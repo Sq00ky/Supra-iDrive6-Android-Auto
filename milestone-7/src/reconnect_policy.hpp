@@ -16,12 +16,16 @@ namespace nbt {
 // Restart budget survives daemon replacement, disabled polling and manual Stop.
 class ReconnectPolicy {
 public:
-    ReconnectPolicy() : spent_(false), haveClock_(false), lastNow_(0), blockedUntil_(0) {
+    ReconnectPolicy() : spent_(false), haveClock_(false), lastNow_(0), blockedUntil_(0),
+                        confirmedPid_(0), confirmedCycle_(0), confirmationRearmed_(false) {
         clearObservation();
     }
 
+    bool confirmationRearmed() const { return confirmationRearmed_; }
+
     // Call only for an explicit user Start/Restart, never for an automatic launch.
     void manualStart() {
+        confirmationRearmed_ = false;
         spent_ = false;
         haveClock_ = false;
         blockedUntil_ = 0;
@@ -31,6 +35,7 @@ public:
     // Distinct CDS power-state observations rearm the episode, without assuming
     // enum values mean ignition ON/OFF. Manual Stop remains an independent guard.
     void powerChanged(uint64_t now) {
+        confirmationRearmed_ = false;
         spent_ = false;
         clearObservation();
         haveClock_ = true;
@@ -41,7 +46,9 @@ public:
     bool evaluate(uint64_t now, bool enabled, bool manuallyStopped, bool stopping,
                   int pid, bool connected, unsigned setupFailures, unsigned setupCycle,
                   unsigned sppWaitSeconds = 0,
-                  unsigned sppWaitThreshold = kReconnectMissingSppSeconds) {
+                  unsigned sppWaitThreshold = kReconnectMissingSppSeconds,
+                  unsigned confirmedCycle = 0, bool confirmationKnown = false) {
+        confirmationRearmed_ = false;
         if (haveClock_ && now < lastNow_) {
             clearObservation();
             if (blockedUntil_) blockedUntil_ = now + kReconnectPowerSettleSeconds;
@@ -52,6 +59,17 @@ public:
         if (!enabled || manuallyStopped || stopping || pid <= 0) {
             clearObservation();
             return false;
+        }
+
+        // A projecting phone starts a new reconnect episode even if the drive
+        // lasted less than 30 s. Remember PID/cycle independently of temporary
+        // observations; repeated/old telemetry cannot grant repeated restarts.
+        if (confirmationKnown && confirmedCycle && confirmedCycle <= setupCycle &&
+            (pid != confirmedPid_ || confirmedCycle > confirmedCycle_)) {
+            confirmedPid_ = pid;
+            confirmedCycle_ = confirmedCycle;
+            spent_ = false;
+            confirmationRearmed_ = true;
         }
 
         // A new process, new TCP cycle or reset failure counter begins a fresh
@@ -67,7 +85,7 @@ public:
             if (!trackingConnected_) {
                 trackingConnected_ = true;
                 connectedSince_ = now;
-            } else if (now - connectedSince_ >= kStableConnectedSeconds) {
+            } else if (!confirmationKnown && now - connectedSince_ >= kStableConnectedSeconds) {
                 spent_ = false;
             }
             return false;
@@ -101,6 +119,9 @@ private:
     unsigned cycle_, failures_;
     bool trackingConnected_;
     uint64_t connectedSince_;
+    int confirmedPid_;
+    unsigned confirmedCycle_;
+    bool confirmationRearmed_;
 };
 
 // Quiet relaunch is separate from manual Start. Cancellation never launches a

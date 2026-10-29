@@ -14,10 +14,21 @@ namespace nbt {
 class SetupProgress {
 public:
     SetupProgress() : failures_(0), cycle_(0), tcp_(false), starting_(false),
-                      waitingSpp_(false), waitingSince_(0) {}
+                      waitingSpp_(false), waitingSince_(0), confirmedCycle_(0) {}
 
     unsigned failures() const { return failures_; }
     unsigned cycle() const { return cycle_; }
+    unsigned confirmedCycle() const { return confirmedCycle_; }
+
+    // Called on actual phone video, once per TCP cycle. Ignore frames from the
+    // previous session while start() is joining it and the next start is pending.
+    // Keep the last success after disconnect so a short session is not lost
+    // between HMI polls. A TCP accept alone must not replenish recovery.
+    bool confirmVideo() {
+        if (!tcp_ || starting_ || confirmedCycle_ == cycle_) return false;
+        confirmedCycle_ = cycle_;
+        return true;
+    }
 
     void waitForSpp(bool waiting, uint64_t now) {
         if (tcp_ || starting_) waiting = false;
@@ -69,6 +80,7 @@ private:
     bool tcp_, starting_;
     bool waitingSpp_;
     uint64_t waitingSince_;
+    unsigned confirmedCycle_;
 };
 
 } // namespace nbt

@@ -135,11 +135,13 @@ static void timingLog(const char* stage) {
         printf("[Timing] %ld.%03ld %s\n", (long)ts.tv_sec, (long)(ts.tv_nsec / 1000000), stage);
 }
 
-static void setupSnapshot(unsigned& failures, unsigned& cycle, unsigned* sppWait = NULL) {
+static void setupSnapshot(unsigned& failures, unsigned& cycle, unsigned* sppWait = NULL,
+                          unsigned* confirmed = NULL) {
     pthread_mutex_lock(&g_setupMutex);
     failures = g_setup.failures();
     cycle = g_setup.cycle();
     if (sppWait) *sppWait = g_setup.sppWaitSeconds(setupNow());
+    if (confirmed) *confirmed = g_setup.confirmedCycle();
     pthread_mutex_unlock(&g_setupMutex);
 }
 
@@ -352,10 +354,10 @@ static void writeUiState(const char* state, int overlay) {
     // (the plugin then saw no daemon: Force Stop did nothing, Restart and Start launched a second instance). The
     // plugin treats a short / partial read as "no state" for one 1 s poll.
     char buf[96];
-    unsigned failures, cycle, sppWait;
-    setupSnapshot(failures, cycle, &sppWait);
+    unsigned failures, cycle, sppWait, confirmed;
+    setupSnapshot(failures, cycle, &sppWait, &confirmed);
     // Extra fields are optional: older plugins still read the first three.
-    int n = snprintf(buf, sizeof(buf), "%s %d %d %u %u %u\n", state, (int)getpid(), overlay, failures, cycle, sppWait);
+    int n = snprintf(buf, sizeof(buf), "%s %d %d %u %u %u %u\n", state, (int)getpid(), overlay, failures, cycle, sppWait, confirmed);
     int fd = open(kUiStateFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     static bool s_warned = false;
     if (fd < 0) {
@@ -840,6 +842,16 @@ static bool micStart(nbt::A2ICaptureStream& mic) {
 }
 
 static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data) {
+    if (nal_data && nal_len) {
+        pthread_mutex_lock(&g_setupMutex);
+        bool confirmed = g_setup.confirmVideo();
+        unsigned cycle = g_setup.confirmedCycle();
+        pthread_mutex_unlock(&g_setupMutex);
+        if (confirmed) {
+            printf("[Reconnect] first phone video confirmed for TCP cycle %u\n", cycle);
+            timingLog("first phone video confirmed");
+        }
+    }
     nbt::VideoManager* video = reinterpret_cast<nbt::VideoManager*>(user_data);
     if (video) {
         // Feed raw H.264 slice straight into the car's hardware video decoder (/dev/name/local/mdev)
@@ -1085,7 +1097,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.35-warm-reconnect4"
+#define NBT_AAD_BUILD "v1.8.35-warm-reconnect5"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no log file and nothing kept in RAM (the iDrive app sends our stdout to /dev/null; from a shell it stays on
@@ -1331,6 +1343,7 @@ int main(int argc, char* argv[]) {
     int ui_overlay = -1;
     unsigned ui_failures = ~0u, ui_cycle = ~0u;
     unsigned ui_sppWait = ~0u;
+    unsigned ui_confirmed = ~0u;
     int night_posted = -1;
     // CarPlay hand-off: 2.5 s without an Android Auto session -> decoder context gets CarPlay's settings (an iPhone
     // taking over right away gets an unzoomed picture). Any later Android Auto connection rebuilds the Android Auto
@@ -1355,9 +1368,10 @@ int main(int argc, char* argv[]) {
             bool menuRecent = mp && (uint32_t)(monoMs() - mp) < 3000u;   // a hard key went to the phone
             if (mp && !menuRecent) g_keyToPhoneMs = 0;
             int ov = g_inputToPhone ? (g_backState == 1 ? 2 : (menuRecent ? 3 : 1)) : 0;
-            unsigned failures, cycle, sppWait;
-            setupSnapshot(failures, cycle, &sppWait);
-            if (strcmp(st, ui_state) != 0 || ov != ui_overlay || failures != ui_failures || cycle != ui_cycle || sppWait != ui_sppWait) {
+            unsigned failures, cycle, sppWait, confirmed;
+            setupSnapshot(failures, cycle, &sppWait, &confirmed);
+            if (strcmp(st, ui_state) != 0 || ov != ui_overlay || failures != ui_failures || cycle != ui_cycle ||
+                sppWait != ui_sppWait || confirmed != ui_confirmed) {
                 writeUiState(st, ov);
                 if (strcmp(st, ui_state) != 0) {
                     printf("[UiState] iDrive menu entry: %s\n", st);
@@ -1368,6 +1382,7 @@ int main(int argc, char* argv[]) {
                 ui_failures = failures;
                 ui_cycle = cycle;
                 ui_sppWait = sppWait;
+                ui_confirmed = confirmed;
             }
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
