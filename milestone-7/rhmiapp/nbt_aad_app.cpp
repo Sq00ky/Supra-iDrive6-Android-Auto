@@ -51,13 +51,14 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include "../src/usb_log.hpp"
+#include "../src/reconnect_policy.hpp"
 #include "cds_parse.hpp"
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-18 (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-18-warm-reconnect4 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -196,6 +197,7 @@ namespace {
 const char* const kDaemon     = "/opt/aa/nbt-aad";
 const char* const kDisable    = "/opt/aa/app.disable";
 const char* const kDaemonEnv  = "/opt/aa/nbt-aad.env";
+const char* const kReconnectProfile = "/var/opt/aa/reconnect-profile";
 const char* const kDaemonLog  = "/dev/null";               // the daemon opens its own USB log (usb_log.hpp)
 const unsigned    kEntryAction = 2;          // <entryButton action="2"> / <raAction id="2"/> in NbtAad.xml
 const char* const kGearProperty = "driving.gear";   // CDS property (libhmiremoting.so property table)
@@ -252,7 +254,7 @@ const unsigned    kSpinMs          = 200;
 const unsigned    kStartButton     = 61;      // <button id="61"> (Start row)
 const unsigned    kPropWaiting     = 8;       // LABEL_WAITINGANIMATION
 // "Start with the car" checkbox (rhmiapp-7): <checkbox action="24" model="34"> in hmiState 10. On = the flag file
-// exists; then nbt-aad is launched kAutostartDelayS after the HMI loaded this app at boot (CAppManager onInit), so a
+// exists; then nbt-aad is launched after the profile's startup delay from CAppManager onInit, so a
 // phone that connects on its own gets Android Auto without opening the menu. The About row (hmiAction 25 -> hmiState
 // 12) is XML only.
 // The flag lives on the persistence partition: /var/opt is /fs/sda1/opt (qnx6, mounted rw at boot by create_sdc.sh,
@@ -263,7 +265,7 @@ const unsigned    kAutostartModel  = 34;
 const char* const kAutostartDir    = "/var/opt/aa";
 const char* const kAutostartFile   = "/var/opt/aa/autostart";
 const char* const kAutostartManual = "/opt/aa/autostart";
-const long        kAutostartDelayS = 15;
+// ReconnectTiming supplies the fast (3 s) / conservative (15 s) startup wait.
 // About page (hmiState 12): a non-selectable <list> on a Richtext raListModel holding a 1x1 table whose cell is
 // TextID 17. The HMI wraps that text to the screen width and honours "\n" in the text DB. Same pattern as BMW's
 // ActiveSeating intro (libActiveSeating StateTutorial::startWidgetInit: DataTableBase(&map, 1), map[0] = TextID(0x58),
@@ -547,9 +549,22 @@ bmw::PluginApp* g_runApp = NULL;
 void runnableNoop(void*) {}
 
 bool holdEnabled();
+// Names from BimmerGestalt IDriveConnectKit's public CDSProperty list. We only
+// observe changes; numeric ignition-state semantics are NOT assumed here.
+const char* const kPowerProps[2] = { "vehicle.powerStateHeadUnit", "vehicle.statePWF" };
+bool onPowerState0(void*, const bmw::BasicString<unsigned short>&);
+bool onPowerState1(void*, const bmw::BasicString<unsigned short>&);
 
 void runnableRun(void* /*self*/) {
     if (!g_runApp) return;
+    for (int i = 0; i < 2; ++i) {
+        bmw::BasicString<char> prop(kPowerProps[i]);
+        bmw::CdsDelegate d;
+        d.object = g_runApp;
+        d.stub = i == 0 ? &onPowerState0 : &onPowerState1;
+        g_runApp->cdsAddPropertyChangedEventHandler(prop, 0, d);
+        alog("[Reconnect] observing CDS %s (waiting for actual values)", kPowerProps[i]);
+    }
     if (!fileExists("/opt/aa/gear.disable")) {
         bmw::BasicString<char> prop(kGearProperty);
         bmw::CdsDelegate d;
@@ -613,6 +628,7 @@ struct DaemonState {
     int pid;            // > 0 and alive, else 0
     int overlay;        // 1 = Android Auto on screen, knob goes to the phone; 2 = same, BACK held (v1.8.26+);
                         // 3 = same, MENU / COM / MEDIA / NAV / MAP just went to the phone (v1.8.29+ / v1.8.34+): re-hold
+    unsigned setupFailures, setupCycle, sppWaitSeconds; // optional fields; zero if absent/partial
 };
 
 bool pidAlive(int pid) {
@@ -641,16 +657,20 @@ DaemonState readDaemonState() {
     strcpy(d.state, "idle");
     d.pid = 0;
     d.overlay = 0;
+    d.setupFailures = d.setupCycle = d.sppWaitSeconds = 0;
     FILE* f = fopen(kStateFile, "r");
     if (f) {
         char st[24] = "";
         int pid = 0, ov = 0;
-        int n = fscanf(f, "%23s %d %d", st, &pid, &ov);
+        unsigned failures = 0, cycle = 0, sppWait = 0;
+        int n = fscanf(f, "%23s %d %d %u %u %u", st, &pid, &ov, &failures, &cycle, &sppWait);
         fclose(f);
         if (n >= 2 && pidAlive(pid)) {
             strcpy(d.state, st);
             d.pid = pid;
             d.overlay = (n >= 3) ? ov : 0;
+            if (n >= 5) { d.setupFailures = failures; d.setupCycle = cycle; }
+            if (n == 6) d.sppWaitSeconds = sppWait;
             return d;
         }
     }
@@ -673,6 +693,52 @@ pid_t g_stopPid = 0;
 time_t g_stopTime = 0;
 int g_stopStage = 0;           // 0 quit sent, 1 SIGTERM sent, 2 SIGKILL sent
 bool g_restartAfterStop = false;
+bool g_autoRestart = false;
+bool g_manualStop = false;
+uint64_t g_autoStopTime = 0;
+nbt::ReconnectPolicy g_reconnectPolicy;
+nbt::ReconnectLaunchDelay g_autoRelaunch;
+
+uint64_t monotonicSeconds() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec;
+}
+bool autostartOn();
+
+nbt::ReconnectTiming reconnectTiming() {
+    FILE* f = fopen(kReconnectProfile, "r");
+    if (!f) return nbt::ReconnectTiming(errno != ENOENT);
+    char profile[24] = "", extra[2] = "";
+    int fields = fscanf(f, "%23s %1s", profile, extra);
+    bool error = ferror(f) != 0;
+    fclose(f);
+    if (error || fields != 1) return nbt::ReconnectTiming(true);
+    return nbt::ReconnectTiming::fromProfileName(profile);
+}
+
+char g_lastPowerText[2][256] = { "", "" };
+bool onPowerState(int index, const bmw::BasicString<unsigned short>& value) {
+    char text[256];
+    const unsigned short* p = value.raw();
+    size_t n = 0;
+    while (p && p[n] && n < sizeof(text) - 1) { text[n] = p[n] < 0x80 ? (char)p[n] : '?'; ++n; }
+    text[n] = 0;
+    const char* field = index == 0 ? "powerStateHeadUnit" : "statePWF";
+    if (!strstr(text, field) || !strcmp(text, g_lastPowerText[index])) return true;
+    bool initial = !g_lastPowerText[index][0];
+    strcpy(g_lastPowerText[index], text);
+    alog("[Reconnect] CDS %s = '%s' (%s)", kPowerProps[index], text, initial ? "baseline" : "changed");
+    if (!initial) {
+        uint64_t now = monotonicSeconds();
+        g_reconnectPolicy.powerChanged(now);
+        if (g_autoRelaunch.pending()) g_autoRelaunch.schedule(now, reconnectTiming().quietSeconds);
+        alog("[Reconnect] power-state change rearmed recovery; allowing 10 s to settle");
+    }
+    return true;
+}
+bool onPowerState0(void*, const bmw::BasicString<unsigned short>& v) { return onPowerState(0, v); }
+bool onPowerState1(void*, const bmw::BasicString<unsigned short>& v) { return onPowerState(1, v); }
 
 // Where to go once connected: NBT_MENU_RETURN in /opt/aa/nbt-aad.env = home (default) | media | off.
 unsigned menuReturnEvent() {
@@ -895,6 +961,7 @@ void startDaemonOrShow() {
 
 void beginStop(bool restart) {
     DaemonState d = readDaemonState();
+    g_autoRestart = false;
     g_restartAfterStop = restart;
     if (d.pid == 0) {
         alog("%s: nbt-aad is not running", restart ? "restart" : "force stop");
@@ -989,11 +1056,34 @@ void serviceStop() {
         g_stopPid = 0;
         recoverScreenIfUnclean();                        // SIGKILL stage: the daemon could not clean up
         unlink(kStateFile);
+        bool automatic = g_autoRestart;
+        g_autoRestart = false;
         if (g_restartAfterStop) {
             g_restartAfterStop = false;
             g_lastLaunch = 0;
-            alog("restart: starting nbt-aad again");
-            startDaemonOrShow();
+            if (automatic) {
+                if (autostartOn() && !g_manualStop) {
+                    unsigned quietSeconds = reconnectTiming().quietSeconds;
+                    g_autoRelaunch.schedule(monotonicSeconds(), quietSeconds);
+                    alog("[Reconnect] old daemon exited; waiting %u s before quiet relaunch", quietSeconds);
+                }
+            } else {
+                alog("restart: starting nbt-aad again");
+                startDaemonOrShow();
+            }
+        }
+        return;
+    }
+    if (g_autoRestart) {
+        // 'recover' is conditional in the daemon. A late connection may reject
+        // it. Automatic recovery NEVER escalates to SIGTERM / SIGKILL.
+        DaemonState d = readDaemonState();
+        if (!autostartOn() || g_manualStop || (d.pid > 0 && d.pid != (int)g_stopPid) ||
+            (d.pid == (int)g_stopPid && !strcmp(d.state, "connected")) ||
+            monotonicSeconds() - g_autoStopTime >= 12) {
+            alog("[Reconnect] recovery wait cancelled (connected, disabled, changed pid or 12 s timeout)");
+            g_stopPid = 0;
+            g_autoRestart = g_restartAfterStop = false;
         }
         return;
     }
@@ -1086,6 +1176,7 @@ bool onAutostartToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
         else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
     }
     bool now = autostartOn();
+    if (now && !on) { g_manualStop = false; g_reconnectPolicy.manualStart(); }
     alog("menu: start with the car %s -> %s", on ? "on" : "off", now ? "on" : "off");
     if (g_runApp) showAutostart(g_runApp);
     return true;
@@ -1155,15 +1246,49 @@ bool onMenuIdriveToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-// From the status poll: once, kAutostartDelayS after onInit.
+// From the status poll: once, after the profile's startup delay from onInit.
 void serviceAutostart() {
-    if (g_autostartDone || !g_initTime || time(NULL) - g_initTime < kAutostartDelayS) return;
+    if (g_autostartDone || !g_initTime || time(NULL) - g_initTime < (long)reconnectTiming().autostartSeconds) return;
     g_autostartDone = true;
-    if (!autostartOn()) return;
+    if (!autostartOn() || g_manualStop || g_autoRelaunch.pending()) return;
     DaemonState d = readDaemonState();
     if (d.pid != 0) { alog("start with the car: nbt-aad already running (pid %d)", d.pid); return; }
     alog("start with the car: launching nbt-aad (%s)", fileExists(kAutostartFile) ? kAutostartFile : kAutostartManual);
     launchDaemon();                                      // no "show", no menu navigation: it waits for the phone
+}
+
+void serviceAutomaticLaunch() {
+    if (!g_autoRelaunch.pending()) return;
+    DaemonState d = readDaemonState();
+    if (g_autoRelaunch.ready(monotonicSeconds(), autostartOn(), g_manualStop, d.pid != 0)) {
+        g_lastLaunch = 0;
+        alog("[Reconnect] settle interval complete; launching a fresh daemon quietly");
+        launchDaemon();
+    }
+}
+
+// Recover either completed setup failures or a continuous absence of SPP nodes.
+// The daemon validates the current TCP cycle and missing-node condition again.
+void serviceReconnect() {
+    nbt::ReconnectTiming timing = reconnectTiming();
+    DaemonState d = readDaemonState();
+    if (!g_reconnectPolicy.evaluate(monotonicSeconds(), autostartOn(), g_manualStop,
+                                    g_stopPid != 0 || g_autoRelaunch.pending(), d.pid, !strcmp(d.state, "connected"),
+                                    d.setupFailures, d.setupCycle, d.sppWaitSeconds, timing.missingSppSeconds)) return;
+    // Re-read immediately; the daemon also checks PID/cycle/TCP under its mutex.
+    DaemonState latest = readDaemonState();
+    if (latest.pid != d.pid || latest.setupCycle != d.setupCycle ||
+        (latest.setupFailures < nbt::kReconnectFailedSetups && latest.sppWaitSeconds < timing.missingSppSeconds) ||
+        !strcmp(latest.state, "connected")) return;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "recover %d %u", latest.pid, latest.setupCycle);
+    g_stopPid = (pid_t)latest.pid;
+    g_autoRestart = g_restartAfterStop = true;
+    g_autoStopTime = monotonicSeconds();
+    g_wantHome = false;
+    sendToDaemon(msg);
+    alog("[Reconnect] %u setups without TCP, %u s waiting for SPP; requesting one guarded restart (pid %d cycle %u)",
+         latest.setupFailures, latest.sppWaitSeconds, latest.pid, latest.setupCycle);
 }
 
 void statusRun(void* /*self*/) {
@@ -1174,7 +1299,9 @@ void statusRun(void* /*self*/) {
     if (!g_menuIdriveShown) showMenuIdrive(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
+    serviceAutomaticLaunch();
     serviceAutostart();
+    serviceReconnect();
     DaemonState d = readDaemonState();
     bool connecting = !strcmp(d.state, "connecting"), connected = !strcmp(d.state, "connected");
 
@@ -1234,6 +1361,10 @@ bmw::PluginApp* g_app = NULL;
 
 bool onEntryAction(void* /*app*/, const bmw::Parcel& /*args*/) {
     alog("entry button pressed (raAction %u, direct-start XML)", kEntryAction);
+    if (g_stopPid) return true;
+    g_autoRelaunch.cancel();
+    g_manualStop = false;
+    g_reconnectPolicy.manualStart();
     startDaemonOrShow();
     return true;
 }
@@ -1252,13 +1383,23 @@ bool guardedByOverlay(const char* what) {
 bool onStartRow(void*, const bmw::Parcel&) {
     alog("menu: Start (raAction %u)", kActStart);
     if (g_stopPid) { alog("start ignored: a stop/restart is in progress"); return true; }
+    g_autoRelaunch.cancel();
+    g_manualStop = false;
+    g_reconnectPolicy.manualStart();
     startDaemonOrShow();
     return true;
 }
 
 bool onStopRow(void*, const bmw::Parcel&) {
     alog("menu: Force Stop (raAction %u)", kActStop);
+    g_autoRelaunch.cancel();
+    if (g_autoRestart) {
+        g_stopPid = 0;
+        g_autoRestart = g_restartAfterStop = false;
+        alog("[Reconnect] manual Force Stop cancelled the pending automatic relaunch");
+    }
     if (g_stopPid || guardedByOverlay("force stop")) return true;
+    g_manualStop = true;
     beginStop(false);
     return true;
 }
@@ -1266,6 +1407,9 @@ bool onStopRow(void*, const bmw::Parcel&) {
 bool onRestartRow(void*, const bmw::Parcel&) {
     alog("menu: Restart (raAction %u)", kActRestart);
     if (g_stopPid || guardedByOverlay("restart")) return true;
+    g_autoRelaunch.cancel();
+    g_manualStop = false;
+    g_reconnectPolicy.manualStart();
     beginStop(true);
     return true;
 }
@@ -1339,6 +1483,10 @@ bool appOnInit(bmw::PluginApp* self) {
     }
     bool ok = self->onInit();
     showAbout(self);
+    nbt::ReconnectTiming timing = reconnectTiming();
+    alog("[Reconnect] timing profile %s: startup %u s, missing SPP %u s, quiet relaunch %u s",
+         timing.conservative ? "conservative" : "fast", timing.autostartSeconds,
+         timing.missingSppSeconds, timing.quietSeconds);
     alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u + menu focus handler registered, base onInit -> %d, start with the car %s, "
          "save logs to USB %s, MENU opens iDrive %s", kEntryAction, kActStart, kActStop, kActRestart, kActAutostart,
          kActUsbLog, kActMenuIdrive, (int)ok, autostartOn() ? "on" : "off", nbt::usblog::enabled() ? "on" : "off",
