@@ -190,12 +190,43 @@ static void noSppBeforeAnyHandshake() {
     CHECK(s.sppWaitSeconds(2000000) == 1000000u);
 }
 
+static void videoConfirmationSurvivesShortSession() {
+    nbt::SetupProgress s;
+    CHECK(s.confirmedCycle() == 0);
+    CHECK(!s.confirmVideo());
+    s.beginTcp();
+    CHECK(!s.confirmVideo()); // old callback while joining the previous session
+    s.endTcp();
+    CHECK(!s.confirmVideo()); // previous disconnect must not remove pending guard
+    s.finishTcp(true);
+    CHECK(s.confirmVideo());
+    CHECK(s.confirmedCycle() == 1);
+    CHECK(!s.confirmVideo()); // repeated frames do not create new recovery budgets
+    s.endTcp();
+    CHECK(s.confirmedCycle() == 1); // HMI can observe success even after a short session
+    CHECK(!s.confirmVideo());
+    s.beginTcp();
+    CHECK(!s.confirmVideo());
+    s.finishTcp(false);
+    CHECK(!s.confirmVideo());
+    CHECK(s.confirmedCycle() == 1); // a failed start cannot count as success
+    s.beginTcp();
+    s.finishTcp(true);
+    CHECK(s.confirmVideo());
+    CHECK(s.confirmedCycle() == 3);
+    s.endTcp();
+    s.waitForSpp(true, 100);
+    CHECK(s.canRecover(3, false, 103));
+    CHECK(!s.canRecover(1, false, 103));
+}
+
 int main() {
     failedAttempts();
     previousSessionCallbackDuringStart();
     saturatedCounter();
     serializedTcpVersusRecovery();
     noSppBeforeAnyHandshake();
+    videoConfirmationSurvivesShortSession();
     printf("setup progress OK (%u checks, 128 concurrent races)\n", checks);
     return 0;
 }

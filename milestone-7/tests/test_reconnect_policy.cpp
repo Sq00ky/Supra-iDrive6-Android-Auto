@@ -188,6 +188,58 @@ static void selectableTimingKeepsConservativeFallback() {
     CHECK(d.ready(403, true, false, false));
 }
 
+static bool confirmedPoll(nbt::ReconnectPolicy& p, uint64_t now, int pid, bool connected,
+                          unsigned cycle, unsigned confirmed, unsigned missingSpp = 0) {
+    return p.evaluate(now, true, false, false, pid, connected, 0, cycle, missingSpp,
+                      nbt::kReconnectMissingSppSeconds, confirmed, true);
+}
+
+static void capturedShortDriveRearmsWithoutManualStart() {
+    nbt::ReconnectPolicy p;
+    CHECK(!confirmedPoll(p, 171, 1200207, true, 1, 1));
+    CHECK(p.confirmationRearmed());
+    CHECK(confirmedPoll(p, 271, 1200207, false, 1, 1, 3));
+    CHECK(!p.confirmationRearmed());
+    CHECK(!confirmedPoll(p, 297, 2199631, true, 1, 0));
+    CHECK(!p.confirmationRearmed());
+    CHECK(!confirmedPoll(p, 298, 2199631, true, 1, 1)); // actual video arrives
+    CHECK(p.confirmationRearmed());
+    CHECK(!confirmedPoll(p, 324, 2199631, false, 1, 1)); // drive < 30 s, as captured
+    CHECK(!p.confirmationRearmed());
+    CHECK(confirmedPoll(p, 327, 2199631, false, 1, 1, 3)); // no manual Start required
+    CHECK(!confirmedPoll(p, 458, 2199631, false, 1, 1, 136)); // no second restart for the same success
+    CHECK(!confirmedPoll(p, 459, 3223631, false, 0, 0, 3));
+    CHECK(!confirmedPoll(p, 460, 3223631, true, 1, 0));
+    CHECK(!confirmedPoll(p, 500, 3223631, true, 1, 0)); // TCP alive 40 s without video is not a new successful episode
+    CHECK(!confirmedPoll(p, 501, 3223631, false, 1, 0, 3));
+    CHECK(!confirmedPoll(p, 502, 3223631, true, 2, 2));
+    CHECK(p.confirmationRearmed());
+    CHECK(confirmedPoll(p, 506, 3223631, false, 2, 2, 3));
+    CHECK(!confirmedPoll(p, 507, 3223631, false, 2, 1, 4)); // stale confirmation cannot replenish budget
+    CHECK(!p.confirmationRearmed());
+    CHECK(!confirmedPoll(p, 508, 3223631, false, 2, 2, 5));
+    CHECK(!confirmedPoll(p, 509, 3223631, false, 2, 3, 6)); // future/malformed cycle is ignored
+    CHECK(!p.confirmationRearmed());
+}
+
+static void shortSuccessAndConfirmationGuards() {
+    nbt::ReconnectPolicy p;
+    CHECK(confirmedPoll(p, 10, 100, false, 0, 0, 3));
+    CHECK(!confirmedPoll(p, 20, 200, false, 1, 1, 0)); // successful short session ended before HMI's poll
+    CHECK(p.confirmationRearmed());
+    CHECK(confirmedPoll(p, 23, 200, false, 1, 1, 3));
+    CHECK(!p.evaluate(24, true, true, false, 200, false, 0, 2, 3, 3, 2, true));
+    CHECK(!p.confirmationRearmed());
+    CHECK(!p.evaluate(25, false, false, false, 200, false, 0, 2, 3, 3, 2, true));
+    CHECK(!p.confirmationRearmed());
+    CHECK(!p.evaluate(26, true, false, true, 200, false, 0, 2, 3, 3, 2, true));
+    CHECK(!p.confirmationRearmed());
+    CHECK(!confirmedPoll(p, 27, 200, true, 2, 2)); // connected wins despite new confirmation
+    CHECK(p.confirmationRearmed());
+    CHECK(confirmedPoll(p, 31, 200, false, 2, 2, 3));
+    CHECK(!confirmedPoll(p, 32, 300, false, 0, 0, 3)); // PID replacement alone still does not rearm
+}
+
 int main() {
     fastFailureAndOneRestart();
     normalConnectionAndLateSuccess();
@@ -197,6 +249,8 @@ int main() {
     missingSppAndWarmPowerCycle();
     powerDebounceAndQuietRelaunch();
     selectableTimingKeepsConservativeFallback();
+    capturedShortDriveRearmsWithoutManualStart();
+    shortSuccessAndConfirmationGuards();
     printf("fast reconnect policy OK (%u checks)\n", checks);
     return 0;
 }
