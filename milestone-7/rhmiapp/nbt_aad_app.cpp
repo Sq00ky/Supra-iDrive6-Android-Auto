@@ -58,7 +58,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-18-warm-reconnect4 (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-18-warm-reconnect5 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -629,6 +629,8 @@ struct DaemonState {
     int overlay;        // 1 = Android Auto on screen, knob goes to the phone; 2 = same, BACK held (v1.8.26+);
                         // 3 = same, MENU / COM / MEDIA / NAV / MAP just went to the phone (v1.8.29+ / v1.8.34+): re-hold
     unsigned setupFailures, setupCycle, sppWaitSeconds; // optional fields; zero if absent/partial
+    unsigned confirmedCycle;
+    bool confirmationKnown;
 };
 
 bool pidAlive(int pid) {
@@ -658,19 +660,22 @@ DaemonState readDaemonState() {
     d.pid = 0;
     d.overlay = 0;
     d.setupFailures = d.setupCycle = d.sppWaitSeconds = 0;
+    d.confirmedCycle = 0;
+    d.confirmationKnown = false;
     FILE* f = fopen(kStateFile, "r");
     if (f) {
         char st[24] = "";
         int pid = 0, ov = 0;
-        unsigned failures = 0, cycle = 0, sppWait = 0;
-        int n = fscanf(f, "%23s %d %d %u %u %u", st, &pid, &ov, &failures, &cycle, &sppWait);
+        unsigned failures = 0, cycle = 0, sppWait = 0, confirmed = 0;
+        int n = fscanf(f, "%23s %d %d %u %u %u %u", st, &pid, &ov, &failures, &cycle, &sppWait, &confirmed);
         fclose(f);
         if (n >= 2 && pidAlive(pid)) {
             strcpy(d.state, st);
             d.pid = pid;
             d.overlay = (n >= 3) ? ov : 0;
             if (n >= 5) { d.setupFailures = failures; d.setupCycle = cycle; }
-            if (n == 6) d.sppWaitSeconds = sppWait;
+            if (n >= 6) d.sppWaitSeconds = sppWait;
+            if (n >= 7) { d.confirmedCycle = confirmed; d.confirmationKnown = true; }
             return d;
         }
     }
@@ -1272,9 +1277,13 @@ void serviceAutomaticLaunch() {
 void serviceReconnect() {
     nbt::ReconnectTiming timing = reconnectTiming();
     DaemonState d = readDaemonState();
-    if (!g_reconnectPolicy.evaluate(monotonicSeconds(), autostartOn(), g_manualStop,
+    bool recover = g_reconnectPolicy.evaluate(monotonicSeconds(), autostartOn(), g_manualStop,
                                     g_stopPid != 0 || g_autoRelaunch.pending(), d.pid, !strcmp(d.state, "connected"),
-                                    d.setupFailures, d.setupCycle, d.sppWaitSeconds, timing.missingSppSeconds)) return;
+                                    d.setupFailures, d.setupCycle, d.sppWaitSeconds, timing.missingSppSeconds,
+                                    d.confirmedCycle, d.confirmationKnown);
+    if (g_reconnectPolicy.confirmationRearmed())
+        alog("[Reconnect] phone video confirmed (pid %d cycle %u): recovery budget rearmed", d.pid, d.confirmedCycle);
+    if (!recover) return;
     // Re-read immediately; the daemon also checks PID/cycle/TCP under its mutex.
     DaemonState latest = readDaemonState();
     if (latest.pid != d.pid || latest.setupCycle != d.setupCycle ||
