@@ -98,6 +98,7 @@
 #include "voice_scenario.hpp"
 #include "bt_play.hpp"
 #include "usb_log.hpp"
+#include "setup_progress.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -116,6 +117,46 @@
 
 static volatile sig_atomic_t g_running = 1;
 static nbt::AASession g_session;
+// Shared by TCP accept, wireless setup and control threads. A setup failure is NOT
+// a proven bad Wi-Fi key. Publish it so the iDrive app can recover a warm reconnect.
+static pthread_mutex_t g_setupMutex = PTHREAD_MUTEX_INITIALIZER;
+static nbt::SetupProgress g_setup;
+static bool sppNodePresent();
+
+static uint64_t setupNow() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec;
+}
+
+static void timingLog(const char* stage) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        printf("[Timing] %ld.%03ld %s\n", (long)ts.tv_sec, (long)(ts.tv_nsec / 1000000), stage);
+}
+
+static void setupSnapshot(unsigned& failures, unsigned& cycle, unsigned* sppWait = NULL) {
+    pthread_mutex_lock(&g_setupMutex);
+    failures = g_setup.failures();
+    cycle = g_setup.cycle();
+    if (sppWait) *sppWait = g_setup.sppWaitSeconds(setupNow());
+    pthread_mutex_unlock(&g_setupMutex);
+}
+
+static void setupWaitForSpp(bool waiting) {
+    pthread_mutex_lock(&g_setupMutex);
+    g_setup.waitForSpp(waiting, setupNow());
+    pthread_mutex_unlock(&g_setupMutex);
+}
+
+static void setupFailed(unsigned cycle) {
+    pthread_mutex_lock(&g_setupMutex);
+    if (g_setup.failed(cycle)) {
+        printf("[Reconnect] setup attempt ended without TCP (%u consecutive, cycle %u)\n",
+               g_setup.failures(), g_setup.cycle());
+    }
+    pthread_mutex_unlock(&g_setupMutex);
+}
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -212,7 +253,7 @@ static uint16_t ctlPort() {
 }
 
 static void* ctlThread(void*) {
-    char buf[32];
+    char buf[96];
     while (g_running) {
         ssize_t n = recv(g_ctlFd, buf, sizeof(buf) - 1, 0);
         if (n <= 0) { if (n < 0 && errno != EINTR) usleep(200000); continue; }
@@ -232,6 +273,25 @@ static void* ctlThread(void*) {
             int v = atoi(buf + 9);
             if (v != g_dayNight) printf("[Night] day/night change-over %d -> %d (from iDrive app)\n", (int)g_dayNight, v);
             g_dayNight = v;
+        }
+        else if (!strncmp(buf, "recover ", 8)) {
+            int pid = 0;
+            unsigned cycle = 0;
+            pthread_mutex_lock(&g_setupMutex);
+            // Validate again in the daemon: a phone may connect after the app's
+            // last poll. Serialize with onClientConnected; never stop that session.
+            // A node may also have appeared since the wireless worker's last
+            // poll: let that worker open it instead of recovering its old wait.
+            if (g_setup.failures() < nbt::kReconnectFailedSetups && sppNodePresent())
+                g_setup.waitForSpp(false, setupNow());
+            if (sscanf(buf + 8, "%d %u", &pid, &cycle) == 2 && pid == (int)getpid() &&
+                g_setup.canRecover(cycle, g_session.isActive(), setupNow())) {
+                printf("[Reconnect] accepted bounded recovery for pid %d cycle %u\n", pid, cycle);
+                g_running = 0;
+            } else {
+                printf("[Reconnect] ignored stale recovery or TCP session already present\n");
+            }
+            pthread_mutex_unlock(&g_setupMutex);
         }
         else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] 'quit' received.\n"); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
@@ -291,8 +351,11 @@ static void writeUiState(const char* state, int overlay) {
     // Written in place: QNX /dev/shmem does not support rename(), so the old tmp + rename never produced the file
     // (the plugin then saw no daemon: Force Stop did nothing, Restart and Start launched a second instance). The
     // plugin treats a short / partial read as "no state" for one 1 s poll.
-    char buf[64];
-    int n = snprintf(buf, sizeof(buf), "%s %d %d\n", state, (int)getpid(), overlay);
+    char buf[96];
+    unsigned failures, cycle, sppWait;
+    setupSnapshot(failures, cycle, &sppWait);
+    // Extra fields are optional: older plugins still read the first three.
+    int n = snprintf(buf, sizeof(buf), "%s %d %d %u %u %u\n", state, (int)getpid(), overlay, failures, cycle, sppWait);
     int fd = open(kUiStateFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     static bool s_warned = false;
     if (fd < 0) {
@@ -477,6 +540,20 @@ static void logStations(const char* tag) {
 static const int kSppNodes = 8;
 static bool g_sppForeign[kSppNodes];
 
+// Presence only: never open/consume a Bluetooth link on the control thread.
+// Foreign or temporarily unopenable nodes are not evidence of a missing SPP
+// service. Prefer leaving them alone over restarting another serial user's link.
+static bool sppNodePresent() {
+    const char* pinned = getenv("NBT_BTSPP_DEV");
+    if (pinned && *pinned) return access(pinned, F_OK) == 0;
+    for (int i = 0; i < kSppNodes; ++i) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/btspp%d", i);
+        if (access(path, F_OK) == 0) return true;
+    }
+    return false;
+}
+
 static int openSppNode(const char* pinned, char* path, size_t pathLen) {
     if (pinned) {
         snprintf(path, pathLen, "%s", pinned);
@@ -522,18 +599,20 @@ static void* wirelessThread(void*) {
 
     while (g_running) {
         // Nothing to do while a projection session is running; re-arm after it ends.
-        if (g_sessionActive) { sleep(1); continue; }
+        if (g_sessionActive) { setupWaitForSpp(false); sleep(1); continue; }
 
         // The SPP node only exists while the phone's Bluetooth link is up: poll for it first and
         // only then read the AP config (keeps the log quiet while idle).
         int fd = openSppNode(pinned, devBuf, sizeof(devBuf));
         if (fd < 0) {
+            setupWaitForSpp(!sppNodePresent());
             static int quiet = 0;
             if ((quiet++ % 30) == 0)
                 printf("[Wireless] waiting for %s (%s)\n", dev, strerror(errno));
             usleep(500000);
             continue;
         }
+        setupWaitForSpp(false);
         nbt::ApInfo ap;
         std::string apPath;
         size_t apCount = 1;
@@ -590,6 +669,7 @@ static void* wirelessThread(void*) {
             printf("[Wireless] tcgetattr failed: %s (device left in its default mode!)\n", strerror(errno));
         }
         printf("[Wireless] opened %s (fd %d), starting handshake\n", dev, fd);
+        timingLog("SPP opened; starting wireless handshake");
         g_btLink = 1;
         // Handshake style: the proactive one (AP info sent without waiting to be asked) is what worked
         // on the car (w5) and does not depend on reading the phone's WifiInfoRequest; on consecutive
@@ -600,6 +680,8 @@ static void* wirelessThread(void*) {
         const char* me = getenv("NBT_WPP_MODE");
         if (me && *me) mode = atoi(me);
         logStations("before handshake");
+        unsigned ignoredFailures, attemptCycle;
+        setupSnapshot(ignoredFailures, attemptCycle);
         bool ok = nbt::runWirelessHandshake(fd, ap, g_aaPort, 10000, mode);
         if (!ok && nbt::lastLinkForeign()) {
             g_btLink = 0;
@@ -635,20 +717,24 @@ static void* wirelessThread(void*) {
             }
             if (everActive) {
                 apNoJoin = 0;
-            } else if (++apNoJoin >= 2) {
-                apNoJoin = 0;
-                if (!cfg && apCount > 1) {
-                    printf("[Wireless] phone never joined the Wi-Fi with the passphrase from %s (2 tries): "
-                           "trying the next one\n", apPath.c_str());
-                    ++apIdx;
-                } else {
-                    printf("[Wireless] phone never joined the Wi-Fi (2 tries): the passphrase in %s is probably not "
-                           "the one the access point uses\n", apPath.c_str());
+            } else {
+                setupFailed(attemptCycle);
+                if (++apNoJoin >= 2) {
+                    apNoJoin = 0;
+                    if (!cfg && apCount > 1) {
+                        printf("[Wireless] no phone TCP connection after 2 tries with AP config %s: "
+                               "trying the next candidate (Wi-Fi association not verified)\n", apPath.c_str());
+                        ++apIdx;
+                    } else {
+                        printf("[Wireless] no phone TCP connection after 2 tries with AP config %s; "
+                               "Wi-Fi association and passphrase failure are not established\n", apPath.c_str());
+                    }
                 }
             }
         } else {
             g_btLink = 0;
             close(fd);
+            setupFailed(attemptCycle);
             ++s_fails;
             sleep(2);
         }
@@ -783,6 +869,9 @@ static void onAudioState(uint8_t channel, bool started, void* user_data) {
 }
 
 static void onSessionEnded(void* user_data) {
+    pthread_mutex_lock(&g_setupMutex);
+    g_setup.endTcp();
+    pthread_mutex_unlock(&g_setupMutex);
     g_sessionActive = false;
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
     printf("[Main] Android Auto session ended. Resuming auto-connector probing...\n");
@@ -808,10 +897,23 @@ static void onSessionEnded(void* user_data) {
 
 static void onClientConnected(int client_fd, void* user_data) {
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
+    pthread_mutex_lock(&g_setupMutex);
+    if (!g_running) {
+        pthread_mutex_unlock(&g_setupMutex);
+        close(client_fd);   // recovery already committed; the listener will stop
+        return;
+    }
+    g_setup.beginTcp();
+    pthread_mutex_unlock(&g_setupMutex);
+    timingLog("TCP accepted; preparing video/session");
     printf("[Main] Android Auto client connected on fd %d. Initializing aasdk session...\n", client_fd);
     g_sessionActive = true;
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames
+    timingLog("video preparation finished; starting AA session");
     if (!g_session.start(client_fd)) {
+        pthread_mutex_lock(&g_setupMutex);
+        g_setup.finishTcp(false);
+        pthread_mutex_unlock(&g_setupMutex);
         // start() closed the fd; make sure the server does not wait for a session that never began
         g_sessionActive = false;
         if (server) server->notifySessionEnded();
@@ -821,6 +923,9 @@ static void onClientConnected(int client_fd, void* user_data) {
     // Re-assert "active" now: a stale end-of-session callback may have cleared the flags between
     // the assignments above and the join (phone reconnecting while the old session was dying).
     g_sessionActive = true;
+    pthread_mutex_lock(&g_setupMutex);
+    g_setup.finishTcp(g_session.isActive()); // honor a new session that already ended during start()
+    pthread_mutex_unlock(&g_setupMutex);
     if (server) server->markSessionActive();
     if (g_btAudio) {
         char d[64];
@@ -980,7 +1085,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.35-keyhold"
+#define NBT_AAD_BUILD "v1.8.35-warm-reconnect4"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no log file and nothing kept in RAM (the iDrive app sends our stdout to /dev/null; from a shell it stays on
@@ -1051,6 +1156,7 @@ int main(int argc, char* argv[]) {
     printf("----------------------------------------------------\n");
 
     if (!ctlClaimOrForward()) return 0;   // a daemon is already running (second start from the iDrive menu)
+    timingLog("daemon claimed control port");
 
     // Drop the packet filter so the phone can reach the stock AA port (5277) on uap0.
     // Set NBT_KEEP_PF=1 to leave the firewall alone.
@@ -1081,12 +1187,14 @@ int main(int argc, char* argv[]) {
 
     // 1. Initialize Video Pipeline (libscreen.so window at the panel size)
     nbt::VideoManager video;
+    timingLog("video initialization begin");
     if (!video.init((uint32_t)car.screenW,
                     (uint32_t)car.screenH,
                     NBT_SCREEN_MAX_FPS)) {
         printf("[Main] Warning: Video initialization encountered an issue.\n");
     }
     g_video = &video;
+    timingLog("video initialization finished");
 
     // 2. Initialize Audio Pipeline (A2I Media + Nav + Echo-Cancelled Mic)
     nbt::AudioManager audio;
@@ -1141,6 +1249,7 @@ int main(int argc, char* argv[]) {
         printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
         return 1;
     }
+    timingLog("TCP listener started");
 
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
@@ -1220,6 +1329,8 @@ int main(int argc, char* argv[]) {
     if (mic_on) voice.init();
     const char* ui_state = "";
     int ui_overlay = -1;
+    unsigned ui_failures = ~0u, ui_cycle = ~0u;
+    unsigned ui_sppWait = ~0u;
     int night_posted = -1;
     // CarPlay hand-off: 2.5 s without an Android Auto session -> decoder context gets CarPlay's settings (an iPhone
     // taking over right away gets an unzoomed picture). Any later Android Auto connection rebuilds the Android Auto
@@ -1244,11 +1355,19 @@ int main(int argc, char* argv[]) {
             bool menuRecent = mp && (uint32_t)(monoMs() - mp) < 3000u;   // a hard key went to the phone
             if (mp && !menuRecent) g_keyToPhoneMs = 0;
             int ov = g_inputToPhone ? (g_backState == 1 ? 2 : (menuRecent ? 3 : 1)) : 0;
-            if (strcmp(st, ui_state) != 0 || ov != ui_overlay) {
+            unsigned failures, cycle, sppWait;
+            setupSnapshot(failures, cycle, &sppWait);
+            if (strcmp(st, ui_state) != 0 || ov != ui_overlay || failures != ui_failures || cycle != ui_cycle || sppWait != ui_sppWait) {
                 writeUiState(st, ov);
-                if (strcmp(st, ui_state) != 0) printf("[UiState] iDrive menu entry: %s\n", st);
+                if (strcmp(st, ui_state) != 0) {
+                    printf("[UiState] iDrive menu entry: %s\n", st);
+                    timingLog(st);
+                }
                 ui_state = st;
                 ui_overlay = ov;
+                ui_failures = failures;
+                ui_cycle = cycle;
+                ui_sppWait = sppWait;
             }
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
@@ -1347,7 +1466,9 @@ int main(int argc, char* argv[]) {
         g_inputToPhone = (want && act) ? 1 : 0;
         nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen
         if (want != overlay_on || (force_show && want)) {
+            timingLog(want ? "overlay show begin" : "overlay hide begin");
             video.setVisible(want);
+            timingLog(want ? "overlay show finished" : "overlay hide finished");
             overlay_on = want;
             reassert_ticks = want ? 0 : -1;
         }
@@ -1395,6 +1516,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Cleanup & graceful teardown
+    timingLog("shutdown begin");
     printf("[Main] Shutdown requested, stopping subsystems...\n");
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block
     if (mic_live) { if (g_audio) g_audio->stopMic(); else mic.stop(); }
@@ -1410,6 +1532,7 @@ int main(int argc, char* argv[]) {
     if (g_ctlFd >= 0) close(g_ctlFd);
     unlink(kUiStateFile);   // plugin falls back to the plain "Android Auto" entry
     printf("[Main] nbt-aad shutdown complete.\n");
+    timingLog("shutdown finished");
     fflush(stdout);
     // Leave without running static destructors: detached threads (DSI sender loops, wireless bring-up) may still
     // be running, and tearing globals down under them crashed at exit (nbt-aad-21: SIGSEGV after "shutdown complete").

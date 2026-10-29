@@ -467,7 +467,7 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
         if (f < 0 && g_foreign) return false;
         if (f < 0) {
             if (sentInfo) {
-                printf("[Wireless] phone closed the Bluetooth link after our WifiInfoResponse (it is joining the Wi-Fi; no TCP connect = wrong passphrase / AP not seen)\n");
+                printf("[Wireless] phone closed the Bluetooth link after our WifiInfoResponse; waiting for TCP (Wi-Fi association not verified)\n");
                 return true;
             }
             printf("[Wireless] phone closed the Bluetooth link before the AP info was exchanged\n");
