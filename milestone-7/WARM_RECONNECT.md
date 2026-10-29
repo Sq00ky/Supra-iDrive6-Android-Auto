@@ -4,12 +4,24 @@ This change has only been tested a few times on one BMW F30 with NBT Evo.
 Startup and warm reconnection improved in those limited tests. It is not yet
 validated for general use or other head units/phones.
 
-## Known unresolved Bluetooth case
+## Short-session correction and remaining Bluetooth coverage
 
-A phone-side Bluetooth disconnection/reconnection can leave Android Auto unable
-to reconnect automatically. This was reproduced by toggling Bluetooth off/on. Force Stop followed by Start Android Auto restores
-it in the reported test. This case remains unfixed; its failure mechanism has
-not been confirmed. These changes should be reviewed and tested as a draft.
+The latest short-session correction is working in the latest manual retest on
+that car, but testing is still limited to a few attempts.
+
+The earlier policy required 30 s of continuous connected status before
+rearming its one-shot recovery budget. A captured session projected video but
+lasted only 27.239 s. After it disconnected the budget stayed spent; pressing
+Start rearmed it and immediately allowed another recovery. The new policy
+rearms once per PID/TCP cycle that actually receives phone video, including
+short successful sessions.
+
+Turning phone Bluetooth off and back on previously required Force Stop then
+Start in the reported test. The short-session correction addresses the
+confirmed budget-rearm defect; prolonged Bluetooth absence and return have
+not been validated comprehensively. A retry spent while the phone remains
+absent, without a subsequent video-confirmed session, can still exhaust the
+budget. This remains a draft pending broader testing.
 
 ## Observed startup failure and recovery
 
@@ -23,7 +35,7 @@ association succeeded or whether a passphrase is wrong.
 The daemon publishes these optional fields after state, PID and overlay in
 /dev/shmem/nbt-aad-state:
 
-    setup_failures tcp_cycle missing_spp_seconds
+    setup_failures tcp_cycle missing_spp_seconds confirmed_video_cycle
 
 The HMI app requests one guarded recovery after two completed setup failures
 or a continuous absence of SPP nodes. The daemon rechecks its PID, TCP cycle,
@@ -34,9 +46,13 @@ SIGTERM/SIGKILL. If exit is not observed within 12 s it abandons that attempt.
 After exit, it relaunches quietly without requesting show or menu navigation.
 
 Force Stop and Start with Car OFF suspend automatic recovery. The budget lives
-in the HMI process and survives daemon replacement. It is rearmed after 30 s
-of continuous connection or explicit Start/Restart. Changing timing profiles
-does not itself replenish the budget.
+in the HMI process and survives daemon replacement. It is rearmed when a new PID/TCP cycle receives actual phone video, or by an
+explicit Start/Restart. The confirmed cycle is retained after disconnect so
+HMI can observe even a session that ends between polls. TCP acceptance alone,
+frames from the previous session during start/join, and repeated/stale
+confirmation markers cannot replenish the budget. The old 30 s rule is kept
+only for compatibility with daemons without the new telemetry. Changing timing
+profiles does not itself replenish the budget.
 
 The app also observes vehicle.powerStateHeadUnit and vehicle.statePWF through
 its existing CDS subscription mechanism, using raw changes without assuming
@@ -47,7 +63,7 @@ settling; that interval is independent of the timing profile below.
 
 A missing phone can consume the single recovery attempt while Bluetooth is
 still off. No periodic unlimited restart loop is added. The unresolved
-phone-Bluetooth-toggle case needs further diagnosis rather than an assumed fix.
+phone-Bluetooth-toggle case needs more validation beyond the short-session fix.
 
 ## Timing profiles
 
@@ -83,11 +99,11 @@ directory:
     echo %ERRORLEVEL%
 
 The script rebuilds both nbt-aad and rhmiapp/libNbtAad.so and collects the output
-in dist-warm-reconnect4. It does not install anything. A nonzero exit code means
+in dist-warm-reconnect5. It does not install anything. A nonzero exit code means
 the output must not be treated as a successful build.
 
 Update the daemon and HMI library together using the normal installation
-procedure and reload HMI so the new library is actually loaded. The v4 app's
+procedure and reload HMI so the new library is actually loaded. The app's
 3 s request threshold needs the matching daemon; an older daemon can reject it.
 Keep existing deployment backups and installation-specific XML/resources.
 
@@ -95,7 +111,8 @@ Keep existing deployment backups and installation-specific XML/resources.
 
 - QNX SDP 6.5 Windows builds and a few manual tests on one BMW F30 NBT Evo.
 - C++98 host tests for recovery policy, both timing profiles, cancellation,
-  PID/cycle changes, manual Stop and disabled autostart.
+  PID/cycle changes, manual Stop and disabled autostart, including the captured
+  27 s sequence and one rearm per video-confirmed TCP cycle.
 - Setup-progress tests, including 128 concurrent TCP-accept/recovery races.
 - Existing AP-candidate and Bluetooth-link-detection tests.
 - Host syntax checks for the daemon main translation unit and native HMI app.
