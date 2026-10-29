@@ -69,7 +69,7 @@ RHMI_LIBS = $(wildcard $(RHMI_LIBDIR)/libAppFramework.A.so $(RHMI_LIBDIR)/libCor
 .PHONY: rhmiapp
 rhmiapp: rhmiapp/libNbtAad.so
 
-rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp
+rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp src/reconnect_policy.hpp src/reconnect_limits.hpp
 	@echo [BUILD] PluginApp $@
 	$(PLUGIN_CXX) $(PLUGIN_CXXFLAGS) -shared -Wl,-soname,libNbtAad.so -o $@ rhmiapp/nbt_aad_app.cpp $(RHMI_LIBS) -Wl,--allow-shlib-undefined -lang-c++
 	@echo [DONE] Built $@ - install with NbtAad.manifest, NbtAad.xml, NbtAad_ALL_*.zip into Plugins/NbtAad
@@ -92,6 +92,8 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 %.o: %.cpp
 	@echo [CXX] $<
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+src/main.o: src/setup_progress.hpp src/reconnect_limits.hpp
 
 clean:
 	@echo [CLEAN] Removing object files and binaries
