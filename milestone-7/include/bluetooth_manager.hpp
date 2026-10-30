@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string>
 
 namespace nbt {
 
@@ -33,11 +34,26 @@ public:
     // Registers the AA UUID with Connectivity's Bluetooth service (non-blocking:
     // the request is sent from the DSI connection thread once attached).
     bool registerAndroidAutoSdp();
+    // SppUuidDeregister + SppUuidRegister in place (what a daemon Restart does on the Bluetooth side), for a phone
+    // that is connected over Bluetooth but never opens the Android Auto link. Call from the wireless thread while
+    // no link or session is up; skipped (false) while a registration is still in flight. `why` is only logged.
+    bool reregister(const char* why);
     void stop();
 
 private:
     bool is_registered_;
 };
+
+// Phone-opened vs car-opened Bluetooth serial links (src/spp_direction.hpp). The Bluetooth thread feeds the GAP
+// ServiceRequest informs in, the wireless thread asks when a /dev/btsppN node appears. Thread-safe.
+// mode: 0 off (no informs watched), 1 always leave car-opened links alone, 2 learn first (BMW/MINI default).
+void sppDirConfigure(int mode, uint32_t windowS, int model);
+int sppDirMode();
+bool sppDirTakePhoneOpened(std::string* service);   // true = a phone ServiceRequest came in the last windowS seconds
+int sppDirLinkResult(bool phoneOpened, bool spoke);  // new model (SppDirection::Model) when it changed, else -1
+bool sppDirGate();                                   // leave car-opened links alone now?
+int sppDirModel();
+unsigned sppDirRequests();
 
 } // namespace nbt
 
