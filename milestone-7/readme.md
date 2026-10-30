@@ -329,6 +329,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |
 | `NBT_CTL` | `0` | Single-instance control port (UDP 127.0.0.1:52790) |
 | `NBT_KEEP_PF` | set to `1` | Don't run `pfctl -d` at start (see [Troubleshooting](#troubleshooting)) |
+| `NBT_NAV_DECODE` | `0` | Readable navigation status (ch 10) in the log and in `/dev/shmem/nbt-aad-nav.txt`. `NBT_NAV_LOG_MS` sets the minimum gap between log lines per message (default 2000) |
 
 ### Advanced / experimental
 
@@ -381,6 +382,7 @@ Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID
 | iDrive app | `<stick>/nbt-aad-app.log` with **Save logs to USB** ticked; always in slog (`slog2info \| grep NbtAadApp`) |
 | Daemon state for the app | `/dev/shmem/nbt-aad-state`: `idle\|connecting\|connected <pid> <overlay>` |
 | Gear seen by the app | `/dev/shmem/nbt-aad-gear` |
+| Navigation status from the phone | `/dev/shmem/nbt-aad-nav.txt`: `guidance=1\|0`, then the last decoded message of each id (`0x8006={...}`) |
 | System log | `slog2info > /mnt/umass01200t7/slog.txt` (no Bluetooth stack messages; those aren't in slog) |
 
 Logs are synced to the stick every 2 s, so they survive a head-unit reset. Pull the stick only with the car off or
@@ -394,6 +396,9 @@ Useful daemon log lines:
 - `[Wireless] ... companion app (BCL), not Android Auto` / `releasing /dev/btspp0`: a MyBMW / Supra app link was
   skipped.
 - `'pfctl -d' ... returned N`: the firewall step (0 = OK).
+- `[Nav] 0x8006 {1:{...} ...}`: the phone's turn-by-turn data during route guidance, decoded generically
+  (`field:value`, text in quotes, nested messages in `{ }`, images as `<N bytes>`). Printed when it changes, at most
+  every 2 s per message id.
 
 ## Troubleshooting
 
@@ -666,6 +671,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
 | `test_pcm` | Ring buffer + resampler |
+| `test_nav_status` | Navigation status decoder: nested fields, UTF-8 road names, opaque bytes, truncated input |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_media_payload.py` | Media metadata payloads |
 
@@ -678,6 +684,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
   - audio: `audio_route` (`audioconn` wrapper), `voice_scenario`, `audio_manager`, `a2i_stream`, `pcm_utils`;
+  - navigation status: `nav_status.hpp` (generic decoder of ch 10, log + state file);
   - other: `crash_handler`, `license_text.hpp`.
 - `include/`: `dhu_sdp.h` (canned service discovery), `a2i_client.h`, `dsi_controller.h`, `screen_video.h`.
 - `rhmiapp/`: the iDrive PluginApp. `plugin/`: the legacy HmiMain3D plugin.
@@ -693,7 +700,9 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 - `carplay.ini` screen codings such as `1180_480` or `900_540` are the CarPlay picture size, not always the panel: set
   `NBT_SCREEN` to the real panel size (e.g. `1280x480`, `1440x540`) if Android Auto doesn't fill the screen.
 - Media through the head unit's own audio path (A2I) is experimental and not audible yet.
-- HUD navigation arrows: researched in a separate fork, on hold.
+- HUD navigation arrows: researched in a separate fork, on hold. The daemon now decodes the phone's
+  turn-by-turn data (ch 10, `[Nav]` log lines, `/dev/shmem/nbt-aad-nav.txt`); a drive with guidance gives the field
+  map needed to drive the HUD / cluster.
 
 ## License
 
