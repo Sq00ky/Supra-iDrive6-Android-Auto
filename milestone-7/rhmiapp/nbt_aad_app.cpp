@@ -9,7 +9,7 @@
 // so iDrive itself creates and places the menu row. Pressing it opens our own menu (hmiState 10, pure XML hmiAction):
 //   Start Android Auto  (raAction 21) - launches /opt/aa/nbt-aad, or brings a running one to the front ("show");
 //                                       the row reads "Connecting..." / "Open Android Auto" with the daemon state
-//   Force Stop          (raAction 22) - "quit", then SIGTERM after 3 s, SIGKILL after 6 s
+//   Force Stop          (raAction 22) - "quit", then SIGTERM after 3 s, SIGKILL after 10 s
 //   Restart             (raAction 23) - Force Stop, then Start
 // When the phone connects after Start, the app sends iDrive back to the main menu (focusEvent 50 -> NativeStateID 1,
 // the way BMW's ActiveSeating leaves its own screen), so stray knob presses under the Android Auto overlay land
@@ -52,12 +52,13 @@
 #include <pthread.h>
 #include "../src/usb_log.hpp"
 #include "cds_parse.hpp"
+#include "boot_guard.hpp"
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-18 (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-22 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -251,7 +252,7 @@ const unsigned    kSpinFrames      = 8;
 const unsigned    kSpinMs          = 200;
 const unsigned    kStartButton     = 61;      // <button id="61"> (Start row)
 const unsigned    kPropWaiting     = 8;       // LABEL_WAITINGANIMATION
-// "Start with the car" checkbox (rhmiapp-7): <checkbox action="24" model="34"> in hmiState 10. On = the flag file
+// "Start automatically" checkbox (rhmiapp-7, called "Start with the car" before rhmiapp-19): <checkbox action="24" model="34"> in hmiState 10. On = the flag file
 // exists; then nbt-aad is launched kAutostartDelayS after the HMI loaded this app at boot (CAppManager onInit), so a
 // phone that connects on its own gets Android Auto without opening the menu. The About row (hmiAction 25 -> hmiState
 // 12) is XML only.
@@ -280,6 +281,15 @@ const unsigned    kActMenuIdrive   = 27;
 const unsigned    kMenuIdriveModel = 42;
 const char* const kMenuIdriveFlag   = "/var/opt/aa/menu-idrive";
 const char* const kMenuIdriveManual = "/opt/aa/menu-idrive";
+// "Show driving mode changes" checkbox (rhmiapp-21): <checkbox action="28" id="69" model="44" textModel="45">, off by
+// default. CDS driving.mode / driving.mode35up ('{"mode":%d}', libhmiremoting CCdsPropertyDrivingMode::onStatus;
+// 15 / 63 = not valid; which one a car publishes depends on its variant) go to the daemon as "drivemode <prop> <n>";
+// with the box ticked the daemon steps aside like in reverse so iDrive's driving-mode popup shows, then comes back.
+const unsigned    kActDriveMode     = 28;
+const unsigned    kDriveModeModel   = 44;
+const char* const kDriveModeFlag    = "/var/opt/aa/show-drivemode";
+const char* const kDriveModeManual  = "/opt/aa/show-drivemode";
+const char* const kDriveModeProps[2] = { "driving.mode", "driving.mode35up" };
 const long        kUsbLogRecheckS  = 5;   // stick lookup cache: a stick plugged in later is found within 5 s
 
 // PluginApp vtable slots (index from the address point)
@@ -537,6 +547,49 @@ bool onDayNightChanged(void* /*app*/, const bmw::BasicString<unsigned short>& va
     return true;
 }
 
+// ---- driving mode -> daemon (rhmiapp-21) -----------------------------------------------------------------------------
+int g_lastDriveMode[2] = { -1000, -1000 };
+time_t g_driveModeChange = 0;     // last change between two valid modes: the daemon may be stepping aside for it
+long g_driveModeSubAt = -1;       // monotonic s when the CDS handlers were registered
+
+long monoSec() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec;
+}
+
+bool driveModeOn() { return fileExists(kDriveModeFlag) || fileExists(kDriveModeManual); }
+
+bool onDriveMode(int prop, const bmw::BasicString<unsigned short>& value) {
+    char text[160];
+    size_t n = 0;
+    const unsigned short* p = value.raw();
+    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
+    text[n] = 0;
+    int v = nbt::cdsIntField(text, "mode", -1);
+    if (v == g_lastDriveMode[prop]) return true;
+    const int invalid = prop == 1 ? 63 : 15;
+    int was = g_lastDriveMode[prop];
+    alog("CDS %s = '%s' -> mode %d%s", kDriveModeProps[prop], text, v, v == invalid || v < 0 ? " (not valid)" : "");
+    // The previous value goes to the daemon too: it starts after we got the current mode at subscription and would
+    // otherwise take the first change as its baseline. Fallback in case a variant sends no value on subscribing: a
+    // first value well after subscribing is the driver changing mode (-2).
+    int prev = was >= 0 ? was : -1;
+    if (was < 0 && v >= 0 && v != invalid && g_driveModeSubAt >= 0 && monoSec() - g_driveModeSubAt >= 5) {
+        prev = -2;
+        alog("CDS %s: first value %lds after subscribing: a change of mode", kDriveModeProps[prop],
+             monoSec() - g_driveModeSubAt);
+    }
+    if ((was >= 0 && was != invalid && v >= 0 && v != invalid) || prev == -2) g_driveModeChange = time(NULL);
+    g_lastDriveMode[prop] = v;
+    char msg[40];
+    snprintf(msg, sizeof(msg), "drivemode %d %d %d", prop, v, prev);
+    sendToDaemon(msg);
+    return true;
+}
+bool onDriveMode0(void*, const bmw::BasicString<unsigned short>& v) { return onDriveMode(0, v); }
+bool onDriveMode1(void*, const bmw::BasicString<unsigned short>& v) { return onDriveMode(1, v); }
+
 // bmw::Runnable stand-in (vtable: D1, D0, run): posted once to subscribe on the app thread, like SecurityMenu does
 // ~1 s after onInit. Static object, so the destructor slots are no-ops.
 struct GearRunnable { void** vptr; };
@@ -574,6 +627,15 @@ void runnableRun(void* /*self*/) {
         g_runApp->cdsAddPropertyChangedEventHandler(dprop, 0, dd);
         alog("CDS handler for %s registered", kDayNightProperty);
     }
+    for (int i = 0; i < 2; ++i) {                        // both: only the one the car's variant codes ever reports
+        bmw::BasicString<char> prop(kDriveModeProps[i]);
+        bmw::CdsDelegate d;
+        d.object = g_runApp;
+        d.stub = i == 0 ? &onDriveMode0 : &onDriveMode1;
+        g_runApp->cdsAddPropertyChangedEventHandler(prop, 0, d);
+        alog("CDS handler for %s registered", kDriveModeProps[i]);
+    }
+    g_driveModeSubAt = monoSec();
     if (holdEnabled()) {                                 // CDS handlers are keyed by property name
         for (int i = 0; i < 2; ++i) {
             bmw::BasicString<char> prop(kCallProps[i]);
@@ -791,7 +853,12 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         // blank state: give the driver the iDrive main menu. Not in reverse (the camera returns to us, then the
         // overlay comes back) and not when a hard key already took iDrive somewhere else.
         bool reverse = g_lastGear == kReverseGear, pdc = g_lastPdc == kPdcActive;
-        if (g_aaVisible && !g_hideSent && !reverse && !pdc) {
+        // Driving mode just changed with "Show driving mode changes" ticked: the daemon steps aside for iDrive's popup
+        // and comes back by itself, so stay on the blank state (like reverse).
+        bool drivemode = driveModeOn() && g_driveModeChange && time(NULL) - g_driveModeChange < 15;
+        if (drivemode) {
+            alog("hold: Android Auto stepped aside for the driving-mode display: staying on state %u", kAaState);
+        } else if (g_aaVisible && !g_hideSent && !reverse && !pdc) {
             app->triggerEvent(kEvGoHome);
             alog("hold: Android Auto stepped aside: event %u -> iDrive main menu", kEvGoHome);
         } else {
@@ -1006,8 +1073,10 @@ void serviceStop() {
         alog("nbt-aad pid %d still running 3 s after 'quit': SIGTERM", (int)g_stopPid);
         kill(g_stopPid, SIGTERM);
         g_stopStage = 1;
-    } else if (g_stopStage == 1 && waited >= 6) {
-        alog("nbt-aad pid %d still running 6 s after 'quit': SIGKILL", (int)g_stopPid);
+    } else if (g_stopStage == 1 && waited >= 10) {
+        // 10 s (was 6 s): SIGTERM runs the same clean shutdown as 'quit', which took 4-5 s on the tester's car
+        // (2026-10-29); SIGKILL skips it (surface 1280 / CarPlay geometry left for recoverScreenIfUnclean()).
+        alog("nbt-aad pid %d still running 10 s after 'quit': SIGKILL", (int)g_stopPid);
         kill(g_stopPid, SIGKILL);
         g_stopStage = 2;
     } else if (g_stopStage == 2 && waited >= 12) {
@@ -1127,6 +1196,32 @@ bool onUsbLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 }
 
 // ---- MENU key opens iDrive ----------------------------------------------------------------------------------------
+bool g_driveModeShown = false;
+
+void showDriveMode(bmw::PluginApp* app) {
+    app->updateModel(kDriveModeModel, driveModeOn());
+    g_driveModeShown = true;
+}
+
+bool onDriveModeToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    bool on = driveModeOn();
+    if (on) {
+        if (fileExists(kDriveModeFlag) && unlink(kDriveModeFlag) != 0)
+            alog("show driving mode: cannot remove %s (errno %d)", kDriveModeFlag, errno);
+        if (fileExists(kDriveModeManual) && unlink(kDriveModeManual) != 0)
+            alog("show driving mode: cannot remove %s (errno %d, read-only?): remove it by hand", kDriveModeManual, errno);
+    } else {
+        mkdir(kAutostartDir, 0755);
+        int fd = open(kDriveModeFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) alog("show driving mode: cannot create %s (errno %d)", kDriveModeFlag, errno);
+        else close(fd);
+    }
+    bool now = driveModeOn();
+    alog("menu: show driving mode changes %s -> %s", on ? "on" : "off", now ? "on" : "off");
+    if (g_runApp) showDriveMode(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -1155,6 +1250,57 @@ bool onMenuIdriveToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// ---- "Start with the car" bootloop guard -------------------------------------------------------------------------
+// A tester's head unit reset 5 times in a row (2026-10-29): each boot autostarted nbt-aad, the phone connected and the
+// unit reset again. Each autostart is recorded (wall-clock seconds, persistent flash file); after kBootGuardMax of them
+// within kBootGuardWindowS the autostart is skipped. The daemon deletes the file on a clean exit and after 10 min of
+// uptime, so normal drives never add up; menu Start deletes it too. Ignition off/on within ~10 min keeps the unit up
+// (no new boot), so 3 cold boots in 15 min only happen when something resets the unit.
+const char* const kBootGuardFile = "/var/opt/aa/bootguard";
+const int  kBootGuardMax = 3;
+const long kBootGuardWindowS = 15 * 60;
+
+// true = autostart may go ahead (and this boot is recorded).
+bool bootGuardAllows() {
+    time_t now = time(NULL);
+    if ((long)now < nbt::bootguard::kClockValidFrom) {                      // before 2020: clock not set yet, times would be meaningless
+        alog("bootloop guard: wall clock not set (%ld): not counting this boot", (long)now);
+        return true;
+    }
+    long raw[8], t[8];
+    int nr = 0;
+    FILE* f = fopen(kBootGuardFile, "r");
+    if (f) {
+        long v;
+        while (nr < 8 && fscanf(f, "%ld", &v) == 1) raw[nr++] = v;
+        fclose(f);
+    }
+    int n = nbt::bootguard::recent(raw, nr, (long)now, kBootGuardWindowS, t, 8);
+    if (!nbt::bootguard::allows(n, kBootGuardMax)) {
+        alog("start with the car: SKIPPED by the bootloop guard: the head unit restarted %d times within %ld min while "
+             "nbt-aad was starting with it. Start it from this menu (that resets the guard); send both USB logs.",
+             n, kBootGuardWindowS / 60);
+        return false;
+    }
+    f = fopen(kBootGuardFile, "w");
+    if (!f) {
+        alog("bootloop guard: cannot write %s (errno %d): not counting this boot", kBootGuardFile, errno);
+        return true;
+    }
+    int from = n >= kBootGuardMax ? n - kBootGuardMax + 1 : 0;
+    for (int i = from; i < n; ++i) fprintf(f, "%ld\n", t[i]);
+    fprintf(f, "%ld\n", (long)now);
+    fflush(f);
+    fsync(fileno(f));                                    // must survive the very reset it is counting
+    fclose(f);
+    if (n) alog("bootloop guard: autostart %d of %d allowed within %ld min", n + 1, kBootGuardMax, kBootGuardWindowS / 60);
+    return true;
+}
+
+void bootGuardReset(const char* why) {
+    if (unlink(kBootGuardFile) == 0) alog("bootloop guard reset (%s)", why);
+}
+
 // From the status poll: once, kAutostartDelayS after onInit.
 void serviceAutostart() {
     if (g_autostartDone || !g_initTime || time(NULL) - g_initTime < kAutostartDelayS) return;
@@ -1162,6 +1308,7 @@ void serviceAutostart() {
     if (!autostartOn()) return;
     DaemonState d = readDaemonState();
     if (d.pid != 0) { alog("start with the car: nbt-aad already running (pid %d)", d.pid); return; }
+    if (!bootGuardAllows()) return;
     alog("start with the car: launching nbt-aad (%s)", fileExists(kAutostartFile) ? kAutostartFile : kAutostartManual);
     launchDaemon();                                      // no "show", no menu navigation: it waits for the phone
 }
@@ -1172,6 +1319,7 @@ void statusRun(void* /*self*/) {
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
     if (!g_menuIdriveShown) showMenuIdrive(app);
+    if (!g_driveModeShown) showDriveMode(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -1252,6 +1400,7 @@ bool guardedByOverlay(const char* what) {
 bool onStartRow(void*, const bmw::Parcel&) {
     alog("menu: Start (raAction %u)", kActStart);
     if (g_stopPid) { alog("start ignored: a stop/restart is in progress"); return true; }
+    bootGuardReset("menu Start");
     startDaemonOrShow();
     return true;
 }
@@ -1322,6 +1471,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActAutostart, &onAutostartToggle);
     addAction(self, kActUsbLog, &onUsbLogToggle);
     addAction(self, kActMenuIdrive, &onMenuIdriveToggle);
+    addAction(self, kActDriveMode, &onDriveModeToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;

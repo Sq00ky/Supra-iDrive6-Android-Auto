@@ -45,7 +45,12 @@ TcpServer::TcpServer(uint16_t port)
       is_running_(false),
       has_active_client_(false),
       client_callback_(NULL),
-      client_user_data_(NULL) {
+      client_user_data_(NULL),
+      rebind_(false),
+      rebind_why_(NULL),
+      sel_errs_(0),
+      last_err_(0),
+      accepts_(0) {
 }
 
 TcpServer::~TcpServer() {
@@ -103,17 +108,15 @@ int TcpServer::tryConnect(const char* ip, uint16_t port, int timeout_ms) {
     return sock;
 }
 
-bool TcpServer::start() {
-    if (is_running_) return true;
-
-    server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd_ < 0) {
+int TcpServer::openListener() {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
         perror("[TcpServer] socket creation failed");
-        return false;
+        return -1;
     }
 
     int opt = 1;
-    setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     sockaddr_in address;
     memset(&address, 0, sizeof(address));
@@ -121,19 +124,42 @@ bool TcpServer::start() {
     address.sin_addr.s_addr = INADDR_ANY; // Bind to 0.0.0.0
     address.sin_port        = htons(port_);
 
-    if (bind(server_fd_, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+    if (bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
         perror("[TcpServer] bind failed");
-        close(server_fd_);
-        server_fd_ = -1;
-        return false;
+        close(fd);
+        return -1;
     }
 
-    if (listen(server_fd_, 5) < 0) {
+    if (listen(fd, 5) < 0) {
         perror("[TcpServer] listen failed");
-        close(server_fd_);
-        server_fd_ = -1;
-        return false;
+        close(fd);
+        return -1;
     }
+    return fd;
+}
+
+// Runs on the accept thread only (the only user of server_fd_ while running).
+void TcpServer::rebindNow(const char* why) {
+    int old = server_fd_;
+    if (old >= 0) close(old);
+    server_fd_ = -1;
+    int fd = -1;
+    for (int i = 0; i < 5 && is_running_ && fd < 0; ++i) {
+        fd = openListener();
+        if (fd < 0) sleep(1);
+    }
+    server_fd_ = fd;
+    printf("[TcpServer] listener on port %u re-created (%s): fd %d -> %d, %u accepted so far, %u socket errors (last: %s)\n",
+           port_, why ? why : "?", old, fd, accepts_, sel_errs_, last_err_ ? strerror(last_err_) : "none");
+    sel_errs_ = 0;
+    last_err_ = 0;
+}
+
+bool TcpServer::start() {
+    if (is_running_) return true;
+
+    server_fd_ = openListener();
+    if (server_fd_ < 0) return false;
 
     is_running_ = true;
     has_active_client_ = false;
@@ -193,11 +219,20 @@ void TcpServer::acceptLoop() {
         sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
 
+        if (rebind_) {
+            rebind_ = false;
+            rebindNow(rebind_why_);
+        }
         // Poll with a timeout instead of blocking in accept(): closing a listening
         // socket does not reliably wake a thread blocked in accept() on QNX, which
         // made stop() (and therefore Ctrl+C) hang in pthread_join.
         int lfd = server_fd_;
-        if (lfd < 0) break;
+        if (lfd < 0) {
+            // A failed re-create leaves no listener: keep trying instead of ending the thread.
+            sleep(1);
+            if (is_running_) rebindNow("no listening socket");
+            continue;
+        }
         fd_set rf;
         FD_ZERO(&rf);
         FD_SET(lfd, &rf);
@@ -206,7 +241,14 @@ void TcpServer::acceptLoop() {
         tv.tv_usec = 0;
         int sr = select(lfd + 1, &rf, NULL, NULL, &tv);
         if (sr <= 0) {
-            if (sr < 0 && errno != EINTR && is_running_) sleep(1);
+            if (sr < 0 && errno != EINTR && is_running_) {
+                last_err_ = errno;
+                if (++sel_errs_ == 1) printf("[TcpServer] select() on the listener failed: %s\n", strerror(errno));
+                // A listener that keeps failing (e.g. the network stack dropped it while the car's Wi-Fi was
+                // switched off) can never accept the phone again: re-create it.
+                if (sel_errs_ >= 3) rebindNow("listener socket keeps failing");
+                else sleep(1);
+            }
             continue;
         }
 
@@ -214,11 +256,15 @@ void TcpServer::acceptLoop() {
         if (client_fd < 0) {
             if (!is_running_) break;
             if (errno != EINTR && errno != ECONNABORTED && errno != EAGAIN) {
+                last_err_ = errno;
                 perror("[TcpServer] accept failed");
-                sleep(1);   // do not spin at 100% CPU on persistent errors (EMFILE...)
+                if (++sel_errs_ >= 3) rebindNow("accept() keeps failing");
+                else sleep(1);   // do not spin at 100% CPU on persistent errors (EMFILE...)
             }
             continue;
         }
+        sel_errs_ = 0;
+        ++accepts_;
         tuneSocket(client_fd);
 
         char client_ip[INET_ADDRSTRLEN];

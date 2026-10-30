@@ -20,7 +20,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
-
 namespace nbt {
 
 enum CarMake { MAKE_TOYOTA = 0, MAKE_BMW, MAKE_MINI, MAKE_ROLLS_ROYCE };
@@ -38,6 +37,7 @@ struct CarConfig {
     int screenW, screenH;
     int make;                   // CarMake
     int iniW, iniH;             // carplay.ini [Screen] size (the factory CarPlay picture), 0 if none
+    int dispW, dispH;           // QNX Screen display 0 size, 0 if unknown
     bool bmw;                   // make != MAKE_TOYOTA (BMW group head unit identity)
     std::string iniPath;        // empty = no carplay.ini found
     std::string manufacturer;   // [General] Manufacturer
@@ -135,9 +135,49 @@ inline bool parseIni(const char* path, CarConfig& c, int& w, int& h) {
     return true;
 }
 
+// Pulls "x=<w>" and "y=<h>" out of LayerManagerControl's "- resolution:           x=1280, y=480" line.
+inline bool parseResolutionLine(const char* line, int& w, int& h) {
+    const char* r = strstr(line, "resolution:");
+    if (!r) return false;
+    const char* x = strstr(r, "x=");
+    const char* y = x ? strstr(x, "y=") : NULL;
+    if (!x || !y) return false;
+    w = atoi(x + 2); h = atoi(y + 2);
+    return sane(w, h);
+}
+
+// Size of screen 0 (the central display) as LayerManager reports it (`LayerManagerControl get screen 0`). 0 = unknown.
+inline void displaySize(int& w, int& h) {
+    w = h = 0;
+    const char* e = getenv("NBT_DISPLAY_SIZE");          // host tests / manual override of the probe
+    if (e && *e) { if (sscanf(e, "%dx%d", &w, &h) != 2) w = h = 0; return; }
+#ifdef __QNX__
+    FILE* p = popen("/opt/sys/bin/LayerManagerControl get screen 0 2>/dev/null", "r");
+    if (!p) return;
+    char line[256];
+    while (fgets(line, sizeof(line), p)) {
+        int a = 0, b = 0;
+        if (!w && parseResolutionLine(line, a, b)) { w = a; h = b; }
+    }
+    pclose(p);
+#endif
+}
+
+// The carplay.ini coding is the factory CarPlay PICTURE size, which on some cars is smaller than the panel:
+// 1180_480 on MINI, and a non-full-screen CarPlay coding (picture on the left ~2/3, iDrive's split screen on the
+// right) on some F-series NBT Evo cars, where Android Auto then filled only that part of the screen (user photo,
+// 2026-10-29). When the display is at least as large as the coded picture in both directions, use the display.
+inline void applyPanel(CarConfig& c, int dw, int dh) {
+    if (!sane(dw, dh) || !c.iniW || !c.iniH) return;
+    if (dw >= c.iniW && dh >= c.iniH && (dw != c.iniW || dh != c.iniH)) {
+        c.screenW = dw; c.screenH = dh;
+        c.screenFrom = "display size (carplay.ini codes a smaller CarPlay picture)";
+    }
+}
+
 inline CarConfig load() {
     CarConfig c;
-    c.screenW = 1280; c.screenH = 480; c.make = MAKE_TOYOTA; c.bmw = false; c.iniW = c.iniH = 0;
+    c.screenW = 1280; c.screenH = 480; c.make = MAKE_TOYOTA; c.bmw = false; c.iniW = c.iniH = 0; c.dispW = c.dispH = 0;
     c.screenFrom = "default"; c.vehicleFrom = "default";
 
     int iw = 0, ih = 0;
@@ -155,6 +195,12 @@ inline CarConfig load() {
     // A 1180_480 coding (MINI F56 and others) is the CarPlay picture size; the panel itself is 1280x480 (MINI tester:
     // NBT_SCREEN=1280x480 fills the screen). iniW/iniH keep 1180x480 for the CarPlay geometry. NBT_SCREEN overrides.
     if (iw == 1180 && ih == 480) { c.screenW = 1280; c.screenH = 480; c.screenFrom = "carplay.ini 1180_480 coding = 1280x480 panel"; }
+    {
+        int dw = 0, dh = 0;
+        displaySize(dw, dh);
+        c.dispW = dw; c.dispH = dh;
+        applyPanel(c, dw, dh);
+    }
     {
         int byIcon = c.oemIcon.empty() ? -1 : makeFromText(c.oemIcon);
         int byMfr = c.manufacturer.empty() ? -1 : makeFromText(c.manufacturer);
@@ -216,6 +262,9 @@ inline double touchScale() { return vidNative() ? 1.0 : 1280.0 / (double)carConf
 // of the 1280x480 panel (MINI F60 tester 2026-10-28: NBT_VID_DPI=152 + NBT_VID_INSETS=0,240,40,40 fit, 60 was too much).
 inline bool miniRoundPanel(const CarConfig& c) { return c.make == MAKE_MINI && c.iniW == 1180 && c.iniH == 480; }
 inline bool miniRoundPanel() { return miniRoundPanel(carConfig()); }
+// Default touch x offset in canvas pixels (NBT_TOUCH_OX overrides). MINI F60 round display (1180_480 coding): touches
+// landed ~20-30 px right of the finger; -20 fixed it (tester, v1.8.35, 2026-10-29). 0 on every other car.
+inline double defaultTouchOffsetX(const CarConfig& c) { return miniRoundPanel(c) ? -20.0 : 0.0; }
 
 } // namespace nbt
 

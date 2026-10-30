@@ -271,7 +271,12 @@ static size_t g_rxLen = 0;
 
 static bool g_foreign = false;   // the link turned out to be BMW Connected (BCL/Etch), not Android Auto
 
-static void rxReset() { g_rxLen = 0; g_lastReadEnd = 0; g_foreign = false; }
+static bool g_spokeWpp = false;  // a valid Android Auto wireless frame came back on this link
+static int g_peekMs = 0;         // setSppPeekMs()
+
+void setSppPeekMs(int ms) { g_peekMs = ms < 0 ? 0 : (ms > 3000 ? 3000 : ms); }
+
+static void rxReset() { g_rxLen = 0; g_lastReadEnd = 0; g_foreign = false; g_spokeWpp = false; }
 
 // BMW Connected / MyBMW talks BCL over its own SPP link: an 8-byte header (u16 command, u16 src port,
 // u16 dst port, u16 length) carrying Apache Etch packets that start with the 0xDEADBEEF signature
@@ -281,7 +286,11 @@ static void rxReset() { g_rxLen = 0; g_lastReadEnd = 0; g_foreign = false; }
 // 5001, 4 bytes 0x1337 0x1337). So also accept any self-consistent BCL frame (u16 length at offset 6
 // equal to the bytes that follow the 8-byte header) that is not a valid Android Auto wireless frame
 // ([u16 len = n - 4][u16 id 1..32]).
+// The BCL link also opens with a bare 4-byte startup magic 12 34 56 78 (BimmerGestalt wireshark_bmw_bcl:
+// "BMW BCL Startup"); a BMW (2026-10-30, nbt-aad log umass02200t7) sent only that, twice, on 53 links that
+// never answered our WifiStartRequest, so the daemon kept feeding the Wi-Fi details to the BMW app.
 bool looksLikeBmwBcl(const uint8_t* p, size_t n) {
+    if (n >= 4 && p[0] == 0x12 && p[1] == 0x34 && p[2] == 0x56 && p[3] == 0x78) return true;
     for (size_t i = 0; i + 4 <= n; ++i) {
         if (p[i] == 0xde && p[i + 1] == 0xad && p[i + 2] == 0xbe && p[i + 3] == 0xef) return true;
         if (p[i] == 0x13 && p[i + 1] == 0x37 && i + 4 <= n && p[i + 2] == 0x13 && p[i + 3] == 0x37) return true;
@@ -294,6 +303,7 @@ bool looksLikeBmwBcl(const uint8_t* p, size_t n) {
 }
 
 bool lastLinkForeign() { return g_foreign; }
+bool lastLinkSpokeWpp() { return g_spokeWpp; }
 
 // 1 = bytes added, 0 = timeout / nothing, -1 = link closed or broken
 static int rxFill(int fd, int timeout_ms) {
@@ -338,6 +348,7 @@ static bool rxNext(uint16_t& id, std::vector<uint8_t>& pl) {
         }
         if (g_rxLen < (size_t)4 + len) return false;
         pl.assign(g_rx + 4, g_rx + 4 + len);
+        g_spokeWpp = true;
         g_rxLen -= (size_t)4 + len;
         memmove(g_rx, g_rx + 4 + len, g_rxLen);
         return true;
@@ -429,6 +440,18 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
     if (mode < 0 || mode > 2) mode = 0;
     printf("[Wireless] handshake mode %d (%s)\n", mode, kModeName[mode]);
     rxReset();
+    // Listen before talking: if the peer is MyBMW / BMW Connected (the link AAIdrive uses) and has already sent its
+    // BCL startup magic, write nothing into it. Android Auto waits up to 10 s for our first message.
+    if (g_peekMs > 0) {
+        int f = rxFill(fd, g_peekMs);
+        if (f < 0) {
+            if (g_foreign)
+                printf("[Wireless] the BMW app spoke first on this link: nothing written, leaving it to the car\n");
+            else
+                printf("[Wireless] link closed before we wrote anything\n");
+            return false;
+        }
+    }
     std::vector<uint8_t> req = wpp::buildStartRequest(ap.ip, port);
     std::vector<uint8_t> info = wpp::buildInfoResponse(ap);
     if (mode == 1) {
@@ -467,7 +490,7 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
         if (f < 0 && g_foreign) return false;
         if (f < 0) {
             if (sentInfo) {
-                printf("[Wireless] phone closed the Bluetooth link after our WifiInfoResponse (it is joining the Wi-Fi; no TCP connect = wrong passphrase / AP not seen)\n");
+                printf("[Wireless] phone closed the Bluetooth link after our WifiInfoResponse: it should now join the Wi-Fi and connect over TCP\n");
                 return true;
             }
             printf("[Wireless] phone closed the Bluetooth link before the AP info was exchanged\n");

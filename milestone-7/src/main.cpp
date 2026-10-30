@@ -98,6 +98,9 @@
 #include "voice_scenario.hpp"
 #include "bt_play.hpp"
 #include "usb_log.hpp"
+#include "spp_rereg.hpp"
+#include "spp_link_policy.hpp"
+#include "spp_direction.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -113,8 +116,21 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/ioctl.h>
+#ifdef __QNX__
+#include <sys/sockio.h>
+#endif
+#include <net/if.h>
 
 static volatile sig_atomic_t g_running = 1;
+// Seconds since boot for the lifecycle log lines (the daemon log had no timestamps, so a bootloop/slow-quit log could
+// not be timed against the iDrive app's log, which uses the same clock).
+static double upSec() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
@@ -142,8 +158,86 @@ static volatile sig_atomic_t g_carExit = 0;   // minimized by the BACK hold: onl
 static volatile sig_atomic_t g_focusFromPhone = 0;   // 1 = phone asked for projection, 2 = phone asked for native
 static volatile int g_gear = -1;
 static volatile int g_pdc = -1;                    // -1 = unknown (no report yet)
+
+// ---- driving mode (Sport / Comfort / ECO PRO ...), like reverse -------------------------------------------------
+// The iDrive app relays CDS driving.mode / driving.mode35up ('{"mode":%d}', libhmiremoting CCdsPropertyDrivingMode::
+// onStatus, from the vehicle's FES VehicleDynamicSwitchHMI; 15 / 63 = not valid) as "drivemode <prop> <n>". With the
+// iDrive menu checkbox "Show driving mode changes" (flag file below, read on every change) a change of mode makes
+// Android Auto step aside for NBT_DRIVEMODE_SHOW_MS (default 3500) so iDrive's own driving-mode popup is visible, then
+// it comes back by itself. The first value after start is only the baseline. Not car-verified.
+static const char* const kDriveModeFlag   = "/var/opt/aa/show-drivemode";
+static const char* const kDriveModeManual = "/opt/aa/show-drivemode";
+static volatile int g_driveMode = -1;              // last valid mode (-1 = none yet)
+static volatile uint32_t g_dmPeekUntil = 0;        // upMs() until which iDrive keeps the screen (0 = never set)
+static volatile uint32_t g_dmPeekFrom = 0;         // upMs() from which it does (change + NBT_DRIVEMODE_DELAY_MS)
+static volatile sig_atomic_t g_dmShown = 0;        // main loop: currently stepped aside for it
+static volatile sig_atomic_t g_mainWake = 0;       // cuts the main loop's 250 ms sleep short (driving-mode change)
+static bool showDriveModeOn() { return access(kDriveModeFlag, F_OK) == 0 || access(kDriveModeManual, F_OK) == 0; }
+static int driveModeShowMs() {
+    const char* e = getenv("NBT_DRIVEMODE_SHOW_MS");
+    int v = (e && *e) ? atoi(e) : 3500;
+    return v < 500 ? 500 : (v > 15000 ? 15000 : v);
+}
+// v1.8.45 stepped aside ~0.3 s after the CDS value, before iDrive had drawn its driving-mode popup: the driver caught
+// iDrive's blank Android Auto page in between (Supra, 2026-10-29). Wait this long first. 0 = at once.
+static int driveModeDelayMs() {
+    const char* e = getenv("NBT_DRIVEMODE_DELAY_MS");
+    int v = (e && *e) ? atoi(e) : 400;
+    return v < 0 ? 0 : (v > 3000 ? 3000 : v);
+}
+static bool driveModePeekDue() {   // a pending step-aside whose start time has come
+    uint32_t until = g_dmPeekUntil, from = g_dmPeekFrom, now = upMs();
+    return !g_dmShown && until != 0 && (int32_t)(now - from) >= 0 && (int32_t)(until - now) > 0;
+}
+static void onDriveModeMsg(const char* s) {
+    // "<prop> <n> [<prev>]": rhmiapp-22 adds the value it had before (-1 = none, -2 = its first value came long after
+    // subscribing). The app gets the current mode when it subscribes at iDrive start, but the daemon starts later and
+    // only hears about changes, so the first press used to become the daemon's baseline (Supra nbt-aad-28: mode 3 at
+    // 130.747, HMI popup took focus 30 ms later, AA stayed on top). With <prev> it is a change (car-verified,
+    // nbt-aad-29: '4 -> 3' on the first press, iDrive visible ~0.4 s after the CDS value).
+    int prop = -1, v = -1, prev = -1;
+    int nf = sscanf(s, "%d %d %d", &prop, &v, &prev);
+    if (nf < 2) { printf("[DriveMode] bad message '%s'\n", s); return; }
+    if (nf < 3) prev = -1;
+    const char* name = prop == 1 ? "driving.mode35up" : "driving.mode";
+    bool valid = v >= 0 && !(prop == 1 ? v == 63 : v == 15);
+    if (!valid) { printf("[DriveMode] %s = %d (not valid)\n", name, v); return; }
+    int was = g_driveMode;
+    g_driveMode = v;
+    if (was < 0) {
+        bool prevOk = prev >= 0 && !(prop == 1 ? prev == 63 : prev == 15) && prev != v;
+        if (prevOk) was = prev;                                  // daemon restarted under a running iDrive app
+        else if (prev != -2) { printf("[DriveMode] [%9.3f] %s = %d (initial mode)\n", upSec(), name, v); return; }
+        else printf("[DriveMode] [%9.3f] %s = %d: first value, but long after the app subscribed (a change)\n",
+                    upSec(), name, v);
+    }
+    if (was == v) return;
+    if (!showDriveModeOn()) {
+        printf("[DriveMode] %s %d -> %d (Show driving mode changes is off)\n", name, was, v);
+        return;
+    }
+    const uint32_t now = upMs();
+    const int delay = driveModeDelayMs();
+    if (g_dmShown) {
+        // Already stepped aside: another change only makes iDrive keep the screen longer.
+        uint32_t until = now + (uint32_t)driveModeShowMs();
+        g_dmPeekUntil = until ? until : 1;
+    } else {
+        uint32_t from = now + (uint32_t)delay;
+        g_dmPeekFrom = from;
+        uint32_t until = from + (uint32_t)driveModeShowMs();
+        g_dmPeekUntil = until ? until : 1;
+        if (!delay) g_mainWake = 1;
+    }
+    printf("[DriveMode] [%9.3f] %s %d -> %d: iDrive gets the screen%s%s for %d ms for its driving-mode display\n",
+           upSec(), name, was, v, g_dmShown ? " (still)" : "", g_dmShown || !delay ? "" : " after NBT_DRIVEMODE_DELAY_MS",
+           driveModeShowMs());
+}
 static const char* const kPdcFile = "/dev/shmem/nbt-aad-pdc";
-static volatile sig_atomic_t g_inputToPhone = 1;
+// Starts at 0: the first main-loop tick writes the iDrive state file before it computes this, and a 1 here made
+// every daemon start report "Android Auto on screen" for one tick (app log: hold fired, then 'stepped aside: event
+// 50 -> iDrive main menu' a second later, before any phone was connected).
+static volatile sig_atomic_t g_inputToPhone = 0;
 static const char* const kGearFile = "/dev/shmem/nbt-aad-gear";
 // Car day/night (iDrive app: CDS vehicle.dayNightChangeOver, message "daynight <n>", /dev/shmem/nbt-aad-daynight at
 // start). Mapped the way factory CarPlay does (HmiMain3D CHmiCarPlayService::onDayNightChangeOver @0x4583a4):
@@ -233,7 +327,8 @@ static void* ctlThread(void*) {
             if (v != g_dayNight) printf("[Night] day/night change-over %d -> %d (from iDrive app)\n", (int)g_dayNight, v);
             g_dayNight = v;
         }
-        else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] 'quit' received.\n"); g_running = 0; }
+        else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
+        else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] [%9.3f] 'quit' received.\n", upSec()); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
         else printf("[Ctl] unknown request '%s' ignored.\n", buf);
     }
@@ -287,6 +382,9 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
+// The iDrive app's "Start with the car" bootloop guard (rhmiapp-20): it records each autostart here and skips the
+// autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
+static const char* const kBootGuardFile = "/var/opt/aa/bootguard";
 static void writeUiState(const char* state, int overlay) {
     // Written in place: QNX /dev/shmem does not support rename(), so the old tmp + rename never produced the file
     // (the plugin then saw no daemon: Force Stop did nothing, Restart and Start launched a second instance). The
@@ -312,17 +410,27 @@ static bool g_btAudio = false;
 static nbt::AudioRoute g_btRoute;
 static uint32_t g_btSrc = 0x3a;                 // eSRC_A2DP (audioconn -l: ConnId 0xc7 AuxInBTAudio)
 static uint32_t g_btSink = 0x1;                 // eSNK_SPEAKERS
-// NBT_BT_CONN=<connId> (experiment, off): request the car's Bluetooth source through the ConnectionMaster
-// (`audioconn -b <connId>`, BuildHighSyncConnection: the call the iDrive HMI's audio sink makes) instead of the
-// AudioManagement focus form (`-b <src> <sink>`, which audioconn says sends no SourceActivity). `audioconn -l`
-// lists eSRC_A2DP as ConnId 0xc7 (AuxInBTAudio srcNr 1) on the Supra and the MINI F60.
-static uint32_t g_btConn = 0;
+// NBT_BT_CONN=<connId> (default 0xc7; 0 = old AudioManagement focus form `-b <src> <sink>`): request the car's
+// Bluetooth source through the ConnectionMaster (`audioconn -b <connId>`, BuildHighSyncConnection: the one call the
+// iDrive HMI makes when Bluetooth audio is picked, HmiMain3D RE 2026-10-29). CAR-VERIFIED (MINI F60, v1.8.35, 3 of 3
+// sessions): granted at once and music starts by itself, even from FM radio, where the focus form was refused for all
+// retries. `audioconn -l` lists eSRC_A2DP as ConnId 0xc7 (AuxInBTAudio srcNr 1) on the Supra and the MINI F60.
+static uint32_t g_btConn = 0xc7;
 static nbt::BtPlay g_btPlay;                    // NBT_BT_PLAY experiment: SourceActivity PLAY once the source is granted
 
 static void onBtGranted(void*) { g_btPlay.play("car granted the Bluetooth source"); }   // audioconn worker thread
+// NBT_BT_ROUTE_DELAY_MS (default 1500, 0 = at once): wait this long after the session starts before running
+// audioconn. A phone that says ByeBye right after the ServiceDiscovery and reconnects every ~3 s (tester bootloop log,
+// 2026-10-29) then never starts an audioconn at all: onSessionEnded() cancels the request while it waits.
+static int btRouteDelayMs() {
+    const char* e = getenv("NBT_BT_ROUTE_DELAY_MS");
+    if (!e || !*e) return 1500;
+    int v = atoi(e);
+    return v < 0 ? 0 : (v > 10000 ? 10000 : v);
+}
 static bool btRequestSource() {
-    if (g_btConn) return g_btRoute.build(g_btConn, &onBtGranted, NULL);
-    return g_btRoute.buildFocus(g_btSrc, g_btSink, &onBtGranted, NULL);
+    if (g_btConn) return g_btRoute.build(g_btConn, &onBtGranted, NULL, btRouteDelayMs());
+    return g_btRoute.buildFocus(g_btSrc, g_btSink, &onBtGranted, NULL, btRouteDelayMs());
 }
 static void btReleaseSource() {
     g_btPlay.stop("session ended");
@@ -476,22 +584,147 @@ static void logStations(const char* tag) {
 // nodes and skip the ones recognised as not ours until they disappear. NBT_BTSPP_DEV pins one node.
 static const int kSppNodes = 8;
 static bool g_sppForeign[kSppNodes];
+static nbt::SppSilencePolicy g_sppSilence;   // silent (non-Android-Auto) links: MyBMW / BMW Connected / AAIdrive
+static uint32_t monoSecs();
+
+// BMW/MINI default: 2 silent links in a row put a node on hold for 60 s, so the car's own BMW Apps handler
+// (NBTMediaMainApp A4AHandler on /dev/btspp0) keeps the MyBMW link that AAIdrive rides on. Toyota: off (no BMW
+// Apps). NBT_SPP_SILENT_STRIKES=0 turns it off, NBT_SPP_SILENT_HOLD_S sets the hold.
+static void configureSppSilence() {
+    static bool s_done = false;
+    if (s_done) return;
+    s_done = true;
+    const nbt::CarConfig& cc = nbt::carConfig();
+    const char* e = getenv("NBT_SPP_SILENT_STRIKES");
+    int limit = (e && *e) ? atoi(e) : (cc.bmw ? 2 : 0);
+    const char* h = getenv("NBT_SPP_SILENT_HOLD_S");
+    int hold = (h && *h) ? atoi(h) : 60;
+    g_sppSilence.configure(limit, hold > 0 ? (uint32_t)hold : 60u);
+    const char* pk = getenv("NBT_SPP_PEEK_MS");
+    int peek = (pk && *pk) ? atoi(pk) : (cc.bmw ? 300 : 0);
+    nbt::setSppPeekMs(peek);
+    if (peek > 0)
+        printf("[Wireless] listening %d ms on each new Bluetooth serial link before writing (a MyBMW link that speaks "
+               "first is left alone; NBT_SPP_PEEK_MS=0 turns this off)\n", peek);
+    if (limit > 0)
+        printf("[Wireless] a Bluetooth serial link that never answers like Android Auto %d times in a row is left to the "
+               "car's BMW Apps (MyBMW / BMW Connected / AAIdrive) for %u s (NBT_SPP_SILENT_STRIKES=0 turns this off)\n",
+               limit, g_sppSilence.holdSeconds());
+}
+
+// Who opened each link (src/spp_direction.hpp): Android Auto links are opened by the phone (a GAP ServiceRequest
+// comes first), BMW Apps links (MyBMW / BMW Connected / AAIdrive) by the car. Once this car has shown that (an Android
+// Auto reply on a phone-opened link; remembered in /var/opt/aa/spp-model), car-opened links are never read or written:
+// the car's A4AHandler keeps them. NBT_SPP_DIRECTION: 0 off, 1 always, 2 learn first (BMW/MINI default; Toyota 0).
+static const char* const kSppModelFile = "/var/opt/aa/spp-model";
+static bool g_sppSeen[kSppNodes];      // node existed at the last scan
+static bool g_sppPhone[kSppNodes];     // ... and the phone opened it
+static bool g_sppCarOwned[kSppNodes];  // ... the car opened it and the rule applies: leave it alone until it is gone
+
+static void saveSppModel(int model) {
+    mkdir("/var/opt/aa", 0755);
+    FILE* f = fopen(kSppModelFile, "w");
+    if (!f) { printf("[Wireless] could not save %s: %s\n", kSppModelFile, strerror(errno)); return; }
+    fprintf(f, "%s\n", nbt::SppDirection::modelName((nbt::SppDirection::Model)model));
+    fclose(f);
+}
+
+static void configureSppDirection() {
+    static bool s_done = false;
+    if (s_done) return;
+    s_done = true;
+    const nbt::CarConfig& cc = nbt::carConfig();
+    const char* e = getenv("NBT_SPP_DIRECTION");
+    int mode = (e && *e) ? atoi(e) : (cc.bmw ? 2 : 0);
+    if (mode < 0 || mode > 2) mode = 2;
+    const char* w = getenv("NBT_SPP_DIRECTION_WINDOW_S");
+    int win = (w && *w) ? atoi(w) : 15;
+    int model = nbt::SppDirection::kUnknown;
+    FILE* f = fopen(kSppModelFile, "r");
+    if (f) {
+        char buf[32] = { 0 };
+        if (fgets(buf, sizeof(buf), f)) model = nbt::SppDirection::parseModel(buf);
+        fclose(f);
+    }
+    nbt::sppDirConfigure(mode, win > 0 ? (uint32_t)win : 15u, model);
+    if (mode == 0) return;
+    printf("[Wireless] Bluetooth link direction check %s (NBT_SPP_DIRECTION=%d, model '%s' from %s): Android Auto links "
+           "are opened by the phone; links the car opens itself are its BMW Apps link (MyBMW / BMW Connected / "
+           "AAIdrive)%s\n", mode == 1 ? "on" : "learning", mode, nbt::SppDirection::modelName((nbt::SppDirection::Model)model),
+           kSppModelFile, nbt::sppDirGate() ? " and are left to the car" : "; they are left to the car once Android Auto "
+           "has answered on a phone-opened link");
+}
+
+// A link we handled ended: update the learned model. spoke = an Android Auto frame came back.
+static void noteSppDirection(const char* path, bool spoke) {
+    int i = -1;
+    if (!path || sscanf(path, "/dev/btspp%d", &i) != 1 || i < 0 || i >= kSppNodes) return;
+    int m = nbt::sppDirLinkResult(g_sppPhone[i], spoke);
+    if (m < 0) return;
+    if (m == nbt::SppDirection::kPhoneOpensAa)
+        printf("[Wireless] Android Auto answered on a link the phone opened: from now on links the car opens itself "
+               "(its BMW Apps link: MyBMW / BMW Connected / AAIdrive) are left to the car\n");
+    else
+        printf("[Wireless] Android Auto answered on a link the car opened: the direction check is switched off on this "
+               "car (delete %s to learn again)\n", kSppModelFile);
+    saveSppModel(m);
+}
+
+static int sppIndex(const char* path) {
+    int i = -1;
+    if (!path || sscanf(path, "/dev/btspp%d", &i) != 1 || i < 0 || i >= kSppNodes) return -1;
+    return i;
+}
+
+// A link ended without a session. spoke = the peer sent at least one Android Auto wireless frame.
+static void noteSppLinkEnd(const char* path, bool spoke) {
+    int i = sppIndex(path);
+    if (i < 0) return;
+    if (!spoke && g_sppSilence.limit() > 0)
+        printf("[Wireless] %s never answered like Android Auto (strike %d of %d)\n", path, g_sppSilence.strikes(i) + 1,
+               g_sppSilence.limit());
+    if (g_sppSilence.onLinkEnd(i, spoke, monoSecs()))
+        printf("[Wireless] leaving %s alone for %u s: it is most likely MyBMW / BMW Connected (the link AAIdrive uses), "
+               "and Android Auto setup messages would break it\n", path, g_sppSilence.holdSeconds());
+}
 
 static int openSppNode(const char* pinned, char* path, size_t pathLen) {
     if (pinned) {
         snprintf(path, pathLen, "%s", pinned);
         return open(path, O_RDWR);
     }
+    configureSppSilence();
+    const uint32_t now = monoSecs();
     int fd = -1;
     for (int i = 0; i < kSppNodes; ++i) {
         char p[32];
         snprintf(p, sizeof(p), "/dev/btspp%d", i);
         if (access(p, F_OK) != 0) {
-            if (g_sppForeign[i]) printf("[Wireless] %s is gone; it will be tried again when it comes back\n", p);
+            if (g_sppForeign[i] || g_sppSilence.onHold(i, now) || g_sppCarOwned[i])
+                printf("[Wireless] %s is gone; it will be tried again when it comes back\n", p);
             g_sppForeign[i] = false;
+            g_sppSilence.nodeGone(i);
+            g_sppSeen[i] = g_sppPhone[i] = g_sppCarOwned[i] = false;
             continue;
         }
-        if (g_sppForeign[i] || fd >= 0) continue;
+        if (!g_sppSeen[i]) {   // new link: who opened it?
+            g_sppSeen[i] = true;
+            std::string svc;
+            g_sppPhone[i] = nbt::sppDirTakePhoneOpened(&svc);
+            if (nbt::sppDirMode() != 0) {
+                if (g_sppPhone[i])
+                    printf("[Wireless] %s appeared: opened by the phone (ServiceRequest '%s'), so it can be Android "
+                           "Auto\n", p, svc.c_str());
+                else
+                    printf("[Wireless] %s appeared: opened by the car (no ServiceRequest from the phone just before; %u "
+                           "seen so far), so it is the car's BMW Apps link (MyBMW / BMW Connected / AAIdrive)%s\n", p,
+                           nbt::sppDirRequests(), nbt::sppDirGate() ? ": leaving it to the car" : "");
+                g_sppCarOwned[i] = !g_sppPhone[i] && nbt::sppDirGate();
+            }
+        }
+        if (g_sppSilence.releaseIfExpired(i, now))
+            printf("[Wireless] hold on %s is over: trying it again\n", p);
+        if (g_sppForeign[i] || g_sppSilence.onHold(i, now) || g_sppCarOwned[i] || fd >= 0) continue;
         fd = open(p, O_RDWR);
         if (fd >= 0) snprintf(path, pathLen, "%s", p);
     }
@@ -503,6 +736,50 @@ static void markSppForeign(const char* path) {
     int i = -1;
     if (sscanf(path, "/dev/btspp%d", &i) == 1 && i >= 0 && i < kSppNodes) g_sppForeign[i] = true;
     printf("[Wireless] releasing %s (another app's Bluetooth link) and looking for the Android Auto one\n", path);
+}
+
+static bool cpLiveRetune() {
+    const char* e = getenv("NBT_CP_LIVE_RETUNE");
+    return nbt::VideoManager::cpHandoff() && !(e && e[0] == '0');
+}
+
+static nbt::TcpServer* g_tcp = NULL;           // set once the listener runs (wireless recovery re-creates it)
+static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
+
+static uint32_t monoSecs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)ts.tv_sec;
+}
+
+// 1 = the interface has an IPv4 address, 0 = it has none or does not exist (the car's Wi-Fi access point is off).
+static int ifaceHasIpv4(const char* ifn) {
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s < 0) return -1;
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifn, sizeof(ifr.ifr_name) - 1);
+    int up = 0;
+    if (ioctl(s, SIOCGIFADDR, &ifr) == 0) {
+        const sockaddr_in* sin = reinterpret_cast<const sockaddr_in*>(&ifr.ifr_addr);
+        up = (sin->sin_family == AF_INET && sin->sin_addr.s_addr != 0) ? 1 : 0;
+    }
+    close(s);
+    return up;
+}
+
+// Ignition off/on while the head unit stays up (it only shuts down ~10 min after ignition off) switches the car's
+// Wi-Fi access point off and on again under a daemon that keeps running. Car reports 2026-10-29 (F31, Supra): after
+// that the phone takes the Wi-Fi details over Bluetooth but never connects, until Force Stop + Start, i.e. until
+// a new process runs 'pfctl -d' and opens a new listening socket. Redo both here.
+static void recoverWifiPath(const char* why) {
+    if (!getenv("NBT_KEEP_PF")) {
+        int rc = system("pfctl -d");
+        printf("[Wireless] %s: 'pfctl -d' returned %d (%s)\n", why, rc,
+               rc == 0 ? "the packet filter was ON again and is now off" : "packet filter already off");
+    }
+    if (g_tcp) g_tcp->requestRebind(why);
+    fflush(stdout);
 }
 
 static void* wirelessThread(void*) {
@@ -520,9 +797,38 @@ static void* wirelessThread(void*) {
     const char* ifn = getenv("NBT_AP_IF");
     if (!ifn || !*ifn) ifn = "uap0";
 
+    int apState = -1;           // ifn: -1 unknown, 0 no IP (access point off), 1 has an IP
+    int apPoll = 0;
+    // No Android Auto Bluetooth link for a while although the phone may be connected over Bluetooth (MINI F60:
+    // cold start, and after the head unit slept): register the Bluetooth service again, as Restart does.
+    nbt::SppReregTimer rereg;
+    rereg.configure(nbt::sppReregBaseSec());
+    if (rereg.enabled())
+        printf("[Wireless] while no phone opens the Android Auto Bluetooth link, the Bluetooth service is registered "
+               "again (like Restart does) every %d s for %d s, then every %d s (NBT_SPP_REREG_S=0 turns this off)\n",
+               nbt::sppReregBaseSec(), nbt::kSppReregFastPhaseSec,
+               nbt::sppReregIntervalSec(1 << 20, nbt::sppReregBaseSec()));
+    else
+        printf("[Wireless] automatic Bluetooth service re-registration off (NBT_SPP_REREG_S=0)\n");
+    bool idleWait = false;      // waiting for a link; the re-registration timer runs from when this started
+    uint32_t idleStart = 0;
     while (g_running) {
         // Nothing to do while a projection session is running; re-arm after it ends.
-        if (g_sessionActive) { sleep(1); continue; }
+        if (g_sessionActive) { idleWait = false; sleep(1); continue; }
+
+        // Watch the access point while idle (every ~2 s): when it comes back after being off, the car was switched
+        // off and on again under us -> refresh the firewall and the listener before the phone tries again.
+        if ((apPoll++ % 4) == 0) {
+            int st = ifaceHasIpv4(ifn);
+            if (st >= 0 && st != apState) {
+                if (st == 0) printf("[Wireless] %s has no IP address: the car's Wi-Fi access point is off\n", ifn);
+                else if (apState == 0) {
+                    recoverWifiPath("the car's Wi-Fi access point came back");
+                    idleWait = false;   // the car woke up: start the re-registration schedule from its first step
+                }
+                apState = st;
+            }
+        }
 
         // The SPP node only exists while the phone's Bluetooth link is up: poll for it first and
         // only then read the AP config (keeps the log quiet while idle).
@@ -530,10 +836,22 @@ static void* wirelessThread(void*) {
         if (fd < 0) {
             static int quiet = 0;
             if ((quiet++ % 30) == 0)
-                printf("[Wireless] waiting for %s (%s)\n", dev, strerror(errno));
+                printf("[Wireless] [%9.3f] waiting for %s (%s)\n", upSec(), dev, strerror(errno));
+            uint32_t now = monoSecs();
+            if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); }
+            else if (g_btMgr && rereg.due(now)) {
+                char why[96];
+                snprintf(why, sizeof(why), "no Android Auto Bluetooth link for %u s (try %d)",
+                         (unsigned)(now - idleStart), rereg.attempts());
+                g_btMgr->reregister(why);
+                if (rereg.nextIntervalSec() != nbt::sppReregIntervalSec(rereg.attempts() - 1, nbt::sppReregBaseSec()))
+                    printf("[Wireless] still no Android Auto Bluetooth link: re-registering every %d s from now on\n",
+                           rereg.nextIntervalSec());
+            }
             usleep(500000);
             continue;
         }
+        idleWait = false;
         nbt::ApInfo ap;
         std::string apPath;
         size_t apCount = 1;
@@ -589,7 +907,7 @@ static void* wirelessThread(void*) {
         } else {
             printf("[Wireless] tcgetattr failed: %s (device left in its default mode!)\n", strerror(errno));
         }
-        printf("[Wireless] opened %s (fd %d), starting handshake\n", dev, fd);
+        printf("[Wireless] [%9.3f] opened %s (fd %d), starting handshake\n", upSec(), dev, fd);
         g_btLink = 1;
         // Handshake style: the proactive one (AP info sent without waiting to be asked) is what worked
         // on the car (w5) and does not depend on reading the phone's WifiInfoRequest; on consecutive
@@ -609,6 +927,8 @@ static void* wirelessThread(void*) {
             continue;
         }
         printf("[Wireless] handshake %s (mode %d)\n", ok ? "done: waiting for the phone to join the Wi-Fi and connect" : "FAILED", mode);
+        if (!ok && !pinned) noteSppLinkEnd(dev, nbt::lastLinkSpokeWpp());
+        if (!ok && !pinned) noteSppDirection(dev, nbt::lastLinkSpokeWpp());
         if (ok) {
             s_fails = 0;
             // Keep the Bluetooth link open and serviced (ping replies, repeated AP info requests) for
@@ -620,30 +940,41 @@ static void* wirelessThread(void*) {
                 ++tick;
                 if (g_sessionActive) everActive = true;
                 if (!alive && nbt::lastLinkForeign()) { if (!pinned) markSppForeign(dev); break; }
-                if (!alive) { printf("[Wireless] Bluetooth link closed by the phone\n"); break; }
+                if (!alive) {
+                    printf("[Wireless] [%9.3f] Bluetooth link closed by the phone\n", upSec());
+                    if (!g_sessionActive && !everActive && !nbt::lastLinkSpokeWpp())
+                        printf("[Wireless] the other end never sent an Android Auto reply (no WifiStartResponse): this "
+                               "Bluetooth link was probably another app's (e.g. BMW Connected / MyBMW), so Android Auto "
+                               "never got the Wi-Fi details\n");
+                    if (!g_sessionActive && !everActive && !pinned) noteSppLinkEnd(dev, nbt::lastLinkSpokeWpp());
+                    break;
+                }
                 if (!g_sessionActive && (tick % 10) == 5) logStations("waiting for phone TCP connect");
                 if (!everActive && tick > 90) { printf("[Wireless] phone did not connect within 90 s\n"); break; }
                 if (everActive && !g_sessionActive) { printf("[Wireless] session ended, releasing the Bluetooth link\n"); break; }
             }
             g_btLink = 0;
             close(fd);
+            if (!pinned) noteSppDirection(dev, nbt::lastLinkSpokeWpp() || everActive);
             // A phone that joined the Wi-Fi usually drops Bluetooth before its TCP connect arrives: give it a
             // few seconds before counting this as a "never joined" try.
             for (int w = 0; !everActive && g_running && w < 40; ++w) {
                 if (g_sessionActive) everActive = true;
                 else usleep(200000);
             }
+            if (!everActive) recoverWifiPath("phone took the Wi-Fi details but did not connect");
             if (everActive) {
                 apNoJoin = 0;
             } else if (++apNoJoin >= 2) {
                 apNoJoin = 0;
                 if (!cfg && apCount > 1) {
-                    printf("[Wireless] phone never joined the Wi-Fi with the passphrase from %s (2 tries): "
-                           "trying the next one\n", apPath.c_str());
+                    printf("[Wireless] no TCP connection from the phone after 2 tries with the AP details from %s: "
+                           "trying the next passphrase candidate\n", apPath.c_str());
                     ++apIdx;
                 } else {
-                    printf("[Wireless] phone never joined the Wi-Fi (2 tries): the passphrase in %s is probably not "
-                           "the one the access point uses\n", apPath.c_str());
+                    printf("[Wireless] no TCP connection from the phone after 2 tries with the AP details from %s "
+                           "(not proof of a wrong passphrase: a dead listener or the packet filter look the same)\n",
+                           apPath.c_str());
                 }
             }
         } else {
@@ -782,10 +1113,19 @@ static void onAudioState(uint8_t channel, bool started, void* user_data) {
     else if (channel == 8) speechState(started);
 }
 
+static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
+static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
+static const double kShortSessionS = 15.0;
 static void onSessionEnded(void* user_data) {
     g_sessionActive = false;
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
-    printf("[Main] Android Auto session ended. Resuming auto-connector probing...\n");
+    double now = upSec(), dur = g_sessionStartS > 0 ? now - g_sessionStartS : -1;
+    printf("[Main] [%9.3f] Android Auto session ended after %.1f s. Resuming auto-connector probing...\n", now, dur);
+    if (dur >= 0 && dur < kShortSessionS) ++g_shortSessions; else g_shortSessions = 0;
+    if (g_shortSessions == 3 || (g_shortSessions > 3 && g_shortSessions % 10 == 0))
+        printf("[Main] the phone ended %d sessions in a row within %.0f s of connecting (see the ByeByeRequest / "
+               "'No data' lines above): Android Auto on the phone keeps giving up; its logcat (CAR.SERVICE) says why\n",
+               g_shortSessions, kShortSessionS);
     if (server) {
         server->notifySessionEnded();
     }
@@ -793,6 +1133,9 @@ static void onSessionEnded(void* user_data) {
     // cached SPS/PPS. The overlay itself is handled by the main loop.
     if (g_video) g_video->endSession();
     if (g_audio) g_audio->onSessionEnded();
+    // Drop the Bluetooth-source request (and its retries) this session queued, so a phone that keeps reconnecting
+    // cannot stack audioconn processes until the head unit runs out of memory and resets (tester log 2026-10-29).
+    g_btRoute.cancelPending();
     if (g_speechRouted) {   // session died mid-prompt: give the speech source back
         g_btRoute.removeFocus(g_speechSrc, g_speechSink);
         g_speechRouted = false;
@@ -808,7 +1151,9 @@ static void onSessionEnded(void* user_data) {
 
 static void onClientConnected(int client_fd, void* user_data) {
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
-    printf("[Main] Android Auto client connected on fd %d. Initializing aasdk session...\n", client_fd);
+    g_sessionStartS = upSec();
+    printf("[Main] [%9.3f] Android Auto client connected on fd %d. Initializing aasdk session...\n", g_sessionStartS,
+           client_fd);
     g_sessionActive = true;
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames
     if (!g_session.start(client_fd)) {
@@ -980,7 +1325,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.35-keyhold"
+#define NBT_AAD_BUILD "v1.8.49-sppdir"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no log file and nothing kept in RAM (the iDrive app sends our stdout to /dev/null; from a shell it stays on
@@ -1052,6 +1397,20 @@ int main(int argc, char* argv[]) {
 
     if (!ctlClaimOrForward()) return 0;   // a daemon is already running (second start from the iDrive menu)
 
+    // Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
+    // the HMI. The bootloop log showed `ldd:FATAL: Could not preload library libEGL_X.gpp.so` from audioconn and
+    // every LayerManagerControl run prints `unknown symbol: kdMain referenced from libKD.so.1`, i.e. each child loads
+    // the graphics stack it does not use. NBT_CHILD_NO_PRELOAD=1 (experiment, not car-verified) removes LD_PRELOAD
+    // for all children; the daemon itself is already loaded and keeps its libraries.
+    {
+        const char* pre = getenv("LD_PRELOAD");
+        const char* np = getenv("NBT_CHILD_NO_PRELOAD");
+        bool strip = np && np[0] == '1';
+        printf("[Main] LD_PRELOAD=%s%s\n", pre ? pre : "(unset)",
+               pre && strip ? " -> removed for child processes (NBT_CHILD_NO_PRELOAD=1)" : "");
+        if (pre && strip) unsetenv("LD_PRELOAD");
+    }
+
     // Drop the packet filter so the phone can reach the stock AA port (5277) on uap0.
     // Set NBT_KEEP_PF=1 to leave the firewall alone.
     if (getenv("NBT_KEEP_PF")) {
@@ -1072,6 +1431,8 @@ int main(int argc, char* argv[]) {
            car.manufacturer.empty() ? "-" : car.manufacturer.c_str(), car.oemIcon.empty() ? "-" : car.oemIcon.c_str(), car.screenW, car.screenH, car.screenFrom,
            car.iniPath.empty() ? "not found" : car.iniPath.c_str(),
            car.coded.empty() ? "" : " (coded: ", car.coded.c_str(), car.coded.empty() ? "" : ")");
+    printf("[Car] display (LayerManager screen 0): %dx%d, CarPlay picture coded %dx%d\n",
+           car.dispW, car.dispH, car.iniW, car.iniH);
     if (nbt::vidNative())
         printf("[Car] phone canvas 1280x720 shown 1:1 (NBT_VID_NATIVE): top-left %dx%d visible, MMR dst %dx%d, touch scale 1.000\n",
                nbt::canvasColsShown(), nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight());
@@ -1098,10 +1459,13 @@ int main(int argc, char* argv[]) {
                "[BtAudio] phone audio stays on Bluetooth A2DP; A2I pipeline not opened. Source 0x%x -> sink 0x%x.\n",
                getenv("NBT_SDR_DROP") ? getenv("NBT_SDR_DROP") : "9", g_btSrc, g_btSink);
         if (!g_btRoute.configure()) printf("[BtAudio] audioconn not found: select Bluetooth audio in iDrive manually.\n");
-        g_btConn = (uint32_t)nbt::envHex("NBT_BT_CONN", 0);
+        g_btConn = (uint32_t)nbt::envHex("NBT_BT_CONN", 0xc7);
         if (g_btConn)
-            printf("[BtAudio] NBT_BT_CONN=0x%x (experiment): Bluetooth source via ConnectionMaster `audioconn -b 0x%x`\n",
-                   g_btConn, g_btConn);
+            printf("[BtAudio] Bluetooth source via ConnectionMaster `audioconn -b 0x%x` (NBT_BT_CONN=0: focus form)\n",
+                   g_btConn);
+        else
+            printf("[BtAudio] NBT_BT_CONN=0: Bluetooth source via AudioManagement focus `audioconn -b 0x%x 0x%x`\n",
+                   g_btSrc, g_btSink);
         g_btPlay.init();
         g_audio = NULL;
         speechInit();
@@ -1141,11 +1505,13 @@ int main(int argc, char* argv[]) {
         printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
         return 1;
     }
+    g_tcp = &tcp_server;
 
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
+    if (nbt::wirelessEnabled()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
     if (nbt::wirelessEnabled() && bluetooth.init()) {
-        bluetooth.registerAndroidAutoSdp();
+        if (bluetooth.registerAndroidAutoSdp()) g_btMgr = &bluetooth;
     }
 
     const char* tfwd = getenv("NBT_TOUCH_FWD");
@@ -1206,6 +1572,7 @@ int main(int argc, char* argv[]) {
     bool overlay_on = false;              // video.init() leaves the window hidden
     bool was_active = false;
     bool was_reverse = false;
+    bool was_dm_peek = false;
     bool force_show = false;
     int reassert_ticks = -1;     // >= 0: ticks since the overlay came back up from the iDrive entry / park / reverse
     int active_ticks = 0;
@@ -1225,8 +1592,11 @@ int main(int argc, char* argv[]) {
     // taking over right away gets an unzoomed picture). Any later Android Auto connection rebuilds the Android Auto
     // context first (prepareForSession), so a quick reconnect is safe too. Only once the context exists.
     int cp_idle_ticks = 0;
+    unsigned cp_live_ticks = 0;
     while (g_running) {
-        usleep(250000);
+        for (int w = 0; w < 5 && !g_mainWake && g_running && !driveModePeekDue(); ++w)
+            usleep(50000);   // 250 ms tick, cut short on a wake or when a driving-mode step-aside is due
+        g_mainWake = 0;
         bool act = g_session.isActive();
         if (act || g_sessionActive) cp_idle_ticks = 0;
         else if (++cp_idle_ticks == 10 && nbt::VideoManager::cpHandoff()) video.retuneForCarPlay();
@@ -1290,6 +1660,8 @@ int main(int argc, char* argv[]) {
             mic_live = false;
         }
         ++log_sync_ticks;
+        if (log_sync_ticks == 2400 && unlink(kBootGuardFile) == 0)   // 10 min up: not part of a bootloop
+            printf("[Main] running for 10 min: autostart bootloop guard cleared\n");
         if ((log_sync_ticks % 20) == 0) serviceUsbLog(false);   // every 5 s: stick plugged in / removed, checkbox
         if (logPersistent() && (log_sync_ticks % 8) == 0) { fflush(stdout); fsync(fileno(stdout)); }
         if (act && !was_active) { g_userExit = 0; g_carExit = 0; }   // a new phone session comes up in Android Auto
@@ -1343,7 +1715,35 @@ int main(int argc, char* argv[]) {
             if (reverse_focus && act && !g_userExit) g_session.postVideoFocus(!park && !reverse);
             was_park = park;
         }
-        bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park;
+        // CarPlay taking the screen while an Android Auto session is still open (iPhone joins while the Android phone
+        // stays connected, MINI tester 2026-10-29): CarPlay plays through our decoder context, so without its factory
+        // settings it opens zoomed (the hand-off retune used to run only after the AA session ended). While Android
+        // Auto is minimized we keep surface 1280 hidden; when it turns visible anyway, iDrive is showing CarPlay on it.
+        // NBT_CP_LIVE_RETUNE=0 disables. Not car-verified.
+        if (act && !overlay_on && cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 &&
+            !video.decoderInCarPlayMode() && nbt::VideoManager::surface1280Visible() == 1) {
+            printf("[Main] CarPlay took the screen while Android Auto is still connected: giving the decoder CarPlay's "
+                   "settings (the Android Auto entry brings Android Auto back)\n");
+            g_userExit = 1;
+            g_carExit = 1;                               // the phone asking for the screen must not cover CarPlay
+            g_session.postVideoFocus(false);             // phone stops streaming; FOCUSED on return makes it restart
+            video.retuneForCarPlay();
+        }
+        // Driving mode changed (checkbox on): step aside like reverse, for a fixed time.
+        uint32_t dmu = g_dmPeekUntil, dmf = g_dmPeekFrom, dmnow = upMs();
+        bool dm_peek = dmu != 0 && (int32_t)(dmu - dmnow) > 0 && (int32_t)(dmnow - dmf) >= 0;
+        g_dmShown = dm_peek ? 1 : 0;
+        if (dm_peek != was_dm_peek) {
+            printf("[DriveMode] [%9.3f] %s\n", upSec(), dm_peek ? "Android Auto steps aside for iDrive's driving-mode display"
+                                                                 : "driving-mode display time over: restoring Android Auto");
+            was_dm_peek = dm_peek;
+        }
+        bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !dm_peek;
+        if (want && act && !overlay_on && video.decoderInCarPlayMode()) {
+            printf("[Main] back to Android Auto after CarPlay: rebuilding the decoder context\n");
+            video.prepareForSession();
+            g_session.postVideoFocus(true);
+        }
         g_inputToPhone = (want && act) ? 1 : 0;
         nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen
         if (want != overlay_on || (force_show && want)) {
@@ -1395,21 +1795,31 @@ int main(int argc, char* argv[]) {
     }
 
     // Cleanup & graceful teardown
-    printf("[Main] Shutdown requested, stopping subsystems...\n");
+    // Every step is timed: the iDrive app sends SIGTERM 3 s after 'quit' and SIGKILL (no clean-up) 10 s after, and
+    // the tester logs (2026-10-29) needed SIGTERM on every Force Stop, so the slow step has to show in the log.
+    const double t0 = upSec();
+    printf("[Main] [%9.3f] Shutdown requested, stopping subsystems...\n", t0);
+    g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
+    g_btRoute.cancelPending(); // no queued audioconn starts while we tear down
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block
+    printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
     if (mic_live) { if (g_audio) g_audio->stopMic(); else mic.stop(); }
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
+    printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
     g_session.stop();
+    printf("[Main] [+%.2f s] session stopped\n", upSec() - t0);
     g_video = NULL;
     g_audio = NULL;
     if (!g_btAudio) audio.stop();
     if (g_speechReady && g_speech) g_speech->stop();
     video.stop();
+    printf("[Main] [+%.2f s] video stopped\n", upSec() - t0);
 
     if (g_ctlFd >= 0) close(g_ctlFd);
     unlink(kUiStateFile);   // plugin falls back to the plain "Android Auto" entry
-    printf("[Main] nbt-aad shutdown complete.\n");
+    unlink(kBootGuardFile); // clean exit: the iDrive app's autostart bootloop guard starts from zero
+    printf("[Main] [%9.3f] nbt-aad shutdown complete (%.2f s).\n", upSec(), upSec() - t0);
     fflush(stdout);
     // Leave without running static destructors: detached threads (DSI sender loops, wireless bring-up) may still
     // be running, and tearing globals down under them crashed at exit (nbt-aad-21: SIGSEGV after "shutdown complete").

@@ -39,6 +39,9 @@ public:
     bool retuneForCarPlay();
     bool decoderInCarPlayMode();
     void fixCarPlayLayer();
+    // LayerManager visibility of surface 1280 (shared with the factory CarPlay window): 1 / 0, -1 = unknown.
+    static int surface1280Visible();
+    bool hasWindow() const { return window_ready_; }
 
     // Push raw H.264 NAL units from aasdk
     bool postVideoFrame(const uint8_t* data, size_t length, uint64_t pts = 0);
@@ -62,6 +65,7 @@ private:
     bool isAccepting();      // takes queue_mutex_
     bool workerRunning();    // takes queue_mutex_
 
+    bool createWindow();      // QNX Screen window "1280" (at start, or on the first Android Auto connection)
     bool createDecoder();     // decoder_mutex_ held
     void destroyDecoder();    // decoder_mutex_ held
     void quiesceWorker();
@@ -91,6 +95,7 @@ private:
     std::string grp_name_;
     pthread_mutex_t decoder_mutex_; // createDecoder / destroyDecoder / retuneForCarPlay
     bool cp_mode_;                  // guarded by decoder_mutex_: context carries CarPlay's settings
+    volatile bool window_ready_;    // createWindow() finished (setVisible() is a no-op before)
     std::vector<VideoQueueItem> frame_queue_;
     std::vector<uint8_t> cached_codec_config_;
 };

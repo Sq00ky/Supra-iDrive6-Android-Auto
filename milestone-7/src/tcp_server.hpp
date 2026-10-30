@@ -22,6 +22,10 @@ public:
     void setConnectionCallback(ClientConnectedCallback callback, void* user_data = NULL);
     void notifySessionEnded();
     void markSessionActive() { has_active_client_ = true; }   // re-assert after AASession::start() returned
+    // Close and re-create the listening socket (done by the accept thread within ~1 s). Used when a phone took the
+    // Wi-Fi details but never connected, or when the car's access point was restarted (ignition off/on while the
+    // head unit stayed up). `why` must be a string literal.
+    void requestRebind(const char* why) { rebind_why_ = why; rebind_ = true; }
 
 private:
     static void* acceptThreadStub(void* arg);
@@ -31,6 +35,9 @@ private:
     void connectorLoop();
 
     int tryConnect(const char* ip, uint16_t port, int timeout_ms);
+    int openListener();                 // socket + SO_REUSEADDR + bind(INADDR_ANY:port_) + listen, -1 on failure
+    void rebindNow(const char* why);
+
 
     uint16_t port_;
     int server_fd_;
@@ -41,6 +48,11 @@ private:
 
     ClientConnectedCallback client_callback_;
     void* client_user_data_;
+    volatile bool rebind_;
+    const char* volatile rebind_why_;
+    unsigned sel_errs_;                 // consecutive select()/accept() errors on the listener
+    int last_err_;
+    unsigned accepts_;
 };
 
 } // namespace nbt

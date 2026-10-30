@@ -1106,6 +1106,20 @@ void AASession::sessionLoop() {
                 } else if (msg_id == 0x0011) { // VoiceSessionRequest {type=1}: 1 START, 2 STOP (informational)
                     uint32_t vs = pbFirstVarint(frame_data, 2, 1);
                     printf("[AASession] >>> VoiceSessionRequest: %s\n", vs == 1 ? "START" : vs == 2 ? "STOP" : "?");
+                } else if (msg_id == 0x000F) { // ByeByeRequest {reason=1}: the phone ends the session
+                    // Answer with ByeByeResponse (0x0010, empty) and end the session ourselves, as aasdk/openauto do.
+                    // Up to v1.8.41 this was only logged as an unknown control message and the session waited for the
+                    // phone to drop the socket (tester bootloop log 2026-10-29: 27 ByeByes, reason 1, mostly right
+                    // after the ServiceDiscoveryResponse, phone reconnecting every ~3 s).
+                    uint32_t reason = pbFirstVarint(frame_data, 2, 1);
+                    uint8_t resp[2] = { 0x00, 0x10 };
+                    std::vector<uint8_t> enc;
+                    bool ok = cryptor_.encrypt(resp, sizeof(resp), enc) && sendFrame(0x00, 0x0B, &enc[0], enc.size());
+                    printf("[AASession] >>> ByeByeRequest from the phone (reason=%d%s, %u media frames this session): "
+                           "ByeByeResponse %s, ending the session\n",
+                           reason == 0xFFFFFFFFu ? -1 : (int)reason, reason == 1 ? " = quit" : "",
+                           (unsigned)media_frames_, ok ? "sent" : "SEND FAILED");
+                    break;
                 } else if (msg_id == 11) { // PingRequest
                     printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");
                     // PingResponse {timestamp = field 1}: echo the request's timestamp varint.

@@ -107,7 +107,8 @@ VideoManager::VideoManager()
       reset_pending_(false),
       worker_busy_(false),
       strm_lib_(NULL),
-      cp_mode_(false) {
+      cp_mode_(false),
+      window_ready_(false) {
     memset(&sink_, 0, sizeof(sink_));
     pthread_mutex_init(&queue_mutex_, NULL);
     pthread_mutex_init(&decoder_mutex_, NULL);
@@ -128,17 +129,12 @@ void* VideoManager::workerThreadStub(void* arg) {
     return NULL;
 }
 
-bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
-    printf("[VideoManager] Initializing QNX Screen context for window '%s' (%ux%u @ %ufps)...\n",
-           NBT_SCREEN_WINDOW_ID, width, height, fps);
-
-    screen_config_t config;
-    config.width     = width;
-    config.height    = height;
-    config.fps       = fps;
-    config.window_id = NBT_SCREEN_WINDOW_ID;
-    config.z_order   = NBT_SCREEN_ZORDER_ACTIVE; // 2000: Forces window above HmiMain3D (order 999)
-
+// Steps 1-13 of the old init(): QNX Screen context + window "1280" in our window group, one black buffer, hidden.
+bool VideoManager::createWindow() {
+    if (window_ready_) return true;
+    const screen_config_t config = sink_.config;
+    const uint32_t width = config.width;
+    const uint32_t height = config.height;
     // 1. Create QNX Screen Application Context
     if (screen_create_context(&sink_.ctx, SCREEN_APPLICATION_CONTEXT) != 0) {
         perror("[VideoManager] Failed to create screen context");
@@ -166,9 +162,7 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
     }
 
     // 3. Set Window Group (matches factory BMW CarPlay: "cpvideogrp<pid>")
-    char grp_name[64];
-    snprintf(grp_name, sizeof(grp_name), "cpvideogrp%d", getpid());
-    screen_create_window_group(sink_.win, grp_name);
+    screen_create_window_group(sink_.win, grp_name_.c_str());
 
     // 4. Set Usage matching factory CarPlay/MM-Renderer screen_writer path.
     // CPU-writable/native buffers worked for test patterns, but screen_writer's
@@ -231,8 +225,6 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
     //     Surface id "1280" is the window name from carplay.ini (WindowName=1280), not a width, and the factory
     //     CarPlay window uses the same surface: its regions are NOT touched here (setVisible(true) sets ours, hiding
     //     puts the factory ones back), so starting the daemon never changes the CarPlay picture.
-    captureFactoryGeometry();
-    restoreFactoryGeometry();   // no-op normally; repairs what an earlier daemon killed with SIGKILL left behind
     system("/opt/sys/bin/LayerManagerControl set surface 1280 visibility 0 2>/dev/null");
     system("/opt/sys/bin/LayerManagerControl set surface 1280 opacity 1.0 2>/dev/null");
     system("/opt/sys/bin/LayerManagerControl set surface 1280 zorder 2000 2>/dev/null");
@@ -243,8 +235,44 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
         printf("[VideoManager] Warning: screen_post_window errno = %d (%s)\n", errno, strerror(errno));
     }
 
+    window_ready_ = true;
+    return true;
+}
+
+bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
+    printf("[VideoManager] Initializing QNX Screen context for window '%s' (%ux%u @ %ufps)...\n",
+           NBT_SCREEN_WINDOW_ID, width, height, fps);
+
+    screen_config_t config;
+    config.width     = width;
+    config.height    = height;
+    config.fps       = fps;
+    config.window_id = NBT_SCREEN_WINDOW_ID;
+    config.z_order   = NBT_SCREEN_ZORDER_ACTIVE; // 2000: Forces window above HmiMain3D (order 999)
+
     sink_.config = config;
     sink_.is_visible = false;
+    grp_name_.clear();
+    {
+        char g[64];
+        snprintf(g, sizeof(g), "cpvideogrp%d", getpid());   // window group, matches factory CarPlay "cpvideogrp<pid>"
+        grp_name_ = g;
+    }
+    // Surface 1280's factory CarPlay geometry (read-only) and the repair of what a SIGKILLed daemon left behind.
+    captureFactoryGeometry();
+    restoreFactoryGeometry();   // no-op normally
+    // CarPlay hand-off: the window is created only when an Android Auto phone connects. Its id string "1280" is the
+    // one Connectivity's CarPlay window uses, and LayerManager binds surface 1280 to the newest window with that id:
+    // created at start ("Start automatically" + an iPhone first after boot), it took surface 1280 away from CarPlay,
+    // whose picture then stayed black, and after a Force Stop the surface was left without a window until the next
+    // reboot (MINI tester, 2026-10-29). NBT_CP_HANDOFF=0 keeps the old order (window at start).
+    if (!cpHandoff()) {
+        if (!createWindow()) return false;
+    } else {
+        printf("[VideoManager] screen window '%s' is created when an Android Auto phone connects (surface 1280 stays "
+               "with the factory CarPlay until then)\n", NBT_SCREEN_WINDOW_ID);
+    }
+
     is_initialized_ = true;
 
     // 14. Preload libstrm.so (RTLD_GLOBAL) so strm_dict_* symbols are available to libmmrndclient.so
@@ -288,7 +316,6 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
         typedef void* (*mmr_connect_t)(const char*);
         mmr_connect_t fn_connect = (mmr_connect_t)dlsym(mmr_lib_, "mmr_connect");
         strm_lib_ = strm_h;
-        grp_name_ = grp_name;
 
         if (fn_connect) {
             mmr_cnx_ = fn_connect(NULL);
@@ -355,8 +382,10 @@ void VideoManager::stop() {
     accepting_ = false;
     pthread_mutex_unlock(&queue_mutex_);
 
-    setVisible(false);
-    system("/opt/sys/bin/LayerManagerControl set surface 256 visibility 1 2>/dev/null");
+    if (window_ready_) {   // never created (no Android Auto phone this run): surface 1280 belongs to CarPlay, leave it
+        setVisible(false);
+        system("/opt/sys/bin/LayerManagerControl set surface 256 visibility 1 2>/dev/null");
+    }
 
     pthread_mutex_lock(&queue_mutex_);
     bool had_worker = worker_running_;
@@ -394,6 +423,7 @@ void VideoManager::stop() {
         name_close(mdev_fd_);
         mdev_fd_ = -1;
     }
+    window_ready_ = false;
     if (sink_.win) {
         screen_destroy_window(sink_.win);
         sink_.win = NULL;
@@ -675,7 +705,12 @@ bool VideoManager::createDecoder() {
 }
 
 bool VideoManager::prepareForSession() {
-    if (!is_initialized_ || !mmr_cnx_) return false;
+    if (!is_initialized_) return false;
+    if (!window_ready_) {
+        printf("[VideoManager] Android Auto phone connected: creating the screen window '%s' now\n", NBT_SCREEN_WINDOW_ID);
+        if (!createWindow()) printf("[VideoManager] Error: screen window could not be created: video will stay black\n");
+    }
+    if (!mmr_cnx_) return false;
     pthread_mutex_lock(&decoder_mutex_);
     bool ok = true;
     if (!mmr_ctxt_) {
@@ -823,33 +858,63 @@ bool VideoManager::workerRunning() {
 
 void VideoManager::setVisible(bool visible) {
     sink_.is_visible = visible;
+    // No window yet (CarPlay hand-off, no Android Auto phone so far): there is nothing of ours to show or hide, and
+    // every LayerManager call below would act on the factory CarPlay's surface 1280.
+    if (!window_ready_) return;
     int32_t z_order = visible ? NBT_SCREEN_ZORDER_ACTIVE : NBT_SCREEN_ZORDER_BACKGROUND;
     int vis = visible ? 1 : 0;
     if (sink_.win) {
         screen_set_window_property_iv(sink_.win, SCREEN_PROPERTY_ZORDER, &z_order);
         screen_set_window_property_iv(sink_.win, SCREEN_PROPERTY_VISIBLE, &vis);
     }
-    char cmd[128];
+    // All LayerManager steps in ONE shell. Each system() is /bin/sh plus LayerManagerControl, and both load the
+    // inherited LD_PRELOAD graphics stack (one 'unknown symbol: kdMain' per process): 5-7 shells per change made the
+    // driving-mode step-aside visibly late (Supra, 2026-10-29). What the driver sees goes first; the CarPlay
+    // bookkeeping (layer 0x800d0000, factory geometry of surface 1280) runs after the switch.
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    const char* const L = "/opt/sys/bin/LayerManagerControl";
+    char cmd[768];
     if (visible) {
-        system("/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x500 2>/dev/null");
         const nbt::CarConfig& cc = nbt::carConfig();
-        snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set surface 1280 source region 0 0 %d %d 2>/dev/null",
-                 cc.screenW, cc.screenH);
-        system(cmd);
-        snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set surface 1280 destination region 0 0 %d %d 2>/dev/null",
-                 cc.screenW, cc.screenH);
-        system(cmd);
-        fixCarPlayLayer();
+        snprintf(cmd, sizeof(cmd),
+                 "%s set layer 0x80000000 render order 0x500 2>/dev/null; "
+                 "%s set surface 1280 source region 0 0 %d %d 2>/dev/null; "
+                 "%s set surface 1280 destination region 0 0 %d %d 2>/dev/null; "
+                 "%s set surface 256 visibility 0 2>/dev/null; "
+                 "%s set surface 1280 visibility 1 2>/dev/null",
+                 L, L, cc.screenW, cc.screenH, L, cc.screenW, cc.screenH, L, L);
     } else {
-        system("/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x100 2>/dev/null");
+        snprintf(cmd, sizeof(cmd),
+                 "%s set layer 0x80000000 render order 0x100 2>/dev/null; "
+                 "%s set surface 256 visibility 1 2>/dev/null; "
+                 "%s set surface 1280 visibility 0 2>/dev/null",
+                 L, L, L);
     }
-    if (!visible) restoreFactoryGeometry();   // the factory CarPlay shares surface 1280: give it its own regions back
-    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set surface 256 visibility %d 2>/dev/null", visible ? 0 : 1);
     system(cmd);
-    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set surface 1280 visibility %d 2>/dev/null", visible ? 1 : 0);
-    system(cmd);
-    printf("[VideoManager] Screen overlay visibility changed: %s (Z-Order: %d)\n",
-           visible ? "VISIBLE" : "HIDDEN", z_order);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+    printf("[VideoManager] Screen overlay visibility changed: %s (Z-Order: %d, %ld ms)\n",
+           visible ? "VISIBLE" : "HIDDEN", z_order, ms);
+    if (visible) fixCarPlayLayer();
+    else restoreFactoryGeometry();   // the factory CarPlay shares surface 1280: give it its own regions back
+}
+
+int VideoManager::surface1280Visible() {
+    FILE* p = popen("/opt/sys/bin/LayerManagerControl get surface 1280 2>&1", "r");
+    if (!p) return -1;
+    char line[256];
+    int vis = -1;
+    while (fgets(line, sizeof(line), p)) {
+        const char* k = strstr(line, "visibility:");
+        if (k && vis < 0) {
+            k += 11;
+            while (*k == ' ' || *k == '\t') ++k;
+            if (*k == '0' || *k == '1') vis = *k - '0';
+        }
+    }
+    pclose(p);
+    return vis;
 }
 
 bool VideoManager::isVisible() const {

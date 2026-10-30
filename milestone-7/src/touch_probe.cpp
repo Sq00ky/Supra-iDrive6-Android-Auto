@@ -3,6 +3,7 @@
 #include "touch_probe.hpp"
 #include "touch_frame.hpp"
 #include "car_config.hpp"
+#include "gesture_pdu.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <sys/time.h>
@@ -123,6 +125,81 @@ void emitUp(TouchEventOut& e, bool* active, int* cx, int* cy, int ns, int k, int
 
 volatile int g_touchOwned = 0;
 
+// ---- gesture camera PDUs on the touch port --------------------------------------------------------------------------
+// UDP 30567 is not touch-only. HmiMain3D's CTouchDataClient (processSocketStream FUN_028dbe30) dispatches on the u32
+// ident of every PDU: 0xB0048002 = touch (ours), 0xB5098004 / 0xB5308005 = gesture camera gesture id (FUN_028dba84 ->
+// forwardGestureCameraGestureSync -> CFreespaceGestureHandler::handleGesture, ids in gesture_pdu.hpp), 0xB50A8003 / 0xB5098003 / 0xB5308003 / 0xB5308006 = hand
+// coordinates, 0xB509800x / 0xB530800x 1-2 = camera status. While the forwarder holds the port, io-pkt delivers every
+// unicast datagram to our socket only, so up to v1.8.42 iDrive never saw a gesture while Android Auto was on screen
+// (user report 2026-10-29: circle-for-volume and swipe-to-skip dead under Android Auto).
+// Fix (default since v1.8.47, NBT_TOUCH_CONNECT=0 turns it off; car-verified on a G11, 2026-10-29: gestures work
+// under Android Auto): connect() our socket to the touch controller (source of the first touch PDU, or
+// NBT_TOUCH_PEER=ip:port). io-pkt then matches only that peer's datagrams to our socket (exact 4-tuple lookup) and
+// hands everything else to the HMI's wildcard socket: the camera's gestures and status PDUs, and its answers to the
+// HMI's configureGestures requests (sent from that socket to the camera's UDP 30501). The HMI's own gates
+// (iva_3DGESTURES coding, power state on, input manager type 5, which configureGestures itself sets) have nothing
+// that depends on Android Auto, so nothing else is needed.
+bool isTouchPdu(const unsigned char* b, size_t n) {
+    return n >= 4 && b[0] == 0xB0 && b[1] == 0x04 && b[2] == 0x80 && b[3] == 0x02;
+}
+
+bool parsePeer(const char* e, sockaddr_in* out) {
+    if (!e || !*e) return false;
+    char ip[32];
+    const char* c = strchr(e, ':');
+    size_t l = c ? (size_t)(c - e) : strlen(e);
+    if (l == 0 || l >= sizeof(ip)) return false;
+    memcpy(ip, e, l);
+    ip[l] = 0;
+    memset(out, 0, sizeof(*out));
+    out->sin_family = AF_INET;
+    if (inet_aton(ip, &out->sin_addr) == 0) return false;
+    out->sin_port = htons(c ? (uint16_t)strtoul(c + 1, NULL, 10) : (uint16_t)30501);
+    return true;
+}
+
+// The touch controller's address, learned from a real touch PDU, is kept here so the next daemon start connects at
+// once (before it, gesture camera PDUs are still swallowed until the screen is touched).
+const char* const kTouchPeerFile = "/var/opt/aa/touch-peer";
+
+bool loadPeerFile(sockaddr_in* out) {
+    FILE* f = fopen(kTouchPeerFile, "r");
+    if (!f) return false;
+    char line[64] = "";
+    bool ok = fgets(line, sizeof(line), f) != NULL;
+    fclose(f);
+    if (!ok) return false;
+    size_t l = strlen(line);
+    while (l && (line[l - 1] == '\n' || line[l - 1] == '\r' || line[l - 1] == ' ')) line[--l] = 0;
+    return parsePeer(line, out);
+}
+
+void savePeerFile(const sockaddr_in& p) {
+    mkdir("/var/opt/aa", 0755);
+    FILE* f = fopen(kTouchPeerFile, "w");
+    if (!f) { printf("[TouchFwd] cannot write %s (%s)\n", kTouchPeerFile, strerror(errno)); return; }
+    fprintf(f, "%s:%u\n", inet_ntoa(p.sin_addr), (unsigned)ntohs(p.sin_port));
+    fclose(f);
+}
+
+bool connectToPeer(int s, const sockaddr_in& peer, const char* why) {
+    char ip[32];
+    snprintf(ip, sizeof(ip), "%s", inet_ntoa(peer.sin_addr));
+    if (connect(s, reinterpret_cast<const sockaddr*>(&peer), sizeof(peer)) != 0) {
+        printf("[TouchFwd] connect to the touch controller %s:%u FAILED (%s): iDrive keeps missing gesture camera "
+               "PDUs\n", ip, (unsigned)ntohs(peer.sin_port), strerror(errno));
+        return false;
+    }
+    sockaddr_in me;
+    socklen_t ml = sizeof(me);
+    memset(&me, 0, sizeof(me));
+    getsockname(s, reinterpret_cast<sockaddr*>(&me), &ml);
+    printf("[TouchFwd] socket connected to the touch controller %s:%u (%s; local %s:%u): only its touch PDUs come "
+           "to us now, the gesture camera's go to iDrive\n", ip, (unsigned)ntohs(peer.sin_port), why,
+           inet_ntoa(me.sin_addr), (unsigned)ntohs(me.sin_port));
+    return true;
+}
+
 // Binds the touch port (after the HMI's socket, so the kernel delivers to us). -1 on failure.
 int bindTouchPort(uint16_t port) {
     int s = socket(AF_INET, SOCK_DGRAM, 0);
@@ -154,7 +231,10 @@ void* forwardMain(void* p) {
     // (1.0 on the 1280x480 panel, 0.889 on a 1440x540 one; 1.0 with NBT_VID_NATIVE=1). NBT_TOUCH_SX/SY override.
     const double panel = touchScale();
     const double sx = envNum("NBT_TOUCH_SX", panel), sy = envNum("NBT_TOUCH_SY", panel);
-    const double ox = envNum("NBT_TOUCH_OX", 0.0), oy = envNum("NBT_TOUCH_OY", 0.0);
+    const double oxDef = defaultTouchOffsetX(carConfig());
+    const double ox = envNum("NBT_TOUCH_OX", oxDef), oy = envNum("NBT_TOUCH_OY", 0.0);
+    if (oxDef != 0.0 && !getenv("NBT_TOUCH_OX"))
+        printf("[TouchFwd] MINI round display: touch x offset %.0f by default (NBT_TOUCH_OX overrides)\n", oxDef);
     const int maxX = (int)envNum("NBT_TOUCH_W", 1280) - 1, maxY = (int)envNum("NBT_TOUCH_H", 720) - 1;
     printf("[TouchFwd] UDP %u, forwarding decoded multi-touch while Android Auto is on screen (scale %.3f/%.3f offset %.0f/%.0f range 0..%d x 0..%d)\n",
            a.port, sx, sy, ox, oy, maxX, maxY);
@@ -167,6 +247,26 @@ void* forwardMain(void* p) {
     int logged = 0, loggedMoves = 0, rawLogged = 0, multiFrames = 0;
     TouchReassembler reasm;
     bool layoutLogged = false;
+    const bool connectPeer = envNum("NBT_TOUCH_CONNECT", 1) != 0;
+    sockaddr_in peer;
+    bool havePeer = parsePeer(getenv("NBT_TOUCH_PEER"), &peer);
+    if (havePeer) printf("[TouchFwd] touch controller from NBT_TOUCH_PEER: %s:%u\n", inet_ntoa(peer.sin_addr), (unsigned)ntohs(peer.sin_port));
+    else if (connectPeer && loadPeerFile(&peer)) {
+        havePeer = true;
+        printf("[TouchFwd] touch controller from %s: %s:%u (learned from an earlier touch)\n", kTouchPeerFile,
+               inet_ntoa(peer.sin_addr), (unsigned)ntohs(peer.sin_port));
+    }
+    // Gestures that reached us (iDrive did not get them), logged decoded: one line per run of the same gesture.
+    int gLast = -1;
+    unsigned gRun = 0, gLines = 0;
+    struct timeval gAt;
+    gettimeofday(&gAt, NULL);
+    unsigned otherPdus = 0;   // non-touch PDUs that reached our socket (iDrive did not get them)
+    printf("[TouchFwd] gesture camera PDUs on UDP %u: %s\n", a.port,
+           connectPeer ? (havePeer ? "left to iDrive (socket connected to the touch controller; NBT_TOUCH_CONNECT=0 turns this off)"
+                                   : "left to iDrive once the screen has been touched (the touch controller's address is "
+                                     "learned from it; NBT_TOUCH_CONNECT=0 turns this off)")
+                       : "reach only us while Android Auto is on screen and are dropped (NBT_TOUCH_CONNECT=0)");
     const int idleMs = (int)envNum("NBT_TOUCH_IDLE_MS", 400);   // finger "up" frames can be lost: release after this silence
     struct timeval lastFrame;
     gettimeofday(&lastFrame, NULL);
@@ -191,6 +291,7 @@ void* forwardMain(void* p) {
             bindFails = 0;
             gettimeofday(&lastFrame, NULL);
             printf("[TouchFwd] took UDP %u: touch goes to the phone\n", a.port);
+            if (connectPeer && havePeer) connectToPeer(s, peer, "known peer");
         }
         if (s < 0) { usleep(100000); continue; }
 
@@ -214,8 +315,45 @@ void* forwardMain(void* p) {
                     if (active[k]) emitUp(evs[ne++], active, cx, cy, NS, k, cx[k], cy[k]);
             }
         } else {
-            ssize_t n = recvfrom(s, buf, sizeof(buf), 0, NULL, NULL);
+            sockaddr_in src;
+            socklen_t sl = sizeof(src);
+            memset(&src, 0, sizeof(src));
+            ssize_t n = recvfrom(s, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&src), &sl);
             if (n < 0) { if (errno == EINTR) continue; usleep(100000); continue; }
+            if (!isTouchPdu(buf, (size_t)n)) {
+                ++otherPdus;
+                if (otherPdus <= 20 || (otherPdus % 100) == 0) {
+                    unsigned id = n >= 4 ? ((unsigned)buf[0] << 24 | (unsigned)buf[1] << 16 | (unsigned)buf[2] << 8 | buf[3]) : 0;
+                    printf("[TouchFwd] non-touch PDU #%u ident 0x%08X (%d bytes) from %s:%u%s: iDrive does not get it\n",
+                           otherPdus, id, (int)n, inet_ntoa(src.sin_addr), (unsigned)ntohs(src.sin_port),
+                           (buf[0] == 0xB5 && (buf[1] == 0x09 || buf[1] == 0x30 || buf[1] == 0x0A)) ? " (gesture camera)" : "");
+                }
+                // Recognised gestures (gesture_pdu.hpp), also when packed behind a hand-coordinate PDU.
+                nbt::CamPdu cp[4];
+                const int np = nbt::splitCameraPdus(buf, (size_t)n, cp, 4);
+                for (int q = 0; q < np; ++q) {
+                    if (!nbt::isGesturePdu(cp[q])) continue;
+                    struct timeval gn;
+                    gettimeofday(&gn, NULL);
+                    long gap = (gn.tv_sec - gAt.tv_sec) * 1000 + (gn.tv_usec - gAt.tv_usec) / 1000;
+                    gAt = gn;
+                    const int gid = cp[q].body[0];
+                    if (gid == gLast && gap < 800) { ++gRun; continue; }
+                    if (gRun > 1 && gLines < 200) printf("[TouchFwd]   (previous gesture: %u PDUs)\n", gRun);
+                    gLast = gid;
+                    gRun = 1;
+                    if (++gLines <= 200)
+                        printf("[TouchFwd] gesture camera: %s (id %d) from %s: %s\n", nbt::gestureName((unsigned)gid), gid,
+                               inet_ntoa(src.sin_addr), connectPeer ? "reached us anyway (connect did not route it to iDrive)"
+                                                                     : "iDrive does not get it (NBT_TOUCH_CONNECT=0)");
+                }
+                continue;
+            }
+            if (connectPeer && !havePeer && src.sin_family == AF_INET && src.sin_addr.s_addr != 0) {
+                peer = src;
+                havePeer = true;
+                if (connectToPeer(s, peer, "learned from the first touch PDU")) savePeerFile(peer);
+            }
             // One touch message = 12 records: one 112-byte datagram on the Supra, 2-4 shorter ones on 1440x540
             // units. Reassemble first, then handle every completed message.
             TouchMsg msgs[kTouchMaxMsgs];

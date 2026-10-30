@@ -14,6 +14,7 @@
       <raAction id="24"/>
       <raAction id="26"/>
       <raAction id="27"/>
+      <raAction id="28"/>
       <hmiAction id="25" target="12"/>
     </actions>
     <models>
@@ -48,6 +49,10 @@
       <textIdModel id="43" textId="19">
         <synonyms/>
       </textIdModel>
+      <raBoolModel id="44"/>
+      <textIdModel id="45" textId="20">
+        <synonyms/>
+      </textIdModel>
       <raIntModel id="40" modelType="NativeStateID" value="1"/>
       <raIntModel id="41" modelType="NativeStateID" value="20"/>
     </models>
@@ -63,9 +68,10 @@
           <button action="22" id="62" model="32" text="Force Stop"/>
           <button action="23" id="63" model="33" text="Restart"/>
           <separator id="66"/>
-          <checkbox action="24" id="64" model="34" text="Start with the car" textModel="35"/>
+          <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
           <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
           <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
+          <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
           <button action="25" id="65" model="36" text="About"/>
         </components>
       </hmiState>

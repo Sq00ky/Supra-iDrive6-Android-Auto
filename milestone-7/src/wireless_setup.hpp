@@ -87,11 +87,17 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
 // Returns false once the link is closed by the phone / broken.
 bool wppService(int fd, int timeout_ms, const ApInfo& ap, uint16_t port);
 
-// True when the bytes contain the Apache Etch signature 0xDEADBEEF, i.e. the SPP link belongs to the
-// BMW Connected / MyBMW app (BCL multiplexer), not to Android Auto.
+// True when the bytes look like BMW Connected / MyBMW BCL (startup magic 12 34 56 78, Etch 0xDEADBEEF, the
+// 0x1337 watchdog or a self-consistent BCL frame), i.e. the SPP link is the BMW app's, not Android Auto's.
 bool looksLikeBmwBcl(const uint8_t* p, size_t n);
 // True when the last handshake / service call stopped because the link was BMW Connected.
 bool lastLinkForeign();
+// True when the peer of the last link sent at least one well-formed Android Auto wireless frame (on a working
+// phone: WifiStartResponse 00 02 00 07 .. right after our WifiStartRequest).
+bool lastLinkSpokeWpp();
+// Listen this long on a fresh link before writing (0 = write at once). BMW/MINI default 300 ms: a MyBMW link that
+// already sent its BCL startup magic gets nothing written into it.
+void setSppPeekMs(int ms);
 
 } // namespace nbt
 

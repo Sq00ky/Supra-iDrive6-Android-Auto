@@ -5,7 +5,17 @@ and several BMWs. A daemon on the head unit (`/opt/aa/nbt-aad`) speaks the Andro
 iDrive app (`NbtAad`) adds an **Android Auto** entry to the Media/Radio menu. You don't need a dongle, a phone-side
 companion app, developer mode, or "Start head unit server". iDrive's own binaries are not patched or hooked.
 
-**Version:** daemon `v1.8.35-keyhold`, iDrive app `rhmiapp-18` (Fork F, the main tree).
+**Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree).
+
+> **v1.8.42-stability / rhmiapp-20 (not car-verified):** after a tester's head unit reset 5 times in a row
+> (phone ending every session right after setup, `audioconn` requests piling up until memory ran out; fixed in
+> v1.8.41-routeguard): the phone's `ByeByeRequest` is answered with `ByeByeResponse` and ends the session at once
+> (logged with its reason); three sessions in a row that end within 15 s print a hint to fetch the phone's logcat;
+> session, `audioconn` and shutdown lines carry uptime timestamps (same clock as the iDrive app log) and every shutdown
+> step is timed; Force Stop waits 10 s (was 6 s) before SIGKILL. **"Start with the car" bootloop guard:** after 3
+> autostarts within 15 minutes (cold boots, so only when something resets the unit) the next boot skips the autostart
+> (`start with the car: SKIPPED by the bootloop guard`); menu Start, a clean daemon exit or 10 minutes of uptime reset
+> it (`/var/opt/aa/bootguard`).
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -26,6 +36,51 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > v1.8.8x / rhmiapp-9x add park assist (iDrive gets the screen for the parking view while `sensors.PDCStatus` is 1,
 > `NBT_PDC_ACTIVE` / `NBT_PDC_ACTION=0` override), the MINI round-display defaults, and put iDrive back on the blank
 > state when OPTIONS takes its focus. App log: `CDS sensors.PDCStatus ...`; daemon log: `[Park] ...`.
+> v1.8.40-sppreg: no more Restart needed when the phone is connected over Bluetooth but never opens the Android Auto
+> Bluetooth link (no `/dev/btspp0`; seen on a MINI F60 after a cold start and after the head unit slept). Restart
+> worked because it registers the Android Auto Bluetooth service again while the phone is connected; the daemon now
+> does that by itself (SppUuidDeregister + SppUuidRegister, no restart) every 5 s for the first 2 minutes without a
+> link, then every 30 s; the 2 minutes start again after every link, session or access-point return.
+> `NBT_SPP_REREG_S=<s>` sets the short interval, `0` turns it off. Log: `[BluetoothManager] ... re-registering the
+> Android Auto Bluetooth service`. Not car-verified yet.
+>
+> v1.8.39-panel: Android Auto uses the whole display on cars whose CarPlay coding is not full screen. The screen size
+> came from the CarPlay coding in `carplay.ini`, which is the factory CarPlay *picture*; on cars coded for the smaller
+> CarPlay window (left ~2/3, iDrive split screen on the right) Android Auto filled only that part. The daemon now reads
+> the display size from LayerManager (`get screen 0`) and uses it when it is larger than the coded picture (this also
+> covers the MINI 1180_480 case). New log line: `[Car] display (LayerManager screen 0): ...`. `NBT_SCREEN=<w>x<h>`
+> still overrides. Not car-verified yet.
+>
+> v1.8.38-btconn: the car's Bluetooth audio source is now requested through the ConnectionMaster (`audioconn -b 0xc7`,
+> the one call iDrive makes when Bluetooth audio is picked) instead of the AudioManagement focus form `-b 0x3a 0x1`.
+> Car-verified on a MINI F60 (3 of 3 sessions): granted at once and music starts by itself, even from FM radio, where
+> the focus form was refused for every retry. `NBT_BT_CONN=0` goes back to the focus form. MINI round display
+> (`1180_480` coding): touch x offset -20 by default (taps landed ~20-30 px right of the finger; tester-verified with
+> `NBT_TOUCH_OX=-20`, which still overrides).
+>
+> v1.8.37-cpwindow / rhmiapp-19 (MINI tester feedback, not car-verified yet):
+> - With the CarPlay hand-off the screen window "1280" is now created only when an Android Auto phone connects. Created
+>   at start it took LayerManager surface 1280 away from the factory CarPlay window (same id), so "Start automatically"
+>   + an iPhone first after boot gave a black CarPlay, and after a Force Stop the surface stayed without a window until
+>   reboot. Until a phone connects, the daemon no longer touches surface 1280 at all (also not on exit).
+> - CarPlay taking the screen while an Android Auto session is still open (both phones connected) now gets the
+>   decoder's CarPlay settings at once instead of a zoomed picture: while Android Auto is minimized the daemon checks
+>   every 2 s whether iDrive made surface 1280 visible. The Android Auto entry brings Android Auto back (decoder
+>   rebuilt, phone asked to restart its stream). `NBT_CP_LIVE_RETUNE=0` disables. Log: `CarPlay took the screen...`,
+>   `back to Android Auto after CarPlay`.
+> - `audioconn` retries after a refused Bluetooth source are spaced out (5, 7, 9, 11, 12, 12 s instead of every 3 s):
+>   a tester saw iDrive's watchdog warn about NBTMediaMainApp during the 3 s burst. `NBT_AUDIOCONN_RETRY_S` sets the
+>   first pause, `NBT_AUDIOCONN_RETRIES` (now default 6) the count.
+> - Menu checkbox renamed **Start automatically** (it starts the daemon when the head unit boots, not with the
+>   ignition). Install the new `NbtAad.xml` and `NbtAad_ALL_Texts.zip`.
+>
+> v1.8.36-wakefix: ignition off/on within ~10 min (the head unit stays up, only its Wi-Fi access point goes off and on)
+> left a running daemon that the phone could no longer reach: it took the Wi-Fi details over Bluetooth but never
+> connected, until Force Stop + Start (F31 and Supra reports). The daemon now watches the access point and, when it
+> comes back or a phone takes the Wi-Fi details without connecting, runs `pfctl -d` again and re-creates its listening
+> socket. Log lines: `[Wireless] ... access point is off`, `[Wireless] ...: 'pfctl -d' returned N`,
+> `[TcpServer] listener on port 5277 re-created`. Not car-verified yet.
+>
 > rhmiapp-18: during a burst of hard keys iDrive can refuse to go back to the blank state for a few seconds; the app
 > now keeps retrying (up to 8 times, while keys keep coming and 6 s after) instead of giving up after 3.
 >
@@ -134,13 +189,14 @@ no settings file.
 | Phone's "exit" (car) icon returns to iDrive; the menu entry brings Android Auto back | Car-verified |
 | BACK key; hold BACK for 2.5 s to minimize Android Auto | Car-verified (short press and hold) |
 | Bluetooth link recovery: SPP register retry; skips a `btspp` link that belongs to the BMW/Toyota companion app | Retry car-verified |
+| Bluetooth service registered again when no Android Auto link appears (every 5 s for 2 min, then 30 s; replaces pressing Restart) | v1.8.40, not yet car-verified |
 | Single instance: starting again brings the running daemon to the front | Works |
 | Older CCS controller (E5 fkt C10/C20, instance 01) | Keys and push seen working in G30 / 1180x480 logs; knob rotation fixed in v1.8.4 (message counter), not yet car-confirmed |
 | Other panel sizes / car make (read from the car's `carplay.ini`) | Works on 1280x480; others untested |
 | Car make on Android Auto's exit icon: Toyota, BMW, MINI, Rolls-Royce (from the car's CarPlay logo, then `Manufacturer`) | v1.8.5, MINI / Rolls-Royce not yet car-verified |
 | No black screen over iDrive while the daemon starts (overlay stays hidden until a phone session) | v1.8.5, not yet car-verified |
 | Native CarPlay keeps its own picture size after Android Auto (surface 1280 regions handed back on hide) | v1.8.6, not yet car-verified |
-| Menu: **Start with the car** checkbox, **About** page | rhmiapp-7, not yet car-verified |
+| Menu: **Start automatically** checkbox (called "Start with the car" before rhmiapp-19), **About** page | rhmiapp-7, not yet car-verified |
 
 Not done yet:
 - iDrive still reacts to touches while Android Auto is on screen.
@@ -248,7 +304,8 @@ Bluetooth reconnect.
 | Restart | Force Stop, then Start |
 | Save logs to USB (checkbox) | Off by default: no log files, nothing kept in RAM. When ticked, the daemon and the iDrive app append to `nbt-aad.log` / `nbt-aad-app.log` on the first writable USB stick (`/mnt/umass*`). A stick plugged in later is picked up within 5 s; a file over 64 MB is renamed to `*.old.log`. Stored as `/var/opt/aa/usblog` (a hand-made `/opt/aa/usblog` also counts). `NBT_LOG_FILE` still forces a daemon log file |
 | MENU key opens iDrive (checkbox) | Off by default: MENU opens Android Auto's menu (phone home screen) and iDrive stays on the blank state. When ticked, MENU minimizes Android Auto and opens the iDrive main menu, like native CarPlay, and is not sent to the phone. Stored as `/var/opt/aa/menu-idrive` (a hand-made `/opt/aa/menu-idrive` also counts); read on every MENU press |
-| Start with the car (checkbox) | When ticked, the iDrive app starts the daemon 15 s after the head unit boots, so a phone that connects on its own gets Android Auto without opening this menu. Stored as `/var/opt/aa/autostart` on the car's persistence partition, which is writable at runtime (`/opt/aa` usually isn't); a hand-made `/opt/aa/autostart` also counts (needs the status polling, i.e. no `status.disable`) |
+| Show driving mode changes (checkbox) | Off by default. When ticked, changing the driving mode (Sport, Comfort, ECO PRO, ...) makes Android Auto step aside like in reverse so iDrive's own driving-mode display is visible, then Android Auto comes back by itself after `NBT_DRIVEMODE_SHOW_MS` (default 3500 ms). The iDrive app reads CDS `driving.mode` / `driving.mode35up` and logs every value (`CDS driving.mode = '{"mode":n}'`). Stored as `/var/opt/aa/show-drivemode`, read on every change. Car-tested on a Supra (`driving.mode35up` 3 / 4). v1.8.45 / rhmiapp-22 (car-verified, Supra): the app also sends the previous mode, so the first change after the daemon starts is no longer taken as its baseline; the daemon reacts at once instead of on its next 250 ms tick; the LayerManager switch runs in one shell. iDrive is visible 0.3-0.5 s after the CDS value (`... HIDDEN (Z-Order: -1000, N ms)`: 262-468 ms). That was quick enough to show iDrive's blank Android Auto page before its popup, so v1.8.46 waits `NBT_DRIVEMODE_DELAY_MS` (default 400 ms; `0` = at once) after the change; a further change while iDrive has the screen only extends it |
+| Start automatically (checkbox; "Start with the car" before rhmiapp-19) | When ticked, the iDrive app starts the daemon 15 s after the head unit boots (not on every ignition-on: the head unit stays up ~10 min after ignition off, and the daemon keeps running), so a phone that connects on its own gets Android Auto without opening this menu. Stored as `/var/opt/aa/autostart` on the car's persistence partition, which is writable at runtime (`/opt/aa` usually isn't); a hand-made `/opt/aa/autostart` also counts (needs the status polling, i.e. no `status.disable`) |
 | About | One wrapping text block (a Richtext list, like BMW's own ActiveSeating intro text, English only): "NBT-AAD: native wireless Android Auto", "Developed by nanaisu", the GitHub address, and the free-of-charge notice |
 
 While Android Auto is on screen, Force Stop and Restart are ignored. Knob presses can leak to the iDrive menu
@@ -341,16 +398,22 @@ Leave these unset unless you are testing.
 | `NBT_WPP_MODE=0\|1\|2` | Pin the Bluetooth handshake mode (default rotates 2, 0, 1 on failures) |
 | `NBT_AP_CFG`, `NBT_AP_IF`, `NBT_AP_IP`, `NBT_AP_BSSID` | Hotspot config path / interface / address / BSSID (default: `iap2.cfg`, `iap2_Wifi.cfg` as fallback; `uap0`, 172.16.224.1) |
 | `NBT_SPP_UUID_CON` | Connect UUID registered with the car's SPP service (default = AA UUID) |
+| `NBT_SPP_REREG_S` | While no Android Auto Bluetooth link is open, register the service again every this many seconds for 2 minutes, then every 30 s (default 5; `0` = off) |
+| `NBT_BT_TRACE` | `1` = read-only Bluetooth diagnostics: log, with uptime, when the phone connects to / drops from the car over Bluetooth and which services it has (`DeviceListChanged: phone ... is connected`), to see why the phone does not open the Android Auto link after the car sleeps and wakes. Off by default, not car-verified |
 | `NBT_VOICE_SCENARIO_NAME` | Speech scenario name, e.g. `Carplay_Siri_1mic_RefCh` |
 | `NBT_BT_SRC`, `NBT_BT_SINK`, `NBT_BT_RELEASE=1` | Audio source/sink for Bluetooth mode (default `0x3a` / `0x1`); release the source when the phone leaves |
-| `NBT_AUDIOCONN`, `NBT_AUDIOCONN_SUFFIX`, `NBT_AUDIOCONN_RETRIES` | `audioconn` path (default `/fs/sda0/opt/mm/bin/audioconn`), extra args, retries every 3 s while the car refuses the source (default 10, max 20) |
+| `NBT_AUDIOCONN`, `NBT_AUDIOCONN_SUFFIX`, `NBT_AUDIOCONN_RETRIES` | `audioconn` path (default `/fs/sda0/opt/mm/bin/audioconn`), extra args, retries while the car refuses the source (default 6, max 20), pauses `NBT_AUDIOCONN_RETRY_S` (default 5) s growing by 2 s up to 12 s |
+| `NBT_BT_ROUTE_DELAY_MS` | wait before the Bluetooth-source `audioconn` after a session starts (default 1500 ms, 0 = at once). Since v1.8.41 the request is single-flight, at most one `audioconn` runs at a time, and a session that ends cancels its pending request and retries (a phone reconnecting every few seconds used to stack `audioconn` processes until the head unit ran out of memory and rebooted) |
+| `NBT_CHILD_NO_PRELOAD` | `1` removes `LD_PRELOAD` (inherited from the HMI) for every child process the daemon starts (`audioconn`, `LayerManagerControl`, `pfctl`, `arp`, `ifconfig`), so they stop loading the graphics libraries (`ldd:FATAL: Could not preload library libEGL_X.gpp.so`, `unknown symbol: kdMain`). Experiment, not car-verified; the start-up line `[Main] LD_PRELOAD=...` shows what is inherited |
+| `NBT_TOUCH_CONNECT`, `NBT_TOUCH_PEER` | On by default since v1.8.47 (`NBT_TOUCH_CONNECT=0` turns it off; car-verified on a G11: gestures work under Android Auto): while Android Auto is on screen the touch socket is connected to the touch controller (the first touch PDU's sender, or `NBT_TOUCH_PEER=ip:port`), so BMW Gesture Control PDUs on the same UDP 30567 port go to iDrive instead of being swallowed: circle clockwise / anticlockwise = volume up / down, two fingers = next track or mute (as set in iDrive). Swipe right and point only close / confirm iDrive popups, so over Android Auto they normally do nothing (iDrive does not even enable them in the camera unless a popup is up); swipe left is ignored by iDrive. The learned address is kept in `/var/opt/aa/touch-peer`, so after the first touch every later start connects at once. Car-confirmed (G11, v1.8.43): the camera sends from `160.48.199.16:30501`, ~30 PDUs/s of `0xB5308006` hand coordinates plus `0xB5308005` gestures. Gestures that still reach the daemon are logged decoded (`[TouchFwd] gesture camera: rotate clockwise (volume up) (id 3)`). If Android Auto touch stops working, set `NBT_TOUCH_CONNECT=0` and delete `/var/opt/aa/touch-peer` |
 | `NBT_BT_PLAY` | **Experiment, off.** `1` = once the car grants the Bluetooth source, wait `NBT_BT_PLAY_DELAY` ms (1500) and send SourceActivity PLAY to it (`AuxInBTAudio.DMMAudioSource` request 2), like picking Bluetooth audio in iDrive; `2` = also AVRCP START (`BlueMedia.SGMedia`). Log: `[BtPlay] ...`. Not car-verified |
-| `NBT_BT_CONN` | **Experiment, off.** ConnId (e.g. `0xc7`, from `audioconn -l`: `eSRC_A2DP ... AuxInBTAudio srcNr: 0x1`) to request the Bluetooth source through the ConnectionMaster (`audioconn -b 0xc7`, the iDrive HMI's call) instead of `-b 0x3a 0x1`. Not car-verified |
+| `NBT_BT_CONN` | ConnId of the car's Bluetooth source, requested through the ConnectionMaster (`audioconn -b <id>`, the iDrive HMI's call). Default `0xc7` (`audioconn -l`: `eSRC_A2DP ... AuxInBTAudio srcNr: 0x1`), car-verified on a MINI F60 since v1.8.38; `0` = the old focus form `-b 0x3a 0x1` (`NBT_BT_SRC` / `NBT_BT_SINK`) |
 | `NBT_SDR_DROP` | AA channels left out of service discovery (default `9` in Bluetooth mode) |
 | `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
 | `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets (default `0,240,0,0` on 1280x480; MINI round display with the `1180_480` coding: `0,240,40,40`, car-verified on a MINI F60) |
+| `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20, tester-verified on a MINI F60) |
 | `NBT_VID_DPI` | Video DPI (default 140, MINI `1180_480` round display 152; `0` = phone default) |
 | `NBT_VID_RES`, `NBT_VID_MW`, `NBT_VID_MH` | Other video config overrides |
 | `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Decoder / renderer heights (default 720) |
@@ -362,7 +425,8 @@ Leave these unset unless you are testing.
 | `NBT_KNOB_RAW=1` | Log every raw controller message |
 | `NBT_GEAR_REVERSE` | Gear value for R (default 2; car codes 3 P, 1 N, 2 R, 5 D) |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
-| `NBT_CP_HANDOFF=0` | Turns off the CarPlay hand-off (decoder created at start and never retuned for CarPlay, as before v1.8.32) |
+| `NBT_CP_HANDOFF=0` | Turns off the CarPlay hand-off (screen window and decoder created at start and never retuned for CarPlay, as before v1.8.32) |
+| `NBT_CP_LIVE_RETUNE=0` | Do not give the decoder CarPlay's settings when CarPlay takes the screen during a live Android Auto session (v1.8.37) |
 | `NBT_PTT_ASSISTANT=1` | Experimental: long press of the steering-wheel voice button starts the Google Assistant. Off by default (the button is only logged) |
 | `NBT_NIGHT_MODE=0/1`, `NBT_DRIVING_STATUS=0` | Sensor values. Night mode follows the car by default (`vehicle.dayNightChangeOver` via the iDrive app); `NBT_NIGHT_MODE` forces day (0) or night (1) |
 | `NBT_CAR_MAKE/MODEL/YEAR`, `NBT_VEHICLE_ID`, `NBT_HU_MAKE/MODEL`, `NBT_SW_VERSION`, `NBT_BT_ADDR` | Single identity fields |
@@ -410,6 +474,10 @@ before nbt-aad was running, so it doesn't know the car offers Android Auto. Work
    -> rejected cars.
 5. Forget the car on the phone and pair again, with nbt-aad already running.
 
+Since v1.8.40 the daemon registers its Bluetooth service again by itself when no link appears (what Restart used to
+fix): look for `re-registering the Android Auto Bluetooth service` and whether `opened /dev/btspp0` follows within a
+few seconds. If it never does, send the log with the time the phone was connected.
+
 While it's waiting, check whether a node appeared: `ls /dev | grep -i spp > /mnt/umass01200t7/spp.txt`. Nodes only
 exist while the phone has the link open, so a listing taken after Force Stop proves nothing.
 
@@ -437,12 +505,12 @@ worked on.
 The car should switch to its Bluetooth audio source on connect (`audioconn` in the log). If it doesn't, selecting
 Bluetooth audio in Media/Radio by hand is a workaround.
 
-- `AMCommand error in execution!!!` means the car refused the switch; the daemon retries for 30 s. Post the log if
-  it ends with `request still failing after 10 retries`.
-- `AMCommand successfully executed` but no sound (the car leaves the radio, AA shows the track playing, music only
-  leaks out during calls / the Assistant): the car's Bluetooth player was not started. Try, one at a time,
-  `NBT_BT_PLAY=1`, then `NBT_BT_PLAY=2`, then `NBT_BT_CONN=0xc7` in `nbt-aad.env`, and post the `[BtPlay]` /
-  `[AudioRoute]` lines with which one played.
+- Since v1.8.38 the daemon asks the car's ConnectionMaster for connection 0xc7 (`audioconn -b 0xc7`, like picking
+  Bluetooth audio in iDrive); the log shows `CMCommand successfully executed`. `CMCommand error in execution` = the
+  car refused; the daemon retries for about a minute. Post the log if it ends with `request still failing`.
+- If `audioconn -l` on your car lists eSRC_A2DP under another ConnId, set `NBT_BT_CONN=<that id>`. `NBT_BT_CONN=0`
+  goes back to the older focus form (`AMCommand ...` lines); with that form a granted source can stay silent until
+  Bluetooth audio is picked in iDrive (`NBT_BT_PLAY=1` / `2` are experiments for that case).
 
 ### Menu entry missing
 
@@ -520,9 +588,33 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
 1. **Bluetooth (`bluetooth_manager`, `dsi_client`).** Over the colibry DSI client, the daemon registers an SPP
    service named `AndroidAuto` with the Android Auto UUID `4de17a00-52cb-11e6-bdf4-0800200c9a66` at the car's
    Bluetooth service (`BSS_GAP.SGBluetoothGap` 35.0). If registration fails, it deregisters and registers once more.
+   While no phone opens the link, it deregisters and registers again every 5 s for 2 minutes, then every 30 s
+   (`spp_rereg.hpp`, `NBT_SPP_REREG_S`), because a phone that is already connected only opens it after that.
 2. **Wireless setup (`wireless_setup`).** When the phone opens the link, Connectivity creates `/dev/btsppN`. The
-   daemon scans `btspp0..7`. Links that turn out to be BMW BCL/Etch (`0xDEADBEEF`, `0x13371337`, or self-consistent BCL
-   frames) are skipped. On the Android Auto link it sends WifiStartRequest plus the hotspot details from the CarPlay
+   daemon scans `btspp0..7`. Links that turn out to be BMW BCL/Etch (the BCL startup magic `12 34 56 78`, `0xDEADBEEF`, `0x13371337`,
+   or self-consistent BCL frames) are skipped. A link that closes without a single Android Auto reply (a working
+   phone answers WifiStartRequest with `00 02 00 07 ...`) is logged as `never sent an Android Auto reply`: it was
+   most likely another app's link (v1.8.48).
+   - **MyBMW / BMW Connected / AAIdrive (BMW/MINI with BMW Apps).** AAIdrive has no Bluetooth link of its own: its
+     apps reach the car through the MyBMW / BMW Connected BCL tunnel, which the car serves in NBTMediaMainApp's
+     A4AHandler on the hard-coded `/dev/btspp0` (it waits for the BCL startup magic `12 34 56 78`). Android Auto setup
+     messages written into that link break it (the BMW app drops, AAIdrive loses the car). Since v1.8.48, on BMW/MINI:
+     - each new link is listened to for 300 ms before anything is written; a link that speaks BCL first is left alone
+       (`NBT_SPP_PEEK_MS`, 0 = off);
+     - a node whose links end twice in a row without a single Android Auto reply is left alone for 60 s, or until it
+       disappears (`NBT_SPP_SILENT_STRIKES`, 0 = off; hold time `NBT_SPP_SILENT_HOLD_S`).
+     Toyota defaults: both off. Not car-verified.
+   - **Direction check (v1.8.49, the proper fix).** An Android Auto link is always opened *by the phone* (the AA app
+     connects to our UUID from the car's SDP records), and the Bluetooth stack announces it with a ServiceRequest
+     first. The BMW Apps link is opened *by the car* (Connectivity's own ServiceConnect to the phone's Serial Port
+     service, where MyBMW / BMW Connected listens), with no ServiceRequest. nbt-aad now watches those ServiceRequests
+     (read-only) and logs for every new `/dev/btsppN` whether the phone or the car opened it. As soon as Android Auto
+     has answered on a phone-opened link once, car-opened links are never read or written again: the car's own BMW
+     Apps handler keeps them, so MyBMW and AAIdrive are not disturbed at all. The learned result is kept in
+     `/var/opt/aa/spp-model` (`phone-opens-aa`); if Android Auto ever answers on a car-opened link the check switches
+     itself off (`mixed`). Until it has learned, the 300 ms listen and the silent-link hold above apply.
+     `NBT_SPP_DIRECTION`: 0 off, 1 always on (no learning), 2 learn first (BMW/MINI default; Toyota 0).
+     Not car-verified. On the Android Auto link it sends WifiStartRequest plus the hotspot details from the CarPlay
    config `iap2_Wifi.cfg` (e.g. SSID `Toyota51807 CarPlay`, `uap0` 172.16.224.1). The phone joins the hotspot and
    connects to TCP 5277.
    - The btspp device is message-oriented: a short `read()` discards the rest of a message. The reader therefore
@@ -658,7 +750,9 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 |---|---|
 | `test_sdr`, `test_sdr_drop` | Service discovery, channel drop list |
 | `test_wpp` | Bluetooth wireless handshake framing |
-| `test_bcl_detect` | Companion-app (BCL/Etch) link detection |
+| `test_bcl_detect` | Companion-app (BCL/Etch) link detection, incl. the BCL startup magic `12 34 56 78` |
+| `test_spp_link_policy` | Silent links (MyBMW / AAIdrive) put on hold, Android Auto links never |
+| `test_spp_direction` | Phone-opened (Android Auto) vs car-opened (BMW Apps) links, learning and switch-off |
 | `test_session_lifecycle` | 400 session cycles (TSAN) |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
 | `test_ccs_decoder`, `test_ccs_push`, `test_most_msg` | Controller decode (CCS35up + old CCS) against car captures |
@@ -674,7 +768,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 - `src/`:
   - core: `main` (daemon loop, overlay ownership, control port, state file), `aa_session`, `aa_cryptor`,
     `tcp_server`, `sdr_builder`, `car_config.hpp`, `nbt_env.hpp`;
-  - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `dsi_client`;
+  - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
   - audio: `audio_route` (`audioconn` wrapper), `voice_scenario`, `audio_manager`, `a2i_stream`, `pcm_utils`;

@@ -29,9 +29,13 @@
 //     NBT_AUDIOCONN_SUFFIX  extra arguments appended to -b/-r (e.g. " 0x01")
 
 #include <stdint.h>
+#include <pthread.h>
 #include <string>
 
 namespace nbt {
+
+// Pause before build retry `attempt` (1-based): NBT_AUDIOCONN_RETRY_S (default 5), +2 s per retry, capped at 12 s.
+int audioconnRetryDelaySec(int attempt);
 
 class AudioRoute {
 public:
@@ -45,19 +49,35 @@ public:
     // (NBT_AUDIOCONN_RETRIES) while the car refuses it; onGranted(user) runs on the worker thread once
     // audioconn exits 0 (not called when every attempt failed).
     typedef void (*GrantedFn)(void* user);
-    bool build(uint32_t conn_id, GrantedFn onGranted = 0, void* user = 0);
+    // Builds are single-flight per AudioRoute and command: while a build (with its retries) is pending, the same
+    // build() again only logs and returns true. delayMs waits before the first attempt (cancelPending() during the wait = no
+    // audioconn at all).
+    bool build(uint32_t conn_id, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0);
     bool remove(uint32_t conn_id);
-    bool buildFocus(uint32_t src, uint32_t sink, GrantedFn onGranted = 0, void* user = 0);
+    bool buildFocus(uint32_t src, uint32_t sink, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0);
     bool removeFocus(uint32_t src, uint32_t sink);
     // Read-only `audioconn -l` after delayMs, logged as "[AudioRoute]   | ..." (40 lines max).
     bool listConnections(const char* tag, int delayMs);
 
+    // Session ended: every queued / sleeping / retrying job of this route stops before its next audioconn run
+    // (an audioconn already running finishes). Jobs queued afterwards (e.g. a release) are not affected.
+    void cancelPending();
+
+    // Worker-thread hooks (internal).
+    bool stale(unsigned gen);
+    void buildFinished(unsigned gen);
+
 private:
-    bool run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn onGranted = 0, void* user = 0);
+    bool run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn onGranted, void* user, int delayMs);
     bool spawn(void* job);
 
     std::string path_;
     std::string suffix_;
+    pthread_mutex_t lock_;
+    unsigned gen_;          // bumped by cancelPending()
+    bool buildBusy_;        // a build worker of generation busyGen_ is alive
+    unsigned busyGen_;
+    std::string busyCmd_;   // the command the busy build runs (single flight is per command)
 };
 
 } // namespace nbt

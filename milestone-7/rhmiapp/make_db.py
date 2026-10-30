@@ -16,21 +16,22 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          # 15 = "start at boot" checkbox, 16 = About row / page title, 17 = About page text (hmiState 12): a Richtext
          # list wraps it to the screen width; "\n" (backslash + n in the .txt) is a line break, as in BMW's own
          # ActiveSeating text 88. English only.
-         15: "Start with the car", 16: "About", 18: "Save logs to USB",   # 18 = log checkbox (rhmiapp-10)
+         15: "Start automatically", 16: "About", 18: "Save logs to USB",   # 18 = log checkbox (rhmiapp-10)
          19: "MENU key opens iDrive",   # 19 = MENU key checkbox (rhmiapp-14)
+         20: "Show driving mode changes",   # 20 = driving mode checkbox (rhmiapp-21)
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).
 LANG_TEXTS = {
-    "de": {19: "MENU-Taste oeffnet iDrive", 2: "Android Auto: Verbinden...", 18: "Protokolle auf USB speichern", 10: "Android Auto starten", 11: "Beenden erzwingen", 12: "Neu starten",
-           13: "Verbinden...", 14: "Android Auto oeffnen", 15: "Mit dem Fahrzeug starten", 16: "Info"},
-    "es-ES": {19: "La tecla MENU abre iDrive", 2: "Android Auto: Conectando...", 18: "Guardar registros en USB", 10: "Iniciar Android Auto", 11: "Forzar cierre", 12: "Reiniciar",
-              13: "Conectando...", 14: "Abrir Android Auto", 15: "Iniciar con el vehiculo", 16: "Acerca de"},
-    "fr-FR": {19: "La touche MENU ouvre iDrive", 2: "Android Auto : Connexion...", 18: "Enregistrer les journaux sur USB", 10: "Demarrer Android Auto", 11: "Forcer l'arret", 12: "Redemarrer",
-              13: "Connexion...", 14: "Ouvrir Android Auto", 15: "Demarrer avec le vehicule", 16: "A propos"},
-    "it": {19: "Il tasto MENU apre iDrive", 2: "Android Auto: Connessione...", 18: "Salva i log su USB", 10: "Avvia Android Auto", 11: "Arresto forzato", 12: "Riavvia",
-           13: "Connessione...", 14: "Apri Android Auto", 15: "Avvia con il veicolo", 16: "Informazioni"},
-    "pt": {19: "A tecla MENU abre o iDrive", 2: "Android Auto: A ligar...", 18: "Guardar registos em USB", 10: "Iniciar Android Auto", 11: "Forcar paragem", 12: "Reiniciar",
-           13: "A ligar...", 14: "Abrir Android Auto", 15: "Iniciar com o veiculo", 16: "Sobre"},
+    "de": {20: "Fahrmodus-Wechsel anzeigen", 19: "MENU-Taste oeffnet iDrive", 2: "Android Auto: Verbinden...", 18: "Protokolle auf USB speichern", 10: "Android Auto starten", 11: "Beenden erzwingen", 12: "Neu starten",
+           13: "Verbinden...", 14: "Android Auto oeffnen", 15: "Automatisch starten", 16: "Info"},
+    "es-ES": {20: "Mostrar cambios de modo de conduccion", 19: "La tecla MENU abre iDrive", 2: "Android Auto: Conectando...", 18: "Guardar registros en USB", 10: "Iniciar Android Auto", 11: "Forzar cierre", 12: "Reiniciar",
+              13: "Conectando...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Acerca de"},
+    "fr-FR": {20: "Afficher les changements de mode de conduite", 19: "La touche MENU ouvre iDrive", 2: "Android Auto : Connexion...", 18: "Enregistrer les journaux sur USB", 10: "Demarrer Android Auto", 11: "Forcer l'arret", 12: "Redemarrer",
+              13: "Connexion...", 14: "Ouvrir Android Auto", 15: "Demarrage automatique", 16: "A propos"},
+    "it": {20: "Mostra i cambi di modalita di guida", 19: "Il tasto MENU apre iDrive", 2: "Android Auto: Connessione...", 18: "Salva i log su USB", 10: "Avvia Android Auto", 11: "Arresto forzato", 12: "Riavvia",
+           13: "Connessione...", 14: "Apri Android Auto", 15: "Avvio automatico", 16: "Informazioni"},
+    "pt": {20: "Mostrar mudancas de modo de conducao", 19: "A tecla MENU abre o iDrive", 2: "Android Auto: A ligar...", 18: "Guardar registos em USB", 10: "Iniciar Android Auto", 11: "Forcar paragem", 12: "Reiniciar",
+           13: "A ligar...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Sobre"},
 }
 LANG_TEXTS["es-US"] = LANG_TEXTS["es-ES"]
 LANG_TEXTS["fr-CA"] = LANG_TEXTS["fr-FR"]
