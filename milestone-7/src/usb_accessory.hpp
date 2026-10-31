@@ -19,7 +19,8 @@
 
 namespace nbt {
 
-struct UsbBridge;   // one /dev/oap <-> socketpair bridge and its two threads (usb_accessory.cpp)
+struct UsbBridge;   // one /dev/oap <-> socketpair bridge and its threads (usb_accessory.cpp)
+class UsbDirect;    // NBT_USB_DIRECT: the phone through libusbdi instead of /dev/oap (usb_direct.hpp)
 
 class UsbAccessory {
 public:
@@ -58,7 +59,7 @@ private:
     static void* watchThreadStub(void* arg);
     void watchLoop();
     TriggerResult trigger(const char* path);
-    BridgeResult startBridge(const std::string& node);
+    BridgeResult startBridge(const std::string& node);   // node: an oap* name, or a UsbDirect key
     bool reapBridge(bool force);   // false: a stuck bridge was abandoned (force only)
     AccessoryNode* findNode(const std::string& name);
 
@@ -79,6 +80,10 @@ private:
     // Owned by the watch thread (stop() takes them over after joining it).
     UsbBridge* bridge_;            // NULL while no bridge runs
     int not_ours_ticks_;           // scans in a row the session owner was not USB while the bridge was up
+    UsbDirect* direct_;            // set from start() to stop() when NBT_USB_DIRECT is on and io-usb answered
+    double next_driver_stop_s_;    // NBT_USB_DIRECT: devc-serusb-aoap is signalled at most once a second
+    int direct_drivers_;           // devc-serusb-aoap processes still running at the last check
+    bool direct_leaked_;           // an abandoned bridge kept its UsbDirectLink: direct_ stays alive
     std::vector<SwitchNode> switches_;
     std::vector<AccessoryNode> nodes_;
 };

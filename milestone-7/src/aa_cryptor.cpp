@@ -59,6 +59,7 @@ AACryptor::AACryptor()
       rbio_(NULL),
       wbio_(NULL),
       is_handshake_complete_(false) {
+    last_error_[0] = 0;
 }
 
 AACryptor::~AACryptor() {
@@ -202,7 +203,19 @@ bool AACryptor::decrypt(const uint8_t* encrypted_data, size_t encrypted_len, std
     while ((n = SSL_read(ssl_, buf, sizeof(buf))) > 0) {
         out_decrypted.insert(out_decrypted.end(), buf, buf + n);
     }
+    if (out_decrypted.empty()) {
+        int e = SSL_get_error(ssl_, n);
+        unsigned long q = ERR_get_error();
+        char qs[120] = "none";
+        if (q) ERR_error_string_n(q, qs, sizeof(qs));
+        snprintf(last_error_, sizeof(last_error_), "SSL_read %d, SSL_get_error %d, %s", n, e, qs);
+        while (ERR_get_error()) { }
+    }
     return !out_decrypted.empty();
+}
+
+size_t AACryptor::pendingOut() const {
+    return wbio_ ? (size_t)BIO_ctrl_pending(wbio_) : 0;
 }
 
 } // namespace nbt
