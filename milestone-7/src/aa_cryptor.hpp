@@ -28,6 +28,10 @@ public:
 
     bool encrypt(const uint8_t* plain_data, size_t plain_len, std::vector<uint8_t>& out_encrypted);
     bool decrypt(const uint8_t* encrypted_data, size_t encrypted_len, std::vector<uint8_t>& out_decrypted);
+    // Why the last decrypt() returned nothing (SSL_get_error code + OpenSSL error queue), and how many bytes OpenSSL
+    // queued for the phone meanwhile (an alert or a renegotiation ClientHello would go out with the next encrypt()).
+    const char* lastError() const { return last_error_; }
+    size_t pendingOut() const;
 
 private:
     SSL_CTX* ssl_ctx_;
@@ -35,6 +39,7 @@ private:
     BIO*     rbio_;
     BIO*     wbio_;
     bool     is_handshake_complete_;
+    char     last_error_[192];
 
     bool readPendingBio(std::vector<uint8_t>& out_data);
 };
