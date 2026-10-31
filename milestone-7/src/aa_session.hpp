@@ -136,6 +136,23 @@ private:
     std::map<uint8_t, uint32_t> reassembly_wire_;    // sum of the fragment length fields
     uint32_t media_frames_;
     std::vector<uint8_t> sps_pps_cache_;
+
+    // TLS records from the phone (session thread): AES-GCM records carry the sender's sequence number as their
+    // explicit nonce, so a gap or a repeat shows a record that went missing or arrived out of order.
+    void checkRxRecord(uint8_t channel, uint8_t flags, const std::vector<uint8_t>& payload);
+    uint64_t rx_seq_next_;
+    bool rx_seq_known_;
+    uint32_t rx_records_;
+
+    // The last frames from the phone (session thread), printed when the phone goes silent.
+    struct RxNote { double t; uint8_t channel; uint8_t flags; uint16_t length; uint16_t msg_id; };
+    enum { kRxNotes = 12 };
+    RxNote rx_notes_[kRxNotes];
+    uint32_t rx_note_count_;
+    double rx_start_s_;
+    void noteRx(uint8_t channel, uint8_t flags, uint16_t length);
+    void noteRxMsg(uint16_t msg_id);
+    void dumpRxNotes();
 };
 
 } // namespace nbt

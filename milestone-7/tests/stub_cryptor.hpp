@@ -17,6 +17,8 @@ public:
     bool isHandshakeComplete() const { return false; }
     bool encrypt(const uint8_t*, size_t, std::vector<uint8_t>&) { return false; }
     bool decrypt(const uint8_t* d, size_t n, std::vector<uint8_t>& o) { o.assign(d, d + n); return true; }
+    const char* lastError() const { return ""; }
+    size_t pendingOut() const { return 0; }
 };
 }
 #endif

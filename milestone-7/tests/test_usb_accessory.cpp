@@ -3,7 +3,7 @@
 // Host test for src/usb_aoap.hpp (devctl layout, node names, frame lengths) and src/usb_accessory.cpp (watcher +
 // bridge threads). A pty linked as <dir>/oap12 stands in for devc-serusb-aoap: the master side is the phone.
 // g++ -std=gnu++98 -Wall -Wextra -pthread -Iinclude -Isrc -o /tmp/test_usb_accessory
-//     tests/test_usb_accessory.cpp src/usb_accessory.cpp && /tmp/test_usb_accessory   (~32 s: real retry gaps)
+//     tests/test_usb_accessory.cpp src/usb_accessory.cpp src/usb_direct.cpp && /tmp/test_usb_accessory   (~32 s: real retry gaps)
 #include "usb_aoap.hpp"
 #include "usb_accessory.hpp"
 #include <assert.h>

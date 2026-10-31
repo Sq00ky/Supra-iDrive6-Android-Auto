@@ -55,6 +55,14 @@ inline bool usbEnabled() {
     return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
 }
 
+// NBT_USB_DIRECT=1 (with NBT_USB=1, experimental): read the phone through libusbdi, not devc-serusb-aoap (which it
+// stops for the phone): see usb_direct.hpp.
+inline bool usbDirectEnabled() {
+    const char* e = getenv("NBT_USB_DIRECT");
+    if (!e || !*e) return false;
+    return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
+}
+
 inline unsigned long envHex(const char* name, unsigned long def) {
     const char* e = getenv(name);
     if (!e || !*e) return def;
