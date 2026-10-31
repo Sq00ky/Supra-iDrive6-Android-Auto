@@ -423,6 +423,7 @@ Leave these unset unless you are testing.
 | Setting | Effect |
 |---|---|
 | `NBT_AA_PORT` | TCP port the phone is told to use (default 5277). Port 52770 has been tried and failed on one car; under investigation |
+| `NBT_USB` | **Experiment, off.** `1` = Android Auto over USB through the head unit's own Android Open Accessory drivers, next to wireless. Not car-verified. With it on, an Android phone plugged in while the daemon runs is switched to accessory mode (`aoap-switch`, `/dev/android<bus><dev>`) as `Android` / `Android Auto`, and the session runs over `/dev/oap<bus><dev>` (`devc-serusb-aoap`). The phone then stays in accessory mode, so iDrive's USB media (MTP) doesn't see it until it is replugged; after 3 sessions on one plug-in, replug it. Log: `[UsbAccessory] ...`. If the phone never answers, `NBT_USB_MANUFACTURER` / `NBT_USB_MODEL` change the identity sent |
 | `NBT_BTSPP_DEV` | Use only this SPP node (default: scan `/dev/btspp0..7`) |
 | `NBT_WPP_MODE=0\|1\|2` | Pin the Bluetooth handshake mode (default rotates 2, 0, 1 on failures) |
 | `NBT_AP_CFG`, `NBT_AP_IF`, `NBT_AP_IP`, `NBT_AP_BSSID` | Hotspot config path / interface / address / BSSID (default: `iap2.cfg`, `iap2_Wifi.cfg` as fallback; `uap0`, 172.16.224.1) |
@@ -853,6 +854,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_spp_link_policy` | Silent links (MyBMW / AAIdrive) put on hold, Android Auto links never |
 | `test_spp_direction` | Phone-opened (Android Auto) vs car-opened (BMW Apps) links, learning and switch-off |
 | `test_session_lifecycle` | 400 session cycles (TSAN) |
+| `test_usb_accessory` | USB accessory: devctl layout, frame lengths, bridge over a fake `/dev/oap` (pty), retries, unplug, stop |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
 | `test_ccs_decoder`, `test_ccs_push`, `test_most_msg` | Controller decode (CCS35up + old CCS) against car captures |
 | `test_ctl_wizard` | Wizard logic and env output |
@@ -869,6 +871,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 - `src/`:
   - core: `main` (daemon loop, overlay ownership, control port, state file), `aa_session`, `aa_cryptor`,
     `tcp_server`, `sdr_builder`, `car_config.hpp`, `nbt_env.hpp`;
+  - USB (experimental): `usb_accessory` (watcher + `/dev/oap` bridge), `usb_aoap.hpp` (aoap-switch devctls);
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
@@ -893,6 +896,10 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 - Media through the head unit's own audio path (A2I) is experimental and not audible yet.
 - Cluster/HUD arrows (`kombi_nav`): confirm on the car that the head unit reaches the KOMBI directly, run a drive,
   and check the direction values other than LEFT / RIGHT / destination (parked).
+- Android Auto over USB (`NBT_USB=1`) needs a first car test. Check with the phone plugged in: does `ls /dev/android*`
+  show a node (the car's medialauncher must still have its OAP probing on), does `/dev/oap*` appear after the
+  `switch to accessory mode sent` line, and does `pidin fds | grep oap` show only nbt-aad on it? If BMW's
+  `NBTMediaMainApp` (A4A) also has it open, the two share the phone's data and the session breaks.
 
 ## License
 
