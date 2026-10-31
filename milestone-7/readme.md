@@ -320,6 +320,7 @@ underneath the overlay, so this stops a stray press from killing the session.
 | Phone's car / "exit" icon | iDrive gets the screen; the session keeps running in the background |
 | Media/Radio -> Android Auto -> Start (while running) | Android Auto comes back |
 | Reverse gear | Camera shows; Android Auto returns when you leave reverse (unless you had exited it) |
+| Manual gearbox: reverse, then neutral + handbrake | Android Auto returns after 5 s in neutral (`NBT_NEUTRAL_RESUME_S`, `0` = off) (park assist would otherwise keep iDrive's parking view up) |
 | BACK (short press) | Back in Android Auto |
 | BACK held 2.5 s | Minimizes Android Auto like the exit icon (`NBT_BACK_HOLD_MS`) |
 | Phone out of range / Wi-Fi drops | After 2 s without data iDrive gets the screen back |
@@ -426,6 +427,7 @@ Leave these unset unless you are testing.
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |
 | `NBT_KNOB_RAW=1` | Log every raw controller message |
 | `NBT_GEAR_REVERSE` | Gear value for R (default 2; car codes 3 P, 1 N, 2 R, 5 D) |
+| `NBT_NEUTRAL_RESUME_S`, `NBT_GEAR_NEUTRAL` | Manual gearbox: seconds in neutral straight after reverse before Android Auto comes back over the park-assist view (default `5`; `0` = off). Leaving neutral or going back into reverse cancels it; not after you exited Android Auto. Gear value for N (default 1). Log: `[Gear] ... reverse -> neutral`. Not car-verified |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
 | `NBT_CP_HANDOFF=0` | Turns off the CarPlay hand-off (screen window and decoder created at start and never retuned for CarPlay, as before v1.8.32) |
 | `NBT_CP_LIVE_RETUNE=0` | Do not give the decoder CarPlay's settings when CarPlay takes the screen during a live Android Auto session (v1.8.37) |

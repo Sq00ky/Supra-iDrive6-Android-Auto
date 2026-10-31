@@ -101,6 +101,7 @@
 #include "spp_rereg.hpp"
 #include "spp_link_policy.hpp"
 #include "spp_direction.hpp"
+#include "neutral_resume.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -1363,7 +1364,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.49-sppdir"
+#define NBT_AAD_BUILD "v1.8.52-neutral5"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no log file and nothing kept in RAM (the iDrive app sends our stdout to /dev/null; from a shell it stays on
@@ -1600,6 +1601,17 @@ int main(int argc, char* argv[]) {
     const bool pdc_action = nbt::envFlag("NBT_PDC_ACTION") != 0;       // default on; NBT_PDC_ACTION=0 ignores park assist
     bool was_park = false;
     bool park_dismissed = false;   // iDrive Android Auto entry chosen while park assist is active: AA until it ends
+    // Manual gearbox (feature request 2026-10-31): reverse -> neutral + handbrake leaves park assist (and with it
+    // iDrive's parking view) up, since only P or driving off ends it. NBT_NEUTRAL_RESUME_S=<s> (default 5, 0 = off)
+    // brings Android Auto back after that many seconds in neutral straight after reverse, as if the driver had picked
+    // the iDrive Android Auto entry. NBT_GEAR_NEUTRAL: gear code for N (default 1). Not car-verified.
+    const uint32_t neutral_resume_ms = (uint32_t)nbt::envHex("NBT_NEUTRAL_RESUME_S", 5) * 1000u;
+    const int gear_neutral = (int)nbt::envHex("NBT_GEAR_NEUTRAL", 1);
+    nbt::NeutralResume neutral_resume;
+    bool neutral_wait_logged = false;
+    if (neutral_resume_ms)
+        printf("[Gear] manual gearbox: Android Auto comes back %u s after reverse -> neutral (gear %d) "
+               "(NBT_NEUTRAL_RESUME_S, 0 = off)\n", neutral_resume_ms / 1000u, gear_neutral);
     printf("[Main] Screen ownership: reverse gear value %d (%s), exit-to-iDrive via the phone's car icon, "
            "back via the iDrive Android Auto entry.\n", gear_reverse, gear_action ? "on" : "off (NBT_GEAR_ACTION=0)");
     bool overlay_on = false;              // video.init() leaves the window hidden
@@ -1738,6 +1750,27 @@ int main(int argc, char* argv[]) {
             was_reverse = reverse;
         }
         bool park_raw = pdc_action && pdcActive(g_pdc);
+        bool neutral_due = neutral_resume.update(gear_action ? (int)g_gear : -1, gear_reverse, gear_neutral, upMs(),
+                                                 neutral_resume_ms);
+        if (neutral_resume.waiting() && !neutral_wait_logged) {
+            neutral_wait_logged = true;
+            printf("[Gear] [%9.3f] reverse -> neutral: Android Auto back in %u s if it stays in neutral\n", upSec(),
+                   neutral_resume_ms / 1000u);
+        } else if (!neutral_resume.waiting()) {
+            neutral_wait_logged = false;
+        }
+        if (neutral_due) {
+            if (g_userExit) {
+                printf("[Gear] [%9.3f] %u s in neutral after reverse: Android Auto stays minimized (driver exited it)\n",
+                       upSec(), neutral_resume_ms / 1000u);
+            } else {
+                printf("[Gear] [%9.3f] %u s in neutral after reverse: back to Android Auto%s\n", upSec(),
+                       neutral_resume_ms / 1000u, park_raw ? " over the park-assist view" : "");
+                if (park_raw) park_dismissed = true;     // like the iDrive entry during park assist: AA until it ends
+                force_show = true;                       // re-assert even if we think it is up (HMI may have raised the camera)
+                if (act && !overlay_on) g_session.postVideoFocus(true);   // phone resumes projecting if it paused
+            }
+        }
         if (!park_raw) park_dismissed = false;
         bool park = park_raw && !park_dismissed;
         if (park != was_park) {
