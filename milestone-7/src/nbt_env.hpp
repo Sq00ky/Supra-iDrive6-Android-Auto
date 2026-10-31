@@ -38,6 +38,23 @@ inline bool btAudioEnabled() {
     return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
 }
 
+// Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified,
+// so off unless NBT_USB=1 / on / yes / true: it switches any Android phone plugged in while the daemon runs into
+// accessory mode, which takes it away from iDrive's USB media (MTP) until it is replugged.
+inline bool usbEnabled() {
+    const char* e = getenv("NBT_USB");
+    if (!e || !*e) return false;
+    return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
+}
+
+// NBT_USB_DIRECT=1 (with NBT_USB=1, experimental): read the phone through libusbdi, not devc-serusb-aoap (which it
+// stops for the phone): see usb_direct.hpp.
+inline bool usbDirectEnabled() {
+    const char* e = getenv("NBT_USB_DIRECT");
+    if (!e || !*e) return false;
+    return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
+}
+
 inline unsigned long envHex(const char* name, unsigned long def) {
     const char* e = getenv(name);
     if (!e || !*e) return def;

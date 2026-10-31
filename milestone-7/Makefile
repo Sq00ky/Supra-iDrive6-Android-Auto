@@ -13,7 +13,7 @@ INCLUDES = -I./include -I./src
 # Remove -fPIC and -Bdynamic to produce a true QNX executable (ET_EXEC), not a shared lib (ET_DYN)
 CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 # Set RPATH so QNX's dynamic linker automatically finds liba2i_client.so in /opt/mm/lib without copying
-LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lang-c++ -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
+LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 SRCS = src/main.cpp \
        src/audio_manager.cpp \
@@ -22,6 +22,8 @@ SRCS = src/main.cpp \
        src/pcm_utils.cpp \
        src/video_manager.cpp \
        src/tcp_server.cpp \
+       src/usb_accessory.cpp \
+       src/usb_direct.cpp \
        src/aa_session.cpp \
        src/aa_cryptor.cpp \
        src/bluetooth_manager.cpp \
@@ -89,10 +91,14 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 	$(PLUGIN_CXX) -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp -I./plugin -o $@ plugin/plugin_check.cpp -lang-c++ $(PLUGIN_RPATH)
 	@echo [DONE] Built $@
 
+# -Wp,-MMD: a .d file per object lists the headers it includes, so changing a header rebuilds every object that
+# uses it (a class that grew in aa_session.hpp once left main.o allocating the old, smaller AASession).
 %.o: %.cpp
 	@echo [CXX] $<
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+
+-include $(OBJS:.o=.d)
 
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check

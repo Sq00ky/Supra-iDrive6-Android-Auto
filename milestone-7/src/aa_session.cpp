@@ -20,6 +20,12 @@
 
 namespace nbt {
 
+static double monoS() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
 AASession::AASession()
     : client_fd_(-1),
       running_(0),
@@ -34,7 +40,12 @@ AASession::AASession()
       audio_user_data_(NULL),
       audio_state_cb_(NULL),
       audio_state_user_data_(NULL),
-      media_frames_(0) {
+      media_frames_(0),
+      rx_seq_next_(0),
+      rx_seq_known_(false),
+      rx_records_(0),
+      rx_note_count_(0),
+      rx_start_s_(0) {
     pthread_mutex_init(&lifecycle_mutex_, NULL);
     pthread_mutex_init(&fd_mutex_, NULL);
     pthread_mutex_init(&touch_mutex_, NULL);
@@ -251,6 +262,11 @@ bool AASession::start(int client_fd) {
     pthread_mutex_unlock(&touch_mutex_);
     mic_sent_ = 0;
     media_frames_ = 0;
+    rx_seq_next_ = 0;
+    rx_seq_known_ = false;
+    rx_records_ = 0;
+    rx_note_count_ = 0;
+    rx_start_s_ = monoS();
     memset(av_session_, 0, sizeof(av_session_));
     audio_frames_[0] = audio_frames_[1] = 0;
     setRunning(true);
@@ -280,6 +296,59 @@ void AASession::stop() {
     }
     releaseSocket();
     pthread_mutex_unlock(&lifecycle_mutex_);
+}
+
+void AASession::noteRx(uint8_t channel, uint8_t flags, uint16_t length) {
+    RxNote& n = rx_notes_[rx_note_count_ % kRxNotes];
+    n.t = monoS() - rx_start_s_;
+    n.channel = channel;
+    n.flags = flags;
+    n.length = length;
+    n.msg_id = 0xFFFF;   // not known until decrypted and complete
+    ++rx_note_count_;
+}
+
+void AASession::noteRxMsg(uint16_t msg_id) {
+    if (rx_note_count_) rx_notes_[(rx_note_count_ - 1) % kRxNotes].msg_id = msg_id;
+}
+
+void AASession::dumpRxNotes() {
+    uint32_t first = rx_note_count_ > kRxNotes ? rx_note_count_ - kRxNotes : 0;
+    printf("[AASession] last %u of %u frames from the phone (s since the session started):\n",
+           (unsigned)(rx_note_count_ - first), (unsigned)rx_note_count_);
+    for (uint32_t i = first; i < rx_note_count_; ++i) {
+        const RxNote& n = rx_notes_[i % kRxNotes];
+        if (n.msg_id == 0xFFFF)
+            printf("            +%.3f ch %u flags 0x%02X len %u\n", n.t, n.channel, n.flags, n.length);
+        else
+            printf("            +%.3f ch %u flags 0x%02X len %u msg 0x%04X\n", n.t, n.channel, n.flags, n.length,
+                   n.msg_id);
+    }
+}
+
+void AASession::checkRxRecord(uint8_t channel, uint8_t flags, const std::vector<uint8_t>& payload) {
+    ++rx_records_;
+    if (payload.size() < 13) {
+        printf("[AASession] TLS record %u on ch %u: only %u bytes\n", rx_records_, channel, (unsigned)payload.size());
+        return;
+    }
+    const uint8_t* p = &payload[0];
+    unsigned type = p[0];
+    unsigned rlen = ((unsigned)p[3] << 8) | p[4];
+    uint64_t seq = 0;
+    for (int i = 5; i < 13; ++i) seq = (seq << 8) | p[i];
+    bool odd = type != 0x17 || p[1] != 0x03 || p[2] != 0x03 || rlen + 5 != payload.size();
+    bool jump = rx_seq_known_ && seq != rx_seq_next_;
+    if (odd || jump || rx_records_ <= 32) {
+        char note[64] = "";
+        if (jump) snprintf(note, sizeof(note), " SEQUENCE JUMP (expected %llu)", (unsigned long long)rx_seq_next_);
+        else if (odd) snprintf(note, sizeof(note), " UNEXPECTED HEADER");
+        printf("[AASession] TLS record %u ch %u flags 0x%02X: type 0x%02X ver %02X%02X len %u (frame %u), seq %llu%s\n",
+               rx_records_, channel, flags, type, p[1], p[2], rlen, (unsigned)payload.size(), (unsigned long long)seq,
+               note);
+    }
+    rx_seq_next_ = seq + 1;
+    rx_seq_known_ = true;
 }
 
 void* AASession::sessionThreadStub(void* arg) {
@@ -334,6 +403,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                     if (idle_ms >= limit_ms) {
                         printf("[AASession] No data from phone for %u s: treating session as dead.\n",
                                (unsigned)(idle_ms / 1000));
+                        dumpRxNotes();
                         return false;
                     }
                 }
@@ -774,6 +844,7 @@ void AASession::sessionLoop() {
         uint8_t channel = header[0];
         uint8_t flags   = header[1];
         uint16_t length = (static_cast<uint16_t>(header[2]) << 8) | header[3];
+        noteRx(channel, flags, length);
         g_crumb_stage = 1;
         g_crumb_channel = channel;
 
@@ -821,8 +892,13 @@ void AASession::sessionLoop() {
             g_crumb_stage = 2;
             std::vector<uint8_t> decrypted_chunk;
             if (flags & 0x08) {
+                checkRxRecord(channel, flags, payload);
                 if (!cryptor_.decrypt(&payload[0], payload.size(), decrypted_chunk)) {
-                    printf("[AASession] Failed to decrypt encrypted frame (%u bytes).\n", length);
+                    printf("[AASession] Failed to decrypt encrypted frame (%u bytes): %s; %u bytes queued for the phone\n",
+                           length, cryptor_.lastError(), (unsigned)cryptor_.pendingOut());
+                    printf("            Raw: ");
+                    for (size_t i = 0; i < payload.size() && i < 24; ++i) printf("%02X ", payload[i]);
+                    printf("\n");
                     continue;
                 }
             } else {
@@ -870,6 +946,7 @@ void AASession::sessionLoop() {
 
             // Universal Message Dispatcher based on protocol wire captures
             uint16_t msg_id = frame_data.size() >= 2 ? ((static_cast<uint16_t>(frame_data[0]) << 8) | frame_data[1]) : 0;
+            noteRxMsg(msg_id);
             g_crumb_stage = 3;
             g_crumb_msg = msg_id;
 
