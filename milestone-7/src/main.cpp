@@ -1212,9 +1212,10 @@ static void onSessionEnded(void* user_data) {
     }
 }
 
-// UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected.
-static bool sessionBusy(void*) {
-    return g_owner.get() != nbt::kTransportNone;
+// UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
+// whose session is over (owner no longer USB) is ended.
+static nbt::Transport sessionOwner(void*) {
+    return g_owner.get();
 }
 
 // The one way a session starts, for both transports (the TCP accept / connector threads and the USB watch thread
@@ -1598,7 +1599,7 @@ int main(int argc, char* argv[]) {
 
     // 4b. Android Auto over USB (NBT_USB=1, experimental). Same user data as the TCP server, so its "session
     // active" state also covers a USB phone and the auto-connector stays quiet; startSession() picks the owner.
-    nbt::UsbAccessory usb(&onUsbConnected, &tcp_server, &sessionBusy, NULL);
+    nbt::UsbAccessory usb(&onUsbConnected, &tcp_server, &sessionOwner, NULL);
     if (nbt::usbEnabled()) {
         if (usb.start()) g_usb = &usb;
         else printf("[Main] Android Auto over USB failed to start.\n");
