@@ -94,7 +94,11 @@ ls -l /opt/hmi/ID5/data/ro/Plugins/NbtAad/
 OnOffDSICommander appreset
 ```
 
-We're going to verify all the files successfully copied over okay, once that's done, you'll need to restart the headunit. Press the power button for 30 seconds, and it will reboot. 
-Before starting it, make sure your phone is connected via Bluetooth and you can hear music on the speakers. Head over to Media/Radio, and select "Android Auto". 
-Your screen may flash briefly. This is 100% normal. On your phone, you should see "Connecting to Android Auto", you should see your WiFi network switch over to your cars... 
-Once it's fully connected Android Auto should display on your screen!
+After the HMI restarts, go into Media/Radio, look for Android Auto. Enable Log to USB, and click start.
+**DO NOT EXPECT ANDROID AUTO TO START IMMEDIATELY.**
+You 9/10 times will need to re-pair your phone as a new bluetooth device to the car.
+If you're installing it yourself, read the logs. It'll often tell you what's wrong.
+
+### Common Issues
+/dev/btspp0 (No such file or directory)? - Re-pair your phone to the car.
+WiFi Information seen but phone not connecting? - Turn off your hotspot. Check ``/var/opt/conn/carplay/*.cfg | grep -i pass`` and see if the network passwords vary. Reboot your phone.
