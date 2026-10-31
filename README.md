@@ -1,7 +1,3 @@
-# milestone-7
-
-The current source tree is in the [milestone-7](milestone-7) folder. [milestone-7/FIXES.md](milestone-7/FIXES.md) lists the session, handshake, settings, and touch fixes.
-
 # Overview
 I'm a believer of humans writing things, but this is well beyond my skillset, so I (me, Ronnie) am writing this (the words on the page you're reading). I'm not a C-dev, but I do know these things can be done... So... This repository contains code for the J29 Toyota Supra to run Android Auto natively on the NBT Evo head unit. Yeah, talk about a big one. I'll preface it with this: Big screw you to all the companies who have profited for **years** on MMI units. You could have drove innovation, yet you chose to implement a "just good enough" solution to get people to bite. Okay, now that that's out of the way...
 
@@ -31,7 +27,15 @@ The only authorized bundlers is TurboCode for directly supporting the developmen
 - SSH Access to your NBT Evo head unit.
 - An Ethernet -> ODB2 cable
 - A computer w/ an SSH Client
-- at least 1GB Flash Drive
+
+## No Flashdrive? No Problem.
+Grab a QNX Compiled SCP Binary and run:
+```
+ssh root@<hu-ip> 'cat > /tmp/scp-server' < scp-server
+ssh root@<hu-ip>
+mv /tmp/scp-server /bin/scp
+chmod +x /bin/scp
+```
 
 ## Instructions
 Installation instructions can be found in the [install.md file](https://github.com/Sq00ky/Supra-iDrive6-Android-Auto/blob/main/install.md)
