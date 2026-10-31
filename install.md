@@ -66,9 +66,9 @@ From there, we will change the head unit from Read Only to Read Write temporaril
 Either I can do this, or you can do this. No pressure. I don't mind doing this for you. I've done both ways. If you're technically inclined and want to poke around, feel free. If not, no worries. I got you!
 
 ### WARNING
-Don't use putty - these commands are meant for a normal SSH client.
+Don't use PuTTY - these SSH connection commands are meant for a normal SSH client. **NOT PuTTY**
 
-Open cmd.exe / powershell and run them. **Don't use PuTTY**
+Open cmd.exe / powershell.exe and run them. **Don't use PuTTY.**
 
 ### What are those commands?
 I'm glad you asked!
