@@ -31,9 +31,9 @@ The only authorized bundlers is TurboCode for directly supporting the developmen
 ## No Flashdrive? No Problem.
 Grab a QNX Compiled SCP Binary and run:
 ```
-ssh root@<hu-ip> 'cat > /tmp/scp-server' < scp-server
+ssh root@<hu-ip> 'cat > /tmp/scp' < /path/to/scp/scp
 ssh root@<hu-ip>
-mv /tmp/scp-server /bin/scp
+mv /tmp/scp /bin/scp
 chmod +x /bin/scp
 ```
 
