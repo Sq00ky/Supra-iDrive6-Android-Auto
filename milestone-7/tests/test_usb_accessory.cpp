@@ -3,7 +3,7 @@
 // Host test for src/usb_aoap.hpp (devctl layout, node names, frame lengths) and src/usb_accessory.cpp (watcher +
 // bridge threads). A pty linked as <dir>/oap12 stands in for devc-serusb-aoap: the master side is the phone.
 // g++ -std=gnu++98 -Wall -Wextra -pthread -Iinclude -Isrc -o /tmp/test_usb_accessory
-//     tests/test_usb_accessory.cpp src/usb_accessory.cpp && /tmp/test_usb_accessory   (~16 s: real retry gaps)
+//     tests/test_usb_accessory.cpp src/usb_accessory.cpp && /tmp/test_usb_accessory   (~32 s: real retry gaps)
 #include "usb_aoap.hpp"
 #include "usb_accessory.hpp"
 #include <assert.h>
@@ -92,11 +92,12 @@ static void onConnect(int fd, void*) {
     pthread_mutex_unlock(&g_mu);
 }
 
-static bool busy(void*) {
+// Like sessionOwner() in main.cpp: the test's "session" is a USB one while its fd is open.
+static Transport owner(void*) {
     pthread_mutex_lock(&g_mu);
     bool b = g_active;
     pthread_mutex_unlock(&g_mu);
-    return b;
+    return b ? kTransportUsb : kTransportNone;
 }
 
 static int sessions() {
@@ -184,7 +185,7 @@ static void testBridge() {
     fclose(f);
     int phone = openPhone(link);
 
-    UsbAccessory usb(&onConnect, NULL, &busy, NULL, dir);
+    UsbAccessory usb(&onConnect, NULL, &owner, NULL, dir);
     assert(usb.start());
     assert(waitSessions(1, 3.0));
     int s = sessionFd();
@@ -263,10 +264,118 @@ static void testBridge() {
     printf("stop: ok\n");
 }
 
+// Item 3 of the review: the phone stops reading while the head unit has data queued, so the writer sits in
+// write() on /dev/oap. When the session ends, the bridge must still be ended (writer interrupted) and reaped, or
+// no USB session could ever start again.
+static void testStalledWriter() {
+    const char* dir = "/tmp/nbt_usbacc_stall";
+    const char* link = "/tmp/nbt_usbacc_stall/oap21";
+    int rc = system("rm -rf /tmp/nbt_usbacc_stall && mkdir -p /tmp/nbt_usbacc_stall");
+    assert(rc == 0);
+    int phone = openPhone(link);   // never read: the pty fills up and the bridge's write() blocks
+    int base = sessions();
+    UsbAccessory usb(&onConnect, NULL, &owner, NULL, dir);
+    assert(usb.start());
+    assert(waitSessions(base + 1, 3.0));
+    int s = sessionFd();
+    assert(fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK) == 0);
+    uint8_t frame[4 + 1000];
+    memset(frame, 0x5a, sizeof(frame));
+    frame[0] = 0x03; frame[1] = 0x0b; frame[2] = 1000 >> 8; frame[3] = 1000 & 0xff;
+    size_t queued = 0;
+    for (int i = 0; i < 20000; ++i) {   // until the socket is full too (the writer is stuck behind it)
+        ssize_t w = write(s, frame, sizeof(frame));
+        if (w < 0) { assert(errno == EAGAIN || errno == EWOULDBLOCK); break; }
+        queued += (size_t)w;
+    }
+    assert(queued > 64 * 1024);
+    usleep(300000);
+    endSession();   // ByeBye: the session is over, the phone is still silent
+    assert(waitSessions(base + 2, 6.0));   // reaped (~1 s) + retry gap (3 s)
+    printf("stalled writer: ok\n");
+
+    // stop() with the new bridge stuck the same way (the pty is still full) returns promptly too.
+    s = sessionFd();
+    assert(fcntl(s, F_SETFL, fcntl(s, F_GETFL) | O_NONBLOCK) == 0);
+    for (int i = 0; i < 20000 && write(s, frame, sizeof(frame)) > 0; ++i) { }
+    usleep(300000);
+    double t0 = now();
+    usb.stop();
+    assert(now() - t0 < 2.0);
+    endSession();
+    close(phone);
+    printf("stop with a stalled writer: ok\n");
+}
+
+// Item 5: an accessory node that cannot be opened yet (driver not ready, or held by another client) is retried and
+// the failures do not use up the sessions of that plug-in.
+static void testOpenRetries() {
+    const char* dir = "/tmp/nbt_usbacc_retry";
+    const char* link = "/tmp/nbt_usbacc_retry/oap33";
+    int rc = system("rm -rf /tmp/nbt_usbacc_retry && mkdir -p /tmp/nbt_usbacc_retry");
+    assert(rc == 0);
+    assert(symlink("/tmp/nbt_usbacc_retry/not-there-yet", link) == 0);   // listed by readdir, open() fails
+    int base = sessions();
+    UsbAccessory usb(&onConnect, NULL, &owner, NULL, dir);
+    assert(usb.start());
+    sleep(4);   // 4 failed opens, one a second: more than the 3 sessions of a plug-in
+    assert(sessions() == base);
+    assert(usb.phonePresent());
+    // The driver comes up: same node name, swapped atomically so the watcher never sees it missing.
+    int phone = openPhone("/tmp/nbt_usbacc_retry/tmp");
+    assert(rename("/tmp/nbt_usbacc_retry/tmp", link) == 0);
+    assert(waitSessions(base + 1, 3.0));
+    usb.stop();
+    endSession();
+    close(phone);
+    printf("open retries: ok\n");
+}
+
+static int countLines(const char* path, const char* needle) {
+    FILE* f = fopen(path, "r");
+    assert(f);
+    char line[512];
+    int n = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, needle)) ++n;
+    }
+    fclose(f);
+    return n;
+}
+
+// Item 5: an aoap-switch node whose switch fails (here: no devctl on the host) is retried a second apart, up to
+// 5 times, instead of once for the whole plug-in.
+static void testSwitchRetries() {
+    const char* dir = "/tmp/nbt_usbacc_switch";
+    const char* log = "/tmp/nbt_usbacc_switch.log";
+    int rc = system("rm -rf /tmp/nbt_usbacc_switch && mkdir -p /tmp/nbt_usbacc_switch");
+    assert(rc == 0);
+    FILE* f = fopen("/tmp/nbt_usbacc_switch/android05", "w");
+    assert(f);
+    fclose(f);
+    int saved = dup(1);
+    int out = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    assert(saved >= 0 && out >= 0);
+    assert(dup2(out, 1) == 1);   // stdout is unbuffered (main)
+    UsbAccessory usb(&onConnect, NULL, &owner, NULL, dir);
+    assert(usb.start());
+    sleep(7);
+    usb.stop();
+    assert(dup2(saved, 1) == 1);
+    close(saved);
+    close(out);
+    assert(countLines(log, "android05: accessory switch failed") == 5);
+    assert(countLines(log, "android05: giving up after 5 tries") == 1);
+    printf("switch retries: ok\n");
+}
+
 int main() {
     setvbuf(stdout, NULL, _IONBF, 0);   // the daemon log lines interleave with the asserts
     testHeader();
     testBridge();
+    testStalledWriter();
+    testOpenRetries();
+    testSwitchRetries();
     printf("test_usb_accessory: all passed\n");
     return 0;
 }

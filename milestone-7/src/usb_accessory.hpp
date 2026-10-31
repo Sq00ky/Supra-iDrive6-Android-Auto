@@ -6,8 +6,10 @@
 // Android Auto over USB (NBT_USB=1, experimental, not car-verified). Uses the head unit's own AOA drivers
 // (see usb_aoap.hpp): a watcher thread triggers aoap-switch on /dev/android<bus><dev> with the Android Auto
 // identity, then opens the /dev/oap<bus><dev> node the phone comes back on and bridges it to one end of a
-// socketpair. The other end goes to the same ClientConnectedCallback as a TCP phone, so AASession runs unchanged.
+// socketpair. The other end goes to the ClientConnectedCallback (startSession() in main.cpp), so AASession runs
+// unchanged.
 
+#include "session_owner.hpp"
 #include "tcp_server.hpp"
 #include <stddef.h>
 #include <stdint.h>
@@ -17,12 +19,16 @@
 
 namespace nbt {
 
+struct UsbBridge;   // one /dev/oap <-> socketpair bridge and its two threads (usb_accessory.cpp)
+
 class UsbAccessory {
 public:
-    typedef bool (*BusyCallback)(void* user_data);   // true while any Android Auto session runs (TCP or USB)
+    // Who owns the AA session right now. kTransportNone: a USB session may start. Anything but kTransportUsb while
+    // a bridge is up: that bridge's session is over (also when its threads are stuck on a silent phone).
+    typedef Transport (*OwnerCallback)(void* user_data);
 
     // dev_dir: where the drivers' nodes appear ("/dev"; host tests pass their own directory).
-    UsbAccessory(ClientConnectedCallback callback, void* user_data, BusyCallback busy, void* busy_data,
+    UsbAccessory(ClientConnectedCallback callback, void* user_data, OwnerCallback owner, void* owner_data,
                  const char* dev_dir = "/dev");
     ~UsbAccessory();
 
@@ -34,47 +40,47 @@ public:
     bool phonePresent() const { return flag(phone_present_); }
 
 private:
+    struct SwitchNode {         // a /dev/android* node
+        std::string name;
+        int tries;
+        double next_try_s;
+        bool done;              // switched, left to another client, or given up
+    };
+    struct AccessoryNode {      // a /dev/oap* node
+        std::string name;
+        int sessions;           // sessions actually started on this plug-in
+        int open_fails;         // in a row
+        double next_try_s;
+    };
+    enum TriggerResult { kTriggerSwitched, kTriggerOtherClient, kTriggerFailed };
+    enum BridgeResult { kBridgeStarted, kBridgeOpenFailed, kBridgeFailed, kBridgeLeaked };
+
     static void* watchThreadStub(void* arg);
     void watchLoop();
-    bool trigger(const char* path);
-    bool startBridge(const std::string& node);
-    void reapBridge(bool force);
+    TriggerResult trigger(const char* path);
+    BridgeResult startBridge(const std::string& node);
+    bool reapBridge(bool force);   // false: a stuck bridge was abandoned (force only)
+    AccessoryNode* findNode(const std::string& name);
 
-    static void* readerThreadStub(void* arg);
-    static void* writerThreadStub(void* arg);
     bool flag(const bool& f) const;
     void setFlag(bool& f, bool v);
-    void readerLoop();   // /dev/oap -> socket
-    void writerLoop();   // socket -> /dev/oap, one AA frame per bulk transfer
 
     std::string dev_dir_;
     ClientConnectedCallback client_callback_;
     void* client_user_data_;
-    BusyCallback busy_;
-    void* busy_data_;
+    OwnerCallback owner_;
+    void* owner_data_;
 
-    pthread_mutex_t flag_mutex_;   // guards is_running_, phone_present_, bridge_stop_, reader_done_, writer_done_
+    pthread_mutex_t flag_mutex_;   // guards is_running_ and phone_present_
     pthread_t watch_thread_;
     bool is_running_;
     bool phone_present_;
 
-    // One bridge at a time, owned by the watch thread (stop() takes it over after joining that thread).
-    bool bridge_up_;
-    std::string bridge_node_;
-    int usb_fd_;
-    int sock_fd_;
-    pthread_t reader_thread_;
-    pthread_t writer_thread_;
-    bool bridge_stop_;
-    bool reader_done_;
-    bool writer_done_;
-    uint64_t bytes_in_;    // read by the watch thread only after joining the bridge threads
-    uint64_t bytes_out_;
-    double bridge_start_s_;
-    double bridge_end_s_;
-
-    std::vector<std::string> triggered_;                    // android nodes we already sent the switch to
-    std::vector<std::pair<std::string, int> > sessions_;    // oap node -> sessions started on it
+    // Owned by the watch thread (stop() takes them over after joining it).
+    UsbBridge* bridge_;            // NULL while no bridge runs
+    int not_ours_ticks_;           // scans in a row the session owner was not USB while the bridge was up
+    std::vector<SwitchNode> switches_;
+    std::vector<AccessoryNode> nodes_;
 };
 
 } // namespace nbt

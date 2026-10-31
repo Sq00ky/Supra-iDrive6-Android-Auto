@@ -20,6 +20,13 @@ namespace nbt {
 
 static const int kMaxSessionsPerNode = 3;     // then the phone has to be replugged (it stays in accessory mode)
 static const double kRetryGapS = 3.0;         // between sessions on the same accessory connection
+// A node can show up in /dev before its driver answers (or another client holds it): retry, without that
+// counting as a session.
+static const int kMaxSwitchTries = 5;         // /dev/android*: open or switch devctl failed
+static const int kMaxOpenFails = 10;          // /dev/oap*: open failed
+static const double kNodeRetryS = 1.0;
+static const int kNotOursTicks = 2;           // scans (~1 s) the owner is not USB before the bridge is ended
+static const unsigned kZeroReadsBeforeNap = 64;
 // devc-serusb-aoap runs with -l 16384 (umass-enum.cfg) and drops whatever part of a transfer does not fit the
 // read buffer: read with plenty of room.
 static const size_t kUsbReadBuf = 65536;
@@ -40,18 +47,15 @@ static int doDevctl(int fd, unsigned dcmd, void* data, size_t n) {
 #endif
 }
 
-// SIGUSR2 only interrupts the reader's blocking read() on /dev/oap (the driver implements io_unblock).
+// SIGUSR2 only interrupts a bridge thread's blocking read() / write() on /dev/oap (the driver implements
+// io_unblock). Nothing else in the daemon uses it.
 static void wakeHandler(int) { }
 
-static bool writeAll(int fd, const uint8_t* p, size_t n) {
-    while (n > 0) {
-        ssize_t w = write(fd, p, n);
-        if (w < 0 && errno == EINTR) continue;
-        if (w <= 0) return false;
-        p += w;
-        n -= static_cast<size_t>(w);
-    }
-    return true;
+static void unblockWake() {
+    sigset_t s;
+    sigemptyset(&s);
+    sigaddset(&s, SIGUSR2);
+    pthread_sigmask(SIG_UNBLOCK, &s, NULL);
 }
 
 static bool contains(const std::vector<std::string>& v, const std::string& s) {
@@ -61,28 +65,137 @@ static bool contains(const std::vector<std::string>& v, const std::string& s) {
     return false;
 }
 
-UsbAccessory::UsbAccessory(ClientConnectedCallback callback, void* user_data, BusyCallback busy, void* busy_data,
+// One bridge. Its threads only ever touch this object, so a bridge that has to be abandoned (stuck in the driver)
+// keeps its own fds and cannot disturb the next one.
+struct UsbBridge {
+    pthread_mutex_t mu;     // guards stop, reader_done, writer_done (QNX GCC 4.4: no atomics)
+    std::string node;
+    int usb_fd;
+    int sock_fd;
+    pthread_t reader;
+    pthread_t writer;
+    bool has_reader;
+    bool has_writer;
+    bool stop;
+    bool reader_done;
+    bool writer_done;
+    uint64_t bytes_in;      // each written by one thread, read after joining it
+    uint64_t bytes_out;
+    double start_s;
+
+    UsbBridge(const std::string& n, int ufd, int sfd)
+        : node(n), usb_fd(ufd), sock_fd(sfd), reader(0), writer(0), has_reader(false), has_writer(false),
+          stop(false), reader_done(false), writer_done(false), bytes_in(0), bytes_out(0), start_s(monoSec()) {
+        pthread_mutex_init(&mu, NULL);
+    }
+    ~UsbBridge() { pthread_mutex_destroy(&mu); }
+
+    bool get(const bool& f) {
+        pthread_mutex_lock(&mu);
+        bool v = f;
+        pthread_mutex_unlock(&mu);
+        return v;
+    }
+    void set(bool& f, bool v) {
+        pthread_mutex_lock(&mu);
+        f = v;
+        pthread_mutex_unlock(&mu);
+    }
+    bool stopping() { return get(stop); }
+    bool readerDone() { return !has_reader || get(reader_done); }
+    bool writerDone() { return !has_writer || get(writer_done); }
+};
+
+static bool writeAll(UsbBridge* b, int fd, const uint8_t* p, size_t n) {
+    while (n > 0) {
+        if (b->stopping()) return false;
+        ssize_t w = write(fd, p, n);
+        if (w < 0 && errno == EINTR) continue;   // woken by reapBridge(): stop is checked above
+        if (w <= 0) return false;
+        p += w;
+        n -= static_cast<size_t>(w);
+    }
+    return true;
+}
+
+// /dev/oap -> socket.
+static void* bridgeReader(void* arg) {
+    UsbBridge* b = reinterpret_cast<UsbBridge*>(arg);
+    unblockWake();
+    std::vector<uint8_t> buf(kUsbReadBuf);
+    const char* why = "stopped";
+    unsigned zeros = 0;
+    while (!b->stopping()) {
+        ssize_t n = read(b->usb_fd, &buf[0], buf.size());
+        if (n < 0 && errno == EINTR) continue;   // stop is checked by the loop
+        if (n < 0) { why = strerror(errno); break; }
+        if (n == 0) {
+            // Not the end: the driver answers each read with one USB transfer, and a zero-length packet (ending a
+            // message that is a multiple of the max packet size) is a transfer too. The end is an error (the
+            // driver gets slain when the phone is unplugged). Just don't spin if it ever returns only zeros.
+            if (++zeros >= kZeroReadsBeforeNap) usleep(10000);
+            continue;
+        }
+        zeros = 0;
+        if (!writeAll(b, b->sock_fd, &buf[0], static_cast<size_t>(n))) {
+            why = b->stopping() ? "stopped" : "session closed";
+            break;
+        }
+        b->bytes_in += static_cast<uint64_t>(n);
+    }
+    printf("[UsbAccessory] USB reader ended (%s)\n", why);
+    b->set(b->stop, true);
+    shutdown(b->sock_fd, SHUT_RDWR);   // the session sees the phone leave
+    b->set(b->reader_done, true);
+    return NULL;
+}
+
+// socket -> /dev/oap, one AA frame per bulk transfer (like other head units do).
+static void* bridgeWriter(void* arg) {
+    UsbBridge* b = reinterpret_cast<UsbBridge*>(arg);
+    unblockWake();
+    std::vector<uint8_t> pending;
+    std::vector<uint8_t> buf(kSockReadBuf);
+    const char* why = "session closed";
+    while (true) {
+        ssize_t n = read(b->sock_fd, &buf[0], buf.size());
+        if (n < 0 && errno == EINTR) {
+            if (b->stopping()) { why = "stopped"; break; }
+            continue;
+        }
+        if (n <= 0) break;
+        pending.insert(pending.end(), buf.begin(), buf.begin() + n);
+        const uint8_t* base = &pending[0];   // not empty: n > 0 bytes were just added
+        size_t off = 0;
+        bool ok = true;
+        for (;;) {
+            size_t len = aoap::frameLength(base + off, pending.size() - off);
+            if (len == 0 || pending.size() - off < len) break;
+            if (!writeAll(b, b->usb_fd, base + off, len)) { ok = false; break; }
+            b->bytes_out += len;
+            off += len;
+        }
+        pending.erase(pending.begin(), pending.begin() + off);
+        if (!ok) { why = b->stopping() ? "stopped" : strerror(errno); break; }
+    }
+    printf("[UsbAccessory] USB writer ended (%s)\n", why);
+    b->set(b->stop, true);
+    b->set(b->writer_done, true);
+    return NULL;
+}
+
+UsbAccessory::UsbAccessory(ClientConnectedCallback callback, void* user_data, OwnerCallback owner, void* owner_data,
                            const char* dev_dir)
     : dev_dir_(dev_dir ? dev_dir : "/dev"),
       client_callback_(callback),
       client_user_data_(user_data),
-      busy_(busy),
-      busy_data_(busy_data),
+      owner_(owner),
+      owner_data_(owner_data),
       watch_thread_(0),
       is_running_(false),
       phone_present_(false),
-      bridge_up_(false),
-      usb_fd_(-1),
-      sock_fd_(-1),
-      reader_thread_(0),
-      writer_thread_(0),
-      bridge_stop_(false),
-      reader_done_(false),
-      writer_done_(false),
-      bytes_in_(0),
-      bytes_out_(0),
-      bridge_start_s_(0),
-      bridge_end_s_(0) {
+      bridge_(NULL),
+      not_ours_ticks_(0) {
     pthread_mutex_init(&flag_mutex_, NULL);
 }
 
@@ -91,8 +204,8 @@ UsbAccessory::~UsbAccessory() {
     pthread_mutex_destroy(&flag_mutex_);
 }
 
-// QNX 6.5 / GCC 4.4 has no atomics: the flags shared by the watch, reader and writer threads go through a mutex
-// (never held across anything else).
+// QNX 6.5 / GCC 4.4 has no atomics: flags read by other threads go through a mutex (never held across anything
+// else).
 bool UsbAccessory::flag(const bool& f) const {
     pthread_mutex_t* m = const_cast<pthread_mutex_t*>(&flag_mutex_);
     pthread_mutex_lock(m);
@@ -110,14 +223,13 @@ void UsbAccessory::setFlag(bool& f, bool v) {
 bool UsbAccessory::start() {
     if (flag(is_running_)) return true;
 
-    struct sigaction old;
-    if (sigaction(SIGUSR2, NULL, &old) == 0 && old.sa_handler == SIG_DFL) {
-        struct sigaction sa;
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = wakeHandler;   // no SA_RESTART: the interrupted read() must return EINTR
-        sigemptyset(&sa.sa_mask);
-        sigaction(SIGUSR2, &sa, NULL);
-    }
+    // Always (also over an inherited SIG_IGN or SA_RESTART handler): without it a stuck bridge thread can never be
+    // woken.
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = wakeHandler;   // no SA_RESTART: the interrupted read() / write() must return EINTR
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGUSR2, &sa, NULL);
 
     setFlag(is_running_, true);
     if (pthread_create(&watch_thread_, NULL, &UsbAccessory::watchThreadStub, this) != 0) {
@@ -148,6 +260,13 @@ void* UsbAccessory::watchThreadStub(void* arg) {
     return NULL;
 }
 
+UsbAccessory::AccessoryNode* UsbAccessory::findNode(const std::string& name) {
+    for (size_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i].name == name) return &nodes_[i];
+    }
+    return NULL;
+}
+
 void UsbAccessory::watchLoop() {
     while (flag(is_running_)) {
         reapBridge(false);
@@ -165,41 +284,65 @@ void UsbAccessory::watchLoop() {
         setFlag(phone_present_, !androids.empty() || !oaps.empty());
 
         // Forget nodes that went away: a phone plugged in again gets a fresh start.
-        for (size_t i = triggered_.size(); i-- > 0;) {
-            if (!contains(androids, triggered_[i])) triggered_.erase(triggered_.begin() + i);
+        for (size_t i = switches_.size(); i-- > 0;) {
+            if (!contains(androids, switches_[i].name)) switches_.erase(switches_.begin() + i);
         }
-        for (size_t i = sessions_.size(); i-- > 0;) {
-            if (!contains(oaps, sessions_[i].first)) {
-                printf("[UsbAccessory] %s/%s gone (phone unplugged)\n", dev_dir_.c_str(),
-                       sessions_[i].first.c_str());
-                sessions_.erase(sessions_.begin() + i);
+        for (size_t i = nodes_.size(); i-- > 0;) {
+            if (!contains(oaps, nodes_[i].name)) {
+                printf("[UsbAccessory] %s/%s gone (phone unplugged)\n", dev_dir_.c_str(), nodes_[i].name.c_str());
+                nodes_.erase(nodes_.begin() + i);
             }
         }
 
-        const bool busy = bridge_up_ || (busy_ && busy_(busy_data_));
-        if (!busy) {
+        const double now = monoSec();
+        const Transport owner = owner_ ? owner_(owner_data_) : kTransportNone;
+        if (!bridge_ && mayStart(owner, kTransportUsb)) {
             for (size_t i = 0; i < androids.size(); ++i) {
-                if (contains(triggered_, androids[i])) continue;
-                triggered_.push_back(androids[i]);
+                SwitchNode* s = NULL;
+                for (size_t j = 0; j < switches_.size(); ++j) {
+                    if (switches_[j].name == androids[i]) s = &switches_[j];
+                }
+                if (!s) {
+                    SwitchNode n = { androids[i], 0, 0, false };
+                    switches_.push_back(n);
+                    s = &switches_.back();
+                }
+                if (s->done || now < s->next_try_s) continue;
                 std::string path = dev_dir_ + "/" + androids[i];
-                trigger(path.c_str());
+                TriggerResult r = trigger(path.c_str());
+                if (r != kTriggerFailed) {
+                    s->done = true;
+                } else if (++s->tries >= kMaxSwitchTries) {
+                    s->done = true;
+                    printf("[UsbAccessory] %s: giving up after %d tries; unplug and replug the phone to try again\n",
+                           path.c_str(), s->tries);
+                } else {
+                    s->next_try_s = now + kNodeRetryS;
+                }
             }
-            for (size_t i = 0; i < oaps.size() && !bridge_up_; ++i) {
-                int* count = NULL;
-                for (size_t j = 0; j < sessions_.size(); ++j) {
-                    if (sessions_[j].first == oaps[i]) count = &sessions_[j].second;
+            for (size_t i = 0; i < oaps.size() && !bridge_; ++i) {
+                AccessoryNode* n = findNode(oaps[i]);
+                if (!n) {
+                    AccessoryNode a = { oaps[i], 0, 0, 0 };
+                    nodes_.push_back(a);
+                    n = &nodes_.back();
                 }
-                if (count && *count >= kMaxSessionsPerNode) continue;
-                if (count && monoSec() - bridge_end_s_ < kRetryGapS) continue;
-                if (!count) {
-                    sessions_.push_back(std::make_pair(oaps[i], 0));
-                    count = &sessions_.back().second;
-                }
-                ++*count;
-                if (*count == kMaxSessionsPerNode)
-                    printf("[UsbAccessory] last session attempt on %s: after it, unplug and replug the phone\n",
-                           oaps[i].c_str());
-                startBridge(oaps[i]);
+                if (n->sessions >= kMaxSessionsPerNode || n->open_fails >= kMaxOpenFails) continue;
+                if (now < n->next_try_s) continue;
+                BridgeResult r = startBridge(oaps[i]);   // does not add to nodes_: n stays valid
+                if (r == kBridgeStarted) {
+                    n->open_fails = 0;
+                    if (++n->sessions == kMaxSessionsPerNode)
+                        printf("[UsbAccessory] last session attempt on %s: after it, unplug and replug the phone\n",
+                               oaps[i].c_str());
+                } else if (r == kBridgeOpenFailed) {
+                    if (++n->open_fails >= kMaxOpenFails)
+                        printf("[UsbAccessory] %s: could not be opened %d times in a row, giving up; unplug and "
+                               "replug the phone to try again\n", oaps[i].c_str(), n->open_fails);
+                    n->next_try_s = now + kNodeRetryS;
+                } else if (r == kBridgeFailed) {
+                    n->next_try_s = now + kRetryGapS;
+                }   // kBridgeLeaked: reapBridge() already took the node out of use
             }
         }
 
@@ -207,11 +350,11 @@ void UsbAccessory::watchLoop() {
     }
 }
 
-bool UsbAccessory::trigger(const char* path) {
-    int fd = open(path, O_RDWR);
+UsbAccessory::TriggerResult UsbAccessory::trigger(const char* path) {
+    int fd = open(path, O_RDWR | O_NOCTTY);
     if (fd < 0) {
         printf("[UsbAccessory] %s: open failed: %s\n", path, strerror(errno));
-        return false;
+        return kTriggerFailed;
     }
     int mode = 0, proto = 0;
     int rm = doDevctl(fd, aoap::kDcmdGetMode, &mode, sizeof(mode));
@@ -222,7 +365,7 @@ bool UsbAccessory::trigger(const char* path) {
         // aoap-switch answers a second switch with success without doing anything: say who was first.
         printf("[UsbAccessory] %s: already switched by another client (BMW A4A?), leaving it alone\n", path);
         close(fd);
-        return false;
+        return kTriggerOtherClient;
     }
 
     aoap::Identity id;
@@ -231,57 +374,37 @@ bool UsbAccessory::trigger(const char* path) {
     close(fd);
     if (r != 0) {
         printf("[UsbAccessory] %s: accessory switch failed: %s\n", path, strerror(r));
-        return false;
+        return kTriggerFailed;
     }
     printf("[UsbAccessory] %s: switch to accessory mode sent as '%s' / '%s'; waiting for %s/oap*\n", path,
            id.manufacturer, id.model, dev_dir_.c_str());
-    return true;
+    return kTriggerSwitched;
 }
 
-bool UsbAccessory::startBridge(const std::string& node) {
+UsbAccessory::BridgeResult UsbAccessory::startBridge(const std::string& node) {
     std::string path = dev_dir_ + "/" + node;
-    int ufd = open(path.c_str(), O_RDWR);
+    int ufd = open(path.c_str(), O_RDWR | O_NOCTTY);
     if (ufd < 0) {
         printf("[UsbAccessory] %s: open failed: %s\n", path.c_str(), strerror(errno));
-        bridge_end_s_ = monoSec();
-        return false;
+        return kBridgeOpenFailed;
     }
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
         printf("[UsbAccessory] socketpair failed: %s\n", strerror(errno));
         close(ufd);
-        bridge_end_s_ = monoSec();
-        return false;
+        return kBridgeFailed;
     }
 
-    usb_fd_ = ufd;
-    sock_fd_ = sv[0];
-    bridge_node_ = node;
-    bridge_start_s_ = monoSec();
-    setFlag(bridge_stop_, false);
-    setFlag(reader_done_, false);
-    setFlag(writer_done_, false);
-    bytes_in_ = 0;
-    bytes_out_ = 0;
-    bool rd = pthread_create(&reader_thread_, NULL, &UsbAccessory::readerThreadStub, this) == 0;
-    bool wr = rd && pthread_create(&writer_thread_, NULL, &UsbAccessory::writerThreadStub, this) == 0;
-    if (!wr) {
+    UsbBridge* b = new UsbBridge(node, ufd, sv[0]);
+    b->has_reader = pthread_create(&b->reader, NULL, &bridgeReader, b) == 0;
+    b->has_writer = b->has_reader && pthread_create(&b->writer, NULL, &bridgeWriter, b) == 0;
+    bridge_ = b;
+    not_ours_ticks_ = 0;
+    if (!b->has_writer) {
         printf("[UsbAccessory] bridge threads failed to start\n");
         close(sv[1]);
-        if (rd) {   // let reapBridge() stop and join the reader and close both fds
-            setFlag(writer_done_, true);
-            writer_thread_ = 0;
-            bridge_up_ = true;
-            reapBridge(true);
-        } else {
-            close(ufd);
-            close(sv[0]);
-            usb_fd_ = sock_fd_ = -1;
-            bridge_end_s_ = monoSec();
-        }
-        return false;
+        return reapBridge(true) ? kBridgeFailed : kBridgeLeaked;
     }
-    bridge_up_ = true;
 
     printf("[UsbAccessory] %s open: starting Android Auto over USB (session fd %d)\n", path.c_str(), sv[1]);
     if (client_callback_) {
@@ -289,99 +412,65 @@ bool UsbAccessory::startBridge(const std::string& node) {
     } else {
         close(sv[1]);
     }
-    return true;
+    return kBridgeStarted;
 }
 
-// force = false: reap a bridge whose threads have ended (waking the reader once the writer is gone).
-// force = true: end the bridge now and wait for it (stop()).
-void UsbAccessory::reapBridge(bool force) {
-    if (!bridge_up_) return;
+// force = false (every scan): end the bridge once one of its threads has ended or its session is over (the
+// session owner is no longer USB: the threads may be stuck on a phone that stopped talking), and reap it.
+// force = true (stop()): end it now and wait up to 3 s. Returns false when a stuck bridge had to be abandoned.
+bool UsbAccessory::reapBridge(bool force) {
+    UsbBridge* b = bridge_;
+    if (!b) return true;
     if (force) {
-        setFlag(bridge_stop_, true);
-        shutdown(sock_fd_, SHUT_RDWR);   // wakes the writer and ends the session's socket
-    }
-    // The reader sits in read() on /dev/oap until the phone sends something: once the bridge is ending, interrupt
-    // it. Repeated, because a signal that arrives just before it enters read() is lost.
-    if (flag(writer_done_)) setFlag(bridge_stop_, true);
-    for (int i = 0; i < (force ? 30 : 1) && !(flag(reader_done_) && flag(writer_done_)); ++i) {
-        if (flag(bridge_stop_) && !flag(reader_done_)) pthread_kill(reader_thread_, SIGUSR2);
-        if (force) usleep(100000);
-    }
-    if (!(flag(reader_done_) && flag(writer_done_))) {
-        if (!force) return;
-        printf("[UsbAccessory] bridge on %s did not stop in 3 s, leaving it\n", bridge_node_.c_str());
-        pthread_detach(reader_thread_);
-        if (writer_thread_) pthread_detach(writer_thread_);
-        bridge_up_ = false;
-        return;
-    }
-    pthread_join(reader_thread_, NULL);
-    if (writer_thread_) pthread_join(writer_thread_, NULL);
-    reader_thread_ = 0;
-    writer_thread_ = 0;
-    close(usb_fd_);
-    close(sock_fd_);
-    usb_fd_ = -1;
-    sock_fd_ = -1;
-    bridge_up_ = false;
-    bridge_end_s_ = monoSec();
-    printf("[UsbAccessory] %s closed after %.1f s: %llu bytes from the phone, %llu bytes to it\n",
-           bridge_node_.c_str(), bridge_end_s_ - bridge_start_s_, (unsigned long long)bytes_in_,
-           (unsigned long long)bytes_out_);
-}
-
-void* UsbAccessory::readerThreadStub(void* arg) {
-    reinterpret_cast<UsbAccessory*>(arg)->readerLoop();
-    return NULL;
-}
-
-void* UsbAccessory::writerThreadStub(void* arg) {
-    reinterpret_cast<UsbAccessory*>(arg)->writerLoop();
-    return NULL;
-}
-
-void UsbAccessory::readerLoop() {
-    std::vector<uint8_t> buf(kUsbReadBuf);
-    const char* why = "stopped";
-    while (!flag(bridge_stop_)) {
-        ssize_t n = read(usb_fd_, &buf[0], buf.size());
-        if (n < 0 && errno == EINTR) continue;   // bridge_stop_ is checked by the loop
-        if (n < 0) { why = strerror(errno); break; }
-        if (n == 0) { why = "end of data"; break; }
-        if (!writeAll(sock_fd_, &buf[0], static_cast<size_t>(n))) { why = "session closed"; break; }
-        bytes_in_ += static_cast<uint64_t>(n);
-    }
-    printf("[UsbAccessory] USB reader ended (%s)\n", why);
-    shutdown(sock_fd_, SHUT_RDWR);   // the session sees the phone leave
-    setFlag(reader_done_, true);
-}
-
-void UsbAccessory::writerLoop() {
-    std::vector<uint8_t> pending;
-    std::vector<uint8_t> buf(kSockReadBuf);
-    const char* why = "session closed";
-    while (true) {
-        ssize_t n = read(sock_fd_, &buf[0], buf.size());
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) break;
-        pending.insert(pending.end(), buf.begin(), buf.begin() + n);
-        // Hand the phone whole frames, one per bulk transfer, like other head units do.
-        const uint8_t* base = &pending[0];   // not empty: n > 0 bytes were just added
-        size_t off = 0;
-        bool ok = true;
-        for (;;) {
-            size_t len = aoap::frameLength(base + off, pending.size() - off);
-            if (len == 0 || pending.size() - off < len) break;
-            if (!writeAll(usb_fd_, base + off, len)) { ok = false; break; }
-            bytes_out_ += len;
-            off += len;
+        b->set(b->stop, true);
+    } else {
+        Transport o = owner_ ? owner_(owner_data_) : kTransportUsb;
+        not_ours_ticks_ = (o != kTransportUsb) ? not_ours_ticks_ + 1 : 0;
+        if (not_ours_ticks_ >= kNotOursTicks && !b->stopping()) {
+            printf("[UsbAccessory] the session on %s is over (owner now: %s): ending the bridge\n", b->node.c_str(),
+                   transportName(o));
+            b->set(b->stop, true);
         }
-        pending.erase(pending.begin(), pending.begin() + off);
-        if (!ok) { why = strerror(errno); break; }
     }
-    printf("[UsbAccessory] USB writer ended (%s)\n", why);
-    setFlag(bridge_stop_, true);
-    setFlag(writer_done_, true);
+    if (b->readerDone() || b->writerDone()) b->set(b->stop, true);
+
+    if (b->stopping()) {
+        shutdown(b->sock_fd, SHUT_RDWR);   // wakes a writer in read() and ends the session's socket
+        // A thread in read() / write() on /dev/oap stays there until the phone moves: interrupt it. Repeated,
+        // because a signal that arrives just before the call is lost.
+        for (int i = 0; i < (force ? 30 : 1) && !(b->readerDone() && b->writerDone()); ++i) {
+            if (!b->readerDone()) pthread_kill(b->reader, SIGUSR2);
+            if (!b->writerDone()) pthread_kill(b->writer, SIGUSR2);
+            if (force) usleep(100000);
+        }
+    }
+    if (!(b->readerDone() && b->writerDone())) {
+        if (!force) return true;
+        // Leave it to itself: its threads keep their own fds (closing them could hand the numbers to the next
+        // bridge) and the object. The node is not used again until the phone is replugged.
+        printf("[UsbAccessory] bridge on %s did not stop in 3 s: abandoning it until the phone is replugged\n",
+               b->node.c_str());
+        if (b->has_reader) pthread_detach(b->reader);
+        if (b->has_writer) pthread_detach(b->writer);
+        AccessoryNode* n = findNode(b->node);
+        if (n) n->sessions = kMaxSessionsPerNode;
+        bridge_ = NULL;
+        not_ours_ticks_ = 0;
+        return false;
+    }
+    if (b->has_reader) pthread_join(b->reader, NULL);
+    if (b->has_writer) pthread_join(b->writer, NULL);
+    close(b->usb_fd);
+    close(b->sock_fd);
+    const double end = monoSec();
+    printf("[UsbAccessory] %s closed after %.1f s: %llu bytes from the phone, %llu bytes to it\n", b->node.c_str(),
+           end - b->start_s, (unsigned long long)b->bytes_in, (unsigned long long)b->bytes_out);
+    AccessoryNode* n = findNode(b->node);
+    if (n) n->next_try_s = end + kRetryGapS;
+    delete b;
+    bridge_ = NULL;
+    not_ours_ticks_ = 0;
+    return true;
 }
 
 } // namespace nbt
