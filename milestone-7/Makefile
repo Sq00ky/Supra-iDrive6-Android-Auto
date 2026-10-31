@@ -22,6 +22,7 @@ SRCS = src/main.cpp \
        src/pcm_utils.cpp \
        src/video_manager.cpp \
        src/tcp_server.cpp \
+       src/usb_accessory.cpp \
        src/aa_session.cpp \
        src/aa_cryptor.cpp \
        src/bluetooth_manager.cpp \
