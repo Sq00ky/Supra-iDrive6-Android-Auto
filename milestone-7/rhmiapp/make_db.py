@@ -19,19 +19,32 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          15: "Start automatically", 16: "About", 18: "Save logs to USB",   # 18 = log checkbox (rhmiapp-10)
          19: "MENU key opens iDrive",   # 19 = MENU key checkbox (rhmiapp-14)
          20: "Show driving mode changes",   # 20 = driving mode checkbox (rhmiapp-21)
+         # 21..25 = "Update from USB" button and transient status texts (rhmiapp-23)
+         21: "Update from USB", 22: "Update: no USB stick", 23: "Update: no release on USB",
+         24: "Updating... Rebooting", 25: "Update failed (see log)",
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).
 LANG_TEXTS = {
     "de": {20: "Fahrmodus-Wechsel anzeigen", 19: "MENU-Taste oeffnet iDrive", 2: "Android Auto: Verbinden...", 18: "Protokolle auf USB speichern", 10: "Android Auto starten", 11: "Beenden erzwingen", 12: "Neu starten",
-           13: "Verbinden...", 14: "Android Auto oeffnen", 15: "Automatisch starten", 16: "Info"},
+           13: "Verbinden...", 14: "Android Auto oeffnen", 15: "Automatisch starten", 16: "Info",
+           21: "Update von USB", 22: "Update: kein USB-Stick", 23: "Update: kein Release auf USB",
+           24: "Update laeuft... Neustart", 25: "Update fehlgeschlagen"},
     "es-ES": {20: "Mostrar cambios de modo de conduccion", 19: "La tecla MENU abre iDrive", 2: "Android Auto: Conectando...", 18: "Guardar registros en USB", 10: "Iniciar Android Auto", 11: "Forzar cierre", 12: "Reiniciar",
-              13: "Conectando...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Acerca de"},
+              13: "Conectando...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Acerca de",
+              21: "Actualizar desde USB", 22: "Actualizar: sin USB", 23: "Actualizar: sin version en USB",
+              24: "Actualizando... Reiniciando", 25: "Error al actualizar"},
     "fr-FR": {20: "Afficher les changements de mode de conduite", 19: "La touche MENU ouvre iDrive", 2: "Android Auto : Connexion...", 18: "Enregistrer les journaux sur USB", 10: "Demarrer Android Auto", 11: "Forcer l'arret", 12: "Redemarrer",
-              13: "Connexion...", 14: "Ouvrir Android Auto", 15: "Demarrage automatique", 16: "A propos"},
+              13: "Connexion...", 14: "Ouvrir Android Auto", 15: "Demarrage automatique", 16: "A propos",
+              21: "Mise a jour via USB", 22: "MAJ : aucune cle USB", 23: "MAJ : aucun fichier sur USB",
+              24: "Mise a jour... Redemarrage", 25: "Echec de la mise a jour"},
     "it": {20: "Mostra i cambi di modalita di guida", 19: "Il tasto MENU apre iDrive", 2: "Android Auto: Connessione...", 18: "Salva i log su USB", 10: "Avvia Android Auto", 11: "Arresto forzato", 12: "Riavvia",
-           13: "Connessione...", 14: "Apri Android Auto", 15: "Avvio automatico", 16: "Informazioni"},
+           13: "Connessione...", 14: "Apri Android Auto", 15: "Avvio automatico", 16: "Informazioni",
+           21: "Aggiorna da USB", 22: "Aggiorna: nessuna USB", 23: "Aggiorna: nessun file su USB",
+           24: "Aggiornamento... Riavvio", 25: "Aggiornamento fallito"},
     "pt": {20: "Mostrar mudancas de modo de conducao", 19: "A tecla MENU abre o iDrive", 2: "Android Auto: A ligar...", 18: "Guardar registos em USB", 10: "Iniciar Android Auto", 11: "Forcar paragem", 12: "Reiniciar",
-           13: "A ligar...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Sobre"},
+           13: "A ligar...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Sobre",
+           21: "Atualizar via USB", 22: "Atualizar: sem USB", 23: "Atualizar: sem versao no USB",
+           24: "A atualizar... A reiniciar", 25: "Falha na atualizacao"},
 }
 LANG_TEXTS["es-US"] = LANG_TEXTS["es-ES"]
 LANG_TEXTS["fr-CA"] = LANG_TEXTS["fr-FR"]

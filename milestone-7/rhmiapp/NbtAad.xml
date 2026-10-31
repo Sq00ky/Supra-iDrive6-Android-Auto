@@ -15,6 +15,7 @@
       <raAction id="26"/>
       <raAction id="27"/>
       <raAction id="28"/>
+      <raAction id="29"/>
       <hmiAction id="25" target="12"/>
     </actions>
     <models>
@@ -53,6 +54,9 @@
       <textIdModel id="45" textId="20">
         <synonyms/>
       </textIdModel>
+      <textIdModel id="46" textId="21">
+        <synonyms/>
+      </textIdModel>
       <raIntModel id="40" modelType="NativeStateID" value="1"/>
       <raIntModel id="41" modelType="NativeStateID" value="20"/>
     </models>
@@ -67,6 +71,7 @@
           <button action="21" id="61" model="31" text="Start Android Auto"/>
           <button action="22" id="62" model="32" text="Force Stop"/>
           <button action="23" id="63" model="33" text="Restart"/>
+          <button action="29" id="72" model="46" text="Update from USB"/>
           <separator id="66"/>
           <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
           <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
