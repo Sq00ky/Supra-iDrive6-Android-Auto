@@ -47,6 +47,7 @@
 #define RTLD_DEFAULT ((void*)-2)   // QNX value
 #endif
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -683,7 +684,9 @@ bool pidAlive(int pid) {
     return errno == EPERM;                               // exists, just not ours to signal
 }
 
-// Independent of the state file: a running nbt-aad owns UDP 127.0.0.1:52790 (single-instance control port).
+// Independent of the state file: a running nbt-aad answers "ping" on UDP 127.0.0.1:52790.
+// Probing with bind() stole that port when the state file was read in the same instant the daemon
+// rewrote it, so the menu then started a second daemon.
 bool controlPortBusy() {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return false;
@@ -692,7 +695,21 @@ bool controlPortBusy() {
     a.sin_family = AF_INET;
     a.sin_port = htons(kDaemonCtlPort);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    bool busy = bind(fd, (struct sockaddr*)&a, sizeof(a)) != 0 && errno == EADDRINUSE;
+    const char ping[] = "ping";
+    bool busy = false;
+    if (sendto(fd, ping, 4, 0, (struct sockaddr*)&a, sizeof(a)) == 4) {
+        fd_set rf;
+        FD_ZERO(&rf);
+        FD_SET(fd, &rf);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 200000;
+        if (select(fd + 1, &rf, NULL, NULL, &tv) > 0) {
+            char buf[8];
+            ssize_t n = recv(fd, buf, sizeof(buf), 0);
+            busy = (n >= 4 && memcmp(buf, "pong", 4) == 0);
+        }
+    }
     close(fd);
     return busy;
 }

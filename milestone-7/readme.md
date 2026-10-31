@@ -5,7 +5,7 @@ and several BMWs. A daemon on the head unit (`/opt/aa/nbt-aad`) speaks the Andro
 iDrive app (`NbtAad`) adds an **Android Auto** entry to the Media/Radio menu. You don't need a dongle, a phone-side
 companion app, developer mode, or "Start head unit server". iDrive's own binaries are not patched or hooked.
 
-**Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree).
+**Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
 > **v1.8.42-stability / rhmiapp-20 (not car-verified):** after a tester's head unit reset 5 times in a row
 > (phone ending every session right after setup, `audioconn` requests piling up until memory ran out; fixed in
@@ -148,6 +148,8 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > ConnectionMaster like the iDrive HMI). Not car-verified yet.
 
 ## Contents
+
+Fixes in this folder: [FIXES.md](FIXES.md).
 
 1. [Features](#features)
 2. [Requirements](#requirements)
@@ -664,6 +666,10 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
 - State 1 = down, 2 = move, 3 = up. `id` is a stable finger id, used as the AA pointer id.
 - Ranges: panel pixels, x 0..1279 / y 0..479 on the Supra, 0..1439 / 0..539 on a 1440x540 panel.
 - Contacts are packed, so finger 1 straddles records 6 and 7.
+- One physical touch reaches the phone as one tap. The forwarder uses the record `seq` to tell the next message
+  from a gap: a duplicated message is skipped, a repeated "down" with no message lost in between is a move, and a
+  finger it released itself (stuck for `NBT_TOUCH_IDLE_MS`, or missing from a message) is ignored while it is still
+  reported, until the hardware sends its "up" or a new "down". Before, each of these reached the phone as an extra tap.
 
 Parser: `src/touch_frame.hpp`; test `tests/test_touch_frame.cpp` runs against real captures from both layouts
 (Supra pinch, F-series corner touches).
