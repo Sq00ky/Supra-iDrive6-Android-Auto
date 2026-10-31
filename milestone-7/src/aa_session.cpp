@@ -5,6 +5,7 @@
 #include "nbt_env.hpp"
 #include "sdr_builder.hpp"
 #include "crash_handler.hpp"
+#include "nav_status.hpp"
 #include <sys/select.h>
 #include <sys/time.h>
 #include <stdlib.h>
@@ -914,6 +915,10 @@ void AASession::sessionLoop() {
                 if ((nav_msgs++ % 50) == 0 || msg_id == 0x8003)
                     printf("[AASession] nav status ch10: msg 0x%04X (%u bytes)%s\n", msg_id, (unsigned)frame_data.size(),
                            msg_id == 0x8003 ? (pbFirstVarint(frame_data, 2, 1) == 1 ? " guidance ACTIVE" : " guidance inactive") : "");
+                // Readable contents (road, maneuver, distance) in the log and in /dev/shmem/nbt-aad-nav.txt, groundwork
+                // for HUD / cluster arrows. Decoded generically, nothing is answered (NBT_NAV_DECODE=0 turns it off).
+                static NavStatusLog nav_log;
+                nav_log.onMessage((uint16_t)msg_id, frame_data);
             } else if (channel == 12 && msg_id >= 0x8000) {
                 // Media playback status channel: 0x8001 = {state, source name e.g. "Apple Music", position} every
                 // second, 0x8003 = track metadata + album art. Informational only. Before v1.6.6 the generic AV
