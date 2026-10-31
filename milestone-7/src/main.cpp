@@ -155,7 +155,32 @@ static int g_ctlFd = -1;
 //   g_inputToPhone - touch / knob events reach the phone only while the overlay is up.
 static volatile sig_atomic_t g_userExit = 0;
 static volatile sig_atomic_t g_carExit = 0;   // minimized by the BACK hold: only the iDrive entry / a new session undoes it
-static volatile sig_atomic_t g_focusFromPhone = 0;   // 1 = phone asked for projection, 2 = phone asked for native
+// Phone focus and mic open/close used to be one slot. The main loop reads a value and then stores 0,
+// so a newer request written in between was lost. A short queue keeps both.
+enum { kSlotQ = 8 };
+static int g_focusQ[kSlotQ];
+static int g_focusN = 0;
+static int g_micQ[kSlotQ];
+static int g_micN = 0;
+static pthread_mutex_t g_slotMu = PTHREAD_MUTEX_INITIALIZER;
+static void pushSlot(int* q, int* n, int v) {
+    pthread_mutex_lock(&g_slotMu);
+    if (*n < kSlotQ) q[(*n)++] = v;
+    else {
+        memmove(q, q + 1, (kSlotQ - 1) * sizeof(int));
+        q[kSlotQ - 1] = v;
+    }
+    pthread_mutex_unlock(&g_slotMu);
+}
+static bool popSlot(int* q, int* n, int* v) {
+    pthread_mutex_lock(&g_slotMu);
+    if (*n <= 0) { pthread_mutex_unlock(&g_slotMu); return false; }
+    *v = q[0];
+    memmove(q, q + 1, (size_t)(*n - 1) * sizeof(int));
+    --*n;
+    pthread_mutex_unlock(&g_slotMu);
+    return true;
+}
 static volatile int g_gear = -1;
 static volatile int g_pdc = -1;                    // -1 = unknown (no report yet)
 
@@ -308,9 +333,16 @@ static uint16_t ctlPort() {
 static void* ctlThread(void*) {
     char buf[32];
     while (g_running) {
-        ssize_t n = recv(g_ctlFd, buf, sizeof(buf) - 1, 0);
+        struct sockaddr_in from;
+        socklen_t flen = sizeof(from);
+        ssize_t n = recvfrom(g_ctlFd, buf, sizeof(buf) - 1, 0, (struct sockaddr*)&from, &flen);
         if (n <= 0) { if (n < 0 && errno != EINTR) usleep(200000); continue; }
         buf[n] = 0;
+        if (!strncmp(buf, "ping", 4)) {
+            const char* pong = "pong";
+            sendto(g_ctlFd, pong, 4, 0, (struct sockaddr*)&from, flen);
+            continue;
+        }
         if (!strncmp(buf, "show", 4)) { printf("[Ctl] 'show' from a second launch (iDrive menu): overlay to front.\n"); g_showReq = 1; }
         else if (!strncmp(buf, "gear ", 5)) {
             int g = atoi(buf + 5);
@@ -337,8 +369,7 @@ static void* ctlThread(void*) {
 
 // Returns false when another instance is running (request forwarded, caller exits).
 static bool ctlClaimOrForward() {
-    const char* c = getenv("NBT_CTL");
-    if (c && c[0] == '0') { printf("[Ctl] NBT_CTL=0: single-instance control port off.\n"); return true; }
+    if (nbt::envFlag("NBT_CTL") == 0) { printf("[Ctl] NBT_CTL=0: single-instance control port off.\n"); return true; }
     struct sockaddr_in a;
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
@@ -386,20 +417,28 @@ static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
 // autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
 static const char* const kBootGuardFile = "/var/opt/aa/bootguard";
 static void writeUiState(const char* state, int overlay) {
-    // Written in place: QNX /dev/shmem does not support rename(), so the old tmp + rename never produced the file
-    // (the plugin then saw no daemon: Force Stop did nothing, Restart and Start launched a second instance). The
-    // plugin treats a short / partial read as "no state" for one 1 s poll.
-    char buf[64];
-    int n = snprintf(buf, sizeof(buf), "%s %d %d\n", state, (int)getpid(), overlay);
-    int fd = open(kUiStateFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
+    // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
+    // tried to bind the control port itself.
+    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key).
+    // fscanf("%23s %d %d") still matches.
+    char rec[32];
+    int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d\n", state ? state : "idle", (int)getpid(), overlay);
+    if (n < 0) return;
+    int fd = open(kUiStateFile, O_WRONLY | O_CREAT, 0666);
     static bool s_warned = false;
     if (fd < 0) {
         if (!s_warned) { printf("[UiState] cannot write %s: %s\n", kUiStateFile, strerror(errno)); s_warned = true; }
         return;
     }
     fchmod(fd, 0666);   // readable by HmiMain3D whatever our umask is
-    ssize_t w = write(fd, buf, (size_t)n);
-    if (w != n && !s_warned) { printf("[UiState] short write to %s\n", kUiStateFile); s_warned = true; }
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1 && !s_warned) {
+        printf("[UiState] seek failed on %s\n", kUiStateFile);
+        s_warned = true;
+    }
+    ssize_t w = write(fd, rec, (size_t)n);
+    if (w == n) ftruncate(fd, n);   // drop a longer old record only after the new line is in place
+    else if (!s_warned) { printf("[UiState] short write to %s\n", kUiStateFile); s_warned = true; }
     close(fd);
 }
 static volatile bool g_sessionActive = false;   // AA session running (set by connect/end callbacks)
@@ -773,7 +812,7 @@ static int ifaceHasIpv4(const char* ifn) {
 // that the phone takes the Wi-Fi details over Bluetooth but never connects, until Force Stop + Start, i.e. until
 // a new process runs 'pfctl -d' and opens a new listening socket. Redo both here.
 static void recoverWifiPath(const char* why) {
-    if (!getenv("NBT_KEEP_PF")) {
+    if (nbt::envFlag("NBT_KEEP_PF") != 1) {
         int rc = system("pfctl -d");
         printf("[Wireless] %s: 'pfctl -d' returned %d (%s)\n", why, rc,
                rc == 0 ? "the packet filter was ON again and is now off" : "packet filter already off");
@@ -981,6 +1020,9 @@ static void* wirelessThread(void*) {
             g_btLink = 0;
             close(fd);
             ++s_fails;
+            // The phone closed a link that was already open without accepting the Wi-Fi start.
+            // Drop and re-add the Android Auto Bluetooth service so the next try is a fresh registration.
+            if (g_btMgr) g_btMgr->requestSppBounce();
             sleep(2);
         }
     }
@@ -997,10 +1039,9 @@ static void signalHandler(int sig) {
 // (A2I /output_mono_AirPlayUL, 16 kHz mono, the CarPlay Siri path) and the session streams it back. In
 // Bluetooth-audio mode the A2I playback pipeline stays closed, so the capture runs standalone. NBT_MIC=0 or
 // /opt/aa/mic.disable keeps the mic closed (the open request is still answered).
-static volatile sig_atomic_t g_micReq = 0;   // 1 = phone opened the mic, 2 = closed
 static void onMicRequest(bool open, void* user) {
     (void)user;
-    g_micReq = open ? 1 : 2;
+    pushSlot(g_micQ, &g_micN, open ? 1 : 2);
 }
 
 // Level meter (once per ~1 s of audio) and optional raw dump, to tell real speech from a silent / unrouted uplink:
@@ -1052,14 +1093,11 @@ static void onMicData(const uint8_t* pcm_data, size_t size, void* user_data) {
 // Default ON since v1.7.7 (car-verified nbt-aad-22-2-2: with it the Assistant's reply is heard).
 // NBT_BT_REFOCUS=0 / off / no / false disables.
 static bool btRefocus() {
-    const char* e = getenv("NBT_BT_REFOCUS");
-    if (!e || !*e) return true;
-    return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
+    return nbt::envFlag("NBT_BT_REFOCUS") != 0;   // unset stays on
 }
 
 static bool micEnabled() {
-    const char* e = getenv("NBT_MIC");
-    if (e && (e[0] == '0' || !strcmp(e, "off") || !strcmp(e, "no"))) return false;
+    if (nbt::envFlag("NBT_MIC") == 0) return false;
     return access("/opt/aa/mic.disable", F_OK) != 0;
 }
 
@@ -1226,7 +1264,7 @@ static void onTouchEvent(const nbt::TouchEventOut& ev, void* user) {
 static void onVideoFocusRequest(bool projected, uint32_t reason, void* user) {
     (void)user;
     printf("[Focus] phone requests %s (reason %u)\n", projected ? "PROJECTION" : "NATIVE UI (exit to iDrive)", reason);
-    g_focusFromPhone = projected ? 1 : 2;
+    pushSlot(g_focusQ, &g_focusN, projected ? 1 : 2);
 }
 
 // iDrive knob / tilt / hard keys (default on, NBT_KNOB=0 disables) -> phone (MOST DSI connection thread).
@@ -1413,8 +1451,8 @@ int main(int argc, char* argv[]) {
 
     // Drop the packet filter so the phone can reach the stock AA port (5277) on uap0.
     // Set NBT_KEEP_PF=1 to leave the firewall alone.
-    if (getenv("NBT_KEEP_PF")) {
-        printf("[Main] NBT_KEEP_PF set: leaving packet filter untouched.\n");
+    if (nbt::envFlag("NBT_KEEP_PF") == 1) {
+        printf("[Main] NBT_KEEP_PF=1: leaving packet filter untouched.\n");
     } else {
         int rc = system("pfctl -d");
         printf("[Main] 'pfctl -d' (disable packet filter) returned %d\n", rc);
@@ -1514,8 +1552,7 @@ int main(int argc, char* argv[]) {
         if (bluetooth.registerAndroidAutoSdp()) g_btMgr = &bluetooth;
     }
 
-    const char* tfwd = getenv("NBT_TOUCH_FWD");
-    if (!(tfwd && tfwd[0] == '0') && !getenv("NBT_TOUCH_PROBE")) {   // default: forward touches to the phone
+    if (nbt::envFlag("NBT_TOUCH_FWD") != 0 && !getenv("NBT_TOUCH_PROBE")) {   // default: forward touches to the phone
         const char* tp = getenv("NBT_TOUCH_PORT");
         uint16_t port = (tp && *tp) ? (uint16_t)atoi(tp) : 30567;
         if (!nbt::startTouchForward(port, &onTouchEvent, &g_session))
@@ -1553,18 +1590,14 @@ int main(int argc, char* argv[]) {
     // NBT_HIDE_IDLE=1 gives iDrive back while no phone is connected (hide/show cycle is UNTESTED).
     // Give iDrive the screen while no phone session is up (default since v1.6.5: a dropped link must not leave the
     // last frame on screen). NBT_HIDE_IDLE=0 keeps the overlay up for the whole daemon run (old behaviour).
-    const char* hi = getenv("NBT_HIDE_IDLE");
-    const bool hide_idle = !(hi && hi[0] == '0');
-    const char* ga = getenv("NBT_GEAR_ACTION");
-    const bool gear_action = !(ga && ga[0] == '0');                    // default on; NBT_GEAR_ACTION=0 ignores the gear
+    const bool hide_idle = nbt::envFlag("NBT_HIDE_IDLE") != 0;        // default on; NBT_HIDE_IDLE=0 keeps the overlay up
+    const bool gear_action = nbt::envFlag("NBT_GEAR_ACTION") != 0;    // default on; NBT_GEAR_ACTION=0 ignores the gear
     const int gear_reverse = (int)nbt::envHex("NBT_GEAR_REVERSE", 2);   // CDS driving.gear value for R (verify in the log)
-    const char* rf = getenv("NBT_REVERSE_FOCUS");
-    const bool reverse_focus = (rf && rf[0] == '1');                   // also tell the phone it lost the screen in R
+    const bool reverse_focus = nbt::envFlag("NBT_REVERSE_FOCUS") == 1; // also tell the phone it lost the screen in R
     readGearFile();
     readPdcFile();
     readDayNightFile();
-    const char* pa = getenv("NBT_PDC_ACTION");
-    const bool pdc_action = !(pa && pa[0] == '0');                     // default on; NBT_PDC_ACTION=0 ignores park assist
+    const bool pdc_action = nbt::envFlag("NBT_PDC_ACTION") != 0;       // default on; NBT_PDC_ACTION=0 ignores park assist
     bool was_park = false;
     bool park_dismissed = false;   // iDrive Android Auto entry chosen while park assist is active: AA until it ends
     printf("[Main] Screen ownership: reverse gear value %d (%s), exit-to-iDrive via the phone's car icon, "
@@ -1625,8 +1658,8 @@ int main(int argc, char* argv[]) {
         // while the phone has the mic closed the session simply drops the PCM. Opening/closing the endpoint per
         // Assistant request preceded a full head-unit reset on the car (2026-10-24, 2nd open of the session), and
         // the known-stable M2 build kept its A2I endpoints open for the whole run.
-        int mr = g_micReq;
-        if (mr) g_micReq = 0;
+        int mr = 0;
+        bool mic_ev = popSlot(g_micQ, &g_micN, &mr);
         // Scenario first: the AudioMatrix routes the processed car mic into the AirPlay uplink our capture reads.
         if (mr == 1 && mic_on && act) voice.activate("phone opened the mic");
         else if (mr == 2) voice.deactivate("phone closed the mic");
@@ -1651,7 +1684,7 @@ int main(int argc, char* argv[]) {
             bool ok = g_audio ? g_audio->startMic() : micStart(mic);
             printf("[Mic] phone opened the mic: capture %s (kept open until the session ends)\n", ok ? "started" : "FAILED");
             mic_live = ok;
-        } else if (mr) {
+        } else if (mic_ev) {
             printf("[Mic] phone %s the mic (capture %s)\n", mr == 1 ? "opened" : "closed", mic_live ? "running" : "not running");
         }
         if (mic_live && !act) {
@@ -1671,13 +1704,11 @@ int main(int argc, char* argv[]) {
             g_backState = 2;
             g_userExit = 1;
             g_carExit = 1;
-            const char* bf = getenv("NBT_BACK_HOLD_FOCUS");
-            if (act && bf && bf[0] == '1') g_session.postVideoFocus(false);
+            if (act && nbt::envFlag("NBT_BACK_HOLD_FOCUS") == 1) g_session.postVideoFocus(false);
             printf("[Focus] BACK held %u ms: minimizing Android Auto, iDrive gets the screen\n", backHoldMs());
         }
-        int ff = g_focusFromPhone;
-        if (ff) {
-            g_focusFromPhone = 0;
+        int ff = 0;
+        if (popSlot(g_focusQ, &g_focusN, &ff)) {
             if (ff == 1 && g_carExit) {
                 printf("[Focus] phone asked for the screen while minimized by BACK hold: ignored (use the iDrive entry)\n");
             } else {

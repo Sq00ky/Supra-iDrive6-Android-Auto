@@ -120,14 +120,33 @@ int TcpServer::openListener() {
 
     sockaddr_in address;
     memset(&address, 0, sizeof(address));
-    address.sin_family      = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY; // Bind to 0.0.0.0
-    address.sin_port        = htons(port_);
-
-    if (bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
-        perror("[TcpServer] bind failed");
-        close(fd);
-        return -1;
+    address.sin_family = AF_INET;
+    address.sin_port   = htons(port_);
+    bool bound = false;
+    // Prefer the CarPlay AP address so a client on another interface cannot open a session.
+    // The AP is often not up yet at start, so fall back to every interface and filter accepts.
+    if (nbt::wirelessEnabled()) {
+        const char* ip = getenv("NBT_AP_IP");
+        if (!ip || !*ip) ip = "172.16.224.1";
+        if (inet_aton(ip, &address.sin_addr) &&
+            bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+            printf("[TcpServer] listening on %s:%u\n", ip, (unsigned)port_);
+            bound = true;
+        } else {
+            printf("[TcpServer] could not bind %s:%u (%s); listening on all interfaces\n",
+                   ip, (unsigned)port_, strerror(errno));
+            memset(&address, 0, sizeof(address));
+            address.sin_family = AF_INET;
+            address.sin_port = htons(port_);
+        }
+    }
+    if (!bound) {
+        address.sin_addr.s_addr = INADDR_ANY;
+        if (bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+            perror("[TcpServer] bind failed");
+            close(fd);
+            return -1;
+        }
     }
 
     if (listen(fd, 5) < 0) {
@@ -271,6 +290,23 @@ void TcpServer::acceptLoop() {
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
         printf("[TcpServer] Incoming Android Auto connection from %s:%u (fd: %d)!\n",
                client_ip, ntohs(client_addr.sin_port), client_fd);
+
+        if (has_active_client_) {
+            printf("[TcpServer] session already active, refusing %s\n", client_ip);
+            close(client_fd);
+            continue;
+        }
+        if (nbt::wirelessEnabled()) {
+            const char* ip = getenv("NBT_AP_IP");
+            unsigned base = inet_addr((ip && *ip) ? ip : "172.16.224.1");
+            uint32_t hip = ntohl(client_addr.sin_addr.s_addr);
+            uint32_t hbase = ntohl(base);
+            if (base != INADDR_NONE && (hip & 0xffffff00u) != (hbase & 0xffffff00u)) {
+                printf("[TcpServer] refusing %s (not on the Android Auto Wi-Fi)\n", client_ip);
+                close(client_fd);
+                continue;
+            }
+        }
 
         has_active_client_ = true;
         if (client_callback_) {
