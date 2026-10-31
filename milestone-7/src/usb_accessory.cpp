@@ -70,6 +70,7 @@ UsbAccessory::UsbAccessory(ClientConnectedCallback callback, void* user_data, Bu
       busy_data_(busy_data),
       watch_thread_(0),
       is_running_(false),
+      phone_present_(false),
       bridge_up_(false),
       usb_fd_(-1),
       sock_fd_(-1),
@@ -138,6 +139,7 @@ void UsbAccessory::stop() {
         watch_thread_ = 0;
     }
     reapBridge(true);
+    setFlag(phone_present_, false);
     printf("[UsbAccessory] stopped.\n");
 }
 
@@ -160,6 +162,7 @@ void UsbAccessory::watchLoop() {
             }
             closedir(d);
         }
+        setFlag(phone_present_, !androids.empty() || !oaps.empty());
 
         // Forget nodes that went away: a phone plugged in again gets a fresh start.
         for (size_t i = triggered_.size(); i-- > 0;) {

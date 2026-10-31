@@ -88,6 +88,7 @@
 #include "license_text.hpp"
 #include "tcp_server.hpp"
 #include "usb_accessory.hpp"
+#include "session_owner.hpp"
 #include "aa_session.hpp"
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
@@ -404,6 +405,9 @@ static void writeUiState(const char* state, int overlay) {
     close(fd);
 }
 static volatile bool g_sessionActive = false;   // AA session running (set by connect/end callbacks)
+static nbt::SessionOwner g_owner;               // which transport that session came in on (session_owner.hpp)
+static pthread_mutex_t g_connectMutex = PTHREAD_MUTEX_INITIALIZER;   // serializes startSession() (TCP and USB)
+static bool wirelessSessionActive() { return g_owner.get() == nbt::kTransportTcp; }
 static nbt::VideoManager* g_video = NULL;       // for the session callbacks (valid between init and teardown)
 static nbt::AudioManager* g_audio = NULL;       // same lifetime rule as g_video
 // Bluetooth audio mode (default; NBT_AUDIO_BT=0 turns it off): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
@@ -745,6 +749,7 @@ static bool cpLiveRetune() {
 }
 
 static nbt::TcpServer* g_tcp = NULL;           // set once the listener runs (wireless recovery re-creates it)
+static nbt::UsbAccessory* g_usb = NULL;        // set while Android Auto over USB runs (NBT_USB=1)
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
@@ -832,6 +837,7 @@ static void* wirelessThread(void*) {
     uint32_t idleStart = 0;
     int apCfgState = -1;        // Wi-Fi hotspot config: -1 not checked yet, 0 none, 1 present
     uint32_t apCfgChecked = 0;
+    bool usbHeld = false;       // a phone is on the USB cable (NBT_USB=1): wireless steps aside
     while (g_running) {
         // Nothing to do while a projection session is running; re-arm after it ends.
         if (g_sessionActive) { idleWait = false; sleep(1); continue; }
@@ -849,6 +855,18 @@ static void* wirelessThread(void*) {
                 apState = st;
             }
         }
+
+        // A phone on the USB cable gets Android Auto over USB: leave the Bluetooth links alone, as without a hotspot
+        // config, so it is not also handed the Wi-Fi (its wireless connection would be refused by startSession()).
+        nbt::UsbAccessory* usb = g_usb;
+        bool usbPhone = usb && usb->phonePresent();
+        if (usbPhone != usbHeld) {
+            printf("[Wireless] %s\n", usbPhone ? "phone on the USB cable: Bluetooth links are left alone while it is"
+                                                 " plugged in"
+                                               : "no phone on the USB cable any more: wireless Android Auto available");
+            usbHeld = usbPhone;
+        }
+        if (usbPhone) { idleWait = false; usleep(500000); continue; }
 
         // No Wi-Fi hotspot config: do not open the phone's Bluetooth links (we would only close them again) and do
         // not re-register the Bluetooth service; look for the config again every kApCfgRecheckSec.
@@ -969,12 +987,13 @@ static void* wirelessThread(void*) {
             s_fails = 0;
             // Keep the Bluetooth link open and serviced (ping replies, repeated AP info requests) for
             // as long as the phone wants it: closing it early makes the phone abort the wireless setup.
-            bool everActive = false;
+            bool everActive = false;   // the wireless phone connected (a USB session does not count)
+            bool toUsb = false;        // the phone was plugged in meanwhile: Android Auto continues over USB
             int tick = 0;
             while (g_running) {
                 bool alive = nbt::wppService(fd, 1000, ap, g_aaPort);
                 ++tick;
-                if (g_sessionActive) everActive = true;
+                if (wirelessSessionActive()) everActive = true;
                 if (!alive && nbt::lastLinkForeign()) { if (!pinned) markSppForeign(dev); break; }
                 if (!alive) {
                     printf("[Wireless] [%9.3f] Bluetooth link closed by the phone\n", upSec());
@@ -985,17 +1004,24 @@ static void* wirelessThread(void*) {
                     if (!g_sessionActive && !everActive && !pinned) noteSppLinkEnd(dev, nbt::lastLinkSpokeWpp());
                     break;
                 }
+                if (!everActive && g_usb && g_usb->phonePresent()) {
+                    printf("[Wireless] phone on the USB cable: releasing the Bluetooth link, Android Auto goes over "
+                           "USB\n");
+                    toUsb = true;
+                    break;
+                }
                 if (!g_sessionActive && (tick % 10) == 5) logStations("waiting for phone TCP connect");
                 if (!everActive && tick > 90) { printf("[Wireless] phone did not connect within 90 s\n"); break; }
-                if (everActive && !g_sessionActive) { printf("[Wireless] session ended, releasing the Bluetooth link\n"); break; }
+                if (everActive && !wirelessSessionActive()) { printf("[Wireless] session ended, releasing the Bluetooth link\n"); break; }
             }
             g_btLink = 0;
             close(fd);
             if (!pinned) noteSppDirection(dev, nbt::lastLinkSpokeWpp() || everActive);
             // A phone that joined the Wi-Fi usually drops Bluetooth before its TCP connect arrives: give it a
             // few seconds before counting this as a "never joined" try.
+            if (toUsb) continue;       // not a failed wireless try: no recovery, no passphrase rotation
             for (int w = 0; !everActive && g_running && w < 40; ++w) {
-                if (g_sessionActive) everActive = true;
+                if (wirelessSessionActive()) everActive = true;
                 else usleep(200000);
             }
             if (!everActive) recoverWifiPath("phone took the Wi-Fi details but did not connect");
@@ -1154,6 +1180,7 @@ static int g_shortSessions = 0;      // sessions in a row that ended within kSho
 static const double kShortSessionS = 15.0;
 static void onSessionEnded(void* user_data) {
     g_sessionActive = false;
+    g_owner.set(nbt::kTransportNone);
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
     double now = upSec(), dur = g_sessionStartS > 0 ? now - g_sessionStartS : -1;
     printf("[Main] [%9.3f] Android Auto session ended after %.1f s. Resuming auto-connector probing...\n", now, dur);
@@ -1187,33 +1214,54 @@ static void onSessionEnded(void* user_data) {
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected.
 static bool sessionBusy(void*) {
-    return g_sessionActive;
+    return g_owner.get() != nbt::kTransportNone;
 }
 
-static void onClientConnected(int client_fd, void* user_data) {
-    nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
+// The one way a session starts, for both transports (the TCP accept / connector threads and the USB watch thread
+// may call it at the same time): mayStart() decides whether `t` may take the session from its current owner.
+static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t) {
+    pthread_mutex_lock(&g_connectMutex);
+    nbt::Transport cur = g_owner.get();
+    if (!nbt::mayStart(cur, t)) {
+        printf("[Main] [%9.3f] %s Android Auto session running: refusing the %s connection on fd %d\n", upSec(),
+               nbt::transportName(cur), nbt::transportName(t), client_fd);
+        close(client_fd);
+        pthread_mutex_unlock(&g_connectMutex);
+        return;
+    }
+    // End the session this one replaces (a wireless phone that reconnected before we noticed it left) before
+    // starting: its onSessionEnded() runs now, so it cannot clear the new session's flags afterwards.
+    g_session.stop();
+    g_owner.set(t);
     g_sessionStartS = upSec();
-    printf("[Main] [%9.3f] Android Auto client connected on fd %d. Initializing aasdk session...\n", g_sessionStartS,
-           client_fd);
+    printf("[Main] [%9.3f] Android Auto client connected over %s on fd %d. Initializing aasdk session...\n",
+           g_sessionStartS, nbt::transportName(t), client_fd);
     g_sessionActive = true;
+    if (server) server->markSessionActive();
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames
     if (!g_session.start(client_fd)) {
         // start() closed the fd; make sure the server does not wait for a session that never began
+        g_owner.set(nbt::kTransportNone);
         g_sessionActive = false;
         if (server) server->notifySessionEnded();
+        pthread_mutex_unlock(&g_connectMutex);
         return;
     }
-    // start() joined any previous session thread, so that thread's onSessionEnded() has finished.
-    // Re-assert "active" now: a stale end-of-session callback may have cleared the flags between
-    // the assignments above and the join (phone reconnecting while the old session was dying).
-    g_sessionActive = true;
-    if (server) server->markSessionActive();
     if (g_btAudio) {
         char d[64];
         btDescribe(d, sizeof(d));
         printf("[BtAudio] session started: requesting car Bluetooth audio %s\n", d);
         if (!btRequestSource()) printf("[BtAudio] could not queue audioconn\n");
     }
+    pthread_mutex_unlock(&g_connectMutex);
+}
+
+static void onClientConnected(int client_fd, void* user_data) {
+    startSession(client_fd, reinterpret_cast<nbt::TcpServer*>(user_data), nbt::kTransportTcp);
+}
+
+static void onUsbConnected(int client_fd, void* user_data) {
+    startSession(client_fd, reinterpret_cast<nbt::TcpServer*>(user_data), nbt::kTransportUsb);
 }
 
 // One-shot diagnostics for "frames reach the decoder but nothing is visible": dump the LayerManager
@@ -1548,11 +1596,12 @@ int main(int argc, char* argv[]) {
     }
     g_tcp = &tcp_server;
 
-    // 4b. Android Auto over USB (NBT_USB=1, experimental). Same connect callback and user data as the TCP server, so
-    // its "session active" state also covers a USB phone and the auto-connector stays quiet.
-    nbt::UsbAccessory usb(&onClientConnected, &tcp_server, &sessionBusy, NULL);
+    // 4b. Android Auto over USB (NBT_USB=1, experimental). Same user data as the TCP server, so its "session
+    // active" state also covers a USB phone and the auto-connector stays quiet; startSession() picks the owner.
+    nbt::UsbAccessory usb(&onUsbConnected, &tcp_server, &sessionBusy, NULL);
     if (nbt::usbEnabled()) {
-        if (!usb.start()) printf("[Main] Android Auto over USB failed to start.\n");
+        if (usb.start()) g_usb = &usb;
+        else printf("[Main] Android Auto over USB failed to start.\n");
     }
 
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
@@ -1855,6 +1904,7 @@ int main(int argc, char* argv[]) {
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
     printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
+    g_usb = NULL;              // the wireless thread stops asking it
     usb.stop();                // no new USB session either; ends the USB bridge (and with it a USB session)
     printf("[Main] [+%.2f s] USB accessory stopped\n", upSec() - t0);
     g_session.stop();

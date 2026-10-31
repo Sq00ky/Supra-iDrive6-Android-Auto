@@ -394,7 +394,7 @@ Leave these unset unless you are testing.
 | Setting | Effect |
 |---|---|
 | `NBT_AA_PORT` | TCP port the phone is told to use (default 5277). Port 52770 has been tried and failed on one car; under investigation |
-| `NBT_USB` | **Experiment, off.** `1` = Android Auto over USB through the head unit's own Android Open Accessory drivers, next to wireless. Not car-verified. With it on, an Android phone plugged in while the daemon runs is switched to accessory mode (`aoap-switch`, `/dev/android<bus><dev>`) as `Android` / `Android Auto`, and the session runs over `/dev/oap<bus><dev>` (`devc-serusb-aoap`). The phone then stays in accessory mode, so iDrive's USB media (MTP) doesn't see it until it is replugged; after 3 sessions on one plug-in, replug it. Log: `[UsbAccessory] ...`. If the phone never answers, `NBT_USB_MANUFACTURER` / `NBT_USB_MODEL` change the identity sent |
+| `NBT_USB` | **Experiment, off.** `1` = Android Auto over USB through the head unit's own Android Open Accessory drivers, next to wireless. Not car-verified. With it on, an Android phone plugged in while the daemon runs is switched to accessory mode (`aoap-switch`, `/dev/android<bus><dev>`) as `Android` / `Android Auto`, and the session runs over `/dev/oap<bus><dev>` (`devc-serusb-aoap`). The phone then stays in accessory mode, so iDrive's USB media (MTP) doesn't see it until it is replugged; after 3 sessions on one plug-in, replug it. USB and wireless share the one session: while a phone is on the cable the wireless thread leaves the Bluetooth links alone (`[Wireless] phone on the USB cable ...`, the same idle state as a car without a hotspot config) and a wireless connection that arrives anyway is refused (`USB Android Auto session running: refusing the wireless connection`); a phone plugged in during a wireless session waits until that session ends. Log: `[UsbAccessory] ...`. If the phone never answers, `NBT_USB_MANUFACTURER` / `NBT_USB_MODEL` change the identity sent |
 | `NBT_BTSPP_DEV` | Use only this SPP node (default: scan `/dev/btspp0..7`) |
 | `NBT_WPP_MODE=0\|1\|2` | Pin the Bluetooth handshake mode (default rotates 2, 0, 1 on failures) |
 | `NBT_AP_CFG`, `NBT_AP_IF`, `NBT_AP_IP`, `NBT_AP_BSSID` | Hotspot config path / interface / address / BSSID (default: `iap2.cfg`, `iap2_Wifi.cfg` as fallback; `uap0`, 172.16.224.1) |
@@ -755,6 +755,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_spp_link_policy` | Silent links (MyBMW / AAIdrive) put on hold, Android Auto links never |
 | `test_spp_direction` | Phone-opened (Android Auto) vs car-opened (BMW Apps) links, learning and switch-off |
 | `test_session_lifecycle` | 400 session cycles (TSAN) |
+| `test_session_owner` | Which transport (wireless / USB) may take the session from which |
 | `test_usb_accessory` | USB accessory: devctl layout, frame lengths, bridge over a fake `/dev/oap` (pty), retries, unplug, stop |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
 | `test_ccs_decoder`, `test_ccs_push`, `test_most_msg` | Controller decode (CCS35up + old CCS) against car captures |
@@ -770,7 +771,8 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 - `src/`:
   - core: `main` (daemon loop, overlay ownership, control port, state file), `aa_session`, `aa_cryptor`,
     `tcp_server`, `sdr_builder`, `car_config.hpp`, `nbt_env.hpp`;
-  - USB (experimental): `usb_accessory` (watcher + `/dev/oap` bridge), `usb_aoap.hpp` (aoap-switch devctls);
+  - USB (experimental): `usb_accessory` (watcher + `/dev/oap` bridge), `usb_aoap.hpp` (aoap-switch devctls),
+    `session_owner.hpp` (wireless vs USB: who owns the session, used by `startSession()` in `main`);
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
