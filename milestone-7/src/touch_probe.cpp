@@ -242,10 +242,13 @@ void* forwardMain(void* p) {
     // Slots are indexed by the HMI's finger id (0..kTouchMaxContacts-1); the id is also the AA pointer_id.
     enum { NS = kTouchMaxContacts, MAXEV = 16 };
     bool active[NS];
+    bool needDown[NS];         // released by us (stuck / gone from a frame) while the hardware may still report it
     int cx[NS], cy[NS];        // last calibrated position per finger id
-    for (int j = 0; j < NS; ++j) { active[j] = false; cx[j] = cy[j] = 0; }
-    int logged = 0, loggedMoves = 0, rawLogged = 0, multiFrames = 0;
+    for (int j = 0; j < NS; ++j) { active[j] = needDown[j] = false; cx[j] = cy[j] = 0; }
+    int logged = 0, loggedMoves = 0, rawLogged = 0, multiFrames = 0, quirkLogged = 0;
     TouchReassembler reasm;
+    bool haveMsg = false;      // prevSeq0/1: first / last record seq of the previous message
+    unsigned char prevSeq0 = 0, prevSeq1 = 0;
     bool layoutLogged = false;
     const bool connectPeer = envNum("NBT_TOUCH_CONNECT", 1) != 0;
     sockaddr_in peer;
@@ -281,8 +284,9 @@ void* forwardMain(void* p) {
         if (!want && s >= 0) {
             close(s);
             s = -1;
-            for (int j = 0; j < NS; ++j) active[j] = false;   // the phone got no release: its own timeout handles it
+            for (int j = 0; j < NS; ++j) active[j] = needDown[j] = false;   // the phone got no release: its own timeout handles it
             reasm = TouchReassembler();
+            haveMsg = false;
             printf("[TouchFwd] released UDP %u: iDrive gets touch\n", a.port);
         }
         if (want && s < 0) {
@@ -312,7 +316,7 @@ void* forwardMain(void* p) {
             if (cnt && gap >= idleMs) {
                 printf("[TouchFwd] no touch frames for %ld ms: releasing %d stuck finger(s)\n", gap, cnt);
                 for (int k = 0; k < NS && ne < MAXEV; ++k)
-                    if (active[k]) emitUp(evs[ne++], active, cx, cy, NS, k, cx[k], cy[k]);
+                    if (active[k]) { emitUp(evs[ne++], active, cx, cy, NS, k, cx[k], cy[k]); needDown[k] = true; }
             }
         } else {
             sockaddr_in src;
@@ -366,6 +370,11 @@ void* forwardMain(void* p) {
                        n == 112 ? "whole message per datagram" : "message split over several datagrams");
             }
             for (int mi = 0; mi < nm; ++mi) {
+                // A duplicated message would replay its "down" as a second tap.
+                if (haveMsg && msgs[mi].seq0 == prevSeq0) continue;
+                // No message lost since the previous one: a finger cannot have lifted without its "up" reaching us.
+                const bool contiguous = haveMsg && msgs[mi].seq0 == (unsigned char)(prevSeq1 + 1);
+                haveMsg = true; prevSeq0 = msgs[mi].seq0; prevSeq1 = msgs[mi].seq1;
                 TouchContact c[kTouchMaxContacts];
                 int declared = 0;
                 const int nc = parseTouchStream(msgs[mi], c, kTouchMaxContacts, &declared);
@@ -394,20 +403,37 @@ void* forwardMain(void* p) {
                     ny[id] = clampi(c[k].y * sy + oy, 0, maxY);
                 }
 
+                // One physical touch must reach the phone as one tap. A "down" repeated for a finger that is already
+                // down, with no message lost in between, is the same touch: a move. A finger we released ourselves
+                // stays ignored while it is still reported, until the hardware lifts it (or puts it down again).
+                for (int k = 0; k < NS; ++k) {
+                    if (seen[k] && st[k] == 1 && active[k] && contiguous) {
+                        st[k] = 2;
+                        if (quirkLogged < 40) { ++quirkLogged; printf("[TouchFwd] finger %d: repeated down -> move\n", k); }
+                    }
+                    if (seen[k] && st[k] != 2) needDown[k] = false;
+                }
                 // A finger that is active but no longer listed has been lifted; a "down" on an active finger means we
                 // missed its "up": release it first.
                 for (int k = 0; k < NS && ne < MAXEV; ++k) {
                     if (active[k] && (!seen[k] || st[k] == 1)) {
                         emitUp(evs[ne++], active, cx, cy, NS, k, cx[k], cy[k]);
+                        if (!seen[k]) needDown[k] = true;
                         printf("[TouchFwd] finger %d: %s -> synthesized release\n", k, !seen[k] ? "gone from frame" : "new down while still active");
                     }
                 }
                 // downs, then one move for all fingers, then ups
                 for (int k = 0; k < NS && ne < MAXEV; ++k) {
+                    // A move for a finger we released starts a new touch only if messages were lost (its "down" may
+                    // have been among them); otherwise it is the old touch still going.
+                    if (seen[k] && st[k] == 2 && !active[k] && needDown[k] && contiguous) {
+                        if (quirkLogged < 40) { ++quirkLogged; printf("[TouchFwd] finger %d: still reported after a synthesized release, ignored until it lifts\n", k); }
+                        continue;
+                    }
                     if (seen[k] && (st[k] == 1 || (st[k] == 2 && !active[k]))) {
                         int before = 0;
                         for (int j = 0; j < NS; ++j) if (active[j]) ++before;
-                        active[k] = true; cx[k] = nx[k]; cy[k] = ny[k];
+                        active[k] = true; needDown[k] = false; cx[k] = nx[k]; cy[k] = ny[k];
                         TouchEventOut& e = evs[ne++];
                         fillActive(e, active, cx, cy, NS, k);
                         e.action = before == 0 ? 0 : 5;     // PRESS / POINTER_DOWN

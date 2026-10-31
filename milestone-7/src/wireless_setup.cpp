@@ -290,14 +290,18 @@ static void rxReset() { g_rxLen = 0; g_lastReadEnd = 0; g_foreign = false; g_spo
 // "BMW BCL Startup"); a BMW (2026-10-30, nbt-aad log umass02200t7) sent only that, twice, on 53 links that
 // never answered our WifiStartRequest, so the daemon kept feeding the Wi-Fi details to the BMW app.
 bool looksLikeBmwBcl(const uint8_t* p, size_t n) {
-    if (n >= 4 && p[0] == 0x12 && p[1] == 0x34 && p[2] == 0x56 && p[3] == 0x78) return true;
-    for (size_t i = 0; i + 4 <= n; ++i) {
-        if (p[i] == 0xde && p[i + 1] == 0xad && p[i + 2] == 0xbe && p[i + 3] == 0xef) return true;
-        if (p[i] == 0x13 && p[i + 1] == 0x37 && i + 4 <= n && p[i + 2] == 0x13 && p[i + 3] == 0x37) return true;
-    }
-    if (n < 8) return false;
+    if (!p || n < 4) return false;
+    // Bare 4-byte startup magic of the BMW app (BimmerGestalt). It is not an Android Auto frame.
+    if (p[0] == 0x12 && p[1] == 0x34 && p[2] == 0x56 && p[3] == 0x78) return true;
     unsigned aaLen = ((unsigned)p[0] << 8) | p[1], aaId = ((unsigned)p[2] << 8) | p[3];
     if (aaLen == n - 4 && aaId >= 1 && aaId <= 32) return false;
+    // The magic is only the payload (offset 8). Scanning every byte mistook Android Auto
+    // frames that happen to contain those bytes later on.
+    if (n >= 12 &&
+        ((p[8] == 0xde && p[9] == 0xad && p[10] == 0xbe && p[11] == 0xef) ||
+         (p[8] == 0x13 && p[9] == 0x37 && p[10] == 0x13 && p[11] == 0x37)))
+        return true;
+    if (n < 8) return false;
     unsigned cmd = aaLen, bclLen = ((unsigned)p[6] << 8) | p[7];
     return cmd >= 1 && cmd <= 0x20 && bclLen == n - 8;
 }
@@ -323,7 +327,9 @@ static int rxFill(int fd, int timeout_ms) {
     printf("[Wireless] RAW RX t=%ld +%d:", nowMs(), (int)k);
     for (ssize_t i = 0; i < k && i < 48; ++i) printf(" %02x", tmp[i]);
     printf("\n");
-    if (looksLikeBmwBcl(tmp, (size_t)k)) {
+    // Only the first message of a new link is inspected. Once an Android Auto frame has been
+    // accepted, later payloads are not scanned (a passphrase or album name can contain anything).
+    if (!g_spokeWpp && g_rxLen == 0 && looksLikeBmwBcl(tmp, (size_t)k)) {
         printf("[Wireless] this Bluetooth serial link is the BMW/Toyota companion app (BCL), not Android Auto\n");
         g_foreign = true;
         g_lastReadEnd = 4;
@@ -392,7 +398,7 @@ static void dumpProto(const uint8_t* p, size_t n) {
 
 // Handles one phone message. Returns 0 = keep going, 1 = handshake finished OK, -1 = write failure.
 static int handleMsg(int fd, uint16_t id, const std::vector<uint8_t>& pl, const ApInfo& ap, uint16_t port,
-                     bool& sentInfo, int& startRespSeen) {
+                     bool& sentInfo, int& startRespSeen, bool& startAcked) {
     printf("[Wireless] RX msg id=%u len=%u\n", id, (unsigned)pl.size());
     if (!pl.empty()) { hexdump("   payload", &pl[0], pl.size()); dumpProto(&pl[0], pl.size()); }
     if (id == wpp::kWifiInfoRequest) {
@@ -402,12 +408,17 @@ static int handleMsg(int fd, uint16_t id, const std::vector<uint8_t>& pl, const 
         if (!writeAll(fd, resp)) return -1;
         sentInfo = true;
     } else if (id == wpp::kWifiStartResponse) {
-        uint64_t st = 0;
-        if (!pl.empty() && wpp::findVarintField(&pl[0], pl.size(), 3, st))
-            printf("[Wireless] WifiStartResponse status field(3)=%llu\n", (unsigned long long)st);
-        else
-            printf("[Wireless] WifiStartResponse (no status field)\n");
+        uint64_t st3 = 0, st4 = 0;
+        bool f3 = !pl.empty() && wpp::findVarintField(&pl[0], pl.size(), 3, st3);
+        bool f4 = !pl.empty() && wpp::findVarintField(&pl[0], pl.size(), 4, st4);
+        // Documented status is field 4. The head-unit capture sends only field 3 = 0 (`18 00`).
+        // When field 4 is present, field 3 is the port, so a non-zero field 3 is not a failure.
+        bool ack = (f4 && st4 == 0) || (!f4 && f3 && st3 == 0);
+        if (f4) printf("[Wireless] WifiStartResponse status field(4)=%llu\n", (unsigned long long)st4);
+        else if (f3) printf("[Wireless] WifiStartResponse status field(3)=%llu\n", (unsigned long long)st3);
+        else printf("[Wireless] WifiStartResponse (no status field)\n");
         if (!sentInfo) ++startRespSeen;
+        if (ack) startAcked = true;
     } else if (id == wpp::kWifiConnectStatus) {
         uint64_t st = 0;
         bool have = !pl.empty() && (wpp::findVarintField(&pl[0], pl.size(), 1, st) || wpp::findVarintField(&pl[0], pl.size(), 2, st));
@@ -475,13 +486,14 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
         sentInfo = true;
     }
     int startRespSeen = 0;
+    bool startAcked = false;
     long tStart = nowMs();
     long tInfo = sentInfo ? tStart : 0;
     int resends = 0;
     for (;;) {
         uint16_t id; std::vector<uint8_t> pl;
         while (rxNext(id, pl)) {
-            int r = handleMsg(fd, id, pl, ap, port, sentInfo, startRespSeen);
+            int r = handleMsg(fd, id, pl, ap, port, sentInfo, startRespSeen, startAcked);
             if (r < 0) return false;
             if (sentInfo && tInfo == 0) tInfo = nowMs();
             if (r > 0) return true;
@@ -489,20 +501,29 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
         int f = rxFill(fd, 1000);
         if (f < 0 && g_foreign) return false;
         if (f < 0) {
-            if (sentInfo) {
-                printf("[Wireless] phone closed the Bluetooth link after our WifiInfoResponse: it should now join the Wi-Fi and connect over TCP\n");
+            // The phone closes Bluetooth once it is moving to Wi-Fi, but only after it has
+            // accepted the start. Closing right after WifiInfoResponse, with no accept, is the
+            // warm-boot failure: the phone never joins. Treat that as a failed handshake.
+            if (startAcked && sentInfo) {
+                printf("[Wireless] phone closed Bluetooth after accepting the Wi-Fi start (joining)\n");
                 return true;
             }
-            printf("[Wireless] phone closed the Bluetooth link before the AP info was exchanged\n");
+            if (sentInfo)
+                printf("[Wireless] phone closed Bluetooth before accepting the Wi-Fi start\n");
+            else
+                printf("[Wireless] phone closed the Bluetooth link before the AP info was exchanged\n");
             return false;
         }
         if (f == 0) {
             long now = nowMs();
             if (sentInfo) {
-                // Give the phone time to join the AP; the TCP connect to our port is the real success signal.
-                if (now - tInfo > 45000) {
-                    printf("[Wireless] phone sent no status after WifiInfoResponse; assuming it is joining Wi-Fi\n");
+                if (startAcked && now - tInfo > 45000) {
+                    printf("[Wireless] phone accepted the Wi-Fi start; waiting for its TCP connection\n");
                     return true;
+                }
+                if (!startAcked && now - tInfo > 45000) {
+                    printf("[Wireless] phone sent no WifiStartResponse after WifiInfoResponse\n");
+                    return false;
                 }
             } else if (now - tStart > timeout_ms) {
                 if (startRespSeen && mode == 0 && resends < 2) {
@@ -523,9 +544,9 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
 bool wppService(int fd, int timeout_ms, const ApInfo& ap, uint16_t port) {
     int f = rxFill(fd, timeout_ms);
     uint16_t id; std::vector<uint8_t> pl;
-    bool sentInfo = true; int sr = 0;
+    bool sentInfo = true; int sr = 0; bool ack = false;
     while (rxNext(id, pl)) {
-        if (handleMsg(fd, id, pl, ap, port, sentInfo, sr) < 0) return false;
+        if (handleMsg(fd, id, pl, ap, port, sentInfo, sr, ack) < 0) return false;
     }
     return f >= 0;
 }

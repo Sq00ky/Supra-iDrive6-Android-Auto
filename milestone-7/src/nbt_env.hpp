@@ -9,20 +9,30 @@
 
 namespace nbt {
 
+// Shared reading for the on/off settings.
+// Unset, empty, or an unrecognised word returns -1 so the caller keeps its default.
+// 0 / off / no / false return 0. 1 / on / yes / true return 1.
+// A variable that is merely present does not turn a setting on.
+inline int envFlag(const char* name) {
+    const char* e = name ? getenv(name) : NULL;
+    if (!e || !*e) return -1;
+    if (strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 ||
+        strcmp(e, "false") == 0) return 0;
+    if (strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 ||
+        strcmp(e, "true") == 0) return 1;
+    return -1;
+}
+
 // HU-hosted wireless (Bluetooth RFCOMM -> Wi-Fi credentials -> TCP accept) is the default since
 // v1.4.2 (car-verified). NBT_WIRELESS=0 / off / no restores the legacy outbound phone scanner.
 inline bool wirelessEnabled() {
-    const char* e = getenv("NBT_WIRELESS");
-    if (!e || !*e) return true;
-    return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
+    return envFlag("NBT_WIRELESS") != 0;   // unset stays on
 }
 
 // iDrive knob / tilt / hard keys -> phone is the default since v1.4.3 (car-verified nbt-25).
 // NBT_KNOB=0 / off / no disables it.
 inline bool knobEnabled() {
-    const char* e = getenv("NBT_KNOB");
-    if (!e || !*e) return true;
-    return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
+    return envFlag("NBT_KNOB") != 0;
 }
 
 // Bluetooth audio mode (default ON since v1.7.5; car-verified 2026-10-23): leaves Android Auto media to the
@@ -33,9 +43,7 @@ inline bool knobEnabled() {
 // eSNK_SPEAKERS), NBT_BT_RELEASE=1 (release the source when the phone disconnects), NBT_SDR_DROP.
 inline bool btAudioEnabled() {
     // Unset = on. NBT_AUDIO_BT=0 / off / no / false selects the A2I (AA media channel) pipeline instead.
-    const char* e = getenv("NBT_AUDIO_BT");
-    if (!e || !*e) return true;
-    return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
+    return envFlag("NBT_AUDIO_BT") != 0;
 }
 
 inline unsigned long envHex(const char* name, unsigned long def) {

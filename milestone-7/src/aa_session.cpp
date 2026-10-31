@@ -51,17 +51,15 @@ AASession::AASession()
     mic_open_ = false;
     mic_sent_ = 0;
     audio_frames_[0] = audio_frames_[1] = 0;
-    {   // touch forwarding is ON by default; NBT_TOUCH_FWD=0 disables it
-        const char* tf = getenv("NBT_TOUCH_FWD");
-        touch_fwd_ = !(tf && tf[0] == '0');
-    }
+    // Touch events are optional. The wake pipe is not: the knob, the microphone, and video
+    // focus are delivered through it, including when NBT_TOUCH_FWD=0.
+    touch_fwd_ = nbt::envFlag("NBT_TOUCH_FWD") != 0;
     wake_pipe_[0] = wake_pipe_[1] = -1;
-    if (touch_fwd_ && pipe(wake_pipe_) == 0) {
+    if (pipe(wake_pipe_) == 0) {
         fcntl(wake_pipe_[1], F_SETFL, fcntl(wake_pipe_[1], F_GETFL, 0) | O_NONBLOCK);
         fcntl(wake_pipe_[0], F_SETFL, fcntl(wake_pipe_[0], F_GETFL, 0) | O_NONBLOCK);
     } else {
         wake_pipe_[0] = wake_pipe_[1] = -1;
-        touch_fwd_ = false;
     }
 }
 
@@ -226,6 +224,9 @@ bool AASession::start(int client_fd) {
 
     // Tear down any previous session first (phone reconnected before we noticed it left, or
     // the previous one ended on its own and was never reaped): wake it, then join.
+    // Clearing the flag before the join makes finishSession skip its callback, so a session
+    // that was still running is cleaned up here. A session that already ended has already run it.
+    bool live = isRunning();
     setRunning(false);
     wakeSession();
     if (thread_) {
@@ -233,11 +234,14 @@ bool AASession::start(int client_fd) {
         thread_ = 0;
     }
     releaseSocket();   // normally already done by the session thread; harmless if not
+    if (live && disconnect_cb_) disconnect_cb_(disconnect_user_data_);
 
     pthread_mutex_lock(&fd_mutex_);
     client_fd_ = client_fd;
     pthread_mutex_unlock(&fd_mutex_);
     reassembly_.clear();
+    reassembly_total_.clear();
+    reassembly_wire_.clear();
     sps_pps_cache_.clear();
     pthread_mutex_lock(&touch_mutex_);
     input_ready_ = false;
@@ -307,7 +311,8 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
     size_t total = 0;
     uint32_t idle_ms = 0;
     const uint32_t limit_ms = rxTimeoutMs();
-    const bool need_select = (limit_ms != 0) || touch_fwd_;
+    const bool have_wake = wake_pipe_[0] >= 0;
+    const bool need_select = (limit_ms != 0) || have_wake;
     while (total < length && isRunning()) {
         int fd = client_fd_;
         if (fd < 0) return false;
@@ -316,7 +321,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
             FD_ZERO(&rf);
             FD_SET(fd, &rf);
             int maxfd = fd;
-            if (touch_fwd_ && wake_pipe_[0] >= 0) {
+            if (have_wake) {
                 FD_SET(wake_pipe_[0], &rf);
                 if (wake_pipe_[0] > maxfd) maxfd = wake_pipe_[0];
             }
@@ -339,7 +344,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 }
                 continue;
             }
-            if (touch_fwd_ && wake_pipe_[0] >= 0 && FD_ISSET(wake_pipe_[0], &rf)) {
+            if (have_wake && FD_ISSET(wake_pipe_[0], &rf)) {
                 char junk[64];
                 while (read(wake_pipe_[0], junk, sizeof(junk)) > 0) { }
                 drainTouch();
@@ -823,6 +828,9 @@ void AASession::sessionLoop() {
             if (flags & 0x08) {
                 if (!cryptor_.decrypt(&payload[0], payload.size(), decrypted_chunk)) {
                     printf("[AASession] Failed to decrypt encrypted frame (%u bytes).\n", length);
+                    reassembly_[channel].clear();
+                    reassembly_total_.erase(channel);
+                    reassembly_wire_.erase(channel);
                     continue;
                 }
             } else {
@@ -837,6 +845,8 @@ void AASession::sessionLoop() {
             if (reassembly_[channel].size() + decrypted_chunk.size() > (8u * 1024u * 1024u)) {
                 printf("[AASession] Reassembly overflow on channel %u: dropping fragments.\n", channel);
                 reassembly_[channel].clear();
+                reassembly_total_.erase(channel);
+                reassembly_wire_.erase(channel);
                 continue;
             }
 
@@ -844,16 +854,37 @@ void AASession::sessionLoop() {
                 reassembly_[channel].clear();
                 reassembly_[channel].insert(reassembly_[channel].end(),
                                              decrypted_chunk.begin(), decrypted_chunk.end());
+                reassembly_total_[channel] = total_size;
+                reassembly_wire_[channel] = length;
                 continue; // Wait for remaining fragments
             } else if (frame_type == 0x00) { // MIDDLE
                 reassembly_[channel].insert(reassembly_[channel].end(),
                                              decrypted_chunk.begin(), decrypted_chunk.end());
+                reassembly_wire_[channel] += length;
                 continue; // Wait for remaining fragments
             } else if (frame_type == 0x02) { // LAST
+                bool had_first = reassembly_total_.find(channel) != reassembly_total_.end() ||
+                                 !reassembly_[channel].empty();
                 reassembly_[channel].insert(reassembly_[channel].end(),
                                              decrypted_chunk.begin(), decrypted_chunk.end());
+                reassembly_wire_[channel] += length;
+                uint32_t expect = reassembly_total_[channel];
+                uint32_t wire = reassembly_wire_[channel];
                 frame_data = reassembly_[channel];
                 reassembly_[channel].clear();
+                reassembly_total_.erase(channel);
+                reassembly_wire_.erase(channel);
+                if (!had_first) {
+                    printf("[AASession] LAST fragment on channel %u with no FIRST: dropping\n", channel);
+                    continue;
+                }
+                // total_size is the size the phone announced. The length fields are the bytes on the
+                // wire (larger once encrypted). A shortfall means this LAST closed an incomplete message.
+                if (expect != 0 && wire < expect) {
+                    printf("[AASession] channel %u reassembled %u wire bytes, phone announced %u: dropping\n",
+                           channel, wire, expect);
+                    continue;
+                }
             } else { // 0x03 = BULK (Single unfragmented message)
                 frame_data = decrypted_chunk;
             }
@@ -947,8 +978,9 @@ void AASession::sessionLoop() {
             } else if (msg_id == 0x8002 && (channel == 8 || channel == 9)) { // AV STOP_INDICATION (audio)
                 printf("[AASession] >>> Received AV STOP_INDICATION on Channel %u.\n", channel);
                 if (audio_state_cb_) audio_state_cb_(channel, false, audio_state_user_data_);
-            } else if (touch_fwd_ && msg_id == 0x8002 && (channel == 3 || channel == 5 || channel == 7)) {
-                // Input BindingRequest: accept it (the phone waits for this before using the channel).
+            } else if (msg_id == 0x8002 && (channel == 3 || channel == 5 || channel == 7)) {
+                // Input BindingRequest: accept it even when touch forwarding is off. The knob, the
+                // microphone wake-up, and video focus share channel 7, and the phone waits for this.
                 printf("[AASession] >>> Input BindingRequest on Channel %u: accepting.\n", channel);
                 sendBindingResponse(channel);
                 if (channel == 7) {   // channel 7 = main touchscreen (1280x480) in our service discovery

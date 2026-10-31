@@ -82,6 +82,7 @@ static void testFSeriesCorners(const char* path) {
         for (int k = 0; k < nm; ++k) {
             ++msgs;
             assert(m[k].recs == 12);
+            assert(m[k].seq1 == (unsigned char)(m[k].seq0 + 11));
             TouchContact c[kTouchMaxContacts];
             int declared = 0;
             const int nc = parseTouchStream(m[k], c, kTouchMaxContacts, &declared);
@@ -134,6 +135,7 @@ static void testSplitAndLoss() {
             got += nm;
         }
         assert(got == 1 && parseTouchStream(m[0], out, kTouchMaxContacts, &d) == 3 && d == 3);
+        assert(m[0].seq0 == 0xfa && m[0].seq1 == 0x05);
         assert(out[1].x == 1439 && out[1].y == 539 && out[2].state == 3);
 
         // lose the middle datagram: no message; the next start record resynchronises
