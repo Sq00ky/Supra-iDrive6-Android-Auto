@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pluginApps>
+  <pluginApp applicationType="Custom" applicationWeight="200" entryButtonFocusID="32752" insertAfterFocusID="2270" insertStateID="20" text="Android Auto">
+    <comment/>
+    <entryButton action="2" id="1" model="3" imageModel="4" previewModel="13">
+      <properties/>
+    </entryButton>
+    <actions>
+      <raAction id="2"/>
+    </actions>
+    <models>
+      <textIdModel id="3" textId="1">
+        <synonyms/>
+      </textIdModel>
+      <imageIdModel id="4" imageId="55001"/>
+      <imageIdModel id="12" imageId="55002"/>
+      <raPreviewModel id="13" modelType="StatePreview" previewState="10"/>
+    </models>
+    <hmiStates>
+      <hmiState id="10" text="Android Auto" textModel="3">
+        <components>
+          <image id="11" model="12">
+            <properties>
+              <property id="3" value="true"/>
+              <property id="9" value="549"/>
+              <property id="10" value="484"/>
+              <property id="20" value="0"/>
+              <property id="21" value="0"/>
+            </properties>
+          </image>
+        </components>
+      </hmiState>
+    </hmiStates>
+  </pluginApp>
+</pluginApps>

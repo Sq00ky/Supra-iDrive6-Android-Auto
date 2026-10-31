@@ -173,9 +173,12 @@ int dropSdrChannels(std::vector<uint8_t>& sdr) {
 int retypeGuidanceSink(std::vector<uint8_t>& sdr) {
     // Default ON in Bluetooth audio mode since v1.6.9 (car-verified nbt-aad-21: nav prompts play over BT A2DP).
     // NBT_GUIDANCE_BT=0 restores the GUIDANCE sink, =1 forces it on outside BT mode.
-    // Unset follows Bluetooth-audio mode. 0/off/no/false keeps GUIDANCE. 1/on/yes/true forces SYSTEM_AUDIO.
-    int g = nbt::envFlag("NBT_GUIDANCE_BT");
-    bool on = (g < 0) ? nbt::btAudioEnabled() : (g == 1);
+    const char* e = getenv("NBT_GUIDANCE_BT");
+    bool on;
+    if (e && *e) on = (strcmp(e, "1") == 0);
+    else {
+        on = nbt::btAudioEnabled();
+    }
     if (!on || sdr.empty()) return 0;
     // ChannelDescriptor(1){ id(1)=8, media_sink_service(3){ codec(1), audio_type(2)=1 GUIDANCE, ... } }:
     // audio_type 1 -> 2 (SYSTEM_AUDIO), patched in place (both are one-byte varints).

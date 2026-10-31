@@ -1,6 +1,6 @@
-# Fixes on branch `milestone-7-local-fixes`
+# milestone-8
 
-The ten session, handshake, and settings fixes in the `milestone-7` folder are listed in [milestone-7/FIXES.md](milestone-7/FIXES.md).
+The ten session, handshake, and settings fixes are in the [milestone-8](milestone-8) folder. [milestone-8/FIXES.md](milestone-8/FIXES.md) lists them. `milestone-7` is unchanged.
 
 # Overview
 I'm a believer of humans writing things, but this is well beyond my skillset, so I (me, Ronnie) am writing this (the words on the page you're reading). I'm not a C-dev, but I do know these things can be done... So... This repository contains code for the J29 Toyota Supra to run Android Auto natively on the NBT Evo head unit. Yeah, talk about a big one. I'll preface it with this: Big screw you to all the companies who have profited for **years** on MMI units. You could have drove innovation, yet you chose to implement a "just good enough" solution to get people to bite. Okay, now that that's out of the way...

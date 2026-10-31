@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "ccs_input.hpp"
-#include "nbt_env.hpp"
 #include "dsi_client.hpp"
 #include "most_msg.hpp"
 
@@ -136,7 +135,7 @@ bool startCcsInput(CcsEventCb cb, void* user) {
     g_user = user;
     const char* e = getenv("NBT_KNOB_INST");
     if (e && *e) g_dec.setInstance((uint8_t)strtoul(e, NULL, 16));
-    if (nbt::envFlag("NBT_KNOB_INVERT") == 1) g_dec.setInvert(true);
+    if (getenv("NBT_KNOB_INVERT")) g_dec.setInvert(true);
     const char* ci = getenv("NBT_KNOB_CCS_INST");   // older CCS controller (fkt C10/C20), default 01
     if (ci && *ci) g_dec.setCcsInstance((uint8_t)strtoul(ci, NULL, 16));
     for (int s = 0; s < CCS_SLOTS; ++s) {

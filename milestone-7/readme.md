@@ -7,8 +7,6 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree).
 
-The extra fixes on branch `milestone-7-local-fixes` are listed in [FIXES.md](FIXES.md).
-
 > **v1.8.42-stability / rhmiapp-20 (not car-verified):** after a tester's head unit reset 5 times in a row
 > (phone ending every session right after setup, `audioconn` requests piling up until memory ran out; fixed in
 > v1.8.41-routeguard): the phone's `ByeByeRequest` is answered with `ByeByeResponse` and ends the session at once
@@ -150,8 +148,6 @@ The extra fixes on branch `milestone-7-local-fixes` are listed in [FIXES.md](FIX
 > ConnectionMaster like the iDrive HMI). Not car-verified yet.
 
 ## Contents
-
-Fixes added on branch `milestone-7-local-fixes`: [FIXES.md](FIXES.md).
 
 1. [Features](#features)
 2. [Requirements](#requirements)

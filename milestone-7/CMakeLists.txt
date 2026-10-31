@@ -3,10 +3,7 @@
 cmake_minimum_required(VERSION 3.10)
 project(nbt_aad C CXX)
 
-# The QNX Makefile passes -Wc,-std=gnu++0x. C++11 matches that. -fPIC is omitted: it
-# produces a shared object the head unit will not exec.
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_EXTENSIONS ON)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(
@@ -14,8 +11,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Same translation units as the Makefile. The QNX build is the Makefile (qcc); this list is
-# so a CMake configure does not drop sources or pass -fPIC, which the readme notes produces ET_DYN.
+# Source files
 set(SOURCES
     src/main.cpp
     src/audio_manager.cpp
@@ -23,18 +19,8 @@ set(SOURCES
     src/audio_route.cpp
     src/pcm_utils.cpp
     src/video_manager.cpp
+    src/input_manager.cpp
     src/tcp_server.cpp
-    src/aa_session.cpp
-    src/aa_cryptor.cpp
-    src/bluetooth_manager.cpp
-    src/wireless_setup.cpp
-    src/touch_probe.cpp
-    src/dsi_client.cpp
-    src/voice_scenario.cpp
-    src/bt_play.cpp
-    src/ccs_input.cpp
-    src/sdr_builder.cpp
-    src/crash_handler.cpp
 )
 
 add_executable(nbt-aad ${SOURCES})
@@ -44,6 +30,7 @@ target_compile_options(nbt-aad PRIVATE
     -Wall
     -Wextra
     -O2
+    -fPIC
     -D_QNX_SOURCE
 )
 
@@ -55,9 +42,5 @@ target_compile_options(nbt-aad PRIVATE
 # -lsys_dsi_servicebroker.cpp-ne (DSI Input)
 # -lssl -lcrypto (OpenSSL)
 target_link_libraries(nbt-aad PRIVATE
-    a2i_client
     socket
-    ssl
-    crypto
-    screen
 )

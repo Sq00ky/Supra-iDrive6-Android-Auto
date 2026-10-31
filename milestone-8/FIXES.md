@@ -1,11 +1,11 @@
-# Fixes on this branch
+# Fixes in milestone-8
 
-These are source changes in the `milestone-7` folder on branch `milestone-7-local-fixes`.
+These are the source changes in the `milestone-8` folder. `milestone-7` is unchanged from upstream.
 A QNX build is still required before a head unit can run them. The daemon and the iDrive app
 need to be this build together: the menu asks the running daemon with a ping, and an older
 plugin still tries to bind the control port itself.
 
-The MINI 8.8 screen profile and the Bluetooth audio route already in milestone-7 are unchanged.
+The MINI 8.8 screen profile and the Bluetooth audio route from milestone-7 are kept.
 Any `1180x480` panel becomes `1280x480` with DPI 152 and 40 px side insets. Bluetooth audio
 uses connection `0xc7` on every car, including Supra. `NBT_BT_CONN=0` falls back to the focus
 request. Also unchanged: the timed Bluetooth re-register, the strike-and-hold for a link that

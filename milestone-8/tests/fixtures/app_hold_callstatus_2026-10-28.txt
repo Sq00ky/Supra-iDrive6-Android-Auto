@@ -1,0 +1,25 @@
+[  192.689] [NbtAadApp] menu: Start (raAction 21)
+[  192.706] [NbtAadApp] launch: started /opt/aa/nbt-aad pid 1421422 (2 env overrides, output -> /dev/null)
+[  194.432] [NbtAadApp] entry text -> 2 (connecting)
+[  194.440] [NbtAadApp] connecting animation on (entry icon frames, Start row busy ring)
+[  194.504] [NbtAadApp] start row text -> 13 (connecting)
+[  195.510] [NbtAadApp] entry text -> 1 (default)
+[  195.521] [NbtAadApp] connecting animation off (entry icon frames, Start row busy ring)
+[  195.558] [NbtAadApp] start row text -> 14 (connected)
+[  196.572] [NbtAadApp] hold: event 52 -> state 13 (Android Auto came on screen, try 1)
+[  196.589] [NbtAadApp] menu state 10 focus -> 0
+[  196.597] [NbtAadApp] hold: state 13 visible -> 1
+[  196.609] [NbtAadApp] hold: state 13 focus -> 1
+[  210.028] [NbtAadApp] CDS communication.callStatus0 = '{"callStatus":{"id":0,"state":3}}' -> idle
+[  210.102] [NbtAadApp] hold: state 13 focus -> 0
+[  216.723] [NbtAadApp] CDS communication.callStatus0 = '{"callStatus":{"id":0,"state":0}}' -> idle
+[  217.535] [NbtAadApp] hold: state 13 focus -> 1
+[  227.523] [NbtAadApp] CDS communication.callStatus0 = '{"callStatus":{"id":0,"state":2}}' -> idle
+[  227.542] [NbtAadApp] hold: state 13 focus -> 0
+[  232.333] [NbtAadApp] hold: state 13 focus -> 1
+[  233.782] [NbtAadApp] hold: state 13 focus -> 0
+[  233.788] [NbtAadApp] hold: state 13 visible -> 0
+[  233.791] [NbtAadApp] menu state 10 focus -> 1
+[  234.619] [NbtAadApp] hold: call in progress: Android Auto stays up, state 13 released
+[  235.738] [NbtAadApp] menu state 10 focus -> 0
+[  246.635] [NbtAadApp] CDS communication.callStatus0 = '{"callStatus":{"id":0,"state":0}}' -> idle

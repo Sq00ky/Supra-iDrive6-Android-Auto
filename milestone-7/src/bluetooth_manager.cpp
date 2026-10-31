@@ -376,10 +376,6 @@ bool BluetoothManager::reregister(const char* why) {
     return true;
 }
 
-void BluetoothManager::requestSppBounce() {
-    reregister("handshake failed before the phone accepted the Wi-Fi start");
-}
-
 void BluetoothManager::stop() {
     if (!is_registered_) return;
     // Deregistration (request 0x2f) is intentionally not sent at shutdown: the DSI

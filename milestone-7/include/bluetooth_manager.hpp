@@ -38,10 +38,6 @@ public:
     // that is connected over Bluetooth but never opens the Android Auto link. Call from the wireless thread while
     // no link or session is up; skipped (false) while a registration is still in flight. `why` is only logged.
     bool reregister(const char* why);
-    // After a handshake that already had /dev/btspp open and the phone closed without accepting
-    // the Wi-Fi start. Uses the same deregister-then-register path as reregister(), on the caller
-    // (the wireless thread), and is skipped while a registration is already in flight.
-    void requestSppBounce();
     void stop();
 
 private:

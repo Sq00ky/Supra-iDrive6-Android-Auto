@@ -132,8 +132,6 @@ private:
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
 
     std::map<uint8_t, std::vector<uint8_t> > reassembly_;
-    std::map<uint8_t, uint32_t> reassembly_total_;   // size the phone announced on the FIRST fragment
-    std::map<uint8_t, uint32_t> reassembly_wire_;    // sum of the fragment length fields
     uint32_t media_frames_;
     std::vector<uint8_t> sps_pps_cache_;
 };
