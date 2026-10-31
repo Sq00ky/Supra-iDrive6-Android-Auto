@@ -87,6 +87,7 @@
 #include "video_manager.hpp"
 #include "license_text.hpp"
 #include "tcp_server.hpp"
+#include "usb_accessory.hpp"
 #include "aa_session.hpp"
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
@@ -1188,6 +1189,11 @@ static void onSessionEnded(void* user_data) {
     }
 }
 
+// UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected.
+static bool sessionBusy(void*) {
+    return g_sessionActive;
+}
+
 static void onClientConnected(int client_fd, void* user_data) {
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
     g_sessionStartS = upSec();
@@ -1546,6 +1552,13 @@ int main(int argc, char* argv[]) {
     }
     g_tcp = &tcp_server;
 
+    // 4b. Android Auto over USB (NBT_USB=1, experimental). Same connect callback and user data as the TCP server, so
+    // its "session active" state also covers a USB phone and the auto-connector stays quiet.
+    nbt::UsbAccessory usb(&onClientConnected, &tcp_server, &sessionBusy, NULL);
+    if (nbt::usbEnabled()) {
+        if (!usb.start()) printf("[Main] Android Auto over USB failed to start.\n");
+    }
+
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
     if (nbt::wirelessEnabled()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
@@ -1871,6 +1884,8 @@ int main(int argc, char* argv[]) {
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
     printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
+    usb.stop();                // no new USB session either; ends the USB bridge (and with it a USB session)
+    printf("[Main] [+%.2f s] USB accessory stopped\n", upSec() - t0);
     g_session.stop();
     printf("[Main] [+%.2f s] session stopped\n", upSec() - t0);
     g_video = NULL;
