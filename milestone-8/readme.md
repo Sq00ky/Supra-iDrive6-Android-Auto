@@ -666,6 +666,10 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
 - State 1 = down, 2 = move, 3 = up. `id` is a stable finger id, used as the AA pointer id.
 - Ranges: panel pixels, x 0..1279 / y 0..479 on the Supra, 0..1439 / 0..539 on a 1440x540 panel.
 - Contacts are packed, so finger 1 straddles records 6 and 7.
+- One physical touch reaches the phone as one tap. The forwarder uses the record `seq` to tell the next message
+  from a gap: a duplicated message is skipped, a repeated "down" with no message lost in between is a move, and a
+  finger it released itself (stuck for `NBT_TOUCH_IDLE_MS`, or missing from a message) is ignored while it is still
+  reported, until the hardware sends its "up" or a new "down". Before, each of these reached the phone as an extra tap.
 
 Parser: `src/touch_frame.hpp`; test `tests/test_touch_frame.cpp` runs against real captures from both layouts
 (Supra pinch, F-series corner touches).
