@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="ISO-8859-1"?>
-<Bundle exportedSymbolName="NbtAadBundle" implementedInterface="NbtAadBundle" path="hmiaad">
-  <Plugin exportedSymbolName="CNbtAadGate" implementedInterface="INbtAadGate" version="1.0.0.0" autostartDelay="0"/>
-</Bundle>
-<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
-<!-- Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto) -->
