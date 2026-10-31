@@ -783,6 +783,23 @@ static void recoverWifiPath(const char* why) {
     fflush(stdout);
 }
 
+// The car's Wi-Fi hotspot config: NBT_AP_CFG, else iap2.cfg / iap2_Wifi.cfg. Cars without CarPlay (no Wi-Fi hotspot)
+// have none, and then there is nothing a phone could be told over Bluetooth.
+static const int kApCfgRecheckSec = 10;
+
+static bool apConfigPresent(const char* cfg) {
+    if (cfg) {
+        nbt::ApInfo ap;
+        return nbt::loadCarPlayApConfig(cfg, ap, true);
+    }
+    return !nbt::collectApCandidates(nbt::kApCfgPaths, nbt::kApCfgPathCount).empty();
+}
+
+static void logNoApConfig(const char* cfg) {
+    printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are left "
+           "alone; checking again every %d s\n", cfg ? cfg : "iap2.cfg / iap2_Wifi.cfg", kApCfgRecheckSec);
+}
+
 static void* wirelessThread(void*) {
     const char* pinned = getenv("NBT_BTSPP_DEV");
     if (pinned && !*pinned) pinned = NULL;
@@ -813,6 +830,8 @@ static void* wirelessThread(void*) {
         printf("[Wireless] automatic Bluetooth service re-registration off (NBT_SPP_REREG_S=0)\n");
     bool idleWait = false;      // waiting for a link; the re-registration timer runs from when this started
     uint32_t idleStart = 0;
+    int apCfgState = -1;        // Wi-Fi hotspot config: -1 not checked yet, 0 none, 1 present
+    uint32_t apCfgChecked = 0;
     while (g_running) {
         // Nothing to do while a projection session is running; re-arm after it ends.
         if (g_sessionActive) { idleWait = false; sleep(1); continue; }
@@ -829,6 +848,20 @@ static void* wirelessThread(void*) {
                 }
                 apState = st;
             }
+        }
+
+        // No Wi-Fi hotspot config: do not open the phone's Bluetooth links (we would only close them again) and do
+        // not re-register the Bluetooth service; look for the config again every kApCfgRecheckSec.
+        if (apCfgState != 1) {
+            uint32_t now = monoSecs();
+            if (apCfgState < 0 || now - apCfgChecked >= (uint32_t)kApCfgRecheckSec) {
+                apCfgChecked = now;
+                int st = apConfigPresent(cfg) ? 1 : 0;
+                if (st == 0 && apCfgState < 0) logNoApConfig(cfg);
+                if (st == 1 && apCfgState == 0) printf("[Wireless] Wi-Fi hotspot config found: wireless Android Auto available\n");
+                apCfgState = st;
+            }
+            if (apCfgState != 1) { idleWait = false; usleep(500000); continue; }
         }
 
         // The SPP node only exists while the phone's Bluetooth link is up: poll for it first and
@@ -858,18 +891,20 @@ static void* wirelessThread(void*) {
         size_t apCount = 1;
         if (cfg) {
             if (!nbt::loadCarPlayApConfig(cfg, ap)) {
-                printf("[Wireless] AP config unreadable, retry in 10 s\n");
                 close(fd);
-                sleep(10);
+                logNoApConfig(cfg);
+                apCfgState = 0;
+                apCfgChecked = monoSecs();
                 continue;
             }
             apPath = cfg;
         } else {
             std::vector<nbt::ApCandidate> cands = nbt::collectApCandidates(nbt::kApCfgPaths, nbt::kApCfgPathCount);
             if (cands.empty()) {
-                printf("[Wireless] no readable CarPlay AP config (iap2_Wifi.cfg / iap2.cfg), retry in 10 s\n");
                 close(fd);
-                sleep(10);
+                logNoApConfig(cfg);
+                apCfgState = 0;
+                apCfgChecked = monoSecs();
                 continue;
             }
             apCount = cands.size();
