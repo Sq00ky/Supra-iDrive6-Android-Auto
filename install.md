@@ -65,6 +65,11 @@ If it looks like this, you're ready to go!
 From there, we will change the head unit from Read Only to Read Write temporarily to install the Android Auto Daemon and the Plugin to enable access in iDrive. This will be done by executing a series of commands over SSH. 
 Either I can do this, or you can do this. No pressure. I don't mind doing this for you. I've done both ways. If you're technically inclined and want to poke around, feel free. If not, no worries. I got you!
 
+### WARNING
+Don't use putty - these commands are meant for a normal SSH client.
+
+Open cmd.exe / powershell and run them. **Don't use PuTTY**
+
 ### What are those commands?
 I'm glad you asked!
 ```bash
