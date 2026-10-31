@@ -30,6 +30,15 @@ int main() {
     CHECK(!nbt::looksLikeBmwBcl(aa3, sizeof(aa3)));
     CHECK(!nbt::looksLikeBmwBcl(bcl, 0));
     CHECK(!nbt::looksLikeBmwBcl(bcl + 8, 3));   // signature cut short
+    // BMW app startup magic, four bytes and nothing else.
+    static const uint8_t boot[] = { 0x12, 0x34, 0x56, 0x78 };
+    CHECK(nbt::looksLikeBmwBcl(boot, sizeof(boot)));
+    // The same magic later in an Android Auto frame is not a BMW link.
+    static const uint8_t aaMagic[] = { 0x00, 0x08, 0x00, 0x07, 0x12, 0x34, 0x56, 0x78, 0x00, 0x00, 0x00, 0x00 };
+    CHECK(!nbt::looksLikeBmwBcl(aaMagic, sizeof(aaMagic)));
+    // DEADBEEF not at payload offset 8 is not enough on its own.
+    static const uint8_t mid[] = { 0x00, 0x02, 0x00, 0x11, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00, 0x00 };
+    CHECK(!nbt::looksLikeBmwBcl(mid, sizeof(mid)));
     printf(g_fail ? "test_bcl_detect: %d FAILED\n" : "test_bcl_detect: all passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

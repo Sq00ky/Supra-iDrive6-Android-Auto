@@ -49,6 +49,7 @@ struct TouchContact {
 struct TouchMsg {
     unsigned char d[kTouchMaxRecs * 4];
     int recs;
+    unsigned char seq0, seq1;   // seq of the first / last record: the next message starts at seq1 + 1
 };
 
 // Reads the touch stream of a reassembled message. Returns the number of contacts written to out (0..max), or -1
@@ -103,6 +104,7 @@ public:
                 if (open_) ++dropped_;               // previous message never ended
                 open_ = true;
                 cur_.recs = 0;
+                cur_.seq0 = rec[3];
             } else if (!open_) {
                 continue;                            // tail of a message whose start we missed
             } else if (rec[3] != (unsigned char)(lastSeq_ + 1)) {
@@ -114,6 +116,7 @@ public:
             for (int i = 0; i < 4; ++i) cur_.d[cur_.recs * 4 + i] = rec[4 + i];
             ++cur_.recs;
             if (end) {
+                cur_.seq1 = rec[3];
                 if (out && done < maxMsgs) out[done++] = cur_;
                 open_ = false;
                 cur_.recs = 0;

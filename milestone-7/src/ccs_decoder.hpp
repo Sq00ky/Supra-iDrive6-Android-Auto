@@ -63,6 +63,7 @@ public:
     CcsDecoder() : inst_(0x03), ccsInst_(0x01), invert_(false), lastPos_(-1), tiltKey_(0), pushDown_(false),
                    ccsLastPos_(-1), ccsTilt_(0), ccsPush_(false) {
         memset(slot_, 0, sizeof(slot_));
+        memset(ccsSlot_, 0, sizeof(ccsSlot_));
         static const char* const names[CCS_SLOTS] = { "MENU", "BACK", "OPTIONS", "COM", "MEDIA", "NAV", "MAP" };
         static const uint32_t keys[CCS_SLOTS] = { AAK_HOME, AAK_BACK, 0, AAK_CALL, AAK_MEDIA, AAK_NAVIGATION, AAK_NAVIGATION };
         for (int i = 0; i < CCS_SLOTS; ++i) { slotName_[i] = names[i]; slotKey_[i] = keys[i]; }
@@ -179,8 +180,8 @@ private:
                 }
             } else if (clus == 0x00) {
                 for (int b = 0; b < CCS_SLOTS; ++b) {
-                    if (sens != (1u << b) || down == slot_[b]) continue;
-                    slot_[b] = down;
+                    if (sens != (1u << b) || down == ccsSlot_[b]) continue;
+                    ccsSlot_[b] = down;
                     add(out, max, k, 1, slotKey_[b], down ? 1 : 0, 0, slotName_[b]);
                 }
             }
@@ -200,7 +201,8 @@ private:
     int lastPos_;
     uint32_t tiltKey_;
     bool pushDown_;
-    bool slot_[CCS_SLOTS];
+    bool slot_[CCS_SLOTS];       // CCS35up hard keys (C47/C4F)
+    bool ccsSlot_[CCS_SLOTS];    // older CCS hard keys (C20); a press on one must not hide the other
     uint32_t slotKey_[CCS_SLOTS];
     const char* slotName_[CCS_SLOTS];
     int ccsLastPos_;
