@@ -29,6 +29,10 @@ public:
     bool start();
     void stop();   // ends the bridge too, which ends a USB session
 
+    // A phone is on the cable: an aoap-switch node (AOA phone, switched or not yet) or an accessory node exists.
+    // The wireless thread leaves the Bluetooth links alone meanwhile. Updated every scan (500 ms).
+    bool phonePresent() const { return flag(phone_present_); }
+
 private:
     static void* watchThreadStub(void* arg);
     void watchLoop();
@@ -49,9 +53,10 @@ private:
     BusyCallback busy_;
     void* busy_data_;
 
-    pthread_mutex_t flag_mutex_;   // guards is_running_, bridge_stop_, reader_done_, writer_done_
+    pthread_mutex_t flag_mutex_;   // guards is_running_, phone_present_, bridge_stop_, reader_done_, writer_done_
     pthread_t watch_thread_;
     bool is_running_;
+    bool phone_present_;
 
     // One bridge at a time, owned by the watch thread (stop() takes it over after joining that thread).
     bool bridge_up_;

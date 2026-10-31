@@ -189,6 +189,8 @@ static void testBridge() {
     assert(waitSessions(1, 3.0));
     int s = sessionFd();
     assert(s >= 0);
+    assert(usb.phonePresent());
+    unlink("/tmp/nbt_usbacc_dev/android01");   // from here on only oap12 says a phone is plugged in
 
     // Head unit -> phone, written in pieces that split headers: arrives byte-exact.
     uint8_t out[12 + 8 + 0x40];
@@ -228,6 +230,7 @@ static void testBridge() {
     unlink(link);
     close(phone);
     sleep(1);
+    assert(!usb.phonePresent());   // the wireless thread may use the Bluetooth links again
     phone = openPhone(link);
     assert(waitSessions(4, 3.0));
     s = sessionFd();
@@ -251,6 +254,7 @@ static void testBridge() {
     t0 = now();
     usb.stop();
     assert(now() - t0 < 2.0);
+    assert(!usb.phonePresent());
     struct pollfd p2 = { sessionFd(), POLLIN, 0 };
     assert(poll(&p2, 1, 1000) == 1);
     assert(read(sessionFd(), &b, 1) == 0);
