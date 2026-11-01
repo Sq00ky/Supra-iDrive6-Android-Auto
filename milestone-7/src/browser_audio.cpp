@@ -148,7 +148,7 @@ bool BrowserAudio::init() {
     duck_cfg_.guidance_gain = AudioMixer::dbToGain(envInt("NBT_GUIDANCE_GAIN_DB", 0));
     duck_cfg_.system_gain = AudioMixer::dbToGain(envInt("NBT_SYSTEM_GAIN_DB", 0));
 
-    printf("[Browser] NBT_AUDIO_MODE=browser (experiment): AA media ch %d + guidance ch %d + system audio ch %d, "
+    printf("[Browser] audio mode browser (default; NBT_AUDIO_MODE=bt for Bluetooth): AA media ch %d + guidance ch %d + system audio ch %d, "
            "mixed and played through the browser audio source\n",
            AA_CH_MEDIA_AUDIO, AA_CH_GUIDANCE_AUDIO, AA_CH_SYSTEM_AUDIO);
     printf("[Browser] connection 0x%x%s, release after %d s without media / %d ms after a prompt or sound alone, "

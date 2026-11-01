@@ -42,9 +42,9 @@ inline bool knobEnabled() {
 // opened in this mode. Overrides: NBT_BT_SRC (default 0x3a eSRC_A2DP), NBT_BT_SINK (default 0x1
 // eSNK_SPEAKERS), NBT_BT_RELEASE=1 (release the source when the phone disconnects), NBT_SDR_DROP.
 // Audio path for Android Auto sound. NBT_AUDIO_MODE picks it; when unset, the older NBT_AUDIO_BT switch decides
-// (unset/on = bt, 0/off = a2i), so existing nbt-aad.env files keep their behaviour.
-//   bt       media, nav prompts and Assistant speech stay on the phone's Bluetooth A2DP link (default, car-verified)
-//   browser  EXPERIMENT: the AA media (ch 9), guidance (ch 8) and system-audio (ch 16) streams are mixed in the
+// (on = bt, 0/off = a2i) and with neither set the default is browser (car-verified, v1.8.61).
+//   bt       media, nav prompts and Assistant speech stay on the phone's Bluetooth A2DP link
+//   browser  (default) the AA media (ch 9), guidance (ch 8) and system-audio (ch 16) streams are mixed in the
 //            daemon, with media ducked under guidance/system sounds, and played through the car's browser audio
 //            source (dev-libasound -> A2I input_stereo_3, ConnectionMaster connection 0xb8). See browser_audio.hpp.
 //   a2i      the old staged A2I pipeline (audio_manager.cpp, NBT_AUDIO_STAGE); not audible on the car
@@ -57,7 +57,8 @@ inline AudioMode audioMode() {
         if (strcmp(m, "a2i") == 0) return AUDIO_MODE_A2I;
         if (strcmp(m, "bt") == 0) return AUDIO_MODE_BT;
     }
-    return envFlag("NBT_AUDIO_BT") == 0 ? AUDIO_MODE_A2I : AUDIO_MODE_BT;
+    int bt = envFlag("NBT_AUDIO_BT");
+    return bt == 0 ? AUDIO_MODE_A2I : bt == 1 ? AUDIO_MODE_BT : AUDIO_MODE_BROWSER;
 }
 
 inline const char* audioModeName(AudioMode m) {

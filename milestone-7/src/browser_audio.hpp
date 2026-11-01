@@ -3,7 +3,7 @@
 #ifndef BROWSER_AUDIO_HPP
 #define BROWSER_AUDIO_HPP
 
-// Browser audio mode (NBT_AUDIO_MODE=browser, EXPERIMENT, not car-verified): Android Auto sound over the AA
+// Browser audio mode (default since v1.8.61, car-verified; NBT_AUDIO_MODE=bt switches it off): Android Auto sound over the AA
 // connection instead of Bluetooth A2DP, played through the car's *browser* audio source.
 //
 // Why the browser source (static RE of the firmware, 2026-11-01): the CarPlay sources (connections 0x314-0x31e)

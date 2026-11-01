@@ -450,7 +450,7 @@ static nbt::AudioManager* g_audio = NULL;       // same lifetime rule as g_video
 // audio source (browser_audio.hpp). Same lifetime rule as g_video.
 static nbt::BrowserAudio* g_browser = NULL;
 static bool g_a2iAudio = false;                 // NBT_AUDIO_MODE=a2i (or NBT_AUDIO_BT=0): the staged AudioManager
-// Bluetooth audio mode (default; NBT_AUDIO_BT=0 turns it off): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
+// Bluetooth audio mode (NBT_AUDIO_MODE=bt or NBT_AUDIO_BT=1; browser is the default since v1.8.61): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
 static bool g_btAudio = false;
 static nbt::AudioRoute g_btRoute;
 static uint32_t g_btSrc = 0x3a;                 // eSRC_A2DP (audioconn -l: ConnId 0xc7 AuxInBTAudio)
@@ -1371,7 +1371,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.52-neutral5"
+#define NBT_AAD_BUILD "v1.8.61-browser"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no log file and nothing kept in RAM (the iDrive app sends our stdout to /dev/null; from a shell it stays on

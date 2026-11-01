@@ -378,8 +378,8 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | Setting | Turn off with | What it does |
 |---|---|---|
 | `NBT_WIRELESS` | `0` | HU-hosted wireless. Off = old mode where the daemon scans for a phone running "Start head unit server" |
-| `NBT_AUDIO_BT` | `0` | Media over Bluetooth A2DP. Off = experimental A2I pipeline (see below) |
-| `NBT_GUIDANCE_BT` | `0` | Nav prompts mixed into the Bluetooth audio (sink declared as system audio) |
+| `NBT_AUDIO_BT` | `0` | Only read when `NBT_AUDIO_MODE` is unset. Since v1.8.61 the default is browser audio (see `NBT_AUDIO_MODE`); `1` = media over Bluetooth A2DP, `0` = experimental A2I pipeline (see below) |
+| `NBT_GUIDANCE_BT` | `0` | Bluetooth mode only: nav prompts mixed into the Bluetooth audio (sink declared as system audio) |
 | `NBT_VOICE_SCENARIO` | `0` | Car mic routed to the Assistant via the `Carplay_Siri_1mic` speech scenario. Without it the Assistant hears silence |
 | `NBT_BT_REFOCUS` | `0` | Request the car's Bluetooth source again after the Assistant closes the mic, so the reply is heard |
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
@@ -412,7 +412,7 @@ Leave these unset unless you are testing.
 | `NBT_BT_PLAY` | **Experiment, off.** `1` = once the car grants the Bluetooth source, wait `NBT_BT_PLAY_DELAY` ms (1500) and send SourceActivity PLAY to it (`AuxInBTAudio.DMMAudioSource` request 2), like picking Bluetooth audio in iDrive; `2` = also AVRCP START (`BlueMedia.SGMedia`). Log: `[BtPlay] ...`. Not car-verified |
 | `NBT_BT_CONN` | ConnId of the car's Bluetooth source, requested through the ConnectionMaster (`audioconn -b <id>`, the iDrive HMI's call). Default `0xc7` (`audioconn -l`: `eSRC_A2DP ... AuxInBTAudio srcNr: 0x1`), car-verified on a MINI F60 since v1.8.38; `0` = the old focus form `-b 0x3a 0x1` (`NBT_BT_SRC` / `NBT_BT_SINK`) |
 | `NBT_SDR_DROP` | AA channels left out of service discovery (default `9` in Bluetooth mode) |
-| `NBT_AUDIO_MODE` | `bt` (default), `browser` or `a2i`. **`browser` is an experiment, not car-verified**: Android Auto sound comes over the Android Auto connection instead of Bluetooth and plays through the car's browser audio source (see [Browser audio mode](#browser-audio-mode-experiment)). Unset follows `NBT_AUDIO_BT` (`0` = `a2i`) |
+| `NBT_AUDIO_MODE` | `browser` (default since v1.8.61, car-verified), `bt` or `a2i`. `browser`: Android Auto sound comes over the Android Auto connection instead of Bluetooth and plays through the car's browser audio source (see [Browser audio mode](#browser-audio-mode)). `bt`: media, prompts and Assistant stay on Bluetooth A2DP. Unset follows `NBT_AUDIO_BT` if that is set (`1` = `bt`, `0` = `a2i`) |
 | `NBT_BROWSER_CONN`, `NBT_BROWSER_IDLE_S`, `NBT_BROWSER_PROMPT_IDLE_MS`, `NBT_BROWSER_REFOCUS`, `NBT_BROWSER_PCM`, `NBT_BROWSER_RATE`, `NBT_BROWSER_FRAG`, `NBT_BROWSER_FRAGS`, `NBT_BROWSER_ASOUND` | Browser mode: connection id (default `0xb8`, `0` = don't route), release the source after N s without sound once AA media has played (default `10`, `0` = keep it until the session ends), release it N ms after a prompt or system sound when no AA media is playing (default `1000`, `0` = use the 10 s rule), ask for it again when the mic closes (default on), `card:device` instead of the preferred device, device rate (default `48000`; this car's browser device takes 22050..44100, so 44100 is used), fragment size in bytes (default `4096`, rounded down to a power of two: A2I refuses any other size), fragment count (default `5`; if the device refuses, the daemon tries twice the count, then 8 fragments of twice the size), shim path (default `/opt/mm/lib/libasound/libasound.so`) |
 | `NBT_DUCK_DB`, `NBT_DUCK_ATTACK_MS`, `NBT_DUCK_HOLD_MS`, `NBT_DUCK_RELEASE_MS`, `NBT_MEDIA_GAIN_DB`, `NBT_GUIDANCE_GAIN_DB`, `NBT_SYSTEM_GAIN_DB` | Browser mode ducking: media level under a prompt or system sound (default `-12` dB), ramp down / hold / ramp up (default `80` / `600` / `500` ms), fixed per-stream gains (default `0` dB) |
 | `NBT_SYSTEM_SINK` | `1` / `0` forces the SYSTEM_AUDIO sink (ch 16) in / out of service discovery (default: in browser mode only) |
@@ -444,10 +444,9 @@ Leave these unset unless you are testing.
 
 Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID_DST_H=480`, `NBT_TOUCH_SY=1.5`.
 
-### Browser audio mode (experiment)
+### Browser audio mode
 
-`NBT_AUDIO_MODE=browser` in `nbt-aad.env`. **Not car-verified; test it parked.** Without the setting nothing changes
-(Bluetooth mode).
+The default since v1.8.61 (car-verified). `NBT_AUDIO_MODE=bt` in `nbt-aad.env` goes back to Bluetooth mode.
 
 - The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 16 kHz mono: nav prompts, Assistant
   speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI sounds). Media
