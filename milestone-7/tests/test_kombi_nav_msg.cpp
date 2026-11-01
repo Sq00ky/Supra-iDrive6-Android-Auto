@@ -182,6 +182,56 @@ int main() {
         assert(utf8Length("Stra\xc3\x9f" "e") == 6);
         assert(utf8Prefix(std::string(300, 'X'), 40).size() == 40);
     }
+    // lanes: NavigationStep field 3 {1 lane_directions {1 shape, 2 is_highlighted}}, left to right
+    {
+        NavView v;
+        assert(viewFromMessages(msgs(navStateLanes(7, "TEST ST", demoLanes(0)), curPos(320, "0.2", 5)), v));
+        assert(v.lanes.size() == 4 && v.lanes[0].size() == 1 && v.lanes[0][0].shape == 4 && v.lanes[0][0].highlighted);
+        assert(v.lanes[3].size() == 2 && v.lanes[3][1].shape == 5 && !v.lanes[3][1].highlighted);
+        assert(v.road == "TEST ST" && v.aa_type == 7 && v.has_step_m && v.step_m == 320);
+        KombiLanes k;
+        assert(kombiLanes(v, k) && describeLanes(k) == "LEFT* STRAIGHT_ON STRAIGHT_ON STRAIGHT_ON");
+        // the four parked-test junctions, as the car showed them
+        const char* want[] = { "LEFT* STRAIGHT_ON STRAIGHT_ON STRAIGHT_ON", "LEFT STRAIGHT_ON STRAIGHT_ON RIGHT*",
+                               "LEFT STRAIGHT_ON RIGHT*", "HALF_LEFT* HALF_LEFT* STRAIGHT_ON STRAIGHT_ON" };
+        for (int j = 0; j < 4; ++j) {
+            assert(viewFromMessages(msgs(navStateLanes(7, "R", demoLanes(j)), Bytes()), v));
+            assert(kombiLanes(v, k) && describeLanes(k) == want[j]);
+        }
+        // an explicit is_highlighted 0 (as the phone sends it) is "not highlighted"
+        Bytes d, ln, step, man, st;
+        fInt(d, 1, 1); fInt(d, 2, 0);
+        fBytes(ln, 1, d);
+        fInt(man, 1, 8);
+        fBytes(step, 1, man); fBytes(step, 2, msgStr(1, "R")); fBytes(step, 3, ln);
+        fBytes(st, 1, step);
+        assert(viewFromMessages(msgs(st, Bytes()), v) && v.lanes.size() == 1 && !v.lanes[0][0].highlighted);
+        assert(kombiLanes(v, k) && k.size() == 1 && k[0].kind == kLaneOther && k[0].arrow == 1);
+    }
+    // lanes we can't map: no lane row at all (never a partial or wrong one)
+    {
+        NavView v;
+        KombiLanes k;
+        assert(viewFromMessages(msgs(navState(7, "TEST ST"), Bytes()), v) && v.lanes.empty() && !kombiLanes(v, k));
+        std::vector<TLane> l = demoLanes(0);
+        l[1] = lane(0, false);                                     // UNKNOWN shape
+        assert(viewFromMessages(msgs(navStateLanes(7, "R", l), Bytes()), v) && !kombiLanes(v, k) && k.empty());
+        l = demoLanes(0);
+        l[2] = TLane();                                            // a lane without directions
+        assert(viewFromMessages(msgs(navStateLanes(7, "R", l), Bytes()), v) && !kombiLanes(v, k));
+        l = std::vector<TLane>(9, lane(1, false));                 // more than kLaneMax lanes
+        assert(viewFromMessages(msgs(navStateLanes(7, "R", l), Bytes()), v) && !kombiLanes(v, k));
+        l = std::vector<TLane>(8, lane(1, false));                 // 8 is fine
+        assert(viewFromMessages(msgs(navStateLanes(7, "R", l), Bytes()), v) && kombiLanes(v, k) && k.size() == 8);
+        // multi-direction lane: the highlighted direction wins, else the first; every shape maps
+        l.clear();
+        l.push_back(lane2(1, false, 5, true));
+        l.push_back(lane2(6, false, 1, false));
+        l.push_back(lane(7, false)); l.push_back(lane(8, false)); l.push_back(lane(9, false)); l.push_back(lane(3, false));
+        assert(viewFromMessages(msgs(navStateLanes(7, "R", l), Bytes()), v) && kombiLanes(v, k));
+        assert(describeLanes(k) == "RIGHT* TIGHT_LEFT TIGHT_RIGHT UTURN_LEFT UTURN_RIGHT HALF_RIGHT");
+        assert(laneArrow(10) == -1 && laneArrow(-1) == -1);
+    }
     printf("test_kombi_nav_msg OK\n");
     return 0;
 }

@@ -186,6 +186,74 @@ int main() {
         const uint8_t want[] = { 0, 'A', 0x00, 0xDF, 0xD8, 0x3D, 0xDE, 0x97, 0xFF, 0xFD };
         assert(u.size() == sizeof(want) && !memcmp(&u[0], want, sizeof(want)));
     }
+    // lanes: byte-identical to the car-proven bridge (aa_hud_bridge Graph.start(lanes=), position, feed_position) for
+    // the parked lane test's four junctions (lane row car-verified on the cluster and the HUD, 2026-11-01)
+    {
+        const struct { int dir; const char* road; uint8_t k[4]; uint8_t a[4]; size_t n; const char* sha; } cases[] = {
+            { 6, "TEST ST", {1, 2, 2, 2}, {6, 1, 1, 1}, 4, "83148d1e9d09e178e99b074af6fbcecd06e6784361eb12de523e8225156ba38d" },
+            { 7, "MAIN ST", {2, 2, 2, 1}, {6, 1, 1, 7}, 4, "4611b5d77a91891f1cab8759fdfff0421f47d264bfefb5e1afc85c3ab0603045" },
+            { 7, "OAK AVE", {2, 2, 1, 0}, {6, 1, 7, 0}, 3, "23891cc1ef8230e1533641ad76fe730d20cece6beed2da1a2741826615372a2b" },
+            { 2, "ELM WAY", {1, 1, 2, 2}, {2, 2, 1, 1}, 4, "99f104c94377a84c51ffd9b292f003b874fa14c9f13729c4ef1305c149e68801" },
+        };
+        for (size_t c = 0; c < 4; ++c) {
+            KombiLanes l;
+            for (size_t i = 0; i < cases[c].n; ++i) l.push_back(KombiLane(cases[c].k[i], cases[c].a[i]));
+            Graph g(0xC8, 255);
+            std::vector<Frame> fr, p;
+            double pos = 0;
+            assert(!g.feedPosition(true, 10.0, pos));                       // no lane graph yet: no feed
+            assert(g.start(cases[c].dir, cases[c].road, "0.2", 0x01, fr, &l) && fr.size() == 93);
+            assert(hashFrames(fr) == cases[c].sha);
+            const struct { bool has; double step; double pos; const char* sha; } feeds[] = {
+                { true, 395.0, 4132.0, "3982173efa6656487fe982ce2f3b7dae0cdcb2d1bc1112adbe00bac8e5a24e38" },
+                { false, 0.0, 4132.0, "3982173efa6656487fe982ce2f3b7dae0cdcb2d1bc1112adbe00bac8e5a24e38" },
+                { true, 10.0, 3962.0, "53221d352e214920da4314fd5d0211af5490e9705e2d64d14d30275a243d8c50" },
+                { true, 500.0, 4132.0, "3982173efa6656487fe982ce2f3b7dae0cdcb2d1bc1112adbe00bac8e5a24e38" },
+                { true, -5.0, 3952.0, "519972f83c9327d4f7682d468a7e069fb0a47d3c48bbb37a4748f682ebe01a26" },
+            };
+            for (size_t f = 0; f < 5; ++f) {
+                assert(g.feedPosition(feeds[f].has, feeds[f].step, pos) && pos == feeds[f].pos);
+                assert(g.position(pos, p) && p.size() == 1 && p[0].method == 0x0009);
+                assert(hashFrames(p) == feeds[f].sha);
+            }
+            // one lane model, sent right before maneuver 0's 0x0F nodes which list it; no template lane model left
+            int models = 0;
+            for (size_t i = 0; i < fr.size(); ++i) {
+                assert(methodAllowed(fr[i].method));
+                if (fr[i].method == 0x0010) {
+                    ++models;
+                    assert(getU32(fr[i].body, 4) == kLaneModel0 && i + 1 < fr.size());
+                    assert(modelType(fr[i + 1].body) == 15 && modelIndex(fr[i + 1].body) == 0);
+                    assert(getU32(fr[i].body, 9) == fr[i].body.size() - 17);
+                }
+                if (fr[i].method == 0x000A && modelType(fr[i].body) == 15) {
+                    uint32_t n = getU32(fr[i].body, 54);
+                    assert(modelIndex(fr[i].body) == 0 ? (n == 4 && getU32(fr[i].body, 58) == kLaneModel0) : n == 0);
+                }
+            }
+            assert(models == 2);
+        }
+        // no lanes = the arrows-only graph, byte for byte
+        KombiLanes none;
+        std::vector<Frame> a, b;
+        Graph g(0xC8, 255);
+        assert(g.start(6, "TEST ST", "0.3", 0x01, a) && g.start(6, "TEST ST", "0.3", 0x01, b, &none));
+        assert(a.size() == 97 && hashFrames(a) == hashFrames(b));
+    }
+    // scope: no road shields, route-number icons or signposts: nothing we send is an image resource (model type 1,
+    // methods 0x0002 / 0x0003, where the factory sends its freeway-shield bitmaps), with and without lanes
+    {
+        KombiLanes l(1, KombiLane(1, 6));
+        std::vector<Frame> fr, c;
+        Graph g(0xC8, 255);
+        assert(g.start(6, "TEST ST", "0.3", 0x01, fr, &l));
+        g.cancel(c);
+        fr.insert(fr.end(), c.begin(), c.end());
+        for (size_t i = 0; i < fr.size(); ++i) {
+            assert(modelType(fr[i].body) != 1);
+            if (fr[i].method == 0x0002 || fr[i].method == 0x0003) assert((getU32(fr[i].body, 4) >> 24) != 0x01);
+        }
+    }
     // SOME/IP framing
     {
         Bytes body(5, 0xAB);

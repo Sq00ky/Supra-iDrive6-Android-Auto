@@ -42,8 +42,11 @@ struct Settings {
     double first_dist_s;   // a new maneuver without a distance yet waits this long, then shows "-"
     double min_update_s;   // distance updates at most this often
     double nav_stale_s;    // guidance on but no ch 10 message this long = ended
+    bool lanes;            // the phone's lanes as the KOMBI lane row (NBT_KOMBI_NAV_LANES=0 turns it off)
+    double lane_resend_s;  // a lane-only change on the same maneuver resends the graph at most this often
+    double lane_feed_s;    // the position update the KOMBI checks lanes against: at most this often
     Settings() : approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
-                 min_update_s(0.5), nav_stale_s(300.0) {}
+                 min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0) {}
 };
 
 // What the state machine drives (callbacks, like AASession's): the real client in kombi_nav.cpp, a test's own in tests.
@@ -80,7 +83,9 @@ public:
 
 private:
     bool approachHold(const NavView& v, double now);
-    bool sendFrames(const char* label, const std::vector<Frame>& frames);
+    bool sendFrames(const char* label, const std::vector<Frame>& frames, bool quiet = false);
+    void feed(const NavView& v, double now, bool force);
+    void forget();
     void log(const char* fmt, ...);
 
     const Graph& g_;
@@ -99,6 +104,11 @@ private:
     bool sent_any_;
     bool last_cancel_ok_;
     Stop stop_;
+    KombiLanes shown_lanes_;  // the lane row in the graph we sent (empty = none)
+    double t_graph_;
+    double t_pos_;
+    bool has_last_pos_;
+    double last_pos_;
 };
 
 // iDrive route detection from the system log (NavNBTEvoController / MapViewer lines, car-seen 2026-10-31):

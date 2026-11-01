@@ -222,6 +222,27 @@ static NavMessages one(int type, const std::string& road, const Bytes& pos, int 
     return m;
 }
 
+static NavMessages oneL(int type, const std::string& road, const std::vector<TLane>& lanes, const Bytes& pos) {
+    NavMessages m;
+    Bytes s = status(1), ns = navStateLanes(type, road, lanes);
+    m.store(0x8003, &s[0], s.size());
+    m.store(0x8006, &ns[0], ns.size());
+    if (!pos.empty()) m.store(0x8007, &pos[0], pos.size());
+    return m;
+}
+
+static size_t countMethod(const std::vector<Seen>& s, uint16_t m, size_t from = 0) {
+    size_t n = 0;
+    for (size_t i = from; i < s.size(); ++i) n += s[i].method == m;
+    return n;
+}
+
+static double lastPos(const std::vector<Seen>& s) {   // the route position in the last 0x11 position update
+    for (size_t i = s.size(); i-- > 0;)
+        if (s[i].method == 0x0009 && s[i].body.size() >= 30 && s[i].body[8] == 17) return getF64(&s[i].body[22]);
+    return -1;
+}
+
 static void waitCount(FakeKombi& k, size_t n, double timeout_s = 5.0) {
     double t0 = monoS();
     while (k.count() < n && monoS() - t0 < timeout_s) usleep(10000);
@@ -394,6 +415,92 @@ int main() {
         assert(r.core.shown());
         r.feed(on, 6.0); r.feed(off, 7.0); r.feed(off, 16.0);
         assert(!r.core.shown() && hasLog("CLEAR (guidance ended)"));
+    }
+    // lanes from the start: the 93-frame lane graph, then a position update (the KOMBI re-checks lanes on it); later
+    // updates at most once a second and only when the position moved; distance updates carry on as before
+    {
+        Rig r;
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(320, "0.2", 5)), 0.0);
+        std::vector<Seen> s = r.k.seen();
+        assert(s.size() == 93 + 1 && countMethod(s, 0x0010) == 2 && s.back().method == 0x0009);
+        assert(lastPos(s) == 4132.0);                               // 320 m: clamped into the section (3952 + 180)
+        assert(hasLog("SHOW type 7 -> direction 6 | 0.2 mi | road 'TEST ST' | lanes LEFT* STRAIGHT_ON STRAIGHT_ON "
+                      "STRAIGHT_ON") && countLog("position:") == 0);   // position sends are quiet unless they fail
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(150, "500", 6)), 0.5);   // < 1 s: no position yet
+        s = r.k.seen();
+        assert(countMethod(s, 0x0009, 94) == 0 && countMethod(s, 0x000A, 94) == 1);   // the distance update only
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(150, "500", 6)), 1.2);
+        s = r.k.seen();
+        assert(countMethod(s, 0x0009, 94) == 1 && lastPos(s) == 3952.0 + 150);
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(150, "500", 6)), 2.5);   // not moved: nothing
+        assert(r.k.count() == s.size());
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(10, "50", 6)), 3.6);
+        s = r.k.seen();
+        assert(lastPos(s) == 3962.0);
+        for (size_t i = 0; i < s.size(); ++i) assert(methodAllowed(s[i].method));
+    }
+    // lanes appear on the same maneuver (the phone sends them only near the junction): the graph is resent with the
+    // lane row, but not within 3 s of the last graph; they disappear: resent without, and the position feed stops
+    {
+        Rig r;
+        r.feed(one(8, "MAIN ST", curPos(600, "0.4", 5)), 0.0);
+        assert(r.k.count() == 97);
+        r.feed(oneL(8, "MAIN ST", demoLanes(1), curPos(400, "0.2", 5)), 1.0);   // too soon: only the distance
+        assert(r.k.count() == 98);
+        r.feed(oneL(8, "MAIN ST", demoLanes(1), curPos(380, "0.2", 5)), 3.5);
+        std::vector<Seen> s = r.k.seen();
+        assert(s.size() == 98 + 93 + 1 && countMethod(s, 0x0010, 98) == 2 && s.back().method == 0x0009);
+        assert(hasLog("LANES type 8 -> direction 7 | 0.2 mi | road 'MAIN ST' | lanes LEFT STRAIGHT_ON STRAIGHT_ON RIGHT*"));
+        r.feed(oneL(8, "MAIN ST", demoLanes(1), curPos(100, "0.1", 5)), 5.0);     // same lanes: no new graph
+        s = r.k.seen();
+        assert(s.size() == 98 + 93 + 1 + 2 && s.back().method == 0x0009);   // the 0.1 mi distance + one position
+        r.feed(one(8, "MAIN ST", curPos(150, "500", 6)), 7.0);                    // lanes gone
+        s = r.k.seen();
+        size_t at = 98 + 93 + 1 + 2;
+        assert(s.size() == at + 97);                               // the arrows-only graph (the template's own 97)
+        assert(hasLog("LANES type 8 -> direction 7 | 500 ft | road 'MAIN ST' | lanes none"));
+        r.feed(one(8, "MAIN ST", curPos(50, "150", 6)), 9.0);
+        s = r.k.seen();
+        assert(s.size() == at + 97 + 1 && s.back().method == 0x000A);   // a distance update, no position feed
+    }
+    // a new maneuver with lanes (next turn, reroute) builds its own lane graph; lanes we can't map send none;
+    // NBT_KOMBI_NAV_LANES=0 (settings.lanes off) = the arrows-only behaviour, byte for byte
+    {
+        Rig r;
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(320, "0.2", 5)), 0.0);
+        r.feed(oneL(7, "OAK AVE", demoLanes(2), curPos(300, "0.2", 5)), 0.5);   // new maneuver: no rate limit
+        std::vector<Seen> s = r.k.seen();
+        assert(s.size() == 2 * (93 + 1) && hasLog("SHOW type 7 -> direction 6 | 0.2 mi | road 'OAK AVE' | lanes LEFT "
+                                                  "STRAIGHT_ON RIGHT*"));
+        std::vector<TLane> bad = demoLanes(3);
+        bad[0] = lane(0, true);
+        r.feed(oneL(5, "ELM WAY", bad, curPos(300, "0.2", 5)), 1.0);
+        s = r.k.seen();
+        assert(s.size() == 2 * 94 + 97);                           // the arrows-only graph, no position update
+        Settings off = noApproach();
+        off.lanes = false;
+        Rig o(off), a;
+        o.feed(oneL(7, "TEST ST", demoLanes(0), curPos(320, "0.2", 5)), 0.0);
+        a.feed(one(7, "TEST ST", curPos(320, "0.2", 5)), 0.0);
+        std::vector<Seen> x = o.k.seen(), y = a.k.seen();
+        assert(x.size() == 97 && y.size() == 97);
+        for (size_t i = 0; i < 97; ++i) assert(x[i].method == y[i].method && x[i].body == y[i].body);
+    }
+    // a clear or a yield forgets the lane row: no position updates afterwards
+    {
+        Rig r;
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(320, "0.2", 5)), 0.0);
+        r.core.yieldToFactory();
+        size_t n = r.k.count();
+        r.core.step(NULL, 5.0);
+        assert(r.k.count() == n);
+        r.feed(oneL(7, "TEST ST", demoLanes(0), curPos(200, "0.1", 5)), 6.0);   // a new route: full lane graph again
+        std::vector<Seen> s = r.k.seen();
+        assert(s.size() == n + 94 && s.back().method == 0x0009);
+        r.core.clear("test");
+        n = r.k.count();
+        r.feed(one(7, "OTHER", Bytes()), 20.0);                    // nothing shown, no distance yet: nothing
+        assert(r.k.count() == n);
     }
     // KOMBI magic cookies queued while idle are drained before the next request
     {

@@ -182,6 +182,16 @@ struct NavMessages {
 };
 
 // ---- view: the next maneuver in Android Auto terms ----------------------------------------------------------------
+// One direction of an AA lane (NavigationStep.lanes[].lane_directions[]): shape (LaneDirection.Shape: 0 UNKNOWN,
+// 1 STRAIGHT, 2/3 SLIGHT_LEFT/RIGHT, 4/5 NORMAL_LEFT/RIGHT, 6/7 SHARP_LEFT/RIGHT, 8/9 U_TURN_LEFT/RIGHT) and whether
+// the phone highlights it (the lane to take).
+struct LaneDirection {
+    int shape;
+    bool highlighted;
+    LaneDirection() : shape(0), highlighted(false) {}
+    LaneDirection(int s, bool h) : shape(s), highlighted(h) {}
+};
+typedef std::vector<LaneDirection> AaLane;
 
 struct NavView {
     int aa_type;             // Maneuver TYPE_*
@@ -194,6 +204,7 @@ struct NavView {
     int64_t dest_m;
     bool has_exit_angle;
     int64_t exit_angle;
+    std::vector<AaLane> lanes;   // the step's lanes, left to right (the phone sends them only near the junction)
     NavView() : aa_type(0), aa_unit(0), has_step_m(false), step_m(0), has_dest_m(false), dest_m(0),
                 has_exit_angle(false), exit_angle(0) {}
 
@@ -237,6 +248,24 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         if (pbInt(man, 1, x)) v.aa_type = (int)x;
         if (pbInt(man, 3, x)) { v.has_exit_angle = true; v.exit_angle = x; }
         v.road = pbText(pbMsg(step, 2), 1);
+        // step field 3: repeated NavigationLane {1 repeated LaneDirection {1 shape, 2 is_highlighted}}
+        PbReader lr(step.data, step.len);
+        PbField lf;
+        while (lr.next(lf)) {
+            if (lf.num != 3 || lf.wire != 2) continue;
+            AaLane lane;
+            PbReader dr(lf.data, lf.len);
+            PbField df;
+            while (dr.next(df)) {
+                if (df.num != 1 || df.wire != 2) continue;
+                PbSpan d(df.data, df.len);
+                int64_t sh = 0, hl = 0;
+                pbInt(d, 1, sh);
+                pbInt(d, 2, hl);
+                lane.push_back(LaneDirection((int)sh, hl != 0));
+            }
+            v.lanes.push_back(lane);
+        }
     } else if (m.has_turn && ev.len) {
         // NextTurnEvent {1 road, 2 turn_side (1 L / 2 R), 3 event, 5 exit number, 6 exit angle}: event -> type pair
         static const int kLegacy[][3] = { {1, 1, 1}, {2, 2, 2}, {3, 5, 6}, {4, 7, 8}, {5, 9, 10}, {6, 11, 12},
@@ -303,6 +332,85 @@ inline int kombiDirection(int aa_type) {
         case 39: case 40: case 41: case 42: return 10;   // DESTINATION*: checkered flag
         default: return 1;                   // depart, straight, name change, ferry, unknown
     }
+}
+
+// ---- lanes -> the KOMBI lane model (car-verified 2026-11-01: lane row on the cluster and the HUD) -------------------
+// AA lane shape -> KOMBI lane arrow (the same enum as the maneuver direction). Car-matched: STRAIGHT 1, NORMAL_LEFT 6,
+// NORMAL_RIGHT 7, SLIGHT_LEFT 2 (factory lane captures + the parked lane test); SLIGHT_RIGHT 3 by symmetry; SHARP_* /
+// U_TURN_* by the KOMBI enum names only. -1 = no KOMBI arrow (then no lane row at all).
+inline int laneArrow(int shape) {
+    switch (shape) {
+        case 1: return 1;    // STRAIGHT -> STRAIGHT_ON
+        case 2: return 2;    // SLIGHT_LEFT -> HALF_LEFT
+        case 3: return 3;    // SLIGHT_RIGHT -> HALF_RIGHT
+        case 4: return 6;    // NORMAL_LEFT -> LEFT
+        case 5: return 7;    // NORMAL_RIGHT -> RIGHT
+        case 6: return 4;    // SHARP_LEFT -> TIGHT_LEFT
+        case 7: return 5;    // SHARP_RIGHT -> TIGHT_RIGHT
+        case 8: return 8;    // U_TURN_LEFT
+        case 9: return 9;    // U_TURN_RIGHT
+        default: return -1;
+    }
+}
+
+// One lane as the KOMBI draws it: kind 1 = a lane to take (highlighted), 2 = another lane; one arrow per lane, as in
+// every factory lane model.
+struct KombiLane {
+    uint8_t kind;
+    uint8_t arrow;
+    KombiLane() : kind(0), arrow(0) {}
+    KombiLane(uint8_t k, uint8_t a) : kind(k), arrow(a) {}
+    bool operator==(const KombiLane& o) const { return kind == o.kind && arrow == o.arrow; }
+};
+typedef std::vector<KombiLane> KombiLanes;
+const uint8_t kLaneTake = 1;
+const uint8_t kLaneOther = 2;
+const size_t kLaneMax = 8;          // factory lane models seen: 2..7 lanes
+
+// The phone's lanes -> the KOMBI's, left to right. False (and out empty) when there are none or anything can't be
+// mapped (an empty lane, an unknown shape, more than kLaneMax lanes): no lane row rather than a wrong one. A lane
+// with several directions shows its highlighted one, else the phone's first (car match: a STRAIGHT+RIGHT through lane
+// is the factory's STRAIGHT).
+inline bool kombiLanes(const NavView& v, KombiLanes& out) {
+    out.clear();
+    if (v.lanes.empty() || v.lanes.size() > kLaneMax) return false;
+    for (size_t i = 0; i < v.lanes.size(); ++i) {
+        const AaLane& l = v.lanes[i];
+        if (l.empty()) { out.clear(); return false; }
+        int shape = l[0].shape;
+        bool take = false;
+        for (size_t k = 0; k < l.size(); ++k)
+            if (l[k].highlighted) { shape = l[k].shape; take = true; break; }
+        int a = laneArrow(shape);
+        if (a < 0) { out.clear(); return false; }
+        out.push_back(KombiLane(take ? kLaneTake : kLaneOther, (uint8_t)a));
+    }
+    return true;
+}
+
+// Log form: "LEFT* STRAIGHT_ON RIGHT" (* = a lane to take), "none".
+inline std::string describeLanes(const KombiLanes& l) {
+    if (l.empty()) return "none";
+    std::string s;
+    for (size_t i = 0; i < l.size(); ++i) {
+        const char* n;
+        switch (l[i].arrow) {
+            case 1: n = "STRAIGHT_ON"; break;
+            case 2: n = "HALF_LEFT"; break;
+            case 3: n = "HALF_RIGHT"; break;
+            case 4: n = "TIGHT_LEFT"; break;
+            case 5: n = "TIGHT_RIGHT"; break;
+            case 6: n = "LEFT"; break;
+            case 7: n = "RIGHT"; break;
+            case 8: n = "UTURN_LEFT"; break;
+            case 9: n = "UTURN_RIGHT"; break;
+            default: n = "?"; break;
+        }
+        if (i) s += ' ';
+        s += n;
+        if (l[i].kind == kLaneTake) s += '*';
+    }
+    return s;
 }
 
 // Display units -> the KOMBI unit byte after the distance text (0x01 mi, 0x05 ft); -1 = no KOMBI unit known.

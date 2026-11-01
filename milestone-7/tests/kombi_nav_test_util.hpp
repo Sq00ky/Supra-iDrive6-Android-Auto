@@ -45,6 +45,43 @@ inline Bytes navState(int type, const std::string& road, int exit_angle = -1,
     return o;
 }
 
+// One AA lane: (shape, highlighted) per direction.
+typedef std::vector<std::pair<int, bool> > TLane;
+inline TLane lane(int s1, bool h1) { return TLane(1, std::make_pair(s1, h1)); }
+inline TLane lane2(int s1, bool h1, int s2, bool h2) { TLane l = lane(s1, h1); l.push_back(std::make_pair(s2, h2)); return l; }
+
+// NavigationState with one step {maneuver {type}, road {name}, lanes[] {lane_directions[] {shape, is_highlighted}}}.
+inline Bytes navStateLanes(int type, const std::string& road, const std::vector<TLane>& lanes) {
+    Bytes man, step, o;
+    fInt(man, 1, type);
+    fBytes(step, 1, man);
+    fBytes(step, 2, msgStr(1, road));
+    for (size_t i = 0; i < lanes.size(); ++i) {
+        Bytes ln;
+        for (size_t k = 0; k < lanes[i].size(); ++k) {
+            Bytes d;
+            fInt(d, 1, lanes[i][k].first);
+            if (lanes[i][k].second) fInt(d, 2, 1);
+            fBytes(ln, 1, d);
+        }
+        fBytes(step, 3, ln);
+    }
+    fBytes(step, 4, msgStr(1, "cue text"));
+    fBytes(o, 1, step);
+    fBytes(o, 2, msgStr(1, "1 DEMO WAY"));
+    return o;
+}
+
+// The parked lane test's four junctions (the shapes the phone sent on the 2026-11-01 drives; car-verified rows).
+inline std::vector<TLane> demoLanes(int k) {
+    std::vector<TLane> l;
+    if (k == 0) { l.push_back(lane(4, true)); l.push_back(lane(1, false)); l.push_back(lane(1, false)); l.push_back(lane2(1, false, 5, false)); }
+    if (k == 1) { l.push_back(lane(4, false)); l.push_back(lane(1, false)); l.push_back(lane(1, false)); l.push_back(lane2(5, true, 1, false)); }
+    if (k == 2) { l.push_back(lane(4, false)); l.push_back(lane(1, false)); l.push_back(lane(5, true)); }
+    if (k == 3) { l.push_back(lane(2, true)); l.push_back(lane(2, true)); l.push_back(lane(1, false)); l.push_back(lane(1, false)); }
+    return l;
+}
+
 // NavigationCurrentPosition {step_distance {distance {meters, display, unit}, seconds}, destination {...}}.
 inline Bytes curPos(int64_t step_m, const std::string& display, int unit, int seconds = 30, int64_t dest_m = 5000,
                     bool with_meters = true) {

@@ -9,6 +9,9 @@
 //   - ManeuverDistance    0x1D UTF-16BE display text at the FEFF BOM, the unit byte after its NUL (0x01 mi,
 //                              0x05 ft), the red distance bar percentage at body[22] (255 = hidden)
 //   - TextResource        0x03 UTF-16BE road name at the FEFF BOM
+// With lanes (start() given KombiLanes): maneuver 0 gets ONE junction lane model 0x1B000000 (method 0x0010
+// setLaneGuidingData) right before each of its 0x0F nodes, which then list it; the template's own lane models are
+// dropped (93 frames instead of 97). position() is the 0x11 destination-info update the KOMBI re-checks lanes on.
 // Only maneuver 0 (the next one) is patched. Frame body layout: [0:4] handle, [4:8] model id (<type><index24>),
 // [8] model type, [9:13] payload length (= body length - 17), [13:17] tag, [17:] payload.
 #ifndef KOMBI_GRAPH_HPP
@@ -16,10 +19,12 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 #include <string>
 #include <vector>
 
 #include "kombi_graph_template.hpp"
+#include "kombi_nav_msg.hpp"
 
 namespace nbt {
 namespace kombinav {
@@ -107,17 +112,109 @@ inline bool patchText(Bytes& b, const std::string& text, size_t* end) {
     return false;
 }
 
+
+inline void putF64(Bytes& b, size_t off, double v) {
+    uint64_t u;
+    memcpy(&u, &v, 8);
+    for (int i = 0; i < 8; ++i) b[off + i] = (uint8_t)(u >> (56 - 8 * i));
+}
+inline double getF64(const uint8_t* p) {
+    uint64_t u = 0;
+    for (int i = 0; i < 8; ++i) u = (u << 8) | p[i];
+    double v;
+    memcpy(&v, &u, 8);
+    return v;
+}
+inline void appendU32(Bytes& b, uint32_t v) {
+    b.push_back((uint8_t)(v >> 24)); b.push_back((uint8_t)(v >> 16)); b.push_back((uint8_t)(v >> 8)); b.push_back((uint8_t)v);
+}
+inline void appendF64(Bytes& b, double v) {
+    size_t at = b.size();
+    b.resize(at + 8);
+    putF64(b, at, v);
+}
+
+// ---- the KOMBI lane model 0x1B (method 0x0010), decoded from 126 factory frames (every one re-encodes byte-identically) -
+//   body    = handle u32 | model id u32 (0x1B000000 | idx) | 0x1B | u32 len(body) - 17 | u32 1 | model id u32 | 0x1B
+//             | u32 n | n bytes of lanes | u32 m | m boundary bytes (one per lane + a 0) | double d0 | double d1
+//             | double d2 | 0x00
+//   lane    = 1 (valid) | kind (1 take, 2 other) | 1 | u32 k + k arrows (factory: always 1) | u32 h + h bytes (factory:
+//             only far from the junction; we send none) | u32 0
+//   d0 = d1 = route position (metres to the destination, the 0x1D double's frame) where the section starts, d2 = its
+//   length: the junction section ends exactly at the maneuver's own position (d0 - d2).
+// The KOMBI (HmiAggrNaviLaneGuiding::SetRicData) shows the lane row while the car's route position from the last 0x11
+// destination info lies inside the current maneuver's sections, re-checked on every 0x11 (so one must follow the model).
+const uint32_t kLaneModel0 = 0x1B000000;
+const uint8_t kLaneType = 0x1B;
+const double kLaneSectionM = 120.0;   // fallback span when the template's car position isn't before maneuver 0
+const double kLaneMarginM = 100.0;    // the section also starts this far before the car position we claim
+
+// Boundary byte left of each lane (+ the 0 terminator): 0 at the road edge and between lanes with different arrows, 2
+// between lanes with the same arrow (factory junction sections; AA has no lane-line data).
+inline Bytes laneMarks(const KombiLanes& l) {
+    Bytes o;
+    for (size_t k = 0; k < l.size(); ++k) o.push_back(k == 0 || l[k].arrow != l[k - 1].arrow ? 0 : 2);
+    o.push_back(0);
+    return o;
+}
+
+inline Bytes encodeLaneModel(uint32_t handle, uint32_t mid, const KombiLanes& l, double d0, double d1, double d2) {
+    Bytes arr;
+    for (size_t i = 0; i < l.size(); ++i) {
+        arr.push_back(1); arr.push_back(l[i].kind); arr.push_back(1);
+        appendU32(arr, 1); arr.push_back(l[i].arrow);
+        appendU32(arr, 0);
+        appendU32(arr, 0);
+    }
+    Bytes marks = laneMarks(l), body;
+    appendU32(body, mid); body.push_back(kLaneType);
+    appendU32(body, (uint32_t)arr.size()); body.insert(body.end(), arr.begin(), arr.end());
+    appendU32(body, (uint32_t)marks.size()); body.insert(body.end(), marks.begin(), marks.end());
+    appendF64(body, d0); appendF64(body, d1); appendF64(body, d2);
+    body.push_back(0);
+    Bytes out;
+    appendU32(out, handle); appendU32(out, mid); out.push_back(kLaneType);
+    appendU32(out, (uint32_t)body.size()); appendU32(out, 1);
+    out.insert(out.end(), body.begin(), body.end());
+    return out;
+}
+
+// A 0x0F maneuver node with its lane-model id list (body[54:58] = byte length, ids follow) replaced. False = layout.
+inline bool withLaneRefs(Bytes& b, const std::vector<uint32_t>& refs) {
+    if (modelType(b) != 15 || b.size() < 62 || b[21] != 15) return false;
+    uint32_t n = getU32(b, 54);
+    if (n % 4 || b.size() < 58 + (size_t)n + 4) return false;
+    Bytes o(b.begin(), b.begin() + 54);
+    appendU32(o, (uint32_t)(4 * refs.size()));
+    for (size_t i = 0; i < refs.size(); ++i) appendU32(o, refs[i]);
+    o.insert(o.end(), b.begin() + 58 + n, b.end());
+    putU32(o, 9, (uint32_t)(o.size() - 17));
+    b.swap(o);
+    return true;
+}
+
 class Graph {
 public:
     // bar_pct: red distance bar in every maneuver-0 distance frame we send; 255 = hidden, -1 = the template's value.
-    explicit Graph(uint32_t handle = 0xC8, int bar_pct = 255) : handle_(handle), bar_pct_(bar_pct) {}
+    explicit Graph(uint32_t handle = 0xC8, int bar_pct = 255)
+        : handle_(handle), bar_pct_(bar_pct), pos_frame_(-1), template_pos_(0), has_anchor_(false), anchor_m0_(0),
+          anchor_span_(0) {
+        // the template's car position: its last 0x11 destination info with a non-zero route position (4132 m)
+        for (size_t i = 0; i < tmpl::phase_b_count; ++i) {
+            const tmpl::Frame& t = tmpl::phase_b[i];
+            if (t.method != 0x0009 || t.len < 30 || t.body[8] != 17) continue;
+            double p = getF64(t.body + 22);
+            if (p > 0) { pos_frame_ = (int)i; template_pos_ = p; }
+        }
+    }
 
     uint32_t handle() const { return handle_; }
 
     // Full route-start graph (97 frames, factory order) with maneuver 0 patched. dist "" = keep the template's text;
     // unit -1 = keep the template's unit byte. False = the template doesn't have the expected layout (never send).
+    // lanes (optional, non-empty): maneuver 0's lane row (see the lane model above).
     bool start(int direction, const std::string& road, const std::string& dist, int unit,
-               std::vector<Frame>& out) const {
+               std::vector<Frame>& out, const KombiLanes* lanes = NULL) const {
         out.clear();
         out.reserve(tmpl::phase_b_count);
         for (size_t i = 0; i < tmpl::phase_b_count; ++i) {
@@ -127,6 +224,28 @@ public:
             if (!patch(f, direction, road, dist, unit)) return false;
             out.push_back(f);
         }
+        return lanes && !lanes->empty() ? withLanes(out, *lanes) : true;
+    }
+
+    // One 0x11 destination-info update (method 0x0009, the template's frame) carrying the car's route position.
+    bool position(double pos_m, std::vector<Frame>& out) const {
+        out.clear();
+        if (pos_frame_ < 0) return false;
+        Frame f = copy(tmpl::phase_b[pos_frame_]);
+        putF64(f.body, 22, pos_m);
+        out.push_back(f);
+        return true;
+    }
+
+    // Route position for the lane feed: maneuver 0 + the metres to it, clamped into the last lane graph's section (so
+    // it never leaves it, and d = position - maneuver stays <= the template's 180 m band). False before any lane graph.
+    bool feedPosition(bool has_step, double step_m, double& pos) const {
+        if (!has_anchor_) return false;
+        double lo = 0.0;
+        if (!has_step) { pos = anchor_m0_ + anchor_span_; return true; }
+        double d = step_m < lo ? lo : step_m;
+        if (d > anchor_span_) d = anchor_span_;
+        pos = anchor_m0_ + d;
         return true;
     }
 
@@ -162,6 +281,50 @@ public:
     }
 
 private:
+    bool withLanes(std::vector<Frame>& frames, const KombiLanes& lanes) const {
+        std::vector<Frame> out;
+        out.reserve(frames.size() + 4);
+        bool has_pos = false;
+        double pos = 0;
+        std::vector<uint32_t> ours(1, kLaneModel0), none;
+        for (size_t i = 0; i < frames.size(); ++i) {
+            Frame& f = frames[i];
+            if (f.method == 0x0010) continue;                          // the template's own lane models
+            if (f.method == 0x000A && modelType(f.body) == 29 && modelIndex(f.body) == 0 && f.body.size() >= 31) {
+                pos = getF64(&f.body[23]);
+                has_pos = true;
+            }
+            if (f.method == 0x000A && modelType(f.body) == 15) {
+                if (modelIndex(f.body) == 0) {
+                    if (!has_pos) return false;
+                    double d0, d2;
+                    laneSection(pos, d0, d2);
+                    Frame lm;
+                    lm.method = 0x0010;
+                    lm.body = encodeLaneModel(handle_, kLaneModel0, lanes, d0, d0, d2);
+                    out.push_back(lm);
+                    if (!withLaneRefs(f.body, ours)) return false;
+                } else if (f.body.size() >= 58 && getU32(f.body, 54)) {
+                    if (!withLaneRefs(f.body, none)) return false;
+                }
+            }
+            out.push_back(f);
+        }
+        frames.swap(out);
+        return true;
+    }
+
+    // (d0, d2) of our junction section for maneuver 0 at route position m0: it ends at the maneuver (d0 - d2 = m0, as
+    // every factory junction section) and starts kLaneMarginM before the car position we claim (m0 + span).
+    void laneSection(double m0, double& d0, double& d2) const {
+        double span = template_pos_ > m0 ? template_pos_ - m0 : kLaneSectionM;
+        has_anchor_ = true;
+        anchor_m0_ = m0;
+        anchor_span_ = span;
+        d0 = m0 + span + kLaneMarginM;
+        d2 = span + kLaneMarginM;
+    }
+
     Frame copy(const tmpl::Frame& t) const {
         Frame f;
         f.method = t.method;
@@ -199,6 +362,11 @@ private:
 
     uint32_t handle_;
     int bar_pct_;
+    int pos_frame_;               // index of the template's 0x11 with the car position, -1 = none
+    double template_pos_;
+    mutable bool has_anchor_;     // (maneuver-0 position, span) of the last graph built with lanes: the feed stays inside
+    mutable double anchor_m0_;
+    mutable double anchor_span_;
 };
 
 // SOME/IP request: service 0xB006, method, length = 8 + body, client, session, protocol 1, interface 1, REQUEST, E_OK.
