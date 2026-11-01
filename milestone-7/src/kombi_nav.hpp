@@ -19,6 +19,7 @@
 #define KOMBI_NAV_HPP
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stddef.h>
 #include <string>
 #include <vector>
@@ -145,6 +146,13 @@ public:
     static const char* kFlagFile;     // /var/opt/aa/kombi-nav (iDrive menu checkbox)
     static const char* kManualFile;   // /opt/aa/kombi-nav
     static const char* kShownFile;    // /dev/shmem/nbt-aad-kombi-nav.shown: an arrow may be up (survives a SIGKILL)
+    // How `sloginfo -w` is started, tried in this order until one works (the HU's posix_spawn refused all paths on
+    // the car, 2026-11-01): posix_spawn with file actions, QNX spawn() with an fd map (QNX only), popen.
+    enum WatchMethod { kWatchPosixSpawn = 0, kWatchQnxSpawn = 1, kWatchPopen = 2, kWatchMethods = 3 };
+    // Host tests: bit (1 << method) set = that method is treated as failing.
+    static unsigned kWatchSkip;
+    // The method the running watch was started with, -1 if none.
+    int watchMethod() const { return watch_method_; }
 
 private:
     static void* workerStub(void* self);
@@ -192,6 +200,9 @@ private:
     pthread_t watch_tid_;
     double watch_spawned_;
     bool watch_failed_logged_;
+    FILE* watch_fp_;             // kWatchPopen: the popen stream (watch_fd_ is its descriptor)
+    int watch_method_;
+    int watch_method_logged_;
 
     Graph* graph_;
     KombiClient* client_;

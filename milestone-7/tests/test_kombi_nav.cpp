@@ -227,6 +227,73 @@ static void waitCount(FakeKombi& k, size_t n, double timeout_s = 5.0) {
     while (k.count() < n && monoS() - t0 < timeout_s) usleep(10000);
 }
 
+// iDrive-route yield through a real child process: a fake `sloginfo -w` on PATH logs a route start after its
+// backlog; kombi_nav stops writing WITHOUT a cancel, a new Android Auto route takes over again. `skip` forces start
+// methods to fail (KombiNav::kWatchSkip) so each fallback is exercised; `expect` = the method that must run it,
+// -1 = none may start: then there is no yield and Android Auto guidance carries on.
+static void yieldThroughChild(unsigned skip, int expect) {
+    FakeKombi k;
+    char port[16], dir[] = "/tmp/kombi_nav_slogXXXXXX";
+    assert(mkdtemp(dir));
+    std::string flag = std::string(dir) + "/kombi-nav", shown = std::string(dir) + "/shown",
+                slog = std::string(dir) + "/sloginfo", path = std::string(dir) + ":" + getenv("PATH");
+    FILE* f = fopen(slog.c_str(), "w");
+    assert(f);
+    fprintf(f, "#!/bin/sh\n[ \"$1\" = -w ] || exit 3\necho 'old backlog RouteGuidanceStarted'\nsleep 4\n"
+               "echo 'pid 1: MARKER RouteGuidanceStarted'\n"
+               "echo 'pid 2: MARKER NaviRouteVisibleInMap sourceHandle = 2182'\nexec sleep 60\n");
+    fclose(f);
+    chmod(slog.c_str(), 0755);
+    f = fopen(flag.c_str(), "w");
+    fclose(f);
+    KombiNav::kFlagFile = flag.c_str();
+    KombiNav::kManualFile = "/nonexistent/kombi-nav";
+    KombiNav::kShownFile = shown.c_str();
+    snprintf(port, sizeof(port), "%u", (unsigned)k.port());
+    setenv("NBT_KOMBI_NAV_PORT", port, 1);
+    setenv("NBT_KOMBI_NAV_YIELD", "1", 1);
+    std::string oldpath = getenv("PATH");
+    setenv("PATH", path.c_str(), 1);
+    KombiNav::kWatchSkip = skip;
+    {
+        KombiNav nav;
+        nav.start();
+        Bytes s1 = status(1), s2 = status(2), st = navState(7, "TEST ST"), cp = curPos(800, "0.5", 5);
+        KombiNav::navStatusCallback(0x8003, &s1[0], s1.size(), &nav);
+        KombiNav::navStatusCallback(0x8006, &st[0], st.size(), &nav);
+        KombiNav::navStatusCallback(0x8007, &cp[0], cp.size(), &nav);
+        waitCount(k, 97);
+        assert(k.count() == 97);
+        usleep(5000000);                                               // the route start is logged at ~4 s
+        assert(nav.watchMethod() == expect);
+        Bytes cp2 = curPos(700, "0.4", 5);
+        KombiNav::navStatusCallback(0x8007, &cp2[0], cp2.size(), &nav);
+        usleep(800000);
+        if (expect < 0) {                                              // no watch: the update is sent
+            assert(k.count() > 97);
+            nav.stop();
+            KombiNav::kWatchSkip = 0;
+            setenv("PATH", oldpath.c_str(), 1);
+            unlink(slog.c_str()); unlink(flag.c_str()); unlink(shown.c_str()); rmdir(dir);
+            return;
+        }
+        assert(k.count() == 97);                                       // yielded: no update, no cancel
+        KombiNav::navStatusCallback(0x8003, &s2[0], s2.size(), &nav);  // AA route ends ...
+        usleep(600000);
+        KombiNav::navStatusCallback(0x8003, &s1[0], s1.size(), &nav);  // ... and a new one starts: released
+        waitCount(k, 97 + 97);
+        assert(k.count() == 97 + 97);
+        nav.stop();                                                    // exit clears, sloginfo is stopped
+        assert(k.count() == 97 + 97 + 6);
+    }
+    KombiNav::kWatchSkip = 0;
+    setenv("PATH", oldpath.c_str(), 1);
+    unlink(slog.c_str());
+    unlink(flag.c_str());
+    unlink(shown.c_str());
+    rmdir(dir);
+}
+
 int main() {
     // demo drive: one full graph per maneuver, only whitelisted methods, ends with the factory cancel, no second one
     {
@@ -548,59 +615,15 @@ int main() {
         for (size_t i = 0; i < s.size(); ++i) assert(methodAllowed(s[i].method));
         rmdir(dir);
     }
-    // iDrive-route yield through a real child process: a fake `sloginfo -w` on PATH logs a route start after its
-    // backlog; kombi_nav stops writing WITHOUT a cancel, a new Android Auto route takes over again
-    {
-        FakeKombi k;
-        char port[16], dir[] = "/tmp/kombi_nav_slogXXXXXX";
-        assert(mkdtemp(dir));
-        std::string flag = std::string(dir) + "/kombi-nav", shown = std::string(dir) + "/shown",
-                    slog = std::string(dir) + "/sloginfo", path = std::string(dir) + ":" + getenv("PATH");
-        FILE* f = fopen(slog.c_str(), "w");
-        assert(f);
-        fprintf(f, "#!/bin/sh\n[ \"$1\" = -w ] || exit 3\necho 'old backlog RouteGuidanceStarted'\nsleep 4\n"
-                   "echo 'pid 1: MARKER RouteGuidanceStarted'\n"
-                   "echo 'pid 2: MARKER NaviRouteVisibleInMap sourceHandle = 2182'\nexec sleep 60\n");
-        fclose(f);
-        chmod(slog.c_str(), 0755);
-        f = fopen(flag.c_str(), "w");
-        fclose(f);
-        KombiNav::kFlagFile = flag.c_str();
-        KombiNav::kManualFile = "/nonexistent/kombi-nav";
-        KombiNav::kShownFile = shown.c_str();
-        snprintf(port, sizeof(port), "%u", (unsigned)k.port());
-        setenv("NBT_KOMBI_NAV_PORT", port, 1);
-        setenv("NBT_KOMBI_NAV_YIELD", "1", 1);
-        std::string oldpath = getenv("PATH");
-        setenv("PATH", path.c_str(), 1);
-        {
-            KombiNav nav;
-            nav.start();
-            Bytes s1 = status(1), s2 = status(2), st = navState(7, "TEST ST"), cp = curPos(800, "0.5", 5);
-            KombiNav::navStatusCallback(0x8003, &s1[0], s1.size(), &nav);
-            KombiNav::navStatusCallback(0x8006, &st[0], st.size(), &nav);
-            KombiNav::navStatusCallback(0x8007, &cp[0], cp.size(), &nav);
-            waitCount(k, 97);
-            assert(k.count() == 97);
-            usleep(5000000);                                               // the route start is logged at ~4 s
-            Bytes cp2 = curPos(700, "0.4", 5);
-            KombiNav::navStatusCallback(0x8007, &cp2[0], cp2.size(), &nav);
-            usleep(800000);
-            assert(k.count() == 97);                                       // yielded: no update, no cancel
-            KombiNav::navStatusCallback(0x8003, &s2[0], s2.size(), &nav);  // AA route ends ...
-            usleep(600000);
-            KombiNav::navStatusCallback(0x8003, &s1[0], s1.size(), &nav);  // ... and a new one starts: released
-            waitCount(k, 97 + 97);
-            assert(k.count() == 97 + 97);
-            nav.stop();                                                    // exit clears, sloginfo is stopped
-            assert(k.count() == 97 + 97 + 6);
-        }
-        setenv("PATH", oldpath.c_str(), 1);
-        unlink(slog.c_str());
-        unlink(flag.c_str());
-        unlink(shown.c_str());
-        rmdir(dir);
-    }
+    yieldThroughChild(0, KombiNav::kWatchPosixSpawn);                       // the normal path
+    yieldThroughChild(1u << KombiNav::kWatchPosixSpawn,                      // posix_spawn refused (car 2026-11-01)
+#ifdef __QNX__
+                      KombiNav::kWatchQnxSpawn);
+#else
+                      KombiNav::kWatchPopen);                                // no QNX spawn() on a host: popen
+#endif
+    yieldThroughChild((1u << KombiNav::kWatchPosixSpawn) | (1u << KombiNav::kWatchQnxSpawn), KombiNav::kWatchPopen);
+    yieldThroughChild(7u, -1);                                               // nothing starts: no yield, AA carries on
     printf("test_kombi_nav OK\n");
     return 0;
 }

@@ -216,12 +216,14 @@ void FactoryRouteWatch::line(const char* s, double now) {
 const char* KombiNav::kFlagFile = "/var/opt/aa/kombi-nav";
 const char* KombiNav::kManualFile = "/opt/aa/kombi-nav";
 const char* KombiNav::kShownFile = "/dev/shmem/nbt-aad-kombi-nav.shown";
+unsigned KombiNav::kWatchSkip = 0;
 
 KombiNav::KombiNav()
     : last_msg_t_(0), session_ended_(false), quit_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
       port_(30502), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
       disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), watch_pid_(-1), watch_fd_(-1),
-      watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), graph_(NULL), client_(NULL),
+      watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), watch_fp_(NULL),
+      watch_method_(-1), watch_method_logged_(-1), graph_(NULL), client_(NULL),
       core_(NULL) {
     pthread_mutex_init(&mu_, NULL);
     pthread_mutex_init(&watch_mu_, NULL);
@@ -465,54 +467,160 @@ void KombiNav::tick(double now) {
 
 // ---- system-log watch (iDrive route yield) -------------------------------------------------------------------------
 
+namespace {
+
+const char* const kWatchMethodName[KombiNav::kWatchMethods] = { "posix_spawn", "spawn", "popen" };
+
+void addError(std::string& why, const char* what, int err) {
+    if (!why.empty()) why += ", ";
+    why += what;
+    why += ": ";
+    why += strerror(err);
+}
+
+// posix_spawn with file actions: stdout = the pipe's write end, stderr = /dev/null, the read end closed. Every path's
+// error is kept (the first car build reported only the last one).
+pid_t spawnPosix(int rd, int wr, char* const* argv, char* const* envp, std::string& why) {
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, wr, 1);
+    posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addclose(&fa, rd);
+    posix_spawn_file_actions_addclose(&fa, wr);
+    static const char* const kPaths[] = { "sloginfo", "/usr/bin/sloginfo", "/bin/sloginfo" };
+    pid_t pid = -1;
+    for (size_t i = 0; i < sizeof(kPaths) / sizeof(kPaths[0]); ++i) {
+        int rc = i == 0 ? posix_spawnp(&pid, kPaths[i], &fa, NULL, argv, envp)
+                        : posix_spawn(&pid, kPaths[i], &fa, NULL, argv, envp);
+        if (rc == 0) break;
+        if (rc == -1) rc = errno;     // some libcs return -1 + errno instead of the error number
+        addError(why, kPaths[i], rc);
+        pid = -1;
+    }
+    posix_spawn_file_actions_destroy(&fa);
+    return pid;
+}
+
+#ifdef __QNX__
+// QNX spawn() with an fd map, the call the HU's own popen() is built on: the child gets exactly stdin closed,
+// stdout = the pipe, stderr = /dev/null (fds not in the map are not inherited).
+pid_t spawnQnx(int wr, char* const* argv, char* const* envp, std::string& why) {
+    int nul = open("/dev/null", O_WRONLY);
+    int map[3] = { SPAWN_FDCLOSED, wr, nul >= 0 ? nul : SPAWN_FDCLOSED };
+    struct inheritance inh;
+    memset(&inh, 0, sizeof(inh));
+    static const char* const kPaths[] = { "/usr/bin/sloginfo", "/bin/sloginfo" };
+    pid_t pid = -1;
+    for (size_t i = 0; i < sizeof(kPaths) / sizeof(kPaths[0]) && pid == -1; ++i) {
+        pid = spawn(kPaths[i], 3, map, &inh, argv, envp);
+        if (pid == -1) addError(why, kPaths[i], errno);
+    }
+    if (nul >= 0) close(nul);
+    return pid;
+}
+#endif
+
+// popen through the shell: it prints its pid, then becomes sloginfo (exec keeps the pid) so stopWatch can signal it.
+// The pid line is read straight from the descriptor, so no stdio buffer holds back later lines.
+pid_t spawnPopen(FILE** fp_out, std::string& why) {
+    FILE* fp = popen("unset LD_PRELOAD; echo $$; exec sloginfo -w 2>/dev/null", "r");
+    if (!fp) {
+        addError(why, "popen", errno ? errno : ENOMEM);
+        return -1;
+    }
+    int fd = fileno(fp);
+    char line[24];
+    size_t n = 0;
+    while (n < sizeof(line) - 1) {
+        ssize_t r = read(fd, line + n, 1);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0 || line[n] == '\n') break;
+        ++n;
+    }
+    line[n] = 0;
+    pid_t pid = (pid_t)atol(line);
+    if (pid <= 0) {
+        addError(why, "popen (no sloginfo)", EIO);
+        pclose(fp);              // the shell has exited (no pid line), so this does not block
+        return -1;
+    }
+    *fp_out = fp;
+    return pid;
+}
+
+} // namespace
+
 void KombiNav::startWatch(double now) {
     if (watch_pid_ > 0) {
         int st;
         if (waitpid(watch_pid_, &st, WNOHANG) != watch_pid_) return;   // still running
         if (watch_thread_) pthread_join(watch_tid_, NULL);
         watch_thread_ = false;
-        if (watch_fd_ >= 0) close(watch_fd_);
+        if (watch_fp_) pclose(watch_fp_);                               // already reaped: returns at once
+        else if (watch_fd_ >= 0) close(watch_fd_);
+        watch_fp_ = NULL;
         watch_fd_ = -1;
         watch_pid_ = -1;
+        watch_method_ = -1;
         printf("[KombiNav] sloginfo ended: restarting the iDrive-route watch\n");
     }
     if (now - watch_spawned_ < 10.0) return;
     watch_spawned_ = now;
-    int p[2];
-    if (pipe(p) != 0) return;
-    fcntl(p[0], F_SETFD, FD_CLOEXEC);   // other children (popen / system elsewhere) must not keep the pipe open
-    fcntl(p[1], F_SETFD, FD_CLOEXEC);
     // The child gets our environment minus LD_PRELOAD (the HMI's graphics preload is no use to sloginfo).
     std::vector<char*> env;
     for (char** e = environ; e && *e; ++e)
         if (strncmp(*e, "LD_PRELOAD=", 11) != 0) env.push_back(*e);
     env.push_back(NULL);
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_adddup2(&fa, p[1], 1);
-    posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addclose(&fa, p[0]);
-    posix_spawn_file_actions_addclose(&fa, p[1]);
-    static const char* const kPaths[] = { "sloginfo", "/usr/bin/sloginfo", "/bin/sloginfo", "/proc/boot/sloginfo" };
     char a0[] = "sloginfo", a1[] = "-w";
     char* argv[] = { a0, a1, NULL };
+    std::string why;
     pid_t pid = -1;
-    int rc = -1;
-    for (size_t i = 0; i < sizeof(kPaths) / sizeof(kPaths[0]) && rc != 0; ++i)
-        rc = i == 0 ? posix_spawnp(&pid, kPaths[i], &fa, NULL, argv, &env[0])
-                    : posix_spawn(&pid, kPaths[i], &fa, NULL, argv, &env[0]);
-    posix_spawn_file_actions_destroy(&fa);
-    close(p[1]);
-    if (rc != 0) {
-        close(p[0]);
+    int fd = -1, method = -1;
+    FILE* fp = NULL;
+    for (int m = 0; m < kWatchMethods && pid <= 0; ++m) {
+        std::string err;
+        if (kWatchSkip & (1u << m)) {
+            err = "skipped (test)";
+        } else if (m == kWatchPopen) {
+            pid = spawnPopen(&fp, err);
+            if (pid > 0) fd = fileno(fp);
+        } else {
+            int p[2];
+            if (pipe(p) != 0) { addError(err, "pipe", errno); }
+            else {
+                fcntl(p[0], F_SETFD, FD_CLOEXEC);   // other children (popen / system elsewhere) must not keep it open
+                fcntl(p[1], F_SETFD, FD_CLOEXEC);
+                if (m == kWatchPosixSpawn) pid = spawnPosix(p[0], p[1], argv, &env[0], err);
+#ifdef __QNX__
+                else pid = spawnQnx(p[1], argv, &env[0], err);
+#else
+                else err = "not QNX";
+#endif
+                close(p[1]);
+                if (pid > 0) fd = p[0];
+                else close(p[0]);
+            }
+        }
+        if (pid > 0) method = m;
+        else { if (!why.empty()) why += "; "; why += std::string(kWatchMethodName[m]) + " (" + err + ")"; }
+    }
+    if (pid <= 0) {
         if (!watch_failed_logged_)
-            printf("[KombiNav] cannot start sloginfo (%s): no iDrive-route yield, don't start an iDrive route while "
-                   "Android Auto guides\n", strerror(rc));
+            printf("[KombiNav] cannot start sloginfo [%s]: no iDrive-route yield, don't start an iDrive route while "
+                   "Android Auto guides\n", why.c_str());
         watch_failed_logged_ = true;
         return;
     }
+    if (method != watch_method_logged_) {
+        printf("[KombiNav] iDrive-route watch: sloginfo -w via %s (pid %d)%s%s\n", kWatchMethodName[method], (int)pid,
+               why.empty() ? "" : "; failed first: ", why.c_str());
+        watch_method_logged_ = method;
+    }
+    watch_failed_logged_ = false;
     watch_pid_ = pid;
-    watch_fd_ = p[0];
+    watch_fd_ = fd;
+    watch_fp_ = fp;
+    watch_method_ = method;
     pthread_mutex_lock(&watch_mu_);
     watch_.restartSettle();
     pthread_mutex_unlock(&watch_mu_);
@@ -549,10 +657,13 @@ void KombiNav::watchReader(int fd) {
 }
 
 void KombiNav::stopWatch() {
+    bool reaped = true;
     if (watch_pid_ > 0) {
         kill(watch_pid_, SIGTERM);
         int st;
-        for (int i = 0; i < 20 && waitpid(watch_pid_, &st, WNOHANG) != watch_pid_; ++i) {
+        reaped = false;
+        for (int i = 0; i < 20; ++i) {
+            if (waitpid(watch_pid_, &st, WNOHANG) == watch_pid_) { reaped = true; break; }
             if (i == 10) kill(watch_pid_, SIGKILL);
             usleep(50000);
         }
@@ -560,8 +671,12 @@ void KombiNav::stopWatch() {
     }
     if (watch_thread_) pthread_join(watch_tid_, NULL);
     watch_thread_ = false;
-    if (watch_fd_ >= 0) close(watch_fd_);
+    if (watch_fp_ && reaped) pclose(watch_fp_);          // the child is reaped: pclose does not block
+    else if (watch_fp_) close(fileno(watch_fp_));        // never reaped: pclose would wait forever, leak the FILE
+    else if (watch_fd_ >= 0) close(watch_fd_);
+    watch_fp_ = NULL;
     watch_fd_ = -1;
+    watch_method_ = -1;
     watch_spawned_ = -1e9;
 }
 
