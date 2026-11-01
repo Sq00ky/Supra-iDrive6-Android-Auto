@@ -84,6 +84,7 @@
 #include "car_config.hpp"
 #include "screen_video.h"
 #include "audio_manager.hpp"
+#include "browser_audio.hpp"
 #include "video_manager.hpp"
 #include "license_text.hpp"
 #include "tcp_server.hpp"
@@ -445,6 +446,10 @@ static void writeUiState(const char* state, int overlay) {
 static volatile bool g_sessionActive = false;   // AA session running (set by connect/end callbacks)
 static nbt::VideoManager* g_video = NULL;       // for the session callbacks (valid between init and teardown)
 static nbt::AudioManager* g_audio = NULL;       // same lifetime rule as g_video
+// NBT_AUDIO_MODE=browser: AA media + guidance + system audio mixed in the daemon and played through the car's browser
+// audio source (browser_audio.hpp). Same lifetime rule as g_video.
+static nbt::BrowserAudio* g_browser = NULL;
+static bool g_a2iAudio = false;                 // NBT_AUDIO_MODE=a2i (or NBT_AUDIO_BT=0): the staged AudioManager
 // Bluetooth audio mode (default; NBT_AUDIO_BT=0 turns it off): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
 static bool g_btAudio = false;
 static nbt::AudioRoute g_btRoute;
@@ -1140,15 +1145,16 @@ static void onCodecConfig(const uint8_t* config_data, size_t config_len, void* u
 }
 
 static void onAudioFrame(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data) {
-    (void)pts;
     (void)user_data;
-    if (g_audio) g_audio->onAaAudio(channel, pcm, pcm_len);
+    if (g_browser) g_browser->onAaAudio(channel, pcm, pcm_len, pts);
+    else if (g_audio) g_audio->onAaAudio(channel, pcm, pcm_len);
     else if (channel == 8) speechFrame(pcm, pcm_len);
 }
 
 static void onAudioState(uint8_t channel, bool started, void* user_data) {
     (void)user_data;
-    if (g_audio) g_audio->onAaStreamState(channel, started);
+    if (g_browser) g_browser->onAaStreamState(channel, started);
+    else if (g_audio) g_audio->onAaStreamState(channel, started);
     else if (channel == 8) speechState(started);
 }
 
@@ -1172,6 +1178,7 @@ static void onSessionEnded(void* user_data) {
     // cached SPS/PPS. The overlay itself is handled by the main loop.
     if (g_video) g_video->endSession();
     if (g_audio) g_audio->onSessionEnded();
+    if (g_browser) g_browser->onSessionEnded();   // mixer stopped, browser audio source released
     // Drop the Bluetooth-source request (and its retries) this session queued, so a phone that keeps reconnecting
     // cannot stack audioconn processes until the head unit runs out of memory and resets (tester log 2026-10-29).
     g_btRoute.cancelPending();
@@ -1490,8 +1497,19 @@ int main(int argc, char* argv[]) {
 
     // 2. Initialize Audio Pipeline (A2I Media + Nav + Echo-Cancelled Mic)
     nbt::AudioManager audio;
-    g_btAudio = nbt::btAudioEnabled();
-    if (g_btAudio) {
+    nbt::BrowserAudio browser;
+    const nbt::AudioMode audio_mode = nbt::audioMode();
+    printf("[Main] audio mode: %s (NBT_AUDIO_MODE=bt|browser|a2i)\n", nbt::audioModeName(audio_mode));
+    g_btAudio = (audio_mode == nbt::AUDIO_MODE_BT);
+    g_a2iAudio = (audio_mode == nbt::AUDIO_MODE_A2I);
+    if (audio_mode == nbt::AUDIO_MODE_BROWSER) {
+        // Media sink (ch 9) and GUIDANCE sink (ch 8) stay in the ServiceDiscovery and a SYSTEM_AUDIO sink (ch 16) is
+        // added, so the phone sends all three streams here instead of to A2DP. The A2I pipeline is not opened; the
+        // mic runs standalone like in Bluetooth mode.
+        if (!browser.init()) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
+        g_browser = &browser;
+        g_audio = NULL;
+    } else if (g_btAudio) {
         g_btSrc = (uint32_t)nbt::envHex("NBT_BT_SRC", 0x3a);
         g_btSink = (uint32_t)nbt::envHex("NBT_BT_SINK", 0x1);
         printf("[BtAudio] NBT_AUDIO_BT on: AA media sink left out of the ServiceDiscovery (NBT_SDR_DROP=%s),\n"
@@ -1523,7 +1541,7 @@ int main(int argc, char* argv[]) {
 
     // Start all subsystems
     video.start();
-    if (!g_btAudio) audio.start();
+    if (g_a2iAudio) audio.start();
 
     // 4. Start Wireless TCP Server on the stock Android Auto port 5277 (override: NBT_AA_PORT)
     {
@@ -1678,6 +1696,8 @@ int main(int argc, char* argv[]) {
         // Default on (NBT_BT_REFOCUS=0 disables): the Assistant pauses the music before it listens, so its reply restarts a
         // suspended A2DP stream. Re-request the car's BT audio source when the phone closes the mic, in case the
         // car does not pick the restarted stream up on its own.
+        // Browser mode: the voice scenario may have moved the car off the browser source; ask for it again.
+        if (mr == 2 && act && g_browser) g_browser->refocus("mic closed");
         if (mr == 2 && act && g_btAudio && btRefocus()) {
             char d[64];
             btDescribe(d, sizeof(d));
@@ -1875,7 +1895,9 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] session stopped\n", upSec() - t0);
     g_video = NULL;
     g_audio = NULL;
-    if (!g_btAudio) audio.stop();
+    g_browser = NULL;
+    if (g_a2iAudio) audio.stop();
+    browser.stop();
     if (g_speechReady && g_speech) g_speech->stop();
     video.stop();
     printf("[Main] [+%.2f s] video stopped\n", upSec() - t0);

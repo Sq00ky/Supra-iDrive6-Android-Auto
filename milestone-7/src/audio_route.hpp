@@ -53,7 +53,9 @@ public:
     // build() again only logs and returns true. delayMs waits before the first attempt (cancelPending() during the wait = no
     // audioconn at all).
     bool build(uint32_t conn_id, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0);
-    bool remove(uint32_t conn_id);
+    // onDone(user) runs on the worker thread once the remove is over, whatever its outcome (also when it was
+    // cancelled or found no free audioconn slot). Not called when remove() returns false.
+    bool remove(uint32_t conn_id, GrantedFn onDone = 0, void* user = 0);
     bool buildFocus(uint32_t src, uint32_t sink, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0);
     bool removeFocus(uint32_t src, uint32_t sink);
     // Read-only `audioconn -l` after delayMs, logged as "[AudioRoute]   | ..." (40 lines max).

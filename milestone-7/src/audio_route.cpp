@@ -19,10 +19,13 @@ struct RouteJob {
     int maxLines;       // output lines copied into the log
     AudioRoute::GrantedFn onGranted;   // build requests: called once audioconn exits 0
     void* user;
+    AudioRoute::GrantedFn onDone;      // remove requests: called when the worker is finished (any outcome)
+    void* doneUser;
     AudioRoute* owner;  // for cancellation (generation check)
     unsigned gen;       // owner's generation when the job was queued
     bool isBuild;       // holds the owner's single-flight build slot
-    RouteJob() : retries(0), delayMs(0), maxLines(20), onGranted(0), user(0), owner(0), gen(0), isBuild(false) {}
+    RouteJob() : retries(0), delayMs(0), maxLines(20), onGranted(0), user(0), onDone(0), doneUser(0), owner(0), gen(0),
+                 isBuild(false) {}
 };
 
 // At most one audioconn process daemon-wide. A tester's head unit rebooted 5 times (v1.8.35 log 2026-10-29): the
@@ -164,6 +167,7 @@ void* routeWorker(void* arg) {
         job->onGranted(job->user);
     }
     if (job->isBuild && job->owner) job->owner->buildFinished(job->gen);
+    if (job->onDone) job->onDone(job->doneUser);
     delete job;
     return NULL;
 }
@@ -257,6 +261,8 @@ bool AudioRoute::run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn o
         if (!spawn(job)) { if (owns) buildFinished(g); return false; }
         return true;
     }
+    job->onDone = onGranted;   // remove: completion callback (see remove())
+    job->doneUser = user;
     pthread_mutex_lock(&lock_);
     job->gen = gen_;
     pthread_mutex_unlock(&lock_);
@@ -297,7 +303,9 @@ bool AudioRoute::spawn(void* p) {
 bool AudioRoute::build(uint32_t conn_id, GrantedFn cb, void* user, int delayMs) {
     return run('b', conn_id, 0, false, cb, user, delayMs);
 }
-bool AudioRoute::remove(uint32_t conn_id) { return run('r', conn_id, 0, false, 0, 0, 0); }
+bool AudioRoute::remove(uint32_t conn_id, GrantedFn onDone, void* user) {
+    return run('r', conn_id, 0, false, onDone, user, 0);
+}
 bool AudioRoute::buildFocus(uint32_t src, uint32_t sink, GrantedFn cb, void* user, int delayMs) {
     return run('b', src, sink, true, cb, user, delayMs);
 }

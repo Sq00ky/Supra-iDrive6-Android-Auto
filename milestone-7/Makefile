@@ -19,6 +19,8 @@ SRCS = src/main.cpp \
        src/audio_manager.cpp \
        src/a2i_stream.cpp \
        src/audio_route.cpp \
+       src/audio_mixer.cpp \
+       src/browser_audio.cpp \
        src/pcm_utils.cpp \
        src/video_manager.cpp \
        src/tcp_server.cpp \
