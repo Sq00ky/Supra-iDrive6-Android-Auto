@@ -291,6 +291,13 @@ const unsigned    kDriveModeModel   = 44;
 const char* const kDriveModeFlag    = "/var/opt/aa/show-drivemode";
 const char* const kDriveModeManual  = "/opt/aa/show-drivemode";
 const char* const kDriveModeProps[2] = { "driving.mode", "driving.mode35up" };
+// "Turn arrows in cluster/HUD" checkbox: <checkbox action="29" id="70" model="46" textModel="47">, off by default.
+// Flag file read by nbt-aad once a second (kombi_nav): when on, Android Auto's turn-by-turn shows in the J29 cluster
+// and HUD.
+const unsigned    kActKombiNav      = 29;
+const unsigned    kKombiNavModel    = 46;
+const char* const kKombiNavFlag     = "/var/opt/aa/kombi-nav";
+const char* const kKombiNavManual   = "/opt/aa/kombi-nav";
 const long        kUsbLogRecheckS  = 5;   // stick lookup cache: a stick plugged in later is found within 5 s
 
 // PluginApp vtable slots (index from the address point)
@@ -1239,6 +1246,35 @@ bool onDriveModeToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// ---- Turn arrows in cluster/HUD ------------------------------------------------------------------------------------
+bool g_kombiNavShown = false;
+bool kombiNavOn() { return fileExists(kKombiNavFlag) || fileExists(kKombiNavManual); }
+
+void showKombiNav(bmw::PluginApp* app) {
+    app->updateModel(kKombiNavModel, kombiNavOn());
+    g_kombiNavShown = true;
+}
+
+bool onKombiNavToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    bool on = kombiNavOn();
+    if (on) {
+        if (fileExists(kKombiNavFlag) && unlink(kKombiNavFlag) != 0)
+            alog("cluster/HUD arrows: cannot remove %s (errno %d)", kKombiNavFlag, errno);
+        if (fileExists(kKombiNavManual) && unlink(kKombiNavManual) != 0)
+            alog("cluster/HUD arrows: cannot remove %s (errno %d, read-only?): remove it by hand", kKombiNavManual,
+                 errno);
+    } else {
+        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
+        int fd = open(kKombiNavFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) alog("cluster/HUD arrows: cannot create %s (errno %d)", kKombiNavFlag, errno);
+        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
+    }
+    bool now = kombiNavOn();
+    alog("menu: turn arrows in cluster/HUD %s -> %s", on ? "on" : "off", now ? "on" : "off");
+    if (g_runApp) showKombiNav(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -1337,6 +1373,7 @@ void statusRun(void* /*self*/) {
     if (!g_usbLogShown) showUsbLog(app);
     if (!g_menuIdriveShown) showMenuIdrive(app);
     if (!g_driveModeShown) showDriveMode(app);
+    if (!g_kombiNavShown) showKombiNav(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -1489,6 +1526,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActUsbLog, &onUsbLogToggle);
     addAction(self, kActMenuIdrive, &onMenuIdriveToggle);
     addAction(self, kActDriveMode, &onDriveModeToggle);
+    addAction(self, kActKombiNav, &onKombiNavToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
