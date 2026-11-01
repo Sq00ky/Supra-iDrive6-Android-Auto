@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 using namespace nbt::kombinav;
 using namespace kntest;
 
@@ -143,7 +144,11 @@ int main() {
         assert(kombiDirection(3) == 2 && kombiDirection(4) == 3 && kombiDirection(11) == 8 && kombiDirection(12) == 9);
         assert(kombiDirection(13) == 25 && kombiDirection(24) == 29 && kombiDirection(25) == 37 && kombiDirection(28) == 33);
         assert(kombiDirection(32) == 14 && kombiDirection(34) == 15 && kombiDirection(36) == 1 && kombiDirection(999) == 1);
-        assert(kombiUnit(6) == 0x05 && kombiUnit(4) == 0x01 && kombiUnit(5) == 0x01 && kombiUnit(1) < 0 && kombiUnit(7) < 0);
+        assert(kombiUnit(6) == 0x05 && kombiUnit(4) == 0x01 && kombiUnit(5) == 0x01);
+        // car-read KOMBI unit bytes (J29 sweep 2026-11-01): 0 km, 1 mi, 3 m, 4 yd, 5 ft
+        assert(kombiUnit(1) == 0x03 && kombiUnit(2) == 0x00 && kombiUnit(3) == 0x00 && kombiUnit(7) == 0x04);
+        assert(kombiUnit(0) < 0 && kombiUnit(8) < 0);
+        assert(!strcmp(kombiUnitName(0x00), "km") && !strcmp(kombiUnitName(0x03), "m") && !strcmp(kombiUnitName(0x04), "yd"));
     }
     // Google-Maps-style display and the 3-character cap
     {
@@ -168,6 +173,41 @@ int main() {
             v.dist_text = "xxxxxx"; v.aa_unit = 0; v.has_step_m = true; v.step_m = ms[i];
             shortDistance(v, 3, t, u);
             assert(t.size() <= 3 && (u == 5 || u == 6));
+        }
+    }
+    // metric and yards: never converted to miles; the phone's own text when it fits
+    {
+        std::string t;
+        int u;
+        metricDisplay(1500, t, u); assert(t == "1.5" && u == 3);
+        metricDisplay(999, t, u); assert(t == "950" && u == 1);
+        metricDisplay(999.6, t, u); assert(t == "1.0" && u == 3);
+        metricDisplay(330, t, u); assert(t == "300" && u == 1);
+        metricDisplay(87, t, u); assert(t == "80" && u == 1);
+        metricDisplay(3, t, u); assert(t == "10" && u == 1);
+        yardsDisplay(250, t, u); assert(t == "0.2" && u == 5);
+        yardsDisplay(120, t, u); assert(t == "100" && u == 7);
+        yardsDisplay(5, t, u); assert(t == "50" && u == 7);
+        NavView v;
+        v.dist_text = "1.2"; v.aa_unit = 3; v.has_step_m = true; v.step_m = 1200;
+        shortDistance(v, 3, t, u); assert(t == "1.2" && u == 3 && kombiUnit(u) == 0x00);
+        v.dist_text = "300"; v.aa_unit = 1; v.step_m = 300;
+        shortDistance(v, 3, t, u); assert(t == "300" && u == 1 && kombiUnit(u) == 0x03);
+        v.dist_text = "12.5"; v.aa_unit = 3; v.step_m = 12500;
+        shortDistance(v, 3, t, u); assert(t == "13" && u == 2 && kombiUnit(u) == 0x00);
+        v.dist_text = "1,000"; v.aa_unit = 1; v.step_m = 1000;
+        shortDistance(v, 3, t, u); assert(t == "1.0" && u == 3);
+        v.dist_text = "xxxx"; v.aa_unit = 1; v.step_m = 5432;
+        shortDistance(v, 3, t, u); assert(t == "5.4" && u == 3);
+        v.dist_text = "350"; v.aa_unit = 7; v.step_m = 320;
+        shortDistance(v, 3, t, u); assert(t == "350" && u == 7 && kombiUnit(u) == 0x04);
+        v.dist_text = "xxxx"; v.aa_unit = 7; v.step_m = 100;
+        shortDistance(v, 3, t, u); assert(t == "100" && u == 7);
+        int ms[] = { 3, 10, 150, 999, 1000, 3000, 15000, 300000 };
+        for (size_t i = 0; i < sizeof(ms) / sizeof(ms[0]); ++i) {
+            v.dist_text = "xxxxxx"; v.aa_unit = 2; v.has_step_m = true; v.step_m = ms[i];
+            shortDistance(v, 3, t, u);
+            assert(t.size() <= 3 && unitSystem(u) == 'm');
         }
     }
     // half to even, like the reference (Python round)

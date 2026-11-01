@@ -413,13 +413,35 @@ inline std::string describeLanes(const KombiLanes& l) {
     return s;
 }
 
-// Display units -> the KOMBI unit byte after the distance text (0x01 mi, 0x05 ft); -1 = no KOMBI unit known.
+// Display units -> the KOMBI unit byte after the distance text; -1 = no KOMBI unit known.
+// KOMBI unit bytes, read off the HUD on a J29 (sweep of 0..15): 0 km, 1 mi, 2 mi, 3 m, 4 yd, 5 ft, 6..15 ft.
 inline int kombiUnit(int aa_unit) {
     switch (aa_unit) {
-        case 6: return 0x05;
-        case 4: case 5: return 0x01;
+        case 1: return 0x03;                 // METERS
+        case 2: case 3: return 0x00;         // KILOMETERS, KILOMETERS_P1
+        case 4: case 5: return 0x01;         // MILES, MILES_P1
+        case 6: return 0x05;                 // FEET
+        case 7: return 0x04;                 // YARDS
         default: return -1;
     }
+}
+
+inline const char* kombiUnitName(int kombi_unit) {
+    switch (kombi_unit) {
+        case 0x00: return "km";
+        case 0x01: case 0x02: return "mi";
+        case 0x03: return "m";
+        case 0x04: return "yd";
+        case 0x05: return "ft";
+        default: return kombi_unit < 0 ? "(unit kept)" : "ft";
+    }
+}
+
+// Unit system of the phone's display units: 'm' metric, 'y' miles + yards, 'f' miles + feet (also unknown).
+inline char unitSystem(int aa_unit) {
+    if (aa_unit == 1 || aa_unit == 2 || aa_unit == 3) return 'm';
+    if (aa_unit == 7) return 'y';
+    return 'f';
 }
 
 // Google-Maps-style US display: from 0.1 mi as one-decimal miles, below that feet rounded down to 50.
@@ -430,6 +452,35 @@ inline void mapsDisplay(double m, std::string& text, int& aa_unit) {
     if (ft < 50) ft = 50;
     text = fmtInt(ft);
     aa_unit = 6;
+}
+
+// Metric display: from 1 km as one-decimal kilometres, below that metres (10 m steps under 100 m, else 50 m steps).
+inline void metricDisplay(double m, std::string& text, int& aa_unit) {
+    if (m >= 999.5) { text = fmt1(m / 1000.0); aa_unit = 3; return; }
+    int64_t step = m < 100.0 ? 10 : 50;
+    int64_t r = (int64_t)(m / (double)step) * step;
+    if (r < 10) r = 10;
+    text = fmtInt(r);
+    aa_unit = 1;
+}
+
+// Miles + yards (UK): from 0.1 mi as one-decimal miles, below that yards rounded down to 50.
+inline void yardsDisplay(double m, std::string& text, int& aa_unit) {
+    double mi = m / 1609.344;
+    if (mi >= 0.095) { text = fmt1(mi); aa_unit = 5; return; }
+    int64_t yd = (int64_t)(m / 0.9144 / 50.0) * 50;
+    if (yd < 50) yd = 50;
+    text = fmtInt(yd);
+    aa_unit = 7;
+}
+
+// Reformat metres in the phone's own unit system (never metric -> miles).
+inline void unitDisplay(double m, int phone_unit, std::string& text, int& aa_unit) {
+    switch (unitSystem(phone_unit)) {
+        case 'm': metricDisplay(m, text, aa_unit); break;
+        case 'y': yardsDisplay(m, text, aa_unit); break;
+        default: mapsDisplay(m, text, aa_unit); break;
+    }
 }
 
 // Metres to the next maneuver: the phone's value, else parsed from the display text + unit.
@@ -475,8 +526,8 @@ inline size_t utf8Length(const std::string& s) {
     return n;
 }
 
-// Distance text of at most n characters with a KOMBI mi/ft unit, so the cluster shows at most n + 3 ("0.5 mi",
-// "450 ft"): the phone's own text when it fits, else reformatted from metres.
+// Distance text of at most n characters with a KOMBI unit, so the cluster shows at most n + 3 ("0.5 mi", "450 ft",
+// "1.2 km", "300 m"): the phone's own text when it fits, else reformatted from metres in the phone's unit system.
 inline void shortDistance(const NavView& v, size_t n, std::string& text, int& aa_unit) {
     if (utf8Length(v.dist_text) <= n && kombiUnit(v.aa_unit) >= 0) {
         text = v.dist_text; aa_unit = v.aa_unit;
@@ -484,8 +535,11 @@ inline void shortDistance(const NavView& v, size_t n, std::string& text, int& aa
     }
     double m;
     if (!distanceMetres(v, m)) { text = "-"; aa_unit = v.aa_unit; return; }
-    mapsDisplay(m, text, aa_unit);
-    if (text.size() > n) { text = fmtInt((int64_t)(m / 1609.344 + 0.5)); aa_unit = 5; }
+    unitDisplay(m, v.aa_unit, text, aa_unit);
+    if (text.size() > n) {
+        if (unitSystem(v.aa_unit) == 'm') { text = fmtInt((int64_t)(m / 1000.0 + 0.5)); aa_unit = 2; }
+        else { text = fmtInt((int64_t)(m / 1609.344 + 0.5)); aa_unit = 5; }
+    }
     text = utf8Prefix(text, n);
 }
 

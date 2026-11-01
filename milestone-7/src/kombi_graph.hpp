@@ -6,8 +6,8 @@
 // and only the fields proven on the car are changed, so the KOMBI always sees a self-consistent graph:
 //   - instance handle         body[0:4]   (0xC8 on every boot seen; NBT_KOMBI_NAV_HANDLE overrides)
 //   - ManeuverDescription 0x0F direction enum at body[33]
-//   - ManeuverDistance    0x1D UTF-16BE display text at the FEFF BOM, the unit byte after its NUL (0x01 mi,
-//                              0x05 ft), the red distance bar percentage at body[22] (255 = hidden)
+//   - ManeuverDistance    0x1D UTF-16BE display text at the FEFF BOM, the unit byte after its NUL (0x00 km,
+//                              0x01 mi, 0x03 m, 0x04 yd, 0x05 ft), the red distance bar percentage at body[22] (255 = hidden)
 //   - TextResource        0x03 UTF-16BE road name at the FEFF BOM
 // With lanes (start() given KombiLanes): maneuver 0 gets ONE junction lane model 0x1B000000 (method 0x0010
 // setLaneGuidingData) right before each of its 0x0F nodes, which then list it; the template's own lane models are

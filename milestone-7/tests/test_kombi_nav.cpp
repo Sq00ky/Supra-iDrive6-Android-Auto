@@ -496,7 +496,7 @@ int main() {
         r.feed(one(7, "TEST ST", Bytes()), 2.0);
         assert(r.k.count() == n && r.core.shown());
     }
-    // metric is shown as imperial: 250 m -> 0.2 mi
+    // metric stays metric (car-read KOMBI unit bytes: 0x03 m, 0x00 km): 250 m -> "250" m, 1.4 km -> "1.4" km
     {
         Rig r;
         r.feed(one(8, "RUE", curPos(250, "250", 1)), 0.0);
@@ -505,7 +505,20 @@ int main() {
         for (size_t i = 0; i < s.size(); ++i)
             if (s[i].method == 0x000A && modelType(s[i].body) == 29 && modelIndex(s[i].body) == 0) {
                 int u;
-                assert(text0(s[i].body, &u) == "0.2" && u == 0x01);
+                assert(text0(s[i].body, &u) == "250" && u == 0x03);
+                found = true;
+            }
+        assert(found);
+    }
+    {
+        Rig r;
+        r.feed(one(8, "RUE", curPos(1400, "1.4", 3)), 0.0);
+        std::vector<Seen> s = r.k.seen();
+        bool found = false;
+        for (size_t i = 0; i < s.size(); ++i)
+            if (s[i].method == 0x000A && modelType(s[i].body) == 29 && modelIndex(s[i].body) == 0) {
+                int u;
+                assert(text0(s[i].body, &u) == "1.4" && u == 0x00);
                 found = true;
             }
         assert(found);

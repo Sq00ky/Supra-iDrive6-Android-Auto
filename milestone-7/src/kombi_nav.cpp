@@ -119,7 +119,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     }
     std::string text;
     int unit;
-    if (kombiUnit(v.aa_unit) < 0 && v.has_step_m && v.dist_text != "-") {   // metric / yards: shown as mi / ft
+    if (kombiUnit(v.aa_unit) < 0 && v.has_step_m && v.dist_text != "-") {   // unknown display unit: mi / ft
         mapsDisplay((double)v.step_m, text, unit);
         v.dist_text = text;
         v.aa_unit = unit;
@@ -144,7 +144,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         std::string lane_note;
         if (!lanes.empty() || lanes_changed) lane_note = " | lanes " + describeLanes(lanes);
         log("%s type %d -> direction %d | %s %s | road '%s'%s", new_man ? "SHOW" : "LANES", v.aa_type, dir,
-            v.dist_text.c_str(), ku == 0x05 ? "ft" : ku == 0x01 ? "mi" : "(unit kept)", v.road.c_str(),
+            v.dist_text.c_str(), kombiUnitName(ku), v.road.c_str(),
             lane_note.c_str());
         const KombiLanes* lp = lanes.empty() ? NULL : &lanes;
         bool done = false;
@@ -189,7 +189,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
             clear("template layout");
             return;
         }
-        log("DIST %s %s", v.dist_text.c_str(), ku == 0x05 ? "ft" : ku == 0x01 ? "mi" : "");
+        log("DIST %s %s", v.dist_text.c_str(), (ku < 0 ? "" : kombiUnitName(ku)));
         if (!sendFrames("distance", frames)) return;
         last_dist_ = v;
         last_dist_t_ = now;
