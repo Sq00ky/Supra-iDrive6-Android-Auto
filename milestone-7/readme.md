@@ -200,6 +200,12 @@ no settings file.
 | Native CarPlay keeps its own picture size after Android Auto (surface 1280 regions handed back on hide) | v1.8.6, not yet car-verified |
 | Menu: **Start automatically** checkbox (called "Start with the car" before rhmiapp-19), **About** page | rhmiapp-7, not yet car-verified |
 
+Off by default (opt-in):
+
+| Feature | Status |
+|---|---|
+| Android Auto turn-by-turn in the **instrument cluster and windscreen HUD** (J29 Supra), with no iDrive route: menu checkbox **Turn arrows in cluster/HUD** ([details](#turn-arrows-in-the-cluster-and-hud-j29)) | The graph the daemon sends was car-verified from a test client on a J29 (cluster + HUD, 2026-10-31); from the daemon itself not yet car-verified |
+
 Not done yet:
 - iDrive still reacts to touches while Android Auto is on screen.
 - Media over the head unit's own audio path (A2I) instead of Bluetooth is experimental: PCM flows, but nothing is
@@ -307,6 +313,7 @@ Bluetooth reconnect.
 | Save logs to USB (checkbox) | Off by default: no log files, nothing kept in RAM. When ticked, the daemon and the iDrive app append to `nbt-aad.log` / `nbt-aad-app.log` on the first writable USB stick (`/mnt/umass*`). A stick plugged in later is picked up within 5 s; a file over 64 MB is renamed to `*.old.log`. Stored as `/var/opt/aa/usblog` (a hand-made `/opt/aa/usblog` also counts). `NBT_LOG_FILE` still forces a daemon log file |
 | MENU key opens iDrive (checkbox) | Off by default: MENU opens Android Auto's menu (phone home screen) and iDrive stays on the blank state. When ticked, MENU minimizes Android Auto and opens the iDrive main menu, like native CarPlay, and is not sent to the phone. Stored as `/var/opt/aa/menu-idrive` (a hand-made `/opt/aa/menu-idrive` also counts); read on every MENU press |
 | Show driving mode changes (checkbox) | Off by default. When ticked, changing the driving mode (Sport, Comfort, ECO PRO, ...) makes Android Auto step aside like in reverse so iDrive's own driving-mode display is visible, then Android Auto comes back by itself after `NBT_DRIVEMODE_SHOW_MS` (default 3500 ms). The iDrive app reads CDS `driving.mode` / `driving.mode35up` and logs every value (`CDS driving.mode = '{"mode":n}'`). Stored as `/var/opt/aa/show-drivemode`, read on every change. Car-tested on a Supra (`driving.mode35up` 3 / 4). v1.8.45 / rhmiapp-22 (car-verified, Supra): the app also sends the previous mode, so the first change after the daemon starts is no longer taken as its baseline; the daemon reacts at once instead of on its next 250 ms tick; the LayerManager switch runs in one shell. iDrive is visible 0.3-0.5 s after the CDS value (`... HIDDEN (Z-Order: -1000, N ms)`: 262-468 ms). That was quick enough to show iDrive's blank Android Auto page before its popup, so v1.8.46 waits `NBT_DRIVEMODE_DELAY_MS` (default 400 ms; `0` = at once) after the change; a further change while iDrive has the screen only extends it |
+| Turn arrows in cluster/HUD (checkbox) | Off by default. When ticked, Google Maps' (or another Android Auto nav app's) next turn, its distance and the road name show in the J29's instrument cluster and windscreen HUD, as with an iDrive route. See [Turn arrows in the cluster and HUD](#turn-arrows-in-the-cluster-and-hud-j29). Stored as `/var/opt/aa/kombi-nav` (a hand-made `/opt/aa/kombi-nav` also counts); the daemon checks it once a second, so unticking clears the arrow at once |
 | Start automatically (checkbox; "Start with the car" before rhmiapp-19) | When ticked, the iDrive app starts the daemon 15 s after the head unit boots (not on every ignition-on: the head unit stays up ~10 min after ignition off, and the daemon keeps running), so a phone that connects on its own gets Android Auto without opening this menu. Stored as `/var/opt/aa/autostart` on the car's persistence partition, which is writable at runtime (`/opt/aa` usually isn't); a hand-made `/opt/aa/autostart` also counts (needs the status polling, i.e. no `status.disable`) |
 | About | One wrapping text block (a Richtext list, like BMW's own ActiveSeating intro text, English only): "NBT-AAD: native wireless Android Auto", "Developed by nanaisu", the GitHub address, and the free-of-charge notice |
 
@@ -338,6 +345,23 @@ underneath the overlay, so this stops a stray press from killing the session.
 | MEDIA | Media |
 | NAV, MAP | Navigation |
 | OPTION | Nothing (`NBT_KEY_OPTIONS`) |
+
+### Turn arrows in the cluster and HUD (J29)
+
+With **Turn arrows in cluster/HUD** ticked, the daemon turns Android Auto's navigation status (channel 10: next
+maneuver, distance, road) into the KOMBI's own route-guidance graph and sends it from the head unit straight to the
+cluster, so the arrow, distance and street show in the cluster and the windscreen HUD without an iDrive route.
+
+| | |
+|---|---|
+| Cars | J29 Supra (the KOMBI's guidance service, SOME/IP `0xB006` at `160.48.199.96:30502`). On any other car the KOMBI refuses the first frame or isn't there, and the feature turns itself off for the session (log: `[KombiNav] the KOMBI rejected a frame ...` / `no KOMBI at ...`) |
+| When the arrow shows | While the phone guides, once the next maneuver is within 1 mile (`NBT_KOMBI_NAV_APPROACH_MI`, `0` = at once), like a production nav HUD. Distance as `0.5 mi` / `450 ft` (metric distances are shown in mi / ft) |
+| When it clears | Guidance off for 8 s (rerouting keeps it), the phone disconnects, the box is unticked, the daemon stops (Force Stop, Restart), or the daemon crashes (cleared from the crash handler). A daemon killed with SIGKILL leaves `/dev/shmem/nbt-aad-kombi-nav.shown`; the next start sends the clear first |
+| iDrive navigation | Wins: when an iDrive route starts (seen in the system log, `sloginfo -w`), the daemon stops writing without clearing, and takes over again at the next Android Auto route. Without `sloginfo` the log says so; then don't start an iDrive route while Android Auto guides |
+| Safety | Only route-guidance model updates are sent (never create / dispose), one connection, our own SOME/IP client id; a frame the KOMBI rejects stops the feature until the next session |
+| Turning it off | Untick the box (the arrow clears within a second) or `NBT_KOMBI_NAV=0` in `nbt-aad.env` |
+
+Not covered: lane guidance, the "then" preview, the cluster's small map.
 
 ### Tips
 
@@ -440,6 +464,11 @@ Leave these unset unless you are testing.
 | `NBT_CAR_MAKE/MODEL/YEAR`, `NBT_VEHICLE_ID`, `NBT_HU_MAKE/MODEL`, `NBT_SW_VERSION`, `NBT_BT_ADDR` | Single identity fields |
 | `NBT_CARPLAY_INI` | Read a different `carplay.ini` (never the factory template in `/opt/conn/data/carplay/`) |
 | `NBT_CTL_PORT` | Control port (default 52790) |
+| `NBT_KOMBI_NAV` | `1` / `0` forces the cluster/HUD arrows on / off, whatever the menu checkbox says (default: the checkbox) |
+| `NBT_KOMBI_NAV_APPROACH_MI` | Show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once) |
+| `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
+| `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
+| `NBT_KOMBI_NAV_HANDLE`, `NBT_KOMBI_NAV_HOST`, `NBT_KOMBI_NAV_PORT` | KOMBI guidance instance handle (default `0xC8`, the same on every boot seen), address (`160.48.199.96`) and port (`30502`) |
 | `NBT_DIAG=1`, `NBT_VERBOSE` | Window/LayerManager dump 8 s into a session; verbose protocol log |
 
 Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID_DST_H=480`, `NBT_TOUCH_SY=1.5`.
@@ -683,6 +712,26 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
 7. **Controller (`ccs_input`, `ccs_decoder.hpp`).** Observe-only MOST client on `DSYSMOSTServer` 4.5 that receives
    copies of the controller's FBlock 0xE5 status messages.
 
+### Cluster and HUD arrows (`kombi_nav`)
+
+- `aa_session` hands every channel 10 message (0x8000 and up) to a nav-status callback. `kombi_nav` copies the
+  newest 0x8003 (status), 0x8006 (next step), 0x8007 (distances), and the older 0x8004 / 0x8005, and returns.
+- A worker thread (4 ticks a second) decodes them (`kombi_nav_msg.hpp`: field numbers as in opencardev/aasdk,
+  maneuver types as androidx `Maneuver.TYPE_*`) and runs the state machine (`kombi_nav.cpp`):
+  - new maneuver: the full 97-frame route-start graph, maneuver 0 patched;
+  - changed distance text: one in-place distance frame (at most twice a second);
+  - no distance yet: wait up to 3 s, then `-` (never the template's own distance).
+- The graph (`kombi_graph.hpp`) is a captured factory route start replayed byte for byte
+  (`kombi_graph_template.hpp`, road names replaced by neutral text of the same length). Only fields proven on the
+  car are changed: the direction enum in ManeuverDescription (0x0F), the distance text, its unit byte (0x01 mi,
+  0x05 ft) and the red bar in ManeuverDistance (0x1D), and the road in TextResource (0x03).
+- Direction enum: LEFT 6, RIGHT 7 and the destination flag 10 are car-verified. The other values follow the
+  KOMBI's enum names (HALF_LEFT 2, TIGHT_LEFT 4, UTURN_LEFT 8, ROUNDABOUT_CCW 15, HIGHWAY_OUT_RIGHT 29, FORK_LEFT 37,
+  ...) and may still need a parked check.
+- `kombi_client` speaks SOME/IP over TCP: KOMBI magic cookies are skipped, a connection error gets one reconnect,
+  and a non-E_OK reply stops the feature. The clear is the factory's own 6-frame cancel on a fresh connection, with
+  the state-0 frame alone as a fallback.
+
 ### Touch frame layout
 
 - Each datagram starts `B0 04 80 02` + BE32 length (datagram size - 8): a 16-byte header, then 8-byte records
@@ -798,6 +847,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
+| `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/kombi_nav.cpp src/kombi_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
 | `test_media_payload.py` | Media metadata payloads |
 
 ## Source layout
@@ -810,6 +860,8 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
   - audio: `audio_route` (`audioconn` wrapper), `voice_scenario`, `browser_audio` + `audio_mixer` (browser mode),
     `audio_manager`, `a2i_stream`, `pcm_utils`;
+  - cluster/HUD arrows: `kombi_nav` (+ `kombi_nav_msg.hpp`, `kombi_graph.hpp`, `kombi_graph_template.hpp`),
+    `kombi_client`;
   - other: `crash_handler`, `license_text.hpp`.
 - `include/`: `dhu_sdp.h` (canned service discovery), `a2i_client.h`, `dsi_controller.h`, `screen_video.h`.
 - `rhmiapp/`: the iDrive PluginApp. `plugin/`: the legacy HmiMain3D plugin.
@@ -825,7 +877,8 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 - `carplay.ini` screen codings such as `1180_480` or `900_540` are the CarPlay picture size, not always the panel: set
   `NBT_SCREEN` to the real panel size (e.g. `1280x480`, `1440x540`) if Android Auto doesn't fill the screen.
 - Media through the head unit's own audio path (A2I) is experimental and not audible yet.
-- HUD navigation arrows: researched in a separate fork, on hold.
+- Cluster/HUD arrows (`kombi_nav`): confirm on the car that the head unit reaches the KOMBI directly, run a drive,
+  and check the direction values other than LEFT / RIGHT / destination (parked).
 
 ## License
 
