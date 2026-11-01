@@ -9,6 +9,12 @@
 // driver's own queue: TLS records went missing in every burst (car logs 2026-10-31). Here io-usb hands the bulk-in
 // transfers to us only, with several reads queued so a burst always has somewhere to land. The driver has to go
 // first (it keeps a read queued on the same endpoint): UsbAccessory stops it once the phone is in accessory mode.
+//
+// It also switches phones itself. vdev-medialaunch asks a new USB device for its AOA protocol once, when it is
+// plugged in, and only creates /dev/android* (aoap-switch) when it gets an answer. A phone that is still in "charging
+// only" (or locked) does not answer then, and choosing "Android Auto" / "File transfer" on it later does not make
+// medialauncher ask again: nothing happened until the phone was replugged (car, 2026-11-01). io-usb reports every
+// device to us, so a device that has no /dev/android* node is asked again every second while it stays plugged in.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -23,6 +29,10 @@ struct usbd_pipe;
 struct usbd_urb;
 
 namespace nbt {
+
+namespace aoap {
+struct Identity;
+}
 
 // Each completed bulk-in transfer, in the order the phone sent it. data == NULL: receiving ended (why() says why).
 // Returns false to stop receiving. Called on io-usb's callback thread with the link's lock held: queue and return.
@@ -45,6 +55,11 @@ public:
     // Attaches to accessory `key` and opens its bulk pipes. NULL on failure (logged).
     UsbDirectLink* open(const std::string& key);
 
+    // Devices other than accessories that have been plugged in for at least min_age_s: asks each one for its AOA
+    // protocol (again every second while it does not answer, for up to 2 minutes) and switches the ones that answer to
+    // accessory mode with `id`. Blocks for the control transfers (1 s timeout each). Returns how many it switched.
+    int switchPhones(const aoap::Identity& id, double min_age_s);
+
     // Stops every devc-serusb-aoap process: SIGTERM, then SIGKILL if it is still there 2 s later (it does not exit
     // on SIGTERM while it holds a phone). Returns how many are still running. Call it about once a second.
     int stopAoapDriver();
@@ -60,6 +75,14 @@ private:
         double seen_s;                    // monotonic time of the insertion
         UsbDirectLink* link;              // attached, or NULL
     };
+    struct Candidate {                    // a device that may be a phone not yet in accessory mode
+        std::string key;
+        std::vector<uint8_t> instance;   // usbd_device_instance_t
+        double seen_s;
+        double next_try_s;
+        int last;                         // what the last attempt gave (a SwitchResult), to log changes only
+        bool done;                        // switched, or given up
+    };
     struct Signalled {
         long pid;
         double term_s;
@@ -73,6 +96,7 @@ private:
     pthread_mutex_t mu_;
     struct usbd_connection* conn_;
     std::vector<Accessory> accs_;
+    std::vector<Candidate> cands_;
     std::vector<Signalled> signalled_;   // watch thread only
 };
 

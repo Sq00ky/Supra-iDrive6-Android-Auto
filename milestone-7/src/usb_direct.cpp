@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "usb_direct.hpp"
+#include "usb_aoap.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,16 @@ static const unsigned kRxSlots = 8;                   // bulk-in transfers kept 
 static const size_t kRxBuf = 16384;                   // like devc-serusb-aoap -l 16384; a longer transfer continues
                                                       // in the next one (a stream to us)
 static const size_t kTxBuf = 65536;
+static const uint32_t kAppleVendor = 0x05ac;          // iPhones: CarPlay's, never asked
+static const double kSwitchRetryS = 1.0;              // a device that does not answer the AOA request: ask again
+static const double kSwitchGiveUpS = 120.0;           // after this long plugged in without an answer, stop asking
+static const unsigned kCtrlTimeoutMs = 1000;
+static const size_t kCtrlBuf = 256;
+
+// AOA vendor requests (Android Open Accessory protocol).
+static const uint16_t kAoaGetProtocol = 51;
+static const uint16_t kAoaSendString = 52;
+static const uint16_t kAoaStart = 53;
 
 static UsbDirect* g_direct = NULL;   // libusbdi's insertion/removal callbacks carry no user pointer
 
@@ -44,6 +55,21 @@ static std::string keyOf(const usbd_device_instance_t* inst) {
     char k[32];
     snprintf(k, sizeof(k), "usb%u.%u.%u", (unsigned)inst->path, (unsigned)inst->devno, (unsigned)inst->generation);
     return k;
+}
+
+// Classes that are never a phone; some USB sticks misbehave on the AOA request (medialauncher's oap_query_blist).
+static bool neverPhone(const usbd_device_instance_t* inst) {
+    switch (inst->ident.dclass) {
+    case 0x01:   // audio
+    case 0x03:   // HID
+    case 0x07:   // printer
+    case 0x08:   // mass storage
+    case 0x09:   // hub
+    case 0x0e:   // video
+        return true;
+    default:
+        return inst->ident.vendor == kAppleVendor;
+    }
 }
 
 static double monoS() {
@@ -75,7 +101,8 @@ bool UsbDirect::start() {
     if (conn_) return true;
     if (g_direct && g_direct != this) return false;
     g_direct = this;
-    static usbd_device_ident_t ident = { kGoogleVendor, USBD_CONNECT_WILDCARD, USBD_CONNECT_WILDCARD,
+    // Every device: accessories to read, and other devices to switch (switchPhones).
+    static usbd_device_ident_t ident = { USBD_CONNECT_WILDCARD, USBD_CONNECT_WILDCARD, USBD_CONNECT_WILDCARD,
                                          USBD_CONNECT_WILDCARD, USBD_CONNECT_WILDCARD };
     static usbd_funcs_t funcs = { _USBDI_NFUNCS, onInsert, onRemove, NULL };
     usbd_connect_parm_t parm;
@@ -92,7 +119,7 @@ bool UsbDirect::start() {
         g_direct = NULL;
         return false;
     }
-    printf("[UsbDirect] connected to io-usb: phones in accessory mode are read through libusbdi (NBT_USB_DIRECT)\n");
+    printf("[UsbDirect] connected to io-usb: phones are switched and read through libusbdi (NBT_USB_DIRECT)\n");
     return true;
 }
 
@@ -102,16 +129,37 @@ void UsbDirect::stop() {
     conn_ = NULL;
     pthread_mutex_lock(&mu_);
     accs_.clear();
+    cands_.clear();
     pthread_mutex_unlock(&mu_);
     if (g_direct == this) g_direct = NULL;
 }
 
 void UsbDirect::inserted(const void* p) {
     const usbd_device_instance_t* inst = reinterpret_cast<const usbd_device_instance_t*>(p);
-    if (inst->ident.vendor != kGoogleVendor || inst->ident.device < kFirstAccessoryPid ||
-        inst->ident.device > kLastAccessoryPid)
-        return;
     std::string key = keyOf(inst);
+    if (inst->ident.vendor != kGoogleVendor || inst->ident.device < kFirstAccessoryPid ||
+        inst->ident.device > kLastAccessoryPid) {
+        if (neverPhone(inst)) return;
+        pthread_mutex_lock(&mu_);
+        bool known = false;
+        for (size_t i = 0; i < cands_.size(); ++i) known = known || cands_[i].key == key;   // one per device
+        if (!known) {
+            Candidate c;
+            c.key = key;
+            c.instance.assign(reinterpret_cast<const uint8_t*>(inst),
+                              reinterpret_cast<const uint8_t*>(inst) + sizeof(*inst));
+            c.seen_s = monoS();
+            c.next_try_s = 0;
+            c.last = -1;
+            c.done = false;
+            cands_.push_back(c);
+        }
+        pthread_mutex_unlock(&mu_);
+        if (!known)
+            printf("[UsbDirect] USB device %04x:%04x (class %02x) at %s\n", (unsigned)inst->ident.vendor,
+                   (unsigned)inst->ident.device, (unsigned)inst->ident.dclass, key.c_str());
+        return;
+    }
     pthread_mutex_lock(&mu_);
     bool known = false;
     for (size_t i = 0; i < accs_.size(); ++i) known = known || accs_[i].key == key;   // one entry per device
@@ -139,6 +187,9 @@ void UsbDirect::removed(const void* p) {
         printf("[UsbDirect] accessory %s removed\n", key.c_str());
         if (accs_[i].link) accs_[i].link->gone();   // lock order: UsbDirect::mu_, then the link's
         accs_.erase(accs_.begin() + i);
+    }
+    for (size_t i = cands_.size(); i-- > 0;) {
+        if (cands_[i].key == key) cands_.erase(cands_.begin() + i);
     }
     pthread_mutex_unlock(&mu_);
 }
@@ -203,6 +254,197 @@ void UsbDirect::released(UsbDirectLink* link) {
         if (accs_[i].link == link) accs_[i].link = NULL;
     }
     pthread_mutex_unlock(&mu_);
+}
+
+// The control pipe of a device we attached to for the AOA requests.
+struct Ctrl {
+    struct usbd_device* dev;
+    struct usbd_pipe* pipe;
+    struct usbd_urb* urb;
+    uint8_t* buf;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    bool busy;   // io-usb has the URB
+    _Uint32t status;
+    _Uint32t len;
+};
+
+static void ctrlDone(struct usbd_urb* urb, struct usbd_pipe*, void* handle) {
+    Ctrl* c = reinterpret_cast<Ctrl*>(handle);
+    _Uint32t status = 0, len = 0;
+    usbd_urb_status(urb, &status, &len);
+    pthread_mutex_lock(&c->mu);
+    c->busy = false;
+    c->status = status;
+    c->len = len;
+    pthread_cond_broadcast(&c->cv);
+    pthread_mutex_unlock(&c->mu);
+}
+
+static void ctrlWait(Ctrl* c, unsigned ms) {   // c->mu held
+    for (unsigned waited = 0; c->busy && waited < ms; waited += 100) {
+        struct timespec ts;
+        deadline(ts, 100);
+        pthread_cond_timedwait(&c->cv, &c->mu, &ts);
+    }
+}
+
+// One vendor request to the device. false: it failed (why says how).
+static bool ctrlRequest(Ctrl* c, bool in, uint16_t request, uint16_t index, const char* data, size_t n,
+                        char* why, size_t why_n) {
+    if (!in && n) memcpy(c->buf, data, n);
+    usbd_setup_vendor(c->urb, in ? (URB_DIR_IN | URB_SHORT_XFER_OK) : URB_DIR_OUT, request,
+                      USB_TYPE_VENDOR | USB_RECIPIENT_DEVICE | (in ? USB_DIRECTION_HOST : USB_DIRECTION_DEVICE), 0,
+                      index, c->buf, n);
+    pthread_mutex_lock(&c->mu);
+    c->busy = true;
+    pthread_mutex_unlock(&c->mu);
+    int r = usbd_io(c->urb, c->pipe, &ctrlDone, c, kCtrlTimeoutMs);
+    pthread_mutex_lock(&c->mu);
+    if (r != EOK) {
+        c->busy = false;
+        pthread_mutex_unlock(&c->mu);
+        snprintf(why, why_n, "request %u: %s", (unsigned)request, strerror(r));
+        return false;
+    }
+    ctrlWait(c, kCtrlTimeoutMs + 1000);   // io-usb times it out itself; this only guards against a lost completion
+    if (c->busy) {
+        pthread_mutex_unlock(&c->mu);
+        usbd_abort_pipe(c->pipe);
+        pthread_mutex_lock(&c->mu);
+        ctrlWait(c, 1000);
+    }
+    bool ok = !c->busy && (c->status & USBD_URB_STATUS_MASK) == USBD_STATUS_CMP;
+    if (!ok && c->busy) {
+        snprintf(why, why_n, "request %u: no completion", (unsigned)request);
+    } else if (!ok) {
+        snprintf(why, why_n, "request %u: %s (status 0x%08x)", (unsigned)request,
+                 (c->status & USBD_USB_STATUS_MASK) == USBD_STATUS_STALL ? "stall" : "failed", (unsigned)c->status);
+    }
+    pthread_mutex_unlock(&c->mu);
+    return ok;
+}
+
+// Frees it all and detaches, unless io-usb still has the URB (then it is kept: a late callback would use it).
+static void ctrlClose(Ctrl* c) {
+    if (c->busy) {
+        printf("[UsbDirect] a control transfer did not complete after the abort: keeping it\n");
+        return;
+    }
+    if (c->urb) usbd_free_urb(c->urb);
+    if (c->buf) usbd_free(c->buf);
+    if (c->pipe) usbd_close_pipe(c->pipe);
+    if (c->dev) usbd_detach(c->dev);
+    pthread_cond_destroy(&c->cv);
+    pthread_mutex_destroy(&c->mu);
+    delete c;
+}
+
+enum SwitchResult { kSwitchSent, kNoAoa, kSwitchError };
+
+// What aoap-switch does for /dev/android*: ask for the AOA protocol, send our identity, start accessory mode. The
+// phone then drops off the bus and comes back as 18d1:2d0x.
+static SwitchResult aoaSwitch(struct usbd_connection* conn, usbd_device_instance_t* inst, const aoap::Identity& id,
+                              int* proto, char* why, size_t why_n) {
+    Ctrl* c = new Ctrl();
+    memset(c, 0, sizeof(*c));
+    pthread_mutex_init(&c->mu, NULL);
+    pthread_cond_init(&c->cv, NULL);
+    int r = usbd_attach(conn, inst, 0, &c->dev);
+    if (r != EOK) {
+        c->dev = NULL;
+        snprintf(why, why_n, "usbd_attach: %s", strerror(r));
+        ctrlClose(c);
+        return kSwitchError;
+    }
+    struct usbd_desc_node* dn = NULL;
+    usbd_descriptors_t* dd = usbd_parse_descriptors(c->dev, NULL, USB_DESC_DEVICE, 0, &dn);
+    r = dd ? usbd_open_pipe(c->dev, dd, &c->pipe) : ENODEV;   // the device descriptor opens endpoint 0
+    if (r != EOK) {
+        c->pipe = NULL;
+        snprintf(why, why_n, "opening the control pipe: %s", strerror(r));
+        ctrlClose(c);
+        return kSwitchError;
+    }
+    c->urb = usbd_alloc_urb(NULL);
+    c->buf = reinterpret_cast<uint8_t*>(usbd_alloc(kCtrlBuf));
+    if (!c->urb || !c->buf) {
+        snprintf(why, why_n, "out of USB transfer memory");
+        ctrlClose(c);
+        return kSwitchError;
+    }
+
+    SwitchResult res = kSwitchSent;
+    if (!ctrlRequest(c, true, kAoaGetProtocol, 0, NULL, 2, why, why_n)) {
+        res = kNoAoa;
+    } else if (c->len < 2) {
+        snprintf(why, why_n, "%u-byte answer to request %u", (unsigned)c->len, (unsigned)kAoaGetProtocol);
+        res = kNoAoa;
+    } else if ((*proto = c->buf[0] | (c->buf[1] << 8)) == 0) {
+        snprintf(why, why_n, "AOA protocol 0");
+        res = kNoAoa;
+    } else {
+        const char* strs[6] = { id.manufacturer, id.model, id.description, id.version, id.url, id.serial };
+        for (uint16_t i = 0; i < 6 && res == kSwitchSent; ++i) {
+            size_t n = strlen(strs[i]) + 1;
+            if (n > kCtrlBuf) n = kCtrlBuf;
+            if (!ctrlRequest(c, false, kAoaSendString, i, strs[i], n, why, why_n)) res = kSwitchError;
+        }
+        if (res == kSwitchSent && !ctrlRequest(c, false, kAoaStart, 0, NULL, 0, why, why_n)) res = kSwitchError;
+    }
+    ctrlClose(c);
+    return res;
+}
+
+int UsbDirect::switchPhones(const aoap::Identity& id, double min_age_s) {
+    if (!conn_) return 0;
+    const double now = monoS();
+    std::vector<Candidate> due;
+    pthread_mutex_lock(&mu_);
+    for (size_t i = 0; i < cands_.size(); ++i) {
+        const Candidate& c = cands_[i];
+        if (!c.done && now - c.seen_s >= min_age_s && now >= c.next_try_s) due.push_back(c);
+    }
+    pthread_mutex_unlock(&mu_);
+
+    int switched = 0;
+    for (size_t i = 0; i < due.size(); ++i) {
+        // Not under mu_: io-usb's callback thread may need it meanwhile.
+        usbd_device_instance_t inst;
+        memcpy(&inst, &due[i].instance[0], sizeof(inst));
+        int proto = 0;
+        char why[128] = "";
+        SwitchResult r = aoaSwitch(conn_, &inst, id, &proto, why, sizeof(why));
+        const double t = monoS();
+        bool give_up = r != kSwitchSent && t - due[i].seen_s >= kSwitchGiveUpS;
+        bool still = false;
+        pthread_mutex_lock(&mu_);
+        for (size_t j = 0; j < cands_.size(); ++j) {
+            Candidate& c = cands_[j];
+            if (c.key != due[i].key) continue;
+            still = true;
+            c.done = r == kSwitchSent || give_up;
+            c.next_try_s = t + kSwitchRetryS;
+            c.last = r;
+        }
+        pthread_mutex_unlock(&mu_);
+        if (!still) continue;   // unplugged meanwhile
+        const char* k = due[i].key.c_str();
+        if (r == kSwitchSent) {
+            ++switched;
+            printf("[UsbDirect] %s: AOA protocol %d: switch to accessory mode sent as '%s' / '%s'\n", k, proto,
+                   id.manufacturer, id.model);
+        } else if (give_up) {
+            printf("[UsbDirect] %s: still not switched after %.0f s (%s): not asking any more\n", k, kSwitchGiveUpS,
+                   why);
+        } else if (due[i].last != r) {
+            printf("[UsbDirect] %s: %s (%s): asking again every %.0f s while it is plugged in\n", k,
+                   r == kNoAoa ? "no answer to the accessory request (phone set to charging only, or locked?)"
+                               : "accessory switch failed",
+                   why, kSwitchRetryS);
+        }
+    }
+    return switched;
 }
 
 int UsbDirect::stopAoapDriver() {
@@ -566,6 +808,7 @@ bool UsbDirect::start() {
 void UsbDirect::stop() {}
 std::vector<std::string> UsbDirect::accessories(double) { return std::vector<std::string>(); }
 UsbDirectLink* UsbDirect::open(const std::string&) { return NULL; }
+int UsbDirect::switchPhones(const aoap::Identity&, double) { return 0; }
 int UsbDirect::stopAoapDriver() { return 0; }
 void UsbDirect::inserted(const void*) {}
 void UsbDirect::removed(const void*) {}

@@ -44,6 +44,10 @@ static const unsigned kTraceTransfers = 48;   // per direction and bridge: first
 static const int kRxPriority = 21;            // like the QNX USB drivers; NBT_USB_RX_PRIO overrides, 0 = leave
 static const size_t kMaxRxQueued = 4u << 20;  // bytes read from the phone that the session has not taken yet
 static const double kDriverGraceS = 2.0;      // NBT_USB_DIRECT: wait this long after the accessory appears
+// NBT_USB_DIRECT: a device that has been plugged in this long without a /dev/android* node is switched by us. One scan:
+// medialauncher's own AOA request comes at plug-in, and a phone that was not answering then (still on "charging only")
+// is only switched by us anyway, from the moment "Android Auto" is chosen on it (it re-enumerates).
+static const double kSelfSwitchAfterS = 0.5;
 
 static double monoSec() {
     struct timespec ts;
@@ -513,6 +517,13 @@ void UsbAccessory::watchLoop() {
         const double now = monoSec();
         const Transport owner = owner_ ? owner_(owner_data_) : kTransportNone;
         if (!bridge_ && mayStart(owner, kTransportUsb)) {
+            // medialauncher creates /dev/android* only if the phone answered its one AOA request at plug-in: a phone
+            // still in "charging only" did not, and is asked again through io-usb until it answers.
+            if (direct_ && androids.empty() && accs.empty()) {
+                aoap::Identity id;
+                aoap::fillIdentity(id, getenv("NBT_USB_MANUFACTURER"), getenv("NBT_USB_MODEL"));
+                direct_->switchPhones(id, kSelfSwitchAfterS);
+            }
             for (size_t i = 0; i < androids.size(); ++i) {
                 SwitchNode* s = NULL;
                 for (size_t j = 0; j < switches_.size(); ++j) {
