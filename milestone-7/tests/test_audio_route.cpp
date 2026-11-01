@@ -57,7 +57,7 @@ int main() {
     g_granted = 0;
     tag = 9;
     assert(r.buildFocus(0x3a, 0x1, &onGranted, &tag));
-    sleep(5);
+    sleep(7);   // the one retry runs after NBT_AUDIOCONN_RETRY_S (5) s: waiting exactly 5 s raced it
     assert(g_granted == 0 && calls(counter) == 2);
 
     // 3) ConnectionMaster form `-b <connId>` granted at once; no callback = no crash.
@@ -69,6 +69,21 @@ int main() {
     assert(r.build(0xc7));
     sleep(1);
     assert(calls(counter) == 2);
+
+    // 4) remove() completion callback: runs once the remove is over, also when audioconn refuses it.
+    writeFake(fake, counter, 0);
+    tag = 5;
+    g_granted = 0;
+    assert(r.remove(0xb8, &onGranted, &tag));
+    assert(waitFor(&g_granted, 5, 4));
+    writeFake(fake, counter, 99);
+    tag = 6;
+    g_granted = 0;
+    assert(r.remove(0xb8, &onGranted, &tag));
+    assert(waitFor(&g_granted, 6, 4));
+    assert(calls(counter) == 1);   // removes are not retried
+    assert(r.remove(0xb8));        // no callback = no crash
+    sleep(1);
 
     unlink(fake);
     unlink(counter);

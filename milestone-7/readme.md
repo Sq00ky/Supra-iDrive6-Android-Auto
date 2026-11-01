@@ -413,7 +413,7 @@ Leave these unset unless you are testing.
 | `NBT_BT_CONN` | ConnId of the car's Bluetooth source, requested through the ConnectionMaster (`audioconn -b <id>`, the iDrive HMI's call). Default `0xc7` (`audioconn -l`: `eSRC_A2DP ... AuxInBTAudio srcNr: 0x1`), car-verified on a MINI F60 since v1.8.38; `0` = the old focus form `-b 0x3a 0x1` (`NBT_BT_SRC` / `NBT_BT_SINK`) |
 | `NBT_SDR_DROP` | AA channels left out of service discovery (default `9` in Bluetooth mode) |
 | `NBT_AUDIO_MODE` | `bt` (default), `browser` or `a2i`. **`browser` is an experiment, not car-verified**: Android Auto sound comes over the Android Auto connection instead of Bluetooth and plays through the car's browser audio source (see [Browser audio mode](#browser-audio-mode-experiment)). Unset follows `NBT_AUDIO_BT` (`0` = `a2i`) |
-| `NBT_BROWSER_CONN`, `NBT_BROWSER_IDLE_S`, `NBT_BROWSER_REFOCUS`, `NBT_BROWSER_PCM`, `NBT_BROWSER_RATE`, `NBT_BROWSER_ASOUND` | Browser mode: connection id (default `0xb8`, `0` = don't route), release the source after N s without sound (default `10`, `0` = keep it until the session ends), ask for it again when the mic closes (default on), `card:device` instead of the preferred device, device rate (default `48000`), shim path (default `/opt/mm/lib/libasound/libasound.so`) |
+| `NBT_BROWSER_CONN`, `NBT_BROWSER_IDLE_S`, `NBT_BROWSER_PROMPT_IDLE_MS`, `NBT_BROWSER_REFOCUS`, `NBT_BROWSER_PCM`, `NBT_BROWSER_RATE`, `NBT_BROWSER_ASOUND` | Browser mode: connection id (default `0xb8`, `0` = don't route), release the source after N s without sound once AA media has played (default `10`, `0` = keep it until the session ends), release it N ms after a prompt or system sound when no AA media is playing (default `1000`, `0` = use the 10 s rule), ask for it again when the mic closes (default on), `card:device` instead of the preferred device, device rate (default `48000`), shim path (default `/opt/mm/lib/libasound/libasound.so`) |
 | `NBT_DUCK_DB`, `NBT_DUCK_ATTACK_MS`, `NBT_DUCK_HOLD_MS`, `NBT_DUCK_RELEASE_MS`, `NBT_MEDIA_GAIN_DB`, `NBT_GUIDANCE_GAIN_DB`, `NBT_SYSTEM_GAIN_DB` | Browser mode ducking: media level under a prompt or system sound (default `-12` dB), ramp down / hold / ramp up (default `80` / `600` / `500` ms), fixed per-stream gains (default `0` dB) |
 | `NBT_SYSTEM_SINK` | `1` / `0` forces the SYSTEM_AUDIO sink (ch 16) in / out of service discovery (default: in browser mode only) |
 | `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
@@ -457,9 +457,11 @@ Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID
   `dev-libasound` -> A2I `input_stereo_3`) and asks for the browser audio source with `audioconn -b 0xb8`. The
   CarPlay sources can't be used: they refuse to allocate unless an iPhone is connected.
 - `0xb8` is an *interrupting* source (like the Owner's Manual audio): while it is built the radio or Bluetooth source is
-  paused and iDrive's Media menu still shows it. The daemon builds it when Android Auto first makes a sound and releases
-  it after `NBT_BROWSER_IDLE_S` (10) s of silence or when the session ends. Audio that arrives before the car grants it
-  waits, so the start of a prompt is not cut off.
+  paused and iDrive's Media menu still shows it. The daemon builds it when Android Auto first makes a sound. Once AA
+  media has played it is kept through pauses and released after `NBT_BROWSER_IDLE_S` (10) s of silence; when only a
+  prompt or a system sound played (you are listening to the radio) it is released `NBT_BROWSER_PROMPT_IDLE_MS` (1000)
+  ms after it, so the radio is cut only for the prompt. Audio that arrives before the car grants the source waits, so
+  the start of a prompt is not cut off.
 - Calls are unchanged (Bluetooth hands-free). Whether `0xb8` comes back by itself after a call is not known yet.
 
 What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[Browser] PCM open: card ..`,

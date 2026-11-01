@@ -29,8 +29,11 @@
 //   NBT_BROWSER_ASOUND   shim path (default /opt/mm/lib/libasound/libasound.so)
 //   NBT_BROWSER_PCM      "card:device" instead of snd_pcm_open_preferred
 //   NBT_BROWSER_RATE     device rate to ask for (default 48000)
-//   NBT_BROWSER_IDLE_S   remove the connection after this many seconds without sound (default 10, 0 = keep
-//                        it until the session ends)
+//   NBT_BROWSER_IDLE_S   remove the connection after this many seconds without sound once AA media has played
+//                        (default 10, 0 = keep it until the session ends)
+//   NBT_BROWSER_PROMPT_IDLE_MS  when no AA media is playing (e.g. the user is on the radio), remove it this many ms
+//                        after a prompt / system sound ends, so the radio is cut only for the prompt (default 1000,
+//                        0 = use NBT_BROWSER_IDLE_S)
 //   NBT_BROWSER_REFOCUS  build the connection again when the phone closes the mic (default on)
 //   NBT_DUCK_DB          media level while ducked, dB (default -12)
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
@@ -72,12 +75,14 @@ public:
     // Mixer thread (internal).
     void mixerLoop();
     void routeGranted();
+    void releaseDone();
 
 private:
     BrowserAudio(const BrowserAudio&);
     BrowserAudio& operator=(const BrowserAudio&);
 
-    enum RouteState { ROUTE_IDLE = 0, ROUTE_BUILDING = 1, ROUTE_ROUTED = 2 };
+    // RELEASING: `audioconn -r` queued; no new build until it has run, so a build can never be overtaken by it.
+    enum RouteState { ROUTE_IDLE = 0, ROUTE_BUILDING = 1, ROUTE_ROUTED = 2, ROUTE_RELEASING = 3 };
 
     bool loadShim();
     bool openPcm();
@@ -95,6 +100,7 @@ private:
     uint32_t conn_;
     uint32_t want_rate_;
     int idle_s_;
+    int prompt_idle_ms_;
     bool refocus_;
     DuckConfig duck_cfg_;
     const char* shim_path_;
@@ -128,6 +134,7 @@ private:
     uint64_t route_since_ms_;
     uint64_t route_backoff_until_ms_;   // after a connection that was never granted
     uint64_t last_sound_ms_;
+    uint64_t last_media_ms_;            // last AA media sound or open media stream (0 = none this session)
 
     // stats
     uint64_t blocks_;

@@ -47,6 +47,7 @@ const uint32_t kOutCh = 2;
 const int kAudibleLevel = 64;        // |sample| above this (about -54 dBFS) counts as sound for ducking / idle
 const uint32_t kLeadMs = 150;        // never run more than this ahead of real time
 const uint32_t kGrantTimeoutMs = 75000;
+const uint32_t kReleaseTimeoutMs = 20000;   // a remove that never reports back
 
 uint64_t nowMs() {
     struct timespec ts;
@@ -63,6 +64,7 @@ int envInt(const char* name, int def) {
 }
 
 void routeGrantedThunk(void* self) { static_cast<BrowserAudio*>(self)->routeGranted(); }
+void releaseDoneThunk(void* self) { static_cast<BrowserAudio*>(self)->releaseDone(); }
 
 void* mixerThunk(void* self) {
     static_cast<BrowserAudio*>(self)->mixerLoop();
@@ -72,9 +74,9 @@ void* mixerThunk(void* self) {
 } // namespace
 
 BrowserAudio::BrowserAudio()
-    : conn_(0xb8), want_rate_(48000), idle_s_(10), refocus_(true), shim_path_(NULL), lib_(NULL), pcm_(NULL),
+    : conn_(0xb8), want_rate_(48000), idle_s_(10), prompt_idle_ms_(1000), refocus_(true), shim_path_(NULL), lib_(NULL), pcm_(NULL),
       rate_(0), frag_bytes_(0), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
-      route_state_(ROUTE_IDLE), route_since_ms_(0), route_backoff_until_ms_(0), last_sound_ms_(0), blocks_(0), write_errors_(0), prepares_(0),
+      route_state_(ROUTE_IDLE), route_since_ms_(0), route_backoff_until_ms_(0), last_sound_ms_(0), last_media_ms_(0), blocks_(0), write_errors_(0), prepares_(0),
       last_stats_ms_(0), was_ducking_(false) {
     memset(fn_, 0, sizeof(fn_));
     for (int s = 0; s < NSTREAMS; ++s) {
@@ -128,6 +130,7 @@ bool BrowserAudio::init() {
     conn_ = (uint32_t)envHex("NBT_BROWSER_CONN", 0xb8);
     want_rate_ = (uint32_t)envInt("NBT_BROWSER_RATE", 48000);
     idle_s_ = envInt("NBT_BROWSER_IDLE_S", 10);
+    prompt_idle_ms_ = envInt("NBT_BROWSER_PROMPT_IDLE_MS", 1000);
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
     shim_path_ = getenv("NBT_BROWSER_ASOUND");
     if (!shim_path_ || !*shim_path_) shim_path_ = "/opt/mm/lib/libasound/libasound.so";
@@ -144,8 +147,9 @@ bool BrowserAudio::init() {
     printf("[Browser] NBT_AUDIO_MODE=browser (experiment): AA media ch %d + guidance ch %d + system audio ch %d, "
            "mixed and played through the browser audio source\n",
            AA_CH_MEDIA_AUDIO, AA_CH_GUIDANCE_AUDIO, AA_CH_SYSTEM_AUDIO);
-    printf("[Browser] connection 0x%x%s, idle release %d s, ducking %d dB (attack %u / hold %u / release %u ms)\n",
-           conn_, conn_ ? "" : " (NBT_BROWSER_CONN=0: not routed)", idle_s_, envInt("NBT_DUCK_DB", -12),
+    printf("[Browser] connection 0x%x%s, release after %d s without media / %d ms after a prompt or sound alone, "
+           "ducking %d dB (attack %u / hold %u / release %u ms)\n",
+           conn_, conn_ ? "" : " (NBT_BROWSER_CONN=0: not routed)", idle_s_, prompt_idle_ms_, envInt("NBT_DUCK_DB", -12),
            duck_cfg_.attack_ms, duck_cfg_.hold_ms, duck_cfg_.release_ms);
     bool ok = loadShim();
     if (conn_ && !route_.configure()) printf("[Browser] audioconn not found: connection 0x%x cannot be built\n", conn_);
@@ -365,25 +369,35 @@ void BrowserAudio::requestRoute(const char* why) {
 
 void BrowserAudio::routeGranted() {   // audioconn worker thread
     pthread_mutex_lock(&lock_);
-    bool was = (route_state_ == ROUTE_BUILDING);
-    route_state_ = ROUTE_ROUTED;
-    route_since_ms_ = nowMs();
+    const int st = route_state_;
+    if (st == ROUTE_BUILDING) { route_state_ = ROUTE_ROUTED; route_since_ms_ = nowMs(); }
     pthread_mutex_unlock(&lock_);
-    printf("[Browser] connection 0x%x granted%s: AA audio is playing through the browser source\n", conn_,
-           was ? "" : " again");
+    if (st == ROUTE_BUILDING)
+        printf("[Browser] connection 0x%x granted: AA audio is playing through the browser source\n", conn_);
+    else if (st == ROUTE_ROUTED)
+        printf("[Browser] connection 0x%x granted again\n", conn_);
+    else   // released meanwhile: the queued remove runs after this build and takes it down again
+        printf("[Browser] connection 0x%x granted after it was released: ignored (the remove follows)\n", conn_);
 }
 
 void BrowserAudio::releaseRoute(const char* why) {
     if (!conn_) return;
     pthread_mutex_lock(&lock_);
-    bool built = (route_state_ != ROUTE_IDLE);
-    route_state_ = ROUTE_IDLE;
+    const bool built = (route_state_ == ROUTE_BUILDING || route_state_ == ROUTE_ROUTED);
+    if (built) { route_state_ = ROUTE_RELEASING; route_since_ms_ = nowMs(); }
     pthread_mutex_unlock(&lock_);
+    if (!built) return;   // idle, or a remove is already on its way
     route_.cancelPending();
-    if (built && route_.available()) {
-        printf("[Browser] releasing the browser audio source: audioconn -r 0x%x (%s)\n", conn_, why);
-        route_.remove(conn_);
-    }
+    printf("[Browser] releasing the browser audio source: audioconn -r 0x%x (%s)\n", conn_, why);
+    // The next build must not overtake this remove (both wait for the one audioconn slot, in no fixed order):
+    // stay RELEASING, which blocks requestRoute(), until the remove has run.
+    if (!route_.available() || !route_.remove(conn_, &releaseDoneThunk, this)) releaseDone();
+}
+
+void BrowserAudio::releaseDone() {   // audioconn worker thread (or the caller when no remove was queued)
+    pthread_mutex_lock(&lock_);
+    if (route_state_ == ROUTE_RELEASING) route_state_ = ROUTE_IDLE;
+    pthread_mutex_unlock(&lock_);
 }
 
 bool BrowserAudio::routedForPlayback() {
@@ -421,7 +435,7 @@ void BrowserAudio::logStats(bool force) {
            (unsigned)ring_[MEDIA]->size(), (unsigned)ring_[GUIDANCE]->size(), (unsigned)ring_[SYSTEM]->size(),
            (unsigned long long)ring_[MEDIA]->droppedBytes(), (unsigned long long)ring_[GUIDANCE]->droppedBytes(),
            (unsigned long long)ring_[SYSTEM]->droppedBytes(), (int)(mixer_.duckLevel() * 100.0f + 0.5f),
-           rs == ROUTE_ROUTED ? "granted" : (rs == ROUTE_BUILDING ? "requested" : "idle"), write_errors_, prepares_);
+           rs == ROUTE_ROUTED ? "granted" : (rs == ROUTE_BUILDING ? "requested" : (rs == ROUTE_RELEASING ? "releasing" : "idle")), write_errors_, prepares_);
 }
 
 void BrowserAudio::mixerLoop() {
@@ -461,9 +475,23 @@ void BrowserAudio::mixerLoop() {
             pthread_mutex_lock(&lock_);
             route_backoff_until_ms_ = nowMs() + 60000u;   // don't hammer audioconn: next try in a minute
             pthread_mutex_unlock(&lock_);
-        } else if (rstate == ROUTE_ROUTED && idle_s_ > 0 && !any_started && !queued &&
-                   now - last_sound_ms_ > (uint64_t)idle_s_ * 1000u) {
-            releaseRoute("no Android Auto sound for a while");
+        } else if (rstate == ROUTE_RELEASING && now - since > kReleaseTimeoutMs) {
+            printf("[Browser] remove of connection 0x%x did not report back: carrying on\n", conn_);
+            releaseDone();
+        } else if (rstate == ROUTE_ROUTED && !any_started && !queued) {
+            // Release as soon as it's quiet. If AA media played recently (paused / between tracks) wait
+            // NBT_BROWSER_IDLE_S, so resuming doesn't rebuild. If only prompts or system sounds played (the user is
+            // on the radio), wait just NBT_BROWSER_PROMPT_IDLE_MS: the radio is then cut only for the prompt.
+            const uint64_t media_hold = idle_s_ > 0 ? (uint64_t)idle_s_ * 1000u : 0;
+            const bool media_recent = last_media_ms_ && (media_hold == 0 || now - last_media_ms_ < media_hold);
+            const uint64_t quiet = now - last_sound_ms_;
+            if (media_recent) {
+                if (media_hold > 0 && quiet > media_hold) releaseRoute("no Android Auto sound for a while");
+            } else if (prompt_idle_ms_ > 0) {
+                if (quiet > (uint64_t)prompt_idle_ms_) releaseRoute("prompt / sound over, no AA media playing");
+            } else if (media_hold > 0 && quiet > media_hold) {
+                releaseRoute("no Android Auto sound for a while");
+            }
         }
 
         // Until the car grants the source, keep the device fed with silence and leave the AA audio queued.
@@ -475,6 +503,7 @@ void BrowserAudio::mixerLoop() {
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
                    have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck, &out[0]);
         if (loud[MEDIA] || duck) last_sound_ms_ = now;
+        if (loud[MEDIA] || started_[MEDIA]) last_media_ms_ = now;
         const bool ducking = mixer_.ducking();
         if (ducking != was_ducking_) {
             printf("[Browser] media %s\n", ducking ? "ducked under a prompt / system sound" : "back to full level");
@@ -522,6 +551,7 @@ void BrowserAudio::onSessionEnded() {
     pthread_mutex_lock(&lock_);
     route_backoff_until_ms_ = 0;
     pthread_mutex_unlock(&lock_);
+    last_media_ms_ = 0;
 }
 
 void BrowserAudio::stop() {
