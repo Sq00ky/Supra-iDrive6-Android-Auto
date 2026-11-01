@@ -291,7 +291,7 @@ const unsigned    kDriveModeModel   = 44;
 const char* const kDriveModeFlag    = "/var/opt/aa/show-drivemode";
 const char* const kDriveModeManual  = "/opt/aa/show-drivemode";
 const char* const kDriveModeProps[2] = { "driving.mode", "driving.mode35up" };
-// "Turn arrows in cluster/HUD" checkbox: <checkbox action="29" id="70" model="46" textModel="47">, off by default.
+// "Turn arrows in cluster/HUD" checkbox: <checkbox action="29" id="72" model="46" textModel="47">, off by default.
 // Flag file read by nbt-aad once a second (kombi_nav): when on, Android Auto's turn-by-turn shows in the J29 cluster
 // and HUD.
 const unsigned    kActKombiNav      = 29;
