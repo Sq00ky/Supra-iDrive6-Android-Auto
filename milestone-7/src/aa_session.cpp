@@ -48,6 +48,8 @@ AASession::AASession()
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
     mic_user_data_ = NULL;
+    nav_cb_ = NULL;
+    nav_user_data_ = NULL;
     mic_open_ = false;
     mic_sent_ = 0;
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
@@ -130,6 +132,11 @@ void AASession::postNightMode(bool night) {
 void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
     mic_cb_ = cb;
     mic_user_data_ = user_data;
+}
+
+void AASession::setNavStatusCallback(NavStatusCallback cb, void* user_data) {
+    nav_cb_ = cb;
+    nav_user_data_ = user_data;
 }
 
 bool AASession::micOpen() {
@@ -941,13 +948,17 @@ void AASession::sessionLoop() {
                 }
             } else if (channel == 10 && msg_id >= 0x8000) {
                 // Navigation status channel: guidance state (0x8003), next turn (0x8006), turn distance (0x8007), ...
-                // Informational only, nothing is answered. Before v1.6.3 the generic handlers below caught 0x8007 as a
-                // VideoFocusRequest and answered with a video message on ch 10: the phone dropped the session as soon
-                // as guidance started and kept reconnecting (car-seen 2026-10-24, followed by a head-unit reset).
+                // Nothing is answered; the messages go to the nav-status callback (kombi_nav). Before v1.6.3 the
+                // generic handlers below caught 0x8007 as a VideoFocusRequest and answered with a video message on
+                // ch 10: the phone dropped the session as soon as guidance started and kept reconnecting (car-seen
+                // 2026-10-24, followed by a head-unit reset).
                 static unsigned nav_msgs = 0;
                 if ((nav_msgs++ % 50) == 0 || msg_id == 0x8003)
                     printf("[AASession] nav status ch10: msg 0x%04X (%u bytes)%s\n", msg_id, (unsigned)frame_data.size(),
                            msg_id == 0x8003 ? (pbFirstVarint(frame_data, 2, 1) == 1 ? " guidance ACTIVE" : " guidance inactive") : "");
+                if (nav_cb_)
+                    nav_cb_(msg_id, frame_data.size() > 2 ? &frame_data[2] : NULL,
+                            frame_data.size() > 2 ? frame_data.size() - 2 : 0, nav_user_data_);
             } else if (channel == 12 && msg_id >= 0x8000) {
                 // Media playback status channel: 0x8001 = {state, source name e.g. "Apple Music", position} every
                 // second, 0x8003 = track metadata + album art. Informational only. Before v1.6.6 the generic AV

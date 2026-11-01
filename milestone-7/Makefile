@@ -34,7 +34,9 @@ SRCS = src/main.cpp \
        src/bt_play.cpp \
        src/ccs_input.cpp \
        src/sdr_builder.cpp \
-       src/crash_handler.cpp
+       src/crash_handler.cpp \
+       src/kombi_client.cpp \
+       src/kombi_nav.cpp
 
 OBJS = $(SRCS:.cpp=.o)
 TARGET = nbt-aad

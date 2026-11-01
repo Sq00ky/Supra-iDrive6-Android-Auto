@@ -103,6 +103,7 @@
 #include "spp_link_policy.hpp"
 #include "spp_direction.hpp"
 #include "neutral_resume.hpp"
+#include "kombi_nav.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -134,6 +135,7 @@ static double upSec() {
 }
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
+static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -1179,6 +1181,7 @@ static void onSessionEnded(void* user_data) {
     if (g_video) g_video->endSession();
     if (g_audio) g_audio->onSessionEnded();
     if (g_browser) g_browser->onSessionEnded();   // mixer stopped, browser audio source released
+    g_kombiNav.onSessionEnded();   // the worker clears a cluster/HUD arrow
     // Drop the Bluetooth-source request (and its retries) this session queued, so a phone that keeps reconnecting
     // cannot stack audioconn processes until the head unit runs out of memory and resets (tester log 2026-10-29).
     g_btRoute.cancelPending();
@@ -1557,12 +1560,15 @@ int main(int argc, char* argv[]) {
     g_session.setAudioStateCallback(&onAudioState, NULL);
     g_session.setVideoFocusCallback(&onVideoFocusRequest, NULL);
     g_session.setMicRequestCallback(&onMicRequest, NULL);
+    g_session.setNavStatusCallback(&nbt::kombinav::KombiNav::navStatusCallback, &g_kombiNav);
 
     if (!tcp_server.start()) {
         printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
         return 1;
     }
     g_tcp = &tcp_server;
+    g_kombiNav.start();            // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on
+    nbt::g_fatal_hook = &nbt::kombinav::KombiNav::onFatalSignal;
 
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
@@ -1889,6 +1895,8 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
     if (mic_live) { if (g_audio) g_audio->stopMic(); else mic.stop(); }
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
+    g_kombiNav.stop();              // clears a cluster/HUD arrow (one quick attempt)
+    printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
     printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
     g_session.stop();
