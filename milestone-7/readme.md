@@ -412,6 +412,10 @@ Leave these unset unless you are testing.
 | `NBT_BT_PLAY` | **Experiment, off.** `1` = once the car grants the Bluetooth source, wait `NBT_BT_PLAY_DELAY` ms (1500) and send SourceActivity PLAY to it (`AuxInBTAudio.DMMAudioSource` request 2), like picking Bluetooth audio in iDrive; `2` = also AVRCP START (`BlueMedia.SGMedia`). Log: `[BtPlay] ...`. Not car-verified |
 | `NBT_BT_CONN` | ConnId of the car's Bluetooth source, requested through the ConnectionMaster (`audioconn -b <id>`, the iDrive HMI's call). Default `0xc7` (`audioconn -l`: `eSRC_A2DP ... AuxInBTAudio srcNr: 0x1`), car-verified on a MINI F60 since v1.8.38; `0` = the old focus form `-b 0x3a 0x1` (`NBT_BT_SRC` / `NBT_BT_SINK`) |
 | `NBT_SDR_DROP` | AA channels left out of service discovery (default `9` in Bluetooth mode) |
+| `NBT_AUDIO_MODE` | `bt` (default), `browser` or `a2i`. **`browser` is an experiment, not car-verified**: Android Auto sound comes over the Android Auto connection instead of Bluetooth and plays through the car's browser audio source (see [Browser audio mode](#browser-audio-mode-experiment)). Unset follows `NBT_AUDIO_BT` (`0` = `a2i`) |
+| `NBT_BROWSER_CONN`, `NBT_BROWSER_IDLE_S`, `NBT_BROWSER_REFOCUS`, `NBT_BROWSER_PCM`, `NBT_BROWSER_RATE`, `NBT_BROWSER_ASOUND` | Browser mode: connection id (default `0xb8`, `0` = don't route), release the source after N s without sound (default `10`, `0` = keep it until the session ends), ask for it again when the mic closes (default on), `card:device` instead of the preferred device, device rate (default `48000`), shim path (default `/opt/mm/lib/libasound/libasound.so`) |
+| `NBT_DUCK_DB`, `NBT_DUCK_ATTACK_MS`, `NBT_DUCK_HOLD_MS`, `NBT_DUCK_RELEASE_MS`, `NBT_MEDIA_GAIN_DB`, `NBT_GUIDANCE_GAIN_DB`, `NBT_SYSTEM_GAIN_DB` | Browser mode ducking: media level under a prompt or system sound (default `-12` dB), ramp down / hold / ramp up (default `80` / `600` / `500` ms), fixed per-stream gains (default `0` dB) |
+| `NBT_SYSTEM_SINK` | `1` / `0` forces the SYSTEM_AUDIO sink (ch 16) in / out of service discovery (default: in browser mode only) |
 | `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
@@ -439,6 +443,29 @@ Leave these unset unless you are testing.
 | `NBT_DIAG=1`, `NBT_VERBOSE` | Window/LayerManager dump 8 s into a session; verbose protocol log |
 
 Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID_DST_H=480`, `NBT_TOUCH_SY=1.5`.
+
+### Browser audio mode (experiment)
+
+`NBT_AUDIO_MODE=browser` in `nbt-aad.env`. **Not car-verified; test it parked.** Without the setting nothing changes
+(Bluetooth mode).
+
+- The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 16 kHz mono: nav prompts, Assistant
+  speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI sounds). Media
+  then no longer goes to Bluetooth A2DP.
+- The daemon mixes the three streams and ducks the media under prompts and system sounds (`NBT_DUCK_*`).
+- It plays the mix as one more client of the car's browser audio (`/opt/mm/lib/libasound/libasound.so` ->
+  `dev-libasound` -> A2I `input_stereo_3`) and asks for the browser audio source with `audioconn -b 0xb8`. The
+  CarPlay sources can't be used: they refuse to allocate unless an iPhone is connected.
+- `0xb8` is an *interrupting* source (like the Owner's Manual audio): while it is built the radio or Bluetooth source is
+  paused and iDrive's Media menu still shows it. The daemon builds it when Android Auto first makes a sound and releases
+  it after `NBT_BROWSER_IDLE_S` (10) s of silence or when the session ends. Audio that arrives before the car grants it
+  waits, so the start of a prompt is not cut off.
+- Calls are unchanged (Bluetooth hands-free). Whether `0xb8` comes back by itself after a call is not known yet.
+
+What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[Browser] PCM open: card ..`,
+`[Browser] device setup: ..`, `[Browser] connection 0xb8 granted`, `[Browser] media ducked under a prompt ..`, and the
+10 s `[Browser] blocks ..` statistics line (queued / dropped bytes per stream, route state, write errors).
+Handy checks from the shell: `audioconn -l` (is `0xb8` listed as `BrowserFront`?) and `sloginfo | grep -i preAllocate`.
 
 ## Logs
 
@@ -756,7 +783,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 
 | Test | Covers |
 |---|---|
-| `test_sdr`, `test_sdr_drop` | Service discovery, channel drop list |
+| `test_sdr`, `test_sdr_drop` | Service discovery, channel drop list, audio mode, system-audio sink |
 | `test_wpp` | Bluetooth wireless handshake framing |
 | `test_bcl_detect` | Companion-app (BCL/Etch) link detection, incl. the BCL startup magic `12 34 56 78` |
 | `test_spp_link_policy` | Silent links (MyBMW / AAIdrive) put on hold, Android Auto links never |
@@ -768,6 +795,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
 | `test_pcm` | Ring buffer + resampler |
+| `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_media_payload.py` | Media metadata payloads |
 
@@ -779,7 +807,8 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
-  - audio: `audio_route` (`audioconn` wrapper), `voice_scenario`, `audio_manager`, `a2i_stream`, `pcm_utils`;
+  - audio: `audio_route` (`audioconn` wrapper), `voice_scenario`, `browser_audio` + `audio_mixer` (browser mode),
+    `audio_manager`, `a2i_stream`, `pcm_utils`;
   - other: `crash_handler`, `license_text.hpp`.
 - `include/`: `dhu_sdp.h` (canned service discovery), `a2i_client.h`, `dsi_controller.h`, `screen_video.h`.
 - `rhmiapp/`: the iDrive PluginApp. `plugin/`: the legacy HmiMain3D plugin.

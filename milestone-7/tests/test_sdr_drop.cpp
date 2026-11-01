@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: NBT_SDR_DROP / NBT_AUDIO_BT channel removal on the real DHU template.
 #include "sdr_builder.hpp"
+#include "nbt_env.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,6 +92,41 @@ int main() {
     CHECK(dropSdrChannels(e) == 1);
     std::vector<int> ce; CHECK(channels(e, ce));
     unsetenv("NBT_AUDIO_BT");
+
+    // NBT_AUDIO_MODE=browser: nothing dropped, ch 8 stays GUIDANCE, a SYSTEM_AUDIO sink (ch 16) is added once
+    setenv("NBT_AUDIO_MODE", "browser", 1);
+    CHECK(audioMode() == AUDIO_MODE_BROWSER && !btAudioEnabled() && browserAudioEnabled());
+    std::vector<uint8_t> g = base;
+    CHECK(dropSdrChannels(g) == 0 && g == base);
+    CHECK(retypeGuidanceSink(g) == 0 && g == base);
+    CHECK(addSystemAudioSink(g) == 1);
+    std::vector<int> cg; CHECK(channels(g, cg));
+    CHECK(has(cg, 16) && has(cg, 8) && has(cg, 9) && has(cg, 14) && cg.size() == before.size() + 1);
+    CHECK(addSystemAudioSink(g) == 0);                       // not added twice
+    // the new descriptor: { 1: 16, 3: { 1: 1 PCM, 2: 2 SYSTEM_AUDIO, 3: { 1: 16000, 2: 16, 3: 1 } } }
+    const uint8_t want[] = { 0x0a, 0x11, 0x08, 0x10, 0x1a, 0x0d, 0x08, 0x01, 0x10, 0x02,
+                             0x1a, 0x07, 0x08, 0x80, 0x7d, 0x10, 0x10, 0x18, 0x01 };
+    CHECK(g.size() == base.size() + sizeof(want) && memcmp(&g[base.size()], want, sizeof(want)) == 0);
+    setenv("NBT_SYSTEM_SINK", "0", 1);                       // switch off
+    std::vector<uint8_t> h = base;
+    CHECK(addSystemAudioSink(h) == 0 && h == base);
+    unsetenv("NBT_SYSTEM_SINK");
+    // other modes: no system sink unless forced
+    setenv("NBT_AUDIO_MODE", "bt", 1);
+    std::vector<uint8_t> i2 = base;
+    CHECK(addSystemAudioSink(i2) == 0);
+    setenv("NBT_SYSTEM_SINK", "1", 1);
+    CHECK(addSystemAudioSink(i2) == 1);
+    unsetenv("NBT_SYSTEM_SINK");
+    // NBT_AUDIO_MODE wins over NBT_AUDIO_BT; unknown words fall back to NBT_AUDIO_BT
+    setenv("NBT_AUDIO_BT", "0", 1);
+    CHECK(audioMode() == AUDIO_MODE_BT);
+    setenv("NBT_AUDIO_MODE", "a2i", 1);
+    CHECK(audioMode() == AUDIO_MODE_A2I);
+    setenv("NBT_AUDIO_MODE", "nonsense", 1);
+    CHECK(audioMode() == AUDIO_MODE_A2I);
+    unsetenv("NBT_AUDIO_MODE"); unsetenv("NBT_AUDIO_BT");
+    CHECK(audioMode() == AUDIO_MODE_BT);
 
     printf(fails ? "test_sdr_drop: %d FAILED\n" : "test_sdr_drop: all passed\n", fails);
     return fails ? 1 : 0;

@@ -170,6 +170,44 @@ int dropSdrChannels(std::vector<uint8_t>& sdr) {
     return removed;
 }
 
+int addSystemAudioSink(std::vector<uint8_t>& sdr) {
+    int f = nbt::envFlag("NBT_SYSTEM_SINK");
+    bool on = (f < 0) ? nbt::browserAudioEnabled() : (f == 1);
+    if (!on) return 0;
+    // Already there? (top-level ChannelDescriptor with id 16)
+    {
+        const uint8_t* p = sdr.empty() ? NULL : &sdr[0];
+        size_t n = sdr.size(), pos = 0;
+        while (p && pos < n) {
+            uint64_t key, l;
+            if (!getVarint(p, n, pos, key)) break;
+            int wt = (int)(key & 7);
+            if (wt == 0) { uint64_t x; if (!getVarint(p, n, pos, x)) break; continue; }
+            if (wt == 5) { pos += 4; continue; }
+            if (wt == 1) { pos += 8; continue; }
+            if (wt != 2 || !getVarint(p, n, pos, l) || pos + l > n) break;
+            size_t q = pos, end = pos + (size_t)l;
+            pos = end;
+            uint64_t k2, cid;
+            if ((key >> 3) == 1 && getVarint(p, end, q, k2) && k2 == ((1u << 3) | 0) && getVarint(p, end, q, cid) &&
+                cid == (uint64_t)AA_CH_SYSTEM_AUDIO) return 0;
+        }
+    }
+    std::vector<uint8_t> cfg, sink, cd;
+    putVarint(cfg, (1u << 3) | 0); putVarint(cfg, 16000);   // AudioConfig{ sample_rate, bit_depth, channels }
+    putVarint(cfg, (2u << 3) | 0); putVarint(cfg, 16);
+    putVarint(cfg, (3u << 3) | 0); putVarint(cfg, 1);
+    putVarint(sink, (1u << 3) | 0); putVarint(sink, 1);     // codec 1 = PCM
+    putVarint(sink, (2u << 3) | 0); putVarint(sink, 2);     // audio_type 2 = SYSTEM_AUDIO
+    putLen(sink, 3, &cfg[0], cfg.size());
+    putVarint(cd, (1u << 3) | 0); putVarint(cd, AA_CH_SYSTEM_AUDIO);
+    putLen(cd, 3, &sink[0], sink.size());
+    putLen(sdr, 1, &cd[0], cd.size());
+    printf("[SDR] added channel %d: SYSTEM_AUDIO sink, 16 kHz mono (NBT_SYSTEM_SINK=0 leaves it out)\n",
+           AA_CH_SYSTEM_AUDIO);
+    return 1;
+}
+
 int retypeGuidanceSink(std::vector<uint8_t>& sdr) {
     // Default ON in Bluetooth audio mode since v1.6.9 (car-verified nbt-aad-21: nav prompts play over BT A2DP).
     // NBT_GUIDANCE_BT=0 restores the GUIDANCE sink, =1 forces it on outside BT mode.

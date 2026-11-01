@@ -16,7 +16,7 @@ namespace nbt {
 typedef void (*SessionEndedCallback)(void* user_data);
 typedef void (*VideoFrameCallback)(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data);
 typedef void (*CodecConfigCallback)(const uint8_t* config_data, size_t config_len, void* user_data);
-// Android Auto PCM (ch 8 speech / ch 9 media, message 0x0000 = 8-byte PTS + PCM) and stream state.
+// Android Auto PCM (ch 8 speech / ch 9 media / ch 16 system audio, message 0x0000 = 8-byte PTS + PCM) and stream state.
 typedef void (*AudioFrameCallback)(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data);
 typedef void (*AudioStateCallback)(uint8_t channel, bool started, void* user_data);
 // Phone asked for video focus (VideoFocusRequest 0x8007 on the video channel): projected=false is the
@@ -128,7 +128,7 @@ private:
     void* audio_user_data_;
     AudioStateCallback audio_state_cb_;
     void* audio_state_user_data_;
-    uint32_t audio_frames_[2];   // [0] = ch 8 speech, [1] = ch 9 media (session thread only)
+    uint32_t audio_frames_[3];   // [0] = ch 8 speech, [1] = ch 9 media, [2] = ch 16 system (session thread only)
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
 
     std::map<uint8_t, std::vector<uint8_t> > reassembly_;

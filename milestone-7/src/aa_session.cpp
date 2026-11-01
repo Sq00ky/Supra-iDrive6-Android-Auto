@@ -50,7 +50,7 @@ AASession::AASession()
     mic_user_data_ = NULL;
     mic_open_ = false;
     mic_sent_ = 0;
-    audio_frames_[0] = audio_frames_[1] = 0;
+    audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
     // Touch events are optional. The wake pipe is not: the knob, the microphone, and video
     // focus are delivered through it, including when NBT_TOUCH_FWD=0.
     touch_fwd_ = nbt::envFlag("NBT_TOUCH_FWD") != 0;
@@ -256,7 +256,7 @@ bool AASession::start(int client_fd) {
     mic_sent_ = 0;
     media_frames_ = 0;
     memset(av_session_, 0, sizeof(av_session_));
-    audio_frames_[0] = audio_frames_[1] = 0;
+    audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
     setRunning(true);
 
     if (pthread_create(&thread_, NULL, &AASession::sessionThreadStub, this) != 0) {
@@ -601,6 +601,7 @@ bool AASession::sendServiceDiscoveryResponse() {
         patchTouchConfig(sdr);
         dropSdrChannels(sdr);
         retypeGuidanceSink(sdr);
+        addSystemAudioSink(sdr);
         plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
     } else {
         std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
@@ -608,6 +609,7 @@ bool AASession::sendServiceDiscoveryResponse() {
         patchTouchConfig(sdr);
         dropSdrChannels(sdr);
         retypeGuidanceSink(sdr);
+        addSystemAudioSink(sdr);
         plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
     }
 
@@ -792,7 +794,8 @@ void AASession::sessionLoop() {
             static unsigned frame_count[256];
             static int verbose = -1;
             if (verbose < 0) verbose = getenv("NBT_VERBOSE") ? 1 : 0;
-            if (!verbose && (channel == 6 || channel == 9 || channel == 12 || channel == 14)) {
+            if (!verbose && (channel == 6 || channel == 9 || channel == 12 || channel == 14 ||
+                             channel == AA_CH_SYSTEM_AUDIO)) {
                 unsigned n = frame_count[channel]++;
                 logit = (n < 30) || ((n % 300) == 0);
             }
@@ -972,10 +975,10 @@ void AASession::sessionLoop() {
                 if (sess != 0xFFFFFFFFu) av_session_[channel & 31] = sess;
                 printf("[AASession] >>> Received AV START_INDICATION on Channel %u (session %u)! Projection ACTIVE!\n", channel,
                        sess == 0xFFFFFFFFu ? 0u : sess);
-                if ((channel == 8 || channel == 9) && audio_state_cb_) {
+                if (isAaAudioSinkChannel(channel) && audio_state_cb_) {
                     audio_state_cb_(channel, true, audio_state_user_data_);
                 }
-            } else if (msg_id == 0x8002 && (channel == 8 || channel == 9)) { // AV STOP_INDICATION (audio)
+            } else if (msg_id == 0x8002 && isAaAudioSinkChannel(channel)) { // AV STOP_INDICATION (audio)
                 printf("[AASession] >>> Received AV STOP_INDICATION on Channel %u.\n", channel);
                 if (audio_state_cb_) audio_state_cb_(channel, false, audio_state_user_data_);
             } else if (msg_id == 0x8002 && (channel == 3 || channel == 5 || channel == 7)) {
@@ -1009,17 +1012,19 @@ void AASession::sessionLoop() {
                     printf("[AASession] >>> Streaming Media Frame %u on Channel %u (%u bytes)\n",
                            media_frames_, channel, static_cast<unsigned int>(frame_data.size()));
                 }
-                if ((channel == 8 || channel == 9) && msg_id == 0x0000) {
-                    // Audio PCM: 2-byte ID + 8-byte PTS + interleaved s16le (ch 9 48 kHz stereo, ch 8 16 kHz mono).
+                if (isAaAudioSinkChannel(channel) && msg_id == 0x0000) {
+                    // Audio PCM: 2-byte ID + 8-byte PTS + interleaved s16le (ch 9 48 kHz stereo, ch 8 guidance and
+                    // ch 16 system audio 16 kHz mono).
                     if (frame_data.size() > 10) {
                         const size_t pcm_len = frame_data.size() - 10;
                         uint64_t pts = 0;
                         for (int b = 2; b < 10; ++b) pts = (pts << 8) | frame_data[b];
-                        uint32_t& n = audio_frames_[channel == 9 ? 1 : 0];
+                        uint32_t& n = audio_frames_[channel == AA_CH_MEDIA_AUDIO ? 1 : (channel == AA_CH_SYSTEM_AUDIO ? 2 : 0)];
                         ++n;
                         if (n <= 3 || (n % 500) == 0) {
                             printf("[AASession] audio %s frame #%u: %u bytes PCM, pts=%llu%s\n",
-                                   channel == 9 ? "media(ch9)" : "speech(ch8)", n, (unsigned)pcm_len,
+                                   channel == AA_CH_MEDIA_AUDIO ? "media(ch9)" :
+                                   (channel == AA_CH_SYSTEM_AUDIO ? "system(ch16)" : "speech(ch8)"), n, (unsigned)pcm_len,
                                    (unsigned long long)pts, audio_cb_ ? "" : " (no consumer)");
                         }
                         if (audio_cb_) {

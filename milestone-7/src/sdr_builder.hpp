@@ -48,6 +48,18 @@ int dropSdrChannels(std::vector<uint8_t>& sdr);
 // own audio, which already plays over Bluetooth A2DP. Returns the number of fields patched (0 or 1).
 int retypeGuidanceSink(std::vector<uint8_t>& sdr);
 
+// Android Auto audio sink channels. 8 and 9 come from the DHU template; 16 is added by addSystemAudioSink.
+enum { AA_CH_GUIDANCE_AUDIO = 8, AA_CH_MEDIA_AUDIO = 9, AA_CH_SYSTEM_AUDIO = 16 };
+inline bool isAaAudioSinkChannel(unsigned ch) {
+    return ch == AA_CH_GUIDANCE_AUDIO || ch == AA_CH_MEDIA_AUDIO || ch == AA_CH_SYSTEM_AUDIO;
+}
+
+// Browser audio mode (or NBT_SYSTEM_SINK=1): appends a third audio sink, ChannelDescriptor{ id=16,
+// media_sink_service{ codec PCM, audio_type 2 SYSTEM_AUDIO, 16 kHz / 16 bit / mono } }, so the phone sends
+// notification chimes and UI sounds to the car instead of its own speaker. NBT_SYSTEM_SINK=0 leaves it out.
+// Returns 1 if added. Does nothing if channel 16 already exists.
+int addSystemAudioSink(std::vector<uint8_t>& sdr);
+
 // Pure helper used by dropSdrChannels (host-tested): parses "8, 9,14" into ids (max 16).
 size_t parseChannelList(const char* s, int* ids, size_t max_ids);
 
