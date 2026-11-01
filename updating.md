@@ -52,6 +52,7 @@ If `pidin | grep nbt-aad` prints nothing, it isn't running and you're good to go
 ## Step 3: Update the Android Auto Daemon
 ```bash
 cd /opt/aa/
+rm -rf /opt/aa/nbt-aad.old
 mv /opt/aa/nbt-aad /opt/aa/nbt-aad.old
 cp /mnt/umassXXXXX/nbt-aad /opt/aa/nbt-aad
 chmod +x /opt/aa/nbt-aad
@@ -64,6 +65,7 @@ The plugin is loaded by iDrive itself, so it's *always* in use while the car is 
 
 Move the current plugin aside and copy in the new one:
 ```bash
+rm -rf /opt/aa/NbtAad.old
 mv /opt/hmi/ID5/data/ro/Plugins/NbtAad /opt/aa/NbtAad.old
 mkdir -p /opt/hmi/ID5/data/ro/Plugins/NbtAad
 cd /opt/hmi/ID5/data/ro/Plugins/NbtAad/
