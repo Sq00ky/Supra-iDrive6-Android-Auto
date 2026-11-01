@@ -494,7 +494,9 @@ void UsbAccessory::watchLoop() {
         // for it meanwhile) and no driver process is left (it ignores SIGTERM while it holds the phone). With the
         // driver's path claimed it never starts, and the accessory is opened right away.
         std::vector<std::string> accs = oaps;
+        bool accessory_plugged = !oaps.empty();   // also while it waits out the grace or the driver
         if (direct_) {
+            accessory_plugged = accessory_plugged || !direct_->accessories(0).empty();
             std::vector<std::string> known = direct_->accessories(direct_->aoapDriverClaimed() ? 0 : kDriverGraceS);
             if ((!oaps.empty() || !known.empty() || bridge_) && monoSec() >= next_driver_stop_s_) {
                 direct_drivers_ = direct_->stopAoapDriver();
@@ -503,7 +505,7 @@ void UsbAccessory::watchLoop() {
             accs = direct_drivers_ == 0 ? known : std::vector<std::string>();
             if (bridge_ && !contains(accs, bridge_->node)) accs.push_back(bridge_->node);
         }
-        setFlag(phone_present_, !androids.empty() || !oaps.empty() || !accs.empty() || (direct_ && bridge_));
+        setFlag(phone_present_, !androids.empty() || accessory_plugged || !accs.empty() || (direct_ && bridge_));
 
         // Forget nodes that went away: a phone plugged in again gets a fresh start.
         for (size_t i = switches_.size(); i-- > 0;) {

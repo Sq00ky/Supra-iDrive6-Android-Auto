@@ -33,6 +33,8 @@ static const size_t kRxBuf = 16384;                   // like devc-serusb-aoap -
                                                       // in the next one (a stream to us)
 static const size_t kTxBuf = 65536;
 static const uint32_t kAppleVendor = 0x05ac;          // iPhones: CarPlay's, never asked
+static const uint32_t kMicrochipVendor = 0x0424;      // the head unit's own hub controller (2530) and network
+                                                      // adapter (9e00, umass-enum.cfg): never asked
 static const double kSwitchRetryS = 1.0;              // a device that does not answer the AOA request: ask again
 static const double kSwitchGiveUpS = 120.0;           // after this long plugged in without an answer, stop asking
 static const unsigned kCtrlTimeoutMs = 1000;
@@ -75,7 +77,7 @@ static bool neverPhone(const usbd_device_instance_t* inst) {
     case 0x0e:   // video
         return true;
     default:
-        return inst->ident.vendor == kAppleVendor;
+        return inst->ident.vendor == kAppleVendor || inst->ident.vendor == kMicrochipVendor;
     }
 }
 
@@ -270,85 +272,45 @@ struct Ctrl {
     struct usbd_pipe* pipe;
     struct usbd_urb* urb;
     uint8_t* buf;
-    pthread_mutex_t mu;
-    pthread_cond_t cv;
-    bool busy;   // io-usb has the URB
-    _Uint32t status;
-    _Uint32t len;
+    _Uint32t len;   // bytes the last request moved
 };
 
-static void ctrlDone(struct usbd_urb* urb, struct usbd_pipe*, void* handle) {
-    Ctrl* c = reinterpret_cast<Ctrl*>(handle);
-    _Uint32t status = 0, len = 0;
-    usbd_urb_status(urb, &status, &len);
-    pthread_mutex_lock(&c->mu);
-    c->busy = false;
-    c->status = status;
-    c->len = len;
-    pthread_cond_broadcast(&c->cv);
-    pthread_mutex_unlock(&c->mu);
-}
-
-static void ctrlWait(Ctrl* c, unsigned ms) {   // c->mu held
-    for (unsigned waited = 0; c->busy && waited < ms; waited += 100) {
-        struct timespec ts;
-        deadline(ts, 100);
-        pthread_cond_timedwait(&c->cv, &c->mu, &ts);
-    }
-}
-
-// One vendor request to the device. false: it failed (why says how).
+// One vendor request to the device, waited for inside usbd_io(): io-usb times it out and takes the URB back, so nothing
+// is left queued. (With a completion callback, the car never called it back, not even after an abort: 2026-11-01.)
+// false: it failed (why says how); *timed_out: the device did not answer at all.
 static bool ctrlRequest(Ctrl* c, bool in, uint16_t request, uint16_t index, const char* data, size_t n,
-                        char* why, size_t why_n) {
+                        bool* timed_out, char* why, size_t why_n) {
     if (!in && n) memcpy(c->buf, data, n);
-    usbd_setup_vendor(c->urb, in ? (URB_DIR_IN | URB_SHORT_XFER_OK) : URB_DIR_OUT, request,
+    usbd_setup_vendor(c->urb, in ? (URB_DIR_IN | URB_SHORT_XFER_OK) : n ? URB_DIR_OUT : URB_DIR_NONE, request,
                       USB_TYPE_VENDOR | USB_RECIPIENT_DEVICE | (in ? USB_DIRECTION_HOST : USB_DIRECTION_DEVICE), 0,
-                      index, c->buf, n);
-    pthread_mutex_lock(&c->mu);
-    c->busy = true;
-    pthread_mutex_unlock(&c->mu);
-    int r = usbd_io(c->urb, c->pipe, &ctrlDone, c, kCtrlTimeoutMs);
-    pthread_mutex_lock(&c->mu);
-    if (r != EOK) {
-        c->busy = false;
-        pthread_mutex_unlock(&c->mu);
-        snprintf(why, why_n, "request %u: %s", (unsigned)request, strerror(r));
-        return false;
+                      index, n ? c->buf : NULL, n);
+    int r = usbd_io(c->urb, c->pipe, NULL, NULL, kCtrlTimeoutMs);
+    _Uint32t status = 0;
+    c->len = 0;
+    usbd_urb_status(c->urb, &status, &c->len);
+    if (r == EOK && (status & USBD_URB_STATUS_MASK) == USBD_STATUS_CMP) return true;
+    *timed_out = r == ETIMEDOUT || (status & USBD_URB_STATUS_MASK) == USBD_STATUS_TIMEOUT;
+    if (*timed_out) {
+        snprintf(why, why_n, "request %u: no answer in %u ms", (unsigned)request, kCtrlTimeoutMs);
+    } else {
+        snprintf(why, why_n, "request %u: %s (%s, status 0x%08x)", (unsigned)request,
+                 (status & USBD_USB_STATUS_MASK) == USBD_STATUS_STALL ? "stall" : "failed", strerror(r),
+                 (unsigned)status);
     }
-    ctrlWait(c, kCtrlTimeoutMs + 1000);   // io-usb times it out itself; this only guards against a lost completion
-    if (c->busy) {
-        pthread_mutex_unlock(&c->mu);
-        usbd_abort_pipe(c->pipe);
-        pthread_mutex_lock(&c->mu);
-        ctrlWait(c, 1000);
-    }
-    bool ok = !c->busy && (c->status & USBD_URB_STATUS_MASK) == USBD_STATUS_CMP;
-    if (!ok && c->busy) {
-        snprintf(why, why_n, "request %u: no completion", (unsigned)request);
-    } else if (!ok) {
-        snprintf(why, why_n, "request %u: %s (status 0x%08x)", (unsigned)request,
-                 (c->status & USBD_USB_STATUS_MASK) == USBD_STATUS_STALL ? "stall" : "failed", (unsigned)c->status);
-    }
-    pthread_mutex_unlock(&c->mu);
-    return ok;
+    return false;
 }
 
-// Frees it all and detaches, unless io-usb still has the URB (then it is kept: a late callback would use it).
 static void ctrlClose(Ctrl* c) {
-    if (c->busy) {
-        printf("[UsbDirect] a control transfer did not complete after the abort: keeping it\n");
-        return;
-    }
     if (c->urb) usbd_free_urb(c->urb);
     if (c->buf) usbd_free(c->buf);
     if (c->pipe) usbd_close_pipe(c->pipe);
     if (c->dev) usbd_detach(c->dev);
-    pthread_cond_destroy(&c->cv);
-    pthread_mutex_destroy(&c->mu);
     delete c;
 }
 
-enum SwitchResult { kSwitchSent, kNoAoa, kSwitchError };
+// kSwitchTimedOut: the device left a request unanswered. A phone answers or refuses (stall) at once, so it is not
+// asked again.
+enum SwitchResult { kSwitchSent, kNoAoa, kSwitchError, kSwitchTimedOut };
 
 // What aoap-switch does for /dev/android*: ask for the AOA protocol, send our identity, start accessory mode. The
 // phone then drops off the bus and comes back as 18d1:2d0x.
@@ -356,8 +318,6 @@ static SwitchResult aoaSwitch(struct usbd_connection* conn, usbd_device_instance
                               int* proto, char* why, size_t why_n) {
     Ctrl* c = new Ctrl();
     memset(c, 0, sizeof(*c));
-    pthread_mutex_init(&c->mu, NULL);
-    pthread_cond_init(&c->cv, NULL);
     int r = usbd_attach(conn, inst, 0, &c->dev);
     if (r != EOK) {
         c->dev = NULL;
@@ -383,8 +343,9 @@ static SwitchResult aoaSwitch(struct usbd_connection* conn, usbd_device_instance
     }
 
     SwitchResult res = kSwitchSent;
-    if (!ctrlRequest(c, true, kAoaGetProtocol, 0, NULL, 2, why, why_n)) {
-        res = kNoAoa;
+    bool timed_out = false;
+    if (!ctrlRequest(c, true, kAoaGetProtocol, 0, NULL, 2, &timed_out, why, why_n)) {
+        res = timed_out ? kSwitchTimedOut : kNoAoa;
     } else if (c->len < 2) {
         snprintf(why, why_n, "%u-byte answer to request %u", (unsigned)c->len, (unsigned)kAoaGetProtocol);
         res = kNoAoa;
@@ -396,9 +357,11 @@ static SwitchResult aoaSwitch(struct usbd_connection* conn, usbd_device_instance
         for (uint16_t i = 0; i < 6 && res == kSwitchSent; ++i) {
             size_t n = strlen(strs[i]) + 1;
             if (n > kCtrlBuf) n = kCtrlBuf;
-            if (!ctrlRequest(c, false, kAoaSendString, i, strs[i], n, why, why_n)) res = kSwitchError;
+            if (!ctrlRequest(c, false, kAoaSendString, i, strs[i], n, &timed_out, why, why_n)) res = kSwitchError;
         }
-        if (res == kSwitchSent && !ctrlRequest(c, false, kAoaStart, 0, NULL, 0, why, why_n)) res = kSwitchError;
+        if (res == kSwitchSent && !ctrlRequest(c, false, kAoaStart, 0, NULL, 0, &timed_out, why, why_n))
+            res = kSwitchError;
+        if (res == kSwitchError && timed_out) res = kSwitchTimedOut;
     }
     ctrlClose(c);
     return res;
@@ -424,7 +387,7 @@ int UsbDirect::switchPhones(const aoap::Identity& id, double min_age_s) {
         char why[128] = "";
         SwitchResult r = aoaSwitch(conn_, &inst, id, &proto, why, sizeof(why));
         const double t = monoS();
-        bool give_up = r != kSwitchSent && t - due[i].seen_s >= kSwitchGiveUpS;
+        bool give_up = r == kSwitchTimedOut || (r != kSwitchSent && t - due[i].seen_s >= kSwitchGiveUpS);
         bool still = false;
         pthread_mutex_lock(&mu_);
         for (size_t j = 0; j < cands_.size(); ++j) {
@@ -442,12 +405,15 @@ int UsbDirect::switchPhones(const aoap::Identity& id, double min_age_s) {
             ++switched;
             printf("[UsbDirect] %s: AOA protocol %d: switch to accessory mode sent as '%s' / '%s'\n", k, proto,
                    id.manufacturer, id.model);
+        } else if (r == kSwitchTimedOut) {
+            printf("[UsbDirect] %s: no answer to the accessory request (%s): not a phone, not asking it again\n", k,
+                   why);
         } else if (give_up) {
             printf("[UsbDirect] %s: still not switched after %.0f s (%s): not asking any more\n", k, kSwitchGiveUpS,
                    why);
         } else if (due[i].last != r) {
             printf("[UsbDirect] %s: %s (%s): asking again every %.0f s while it is plugged in\n", k,
-                   r == kNoAoa ? "no answer to the accessory request (phone set to charging only, or locked?)"
+                   r == kNoAoa ? "refused the accessory request (phone set to charging only, or locked?)"
                                : "accessory switch failed",
                    why, kSwitchRetryS);
         }
@@ -544,7 +510,10 @@ bool UsbDirect::claimAoapDriver() {
     ra.msg_max_size = 2048;
     unsigned attached = 0;
     for (unsigned i = 0; i < kAoapDriverPathCount; ++i) {
-        c->ids[i] = resmgr_attach(c->dpp, &ra, kAoapDriverPaths[i], _FTYPE_ANY, 0, &c->connect, &c->io, &c->attr);
+        // _RESMGR_FLAG_SELF: procnto hides a process's own paths from it unless asked, and then the check below would
+        // not see the claim (it went past it to ENOENT on the car, 2026-11-01). Only the check opens these paths here.
+        c->ids[i] = resmgr_attach(c->dpp, &ra, kAoapDriverPaths[i], _FTYPE_ANY, _RESMGR_FLAG_SELF, &c->connect,
+                                  &c->io, &c->attr);
         if (c->ids[i] == -1)
             printf("[UsbDirect] driver path claim: %s: %s\n", kAoapDriverPaths[i], strerror(errno));
         else
@@ -559,12 +528,18 @@ bool UsbDirect::claimAoapDriver() {
     }
 
     // Our own open goes the way medialauncher's spawn does: refused only if the claim is in front of the real file.
-    int fd = ::open(kAoapDriverPaths[0], O_RDONLY);
-    int err = fd < 0 ? errno : 0;
-    if (fd >= 0) ::close(fd);
-    if (err != EACCES) {
-        printf("[UsbDirect] driver path claim not effective (opening %s: %s): stopping devc-serusb-aoap instead\n",
-               kAoapDriverPaths[0], fd >= 0 ? "opened" : strerror(err));
+    // The first path is the one umass-enum.cfg names; the other is only logged.
+    int err[kAoapDriverPathCount];
+    for (unsigned i = 0; i < kAoapDriverPathCount; ++i) {
+        int fd = ::open(kAoapDriverPaths[i], O_RDONLY);
+        err[i] = fd < 0 ? errno : 0;
+        if (fd >= 0) ::close(fd);
+        if (err[i] != EACCES)
+            printf("[UsbDirect] driver path claim: opening %s: %s\n", kAoapDriverPaths[i],
+                   err[i] ? strerror(err[i]) : "opened (not refused)");
+    }
+    if (err[0] != EACCES) {
+        printf("[UsbDirect] driver path claim not effective: stopping devc-serusb-aoap instead\n");
         freeClaim(c);
         return false;
     }
