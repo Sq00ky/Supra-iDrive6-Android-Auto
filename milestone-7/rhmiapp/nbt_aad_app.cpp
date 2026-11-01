@@ -11,6 +11,9 @@
 //                                       the row reads "Connecting..." / "Open Android Auto" with the daemon state
 //   Force Stop          (raAction 22) - "quit", then SIGTERM after 3 s, SIGKILL after 10 s
 //   Restart             (raAction 23) - Force Stop, then Start
+//   Update from USB     (raAction 29) - checks <stick>/nbt-aad and <stick>/release/ (ELF / ZIP magic, sizes), stops
+//                                       nbt-aad, stages the files on flash, moves the old ones to *.old (update.md),
+//                                       swaps the new ones in and runs OnOffDSICommander appreset (rhmiapp-23)
 // When the phone connects after Start, the app sends iDrive back to the main menu (focusEvent 50 -> NativeStateID 1,
 // the way BMW's ActiveSeating leaves its own screen), so stray knob presses under the Android Auto overlay land
 // there and not on Force Stop / Restart. Those two rows are also ignored while the overlay is up.
@@ -59,7 +62,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-22 (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-23 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -292,6 +295,18 @@ const char* const kDriveModeFlag    = "/var/opt/aa/show-drivemode";
 const char* const kDriveModeManual  = "/opt/aa/show-drivemode";
 const char* const kDriveModeProps[2] = { "driving.mode", "driving.mode35up" };
 const long        kUsbLogRecheckS  = 5;   // stick lookup cache: a stick plugged in later is found within 5 s
+// "Update from USB" button (rhmiapp-23): <button action="29" id="72" model="46"> in hmiState 10. Does the steps of
+// update.md from the menu: no SSH, no polling (nothing runs until the button is pressed). The row text shows the
+// result (texts 22..25); error texts go back to "Update from USB" after kUpdRowResetS.
+const unsigned    kActUpdate       = 29;
+const unsigned    kUpdateRowModel  = 46;
+const unsigned    kUpdateButton    = 72;
+const unsigned    kTextUpdate      = 21;      // "Update from USB"
+const unsigned    kTextUpdNoUsb    = 22;      // "Update: no USB stick"
+const unsigned    kTextUpdNoFiles  = 23;      // "Update: no release on USB"
+const unsigned    kTextUpdating    = 24;      // "Updating... Rebooting"
+const unsigned    kTextUpdFailed   = 25;      // "Update failed (see log)"
+const long        kUpdRowResetS    = 5;
 
 // PluginApp vtable slots (index from the address point)
 enum { kSlotOnError = 21, kSlotOnInit = 22, kSlotOnFinalize = 23, kVtblSlots = 34 };
@@ -752,6 +767,11 @@ pid_t g_stopPid = 0;
 time_t g_stopTime = 0;
 int g_stopStage = 0;           // 0 quit sent, 1 SIGTERM sent, 2 SIGKILL sent
 bool g_restartAfterStop = false;
+// Update from USB in progress (rhmiapp-23); g_updateAfterStop = install once the running nbt-aad has exited.
+bool g_updating = false;
+bool g_updateAfterStop = false;
+void postUpdate(unsigned delayMs);
+void updateFailed(unsigned text, const char* why);
 
 // Where to go once connected: NBT_MENU_RETURN in /opt/aa/nbt-aad.env = home (default) | media | off.
 unsigned menuReturnEvent() {
@@ -1079,11 +1099,21 @@ void serviceStop() {
             alog("restart: starting nbt-aad again");
             startDaemonOrShow();
         }
+        if (g_updateAfterStop) {                         // never replace the daemon binary while it runs
+            g_updateAfterStop = false;
+            alog("update: nbt-aad has stopped: installing");
+            postUpdate(300);
+        }
         return;
     }
     long waited = (long)(time(NULL) - g_stopTime);
     if (g_stopPid < 0) {                                 // no pid: 'quit' is all we can do
-        if (waited >= 10) { alog("nbt-aad (pid unknown) still running 10 s after 'quit': giving up"); g_stopPid = 0; g_restartAfterStop = false; }
+        if (waited >= 10) {
+            alog("nbt-aad (pid unknown) still running 10 s after 'quit': giving up");
+            g_stopPid = 0;
+            g_restartAfterStop = false;
+            if (g_updateAfterStop) { g_updateAfterStop = false; updateFailed(kTextUpdFailed, "nbt-aad did not stop"); }
+        }
         return;
     }
     if (g_stopStage == 0 && waited >= 3) {
@@ -1100,6 +1130,7 @@ void serviceStop() {
         alog("nbt-aad pid %d survived SIGKILL; giving up", (int)g_stopPid);
         g_stopPid = 0;
         g_restartAfterStop = false;
+        if (g_updateAfterStop) { g_updateAfterStop = false; updateFailed(kTextUpdFailed, "nbt-aad did not stop"); }
     }
 }
 
@@ -1320,6 +1351,7 @@ void bootGuardReset(const char* why) {
 
 // From the status poll: once, kAutostartDelayS after onInit.
 void serviceAutostart() {
+    if (g_updating) return;                              // update from USB pending: no launch (retried after a failure)
     if (g_autostartDone || !g_initTime || time(NULL) - g_initTime < kAutostartDelayS) return;
     g_autostartDone = true;
     if (!autostartOn()) return;
@@ -1330,9 +1362,351 @@ void serviceAutostart() {
     launchDaemon();                                      // no "show", no menu navigation: it waits for the phone
 }
 
+// ---- Update from USB (rhmiapp-23) ---------------------------------------------------------------------------------
+// The steps of update.md, run from the menu button. Golden rule kept: nothing in use is overwritten. The new files are
+// first copied to staging names on flash (fsync + size check), then the old ones are renamed to *.old (the plugin
+// folder to /opt/aa/NbtAad.old, never inside Plugins/), the staged ones renamed into place, and the HMI is reset.
+// Everything is checked before nbt-aad is stopped or the flash is made writable, so a bad stick changes nothing.
+const char* const kPluginDir      = "/opt/hmi/ID5/data/ro/Plugins/NbtAad";
+const char* const kPluginOld      = "/opt/aa/NbtAad.old";
+const char* const kPluginStaging  = "/opt/aa/NbtAad.staging";
+const char* const kDaemonOld      = "/opt/aa/nbt-aad.old";
+const char* const kDaemonStaging  = "/opt/aa/nbt-aad.staging";
+const char* const kWriteTest      = "/opt/aa/.update-wtest";
+const char* const kFlashMount     = "/fs/sda0";
+const char* const kAppReset       = "/opt/car/bin/OnOffDSICommander";
+const char* const kMountTools[2]  = { "/bin/mount", "/sbin/mount" };
+const char* const kReleaseDirs[3] = { "release", "Release", "releases" };
+const char* const kPluginFiles[5] = { "libNbtAad.so", "NbtAad.manifest", "NbtAad.xml", "NbtAad_ALL_Texts.zip",
+                                      "NbtAad_ALL_Images.zip" };
+
+unsigned g_updRowText = kTextUpdate;
+time_t g_updRowReset = 0;      // when a transient result text goes back to "Update from USB"
+time_t g_resetAt = 0;          // appreset spawned (files already installed)
+
+void setUpdateRow(unsigned text, bool busy, bool transient) {
+    bmw::PluginApp* app = g_runApp;
+    if (!app) return;
+    if (text != g_updRowText) {
+        bmw::TextID t(text);
+        app->updateModel(kUpdateRowModel, t);
+        g_updRowText = text;
+    }
+    bmw::Parcel b(busy);
+    app->setProperty(kUpdateButton, kPropWaiting, b);
+    g_updRowReset = transient ? time(NULL) + kUpdRowResetS : 0;
+}
+
+void updateFailed(unsigned text, const char* why) {
+    alog("update: FAILED (%s)", why);
+    g_updating = false;
+    setUpdateRow(text, false, true);
+}
+
+// Runs a tool with stdio on /dev/null. waitExit: exit status (or -1); else detached (new process group), 0 if spawned.
+int runTool(const char* path, char* const argv[], bool waitExit) {
+    if (!fileExists(path)) return -1;
+    int nul = open("/dev/null", O_RDWR);
+    if (nul < 0) return -1;
+    pid_t pid = -1;
+#ifdef __QNX__
+    int fdmap[3] = { nul, nul, nul };
+    struct inheritance inh;
+    memset(&inh, 0, sizeof(inh));
+    inh.flags = SPAWN_SETSIGDEF;
+    if (!waitExit) { inh.flags |= SPAWN_SETGROUP | SPAWN_NOZOMBIE; inh.pgroup = SPAWN_NEWPGROUP; }
+    sigfillset(&inh.sigdefault);
+    pid = spawn(path, 3, fdmap, &inh, argv, environ);
+#else
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, nul, 0);
+    posix_spawn_file_actions_adddup2(&fa, nul, 1);
+    posix_spawn_file_actions_adddup2(&fa, nul, 2);
+    if (posix_spawn(&pid, path, &fa, NULL, argv, environ) != 0) pid = -1;
+    posix_spawn_file_actions_destroy(&fa);
+#endif
+    close(nul);
+    if (pid <= 0) return -1;
+    if (!waitExit) return 0;
+    int st = 0;
+    if (waitpid(pid, &st, 0) != pid) return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+// Size of a regular, non-empty file starting with `magic` (NULL = any content); 0 if missing, empty or wrong.
+long checkedSize(const char* path, const char* magic) {
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return 0;
+    if (magic) {
+        size_t n = strlen(magic);
+        char head[8];
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) return 0;
+        ssize_t r = read(fd, head, n);
+        close(fd);
+        if (r != (ssize_t)n || memcmp(head, magic, n) != 0) return 0;
+    }
+    return (long)st.st_size;
+}
+
+const char* magicFor(const char* name) {
+    size_t l = strlen(name);
+    if (l > 3 && !strcmp(name + l - 3, ".so")) return "\x7f" "ELF";
+    if (l > 4 && !strcmp(name + l - 4, ".zip")) return "PK\x03\x04";
+    return NULL;
+}
+
+// 32-bit little-endian ARM ELF (EI_CLASS 1, EI_DATA 1, e_machine 40 = EM_ARM). A wrong-architecture libNbtAad.so would
+// not load, and the menu holding this button would be gone with it, so this is checked, not just the magic.
+bool isArmElf(const char* path) {
+    unsigned char h[20];
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return false;
+    ssize_t r = read(fd, h, sizeof(h));
+    close(fd);
+    return r == (ssize_t)sizeof(h) && h[0] == 0x7f && h[1] == 'E' && h[2] == 'L' && h[3] == 'F' &&
+           h[4] == 1 && h[5] == 1 && (h[18] | (h[19] << 8)) == 40;
+}
+
+struct UpdatePlan {
+    char stick[128];
+    char daemon[192];          // <stick>/nbt-aad, "" = not on the stick
+    char release[192];         // <stick>/release, "" = not on the stick
+};
+
+// Everything on the stick is checked before anything on the head unit is touched. err = row text on failure.
+bool updatePreflight(UpdatePlan& p, unsigned& err) {
+    p.daemon[0] = p.release[0] = 0;
+    if (!nbt::usblog::findStick(p.stick, sizeof(p.stick))) { err = kTextUpdNoUsb; alog("update: no USB stick under /mnt"); return false; }
+    char path[256];
+    snprintf(path, sizeof(path), "%s/nbt-aad", p.stick);
+    if (fileExists(path)) {
+        long sz = checkedSize(path, "\x7f" "ELF");
+        if (!sz || !isArmElf(path)) { err = kTextUpdFailed; alog("update: %s is empty or not an ARM ELF binary", path); return false; }
+        snprintf(p.daemon, sizeof(p.daemon), "%s", path);
+        alog("update: daemon %s (%ld bytes)", path, sz);
+    }
+    for (int i = 0; i < 3 && !p.release[0]; ++i) {
+        struct stat st;
+        snprintf(path, sizeof(path), "%s/%s", p.stick, kReleaseDirs[i]);
+        if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) snprintf(p.release, sizeof(p.release), "%s", path);
+    }
+    if (p.release[0]) {
+        for (int i = 0; i < 5; ++i) {
+            snprintf(path, sizeof(path), "%s/%s", p.release, kPluginFiles[i]);
+            long sz = checkedSize(path, magicFor(kPluginFiles[i]));
+            if (sz && i == 0 && !isArmElf(path)) sz = 0;     // libNbtAad.so
+            if (!sz) { err = kTextUpdFailed; alog("update: %s missing, empty or corrupt: plugin not updated", path); return false; }
+            alog("update: plugin file %s (%ld bytes)", path, sz);
+        }
+    }
+    if (!p.daemon[0] && !p.release[0]) {
+        err = kTextUpdNoFiles;
+        alog("update: neither %s/nbt-aad nor %s/release/ found", p.stick, p.stick);
+        return false;
+    }
+    return true;
+}
+
+bool flashWritable() {
+    int fd = open(kWriteTest, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return false;
+    close(fd);
+    unlink(kWriteTest);
+    return true;
+}
+
+// /opt (application partition) is read-only in normal use; the appreset at the end puts it back to read-only.
+bool remountFlashRw() {
+    if (flashWritable()) return true;
+    for (int i = 0; i < 2; ++i) {
+        char* doc[] = { const_cast<char*>(kMountTools[i]), const_cast<char*>("-o"), const_cast<char*>("remount"),
+                        const_cast<char*>("rw"), const_cast<char*>(kFlashMount), NULL };   // form used in install.md
+        int r = runTool(kMountTools[i], doc, true);
+        if (flashWritable()) { alog("update: %s -o remount rw %s -> %d: flash writable", kMountTools[i], kFlashMount, r); return true; }
+        char* qnx[] = { const_cast<char*>(kMountTools[i]), const_cast<char*>("-uw"), const_cast<char*>(kFlashMount), NULL };
+        r = runTool(kMountTools[i], qnx, true);
+        if (flashWritable()) { alog("update: %s -uw %s -> %d: flash writable", kMountTools[i], kFlashMount, r); return true; }
+    }
+    alog("update: cannot make %s writable (errno %d)", kFlashMount, errno);
+    return false;
+}
+
+// Copy with fsync and a byte count check; a partial dst is removed.
+bool copyFile(const char* src, const char* dst, mode_t mode) {
+    int in = open(src, O_RDONLY);
+    if (in < 0) { alog("update: cannot open %s (errno %d)", src, errno); return false; }
+    int out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (out < 0) { alog("update: cannot create %s (errno %d)", dst, errno); close(in); return false; }
+    static char buf[32768];                              // app thread only
+    long total = 0;
+    bool ok = true;
+    for (;;) {
+        ssize_t r = read(in, buf, sizeof(buf));
+        if (r < 0) { if (errno == EINTR) continue; ok = false; break; }
+        if (r == 0) break;
+        ssize_t off = 0;
+        while (off < r) {
+            ssize_t w = write(out, buf + off, (size_t)(r - off));
+            if (w < 0) { if (errno == EINTR) continue; ok = false; break; }
+            off += w;
+        }
+        if (!ok) break;
+        total += (long)r;
+    }
+    int e = errno;
+    if (ok && fsync(out) != 0) { ok = false; e = errno; }
+    if (close(out) != 0 && ok) { ok = false; e = errno; }
+    close(in);
+    struct stat a, b;
+    if (ok && (stat(src, &a) != 0 || stat(dst, &b) != 0 || a.st_size != b.st_size || (long)b.st_size != total)) ok = false;
+    if (!ok) { alog("update: copy %s -> %s failed (errno %d, %ld bytes)", src, dst, e, total); unlink(dst); }
+    else chmod(dst, mode);
+    return ok;
+}
+
+// The plugin folder is flat (5 files), so no recursion is needed.
+void removeFlatDir(const char* dir) {
+    DIR* d = opendir(dir);
+    if (d) {
+        struct dirent* e;
+        char p[256];
+        while ((e = readdir(d)) != NULL) {
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+            unlink(p);
+        }
+        closedir(d);
+    }
+    rmdir(dir);
+}
+
+void rollbackPlugin() {
+    rename(kPluginDir, kPluginStaging);
+    if (rename(kPluginOld, kPluginDir) == 0) alog("update: previous plugin restored");
+    else alog("update: could not restore %s from %s (errno %d): see update.md 'Roll back'", kPluginDir, kPluginOld, errno);
+    removeFlatDir(kPluginStaging);
+}
+
+void performUsbUpdate() {
+    UpdatePlan p;
+    unsigned err = kTextUpdFailed;
+    if (!updatePreflight(p, err)) { updateFailed(err, "stick changed while nbt-aad was stopping"); return; }
+    if (!remountFlashRw()) { updateFailed(kTextUpdFailed, "flash stays read-only"); return; }
+
+    // 1. Stage everything on flash. Nothing in use has been touched yet.
+    if (p.daemon[0]) {
+        unlink(kDaemonStaging);
+        if (!copyFile(p.daemon, kDaemonStaging, 0755)) { updateFailed(kTextUpdFailed, "staging nbt-aad"); return; }
+    }
+    if (p.release[0]) {
+        removeFlatDir(kPluginStaging);
+        if (mkdir(kPluginStaging, 0755) != 0) {
+            alog("update: cannot create %s (errno %d)", kPluginStaging, errno);
+            unlink(kDaemonStaging);
+            updateFailed(kTextUpdFailed, "staging plugin");
+            return;
+        }
+        for (int i = 0; i < 5; ++i) {
+            char src[256], dst[256];
+            snprintf(src, sizeof(src), "%s/%s", p.release, kPluginFiles[i]);
+            snprintf(dst, sizeof(dst), "%s/%s", kPluginStaging, kPluginFiles[i]);
+            if (!copyFile(src, dst, i == 0 ? 0755 : 0644)) {
+                removeFlatDir(kPluginStaging);
+                unlink(kDaemonStaging);
+                updateFailed(kTextUpdFailed, "staging plugin");
+                return;
+            }
+        }
+    }
+
+    // 2. Plugin: old folder out to /opt/aa/NbtAad.old (renaming a folder whose .so is loaded is safe), staged one in.
+    if (p.release[0]) {
+        removeFlatDir(kPluginOld);                       // backup of the update before this one
+        if (rename(kPluginDir, kPluginOld) != 0 && errno != ENOENT) {
+            alog("update: cannot move %s to %s (errno %d)", kPluginDir, kPluginOld, errno);
+            removeFlatDir(kPluginStaging);
+            unlink(kDaemonStaging);
+            updateFailed(kTextUpdFailed, "moving old plugin aside");
+            return;
+        }
+        if (rename(kPluginStaging, kPluginDir) != 0) {
+            alog("update: cannot move %s to %s (errno %d)", kPluginStaging, kPluginDir, errno);
+            rename(kPluginOld, kPluginDir);
+            removeFlatDir(kPluginStaging);
+            unlink(kDaemonStaging);
+            updateFailed(kTextUpdFailed, "installing plugin");
+            return;
+        }
+        alog("update: plugin installed (%s), previous one in %s", kPluginDir, kPluginOld);
+    }
+
+    // 3. Daemon (stopped by now): old binary to nbt-aad.old, staged one in.
+    if (p.daemon[0]) {
+        unlink(kDaemonOld);
+        if (rename(kDaemon, kDaemonOld) != 0 && errno != ENOENT) {
+            alog("update: cannot move %s to %s (errno %d)", kDaemon, kDaemonOld, errno);
+            unlink(kDaemonStaging);
+            if (p.release[0]) rollbackPlugin();
+            updateFailed(kTextUpdFailed, "moving old nbt-aad aside");
+            return;
+        }
+        if (rename(kDaemonStaging, kDaemon) != 0) {
+            alog("update: cannot move %s to %s (errno %d)", kDaemonStaging, kDaemon, errno);
+            rename(kDaemonOld, kDaemon);
+            unlink(kDaemonStaging);
+            if (p.release[0]) rollbackPlugin();
+            updateFailed(kTextUpdFailed, "installing nbt-aad");
+            return;
+        }
+        chmod(kDaemon, 0755);
+        alog("update: nbt-aad installed, previous one in %s", kDaemonOld);
+    }
+
+    // 4. Reset the HMI so it loads the new plugin (and /opt goes back to read-only).
+    bootGuardReset("update from USB");
+    sync();
+    char* argv[] = { const_cast<char*>(kAppReset), const_cast<char*>("appreset"), NULL };
+    alog("update: done (from %s): %s appreset", p.stick, kAppReset);
+    if (runTool(kAppReset, argv, false) != 0) {
+        alog("update: %s not available (errno %d): hold the power button for 30 s to reboot", kAppReset, errno);
+        g_updating = false;                              // row keeps "Updating... Rebooting" until the manual reboot
+        setUpdateRow(kTextUpdating, false, false);
+    } else {
+        g_resetAt = time(NULL);                          // statusRun() reports it if the reset never comes
+    }
+}
+
+// Posted, so iDrive draws "Updating... Rebooting" and the busy ring before the copy blocks the app thread (~1-2 s).
+GearRunnable g_updateRunnable;
+void* g_updateVtbl[5];
+
+void updateRun(void* /*self*/) { performUsbUpdate(); }
+
+void postUpdate(unsigned delayMs) {
+    bmw::PluginApp* app = g_runApp;
+    if (!app) { g_updating = false; return; }
+    void** base = reinterpret_cast<void**>(dlsym(RTLD_DEFAULT, "_ZTVN3bmw8RunnableE"));
+    if (base) memcpy(g_updateVtbl, base, sizeof(g_updateVtbl));
+    else { g_updateVtbl[0] = NULL; g_updateVtbl[1] = NULL; }
+    g_updateVtbl[2] = reinterpret_cast<void*>(&runnableNoop);
+    g_updateVtbl[3] = reinterpret_cast<void*>(&runnableNoop);
+    g_updateVtbl[4] = reinterpret_cast<void*>(&updateRun);
+    g_updateRunnable.vptr = g_updateVtbl + 2;
+    app->post(reinterpret_cast<bmw::Runnable*>(&g_updateRunnable), delayMs);
+}
+
 void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
+    if (g_updRowReset && time(NULL) >= g_updRowReset) setUpdateRow(kTextUpdate, false, false);
+    if (g_resetAt && time(NULL) - g_resetAt >= 30) {     // still alive: appreset did not reset the HMI
+        g_resetAt = 0;
+        g_updating = false;
+        alog("update: files are installed but the HMI was not reset after 30 s: hold the power button for 30 s");
+        setUpdateRow(kTextUpdating, false, false);       // text stays: a reboot is still needed
+    }
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
     if (!g_menuIdriveShown) showMenuIdrive(app);
@@ -1416,6 +1790,7 @@ bool guardedByOverlay(const char* what) {
 
 bool onStartRow(void*, const bmw::Parcel&) {
     alog("menu: Start (raAction %u)", kActStart);
+    if (g_updating) { alog("start ignored: an update from USB is in progress"); return true; }
     if (g_stopPid) { alog("start ignored: a stop/restart is in progress"); return true; }
     bootGuardReset("menu Start");
     startDaemonOrShow();
@@ -1424,15 +1799,41 @@ bool onStartRow(void*, const bmw::Parcel&) {
 
 bool onStopRow(void*, const bmw::Parcel&) {
     alog("menu: Force Stop (raAction %u)", kActStop);
-    if (g_stopPid || guardedByOverlay("force stop")) return true;
+    if (g_stopPid || g_updating || guardedByOverlay("force stop")) return true;
     beginStop(false);
     return true;
 }
 
 bool onRestartRow(void*, const bmw::Parcel&) {
     alog("menu: Restart (raAction %u)", kActRestart);
-    if (g_stopPid || guardedByOverlay("restart")) return true;
+    if (g_stopPid || g_updating || guardedByOverlay("restart")) return true;
     beginStop(true);
+    return true;
+}
+
+// Update from USB: check the stick first (a bad stick changes nothing), then stop nbt-aad if it runs; serviceStop()
+// starts the install once it has exited.
+bool onUpdateRow(void*, const bmw::Parcel&) {
+    alog("menu: Update from USB (raAction %u)", kActUpdate);
+    if (g_updating) { alog("update ignored: already in progress"); return true; }
+    if (g_stopPid || guardedByOverlay("update from USB")) return true;
+    UpdatePlan p;
+    unsigned err = kTextUpdFailed;
+    if (!updatePreflight(p, err)) { updateFailed(err, "pre-flight check"); return true; }
+    DaemonState d = readDaemonState();
+    if (d.pid != 0 && fileExists(kStatusOff)) {          // serviceStop() runs from the status poll only
+        updateFailed(kTextUpdFailed, "status polling is off (/opt/aa/status.disable): Force Stop can't be tracked");
+        return true;
+    }
+    g_updating = true;
+    setUpdateRow(kTextUpdating, true, false);
+    if (d.pid != 0) {
+        alog("update: stopping nbt-aad (pid %d) first", d.pid);
+        g_updateAfterStop = true;
+        beginStop(false);
+    } else {
+        postUpdate(300);
+    }
     return true;
 }
 
@@ -1489,6 +1890,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActUsbLog, &onUsbLogToggle);
     addAction(self, kActMenuIdrive, &onMenuIdriveToggle);
     addAction(self, kActDriveMode, &onDriveModeToggle);
+    addAction(self, kActUpdate, &onUpdateRow);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
@@ -1506,9 +1908,9 @@ bool appOnInit(bmw::PluginApp* self) {
     }
     bool ok = self->onInit();
     showAbout(self);
-    alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u + menu focus handler registered, base onInit -> %d, start with the car %s, "
+    alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u/%u + menu focus handler registered, base onInit -> %d, start with the car %s, "
          "save logs to USB %s, MENU opens iDrive %s", kEntryAction, kActStart, kActStop, kActRestart, kActAutostart,
-         kActUsbLog, kActMenuIdrive, (int)ok, autostartOn() ? "on" : "off", nbt::usblog::enabled() ? "on" : "off",
+         kActUsbLog, kActMenuIdrive, kActUpdate, (int)ok, autostartOn() ? "on" : "off", nbt::usblog::enabled() ? "on" : "off",
          menuIdriveOn() ? "on" : "off");
     subscribeGear(self);                                 // gear (unless gear.disable) + call status (Fork F hold)
     startStatusPolling(self);
