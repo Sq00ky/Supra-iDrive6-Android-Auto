@@ -15,6 +15,11 @@
 // only" (or locked) does not answer then, and choosing "Android Auto" / "File transfer" on it later does not make
 // medialauncher ask again: nothing happened until the phone was replugged (car, 2026-11-01). io-usb reports every
 // device to us, so a device that has no /dev/android* node is asked again every second while it stays plugged in.
+//
+// And it keeps the driver from starting at all: it claims the driver's path in the QNX path space and refuses every
+// open of it, so medialauncher's spawn fails. vdev-medialaunch then logs "spawnning devc-serusb-aoap driver failed",
+// sends its clients an ADD_USB_OAP_IGN notice and leaves that accessory alone, with no retry (firmware disassembly,
+// 2026-11-01). QNX drops the claim when this process exits, so the stock driver is back as soon as nbt-aad is gone.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -33,6 +38,7 @@ namespace nbt {
 namespace aoap {
 struct Identity;
 }
+struct DriverClaim;
 
 // Each completed bulk-in transfer, in the order the phone sent it. data == NULL: receiving ended (why() says why).
 // Returns false to stop receiving. Called on io-usb's callback thread with the link's lock held: queue and return.
@@ -59,6 +65,12 @@ public:
     // protocol (again every second while it does not answer, for up to 2 minutes) and switches the ones that answer to
     // accessory mode with `id`. Blocks for the control transfers (1 s timeout each). Returns how many it switched.
     int switchPhones(const aoap::Identity& id, double min_age_s);
+
+    // Claims the paths medialauncher starts devc-serusb-aoap from and refuses every open of them. true when an open
+    // of the path in umass-enum.cfg is now refused (checked, logged). stop() releases it.
+    bool claimAoapDriver();
+    void releaseAoapDriver();
+    bool aoapDriverClaimed() const { return claim_ != NULL; }
 
     // Stops every devc-serusb-aoap process: SIGTERM, then SIGKILL if it is still there 2 s later (it does not exit
     // on SIGTERM while it holds a phone). Returns how many are still running. Call it about once a second.
@@ -98,6 +110,7 @@ private:
     std::vector<Accessory> accs_;
     std::vector<Candidate> cands_;
     std::vector<Signalled> signalled_;   // watch thread only
+    DriverClaim* claim_;
 };
 
 class UsbDirectLink {

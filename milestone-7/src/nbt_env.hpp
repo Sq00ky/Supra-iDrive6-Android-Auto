@@ -63,6 +63,14 @@ inline bool usbDirectEnabled() {
     return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
 }
 
+// NBT_USB_CLAIM_DRIVER=0: with NBT_USB_DIRECT, stop devc-serusb-aoap after it has started instead of keeping it from
+// starting (usb_direct.hpp). On by default.
+inline bool usbClaimDriverEnabled() {
+    const char* e = getenv("NBT_USB_CLAIM_DRIVER");
+    if (!e || !*e) return true;
+    return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
+}
+
 inline unsigned long envHex(const char* name, unsigned long def) {
     const char* e = getenv(name);
     if (!e || !*e) return def;
