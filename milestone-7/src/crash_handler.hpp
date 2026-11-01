@@ -16,6 +16,10 @@ extern volatile int g_crumb_msg;       // last AA message id received
 // reporting. Call first thing in main().
 void installProcessGuards();
 
+// Optional: called from the fatal-signal handler before the report, so a feature can undo an outside effect (kombi_nav
+// clears a cluster/HUD arrow). Must be async-signal-safe.
+extern void (*volatile g_fatal_hook)();
+
 } // namespace nbt
 
 #endif
