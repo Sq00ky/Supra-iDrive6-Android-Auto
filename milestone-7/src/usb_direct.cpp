@@ -11,6 +11,8 @@
 #ifdef __QNX__
 #include <sys/usbdi.h>
 #include <sys/procfs.h>
+#include <sys/iofunc.h>
+#include <sys/dispatch.h>
 #include <devctl.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -35,6 +37,11 @@ static const double kSwitchRetryS = 1.0;              // a device that does not 
 static const double kSwitchGiveUpS = 120.0;           // after this long plugged in without an answer, stop asking
 static const unsigned kCtrlTimeoutMs = 1000;
 static const size_t kCtrlBuf = 256;
+
+// Where medialauncher starts the accessory driver from (umass-enum.cfg), and what /opt/mm resolves to on the car.
+static const char* const kAoapDriverPaths[] = { "/opt/mm/bin/devc-serusb-aoap",
+                                                "/fs/sda0/opt/mm/bin/devc-serusb-aoap" };
+static const unsigned kAoapDriverPathCount = sizeof(kAoapDriverPaths) / sizeof(kAoapDriverPaths[0]);
 
 // AOA vendor requests (Android Open Accessory protocol).
 static const uint16_t kAoaGetProtocol = 51;
@@ -88,7 +95,7 @@ static void deadline(struct timespec& ts, unsigned ms) {
     }
 }
 
-UsbDirect::UsbDirect() : conn_(NULL) {
+UsbDirect::UsbDirect() : conn_(NULL), claim_(NULL) {
     pthread_mutex_init(&mu_, NULL);
 }
 
@@ -124,6 +131,7 @@ bool UsbDirect::start() {
 }
 
 void UsbDirect::stop() {
+    releaseAoapDriver();
     if (!conn_) return;
     usbd_disconnect(conn_);
     conn_ = NULL;
@@ -445,6 +453,132 @@ int UsbDirect::switchPhones(const aoap::Identity& id, double min_age_s) {
         }
     }
     return switched;
+}
+
+// The driver path claim: a resource manager on the driver's paths that answers every open with EACCES. Only ENOENT (and
+// ENOSYS) make the client library try the next server for a path, so the real file behind it is never reached.
+struct DriverClaim {
+    dispatch_t* dpp;
+    dispatch_context_t* ctp;
+    int ids[kAoapDriverPathCount];
+    iofunc_attr_t attr;
+    resmgr_connect_funcs_t connect;
+    resmgr_io_funcs_t io;
+    pthread_t thread;
+    bool has_thread;
+    pthread_mutex_t mu;
+    bool running;
+};
+
+static int refuseOpen(resmgr_context_t*, io_open_t*, RESMGR_HANDLE_T*, void*) {
+    return EACCES;
+}
+
+static bool claimRunning(DriverClaim* c) {
+    pthread_mutex_lock(&c->mu);
+    bool r = c->running;
+    pthread_mutex_unlock(&c->mu);
+    return r;
+}
+
+static void* claimThread(void* arg) {
+    DriverClaim* c = reinterpret_cast<DriverClaim*>(arg);
+    struct timespec tick = { 0, 500000000L };   // dispatch_block() returns ETIMEDOUT: running is checked twice a second
+    dispatch_timeout(c->dpp, &tick);
+    while (claimRunning(c)) {
+        dispatch_context_t* r = dispatch_block(c->ctp);
+        if (r) {
+            c->ctp = r;
+            dispatch_handler(r);
+        } else if (errno != ETIMEDOUT && errno != EINTR) {
+            printf("[UsbDirect] driver path claim: dispatch_block failed: %s\n", strerror(errno));
+            break;
+        }
+    }
+    return NULL;
+}
+
+static void freeClaim(DriverClaim* c) {
+    for (unsigned i = 0; i < kAoapDriverPathCount; ++i) {
+        if (c->ids[i] != -1) resmgr_detach(c->dpp, c->ids[i], _RESMGR_DETACH_ALL);
+    }
+    if (c->has_thread) {
+        pthread_mutex_lock(&c->mu);
+        c->running = false;
+        pthread_mutex_unlock(&c->mu);
+        pthread_join(c->thread, NULL);
+    }
+    if (c->ctp) dispatch_context_free(c->ctp);
+    if (c->dpp) dispatch_destroy(c->dpp);
+    pthread_mutex_destroy(&c->mu);
+    delete c;
+}
+
+bool UsbDirect::claimAoapDriver() {
+    if (claim_) return true;
+    DriverClaim* c = new DriverClaim();
+    memset(c, 0, sizeof(*c));
+    pthread_mutex_init(&c->mu, NULL);
+    c->running = true;
+    for (unsigned i = 0; i < kAoapDriverPathCount; ++i) c->ids[i] = -1;
+    c->dpp = dispatch_create();
+    if (!c->dpp) {
+        printf("[UsbDirect] driver path claim: dispatch_create failed: %s\n", strerror(errno));
+        freeClaim(c);
+        return false;
+    }
+    iofunc_func_init(_RESMGR_CONNECT_NFUNCS, &c->connect, _RESMGR_IO_NFUNCS, &c->io);
+    // Only opens are refused (spawn, stat and access all start with one); anything else is ENOSYS, which passes the
+    // request on to the file system.
+    c->connect.open = &refuseOpen;
+    c->connect.unlink = NULL;
+    c->connect.rename = NULL;
+    c->connect.mknod = NULL;
+    c->connect.readlink = NULL;
+    c->connect.link = NULL;
+    c->connect.mount = NULL;
+    iofunc_attr_init(&c->attr, S_IFREG | 0555, NULL, NULL);
+    resmgr_attr_t ra;
+    memset(&ra, 0, sizeof(ra));
+    ra.nparts_max = 1;
+    ra.msg_max_size = 2048;
+    unsigned attached = 0;
+    for (unsigned i = 0; i < kAoapDriverPathCount; ++i) {
+        c->ids[i] = resmgr_attach(c->dpp, &ra, kAoapDriverPaths[i], _FTYPE_ANY, 0, &c->connect, &c->io, &c->attr);
+        if (c->ids[i] == -1)
+            printf("[UsbDirect] driver path claim: %s: %s\n", kAoapDriverPaths[i], strerror(errno));
+        else
+            ++attached;
+    }
+    c->ctp = attached ? dispatch_context_alloc(c->dpp) : NULL;
+    c->has_thread = c->ctp && pthread_create(&c->thread, NULL, &claimThread, c) == 0;
+    if (!c->has_thread) {
+        if (attached) printf("[UsbDirect] driver path claim: could not start its thread\n");
+        freeClaim(c);
+        return false;
+    }
+
+    // Our own open goes the way medialauncher's spawn does: refused only if the claim is in front of the real file.
+    int fd = ::open(kAoapDriverPaths[0], O_RDONLY);
+    int err = fd < 0 ? errno : 0;
+    if (fd >= 0) ::close(fd);
+    if (err != EACCES) {
+        printf("[UsbDirect] driver path claim not effective (opening %s: %s): stopping devc-serusb-aoap instead\n",
+               kAoapDriverPaths[0], fd >= 0 ? "opened" : strerror(err));
+        freeClaim(c);
+        return false;
+    }
+    claim_ = c;
+    printf("[UsbDirect] claimed %s: the head unit cannot start devc-serusb-aoap while nbt-aad runs "
+           "(NBT_USB_CLAIM_DRIVER=0 turns this off)\n", kAoapDriverPaths[0]);
+    return true;
+}
+
+void UsbDirect::releaseAoapDriver() {
+    if (!claim_) return;
+    freeClaim(claim_);
+    claim_ = NULL;
+    printf("[UsbDirect] released the devc-serusb-aoap path\n");
 }
 
 int UsbDirect::stopAoapDriver() {
@@ -799,7 +933,7 @@ void UsbDirectLink::close() {
 
 #else   // host builds (tests): there is no io-usb
 
-UsbDirect::UsbDirect() : conn_(NULL) { pthread_mutex_init(&mu_, NULL); }
+UsbDirect::UsbDirect() : conn_(NULL), claim_(NULL) { pthread_mutex_init(&mu_, NULL); }
 UsbDirect::~UsbDirect() { pthread_mutex_destroy(&mu_); }
 bool UsbDirect::start() {
     printf("[UsbDirect] needs QNX io-usb: not available here\n");
@@ -809,6 +943,8 @@ void UsbDirect::stop() {}
 std::vector<std::string> UsbDirect::accessories(double) { return std::vector<std::string>(); }
 UsbDirectLink* UsbDirect::open(const std::string&) { return NULL; }
 int UsbDirect::switchPhones(const aoap::Identity&, double) { return 0; }
+bool UsbDirect::claimAoapDriver() { return false; }
+void UsbDirect::releaseAoapDriver() {}
 int UsbDirect::stopAoapDriver() { return 0; }
 void UsbDirect::inserted(const void*) {}
 void UsbDirect::removed(const void*) {}

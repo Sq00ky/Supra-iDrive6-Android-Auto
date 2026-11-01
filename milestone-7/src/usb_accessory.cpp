@@ -428,6 +428,8 @@ bool UsbAccessory::start() {
             printf("[UsbAccessory] NBT_USB_DIRECT: io-usb not available, using %s/oap* instead\n", dev_dir_.c_str());
             delete direct_;
             direct_ = NULL;
+        } else if (usbClaimDriverEnabled()) {
+            direct_->claimAoapDriver();   // logged; on failure the driver is stopped once it runs, as before
         }
     }
 
@@ -489,10 +491,11 @@ void UsbAccessory::watchLoop() {
         // NBT_USB_DIRECT: devc-serusb-aoap must not read the phone alongside us. Its node shows the phone is in
         // accessory mode; stop the driver, then use the accessory io-usb reports (its node is gone by then).
         // The accessory is only opened once it has been known for kDriverGraceS (vdev-medialaunch starts the driver
-        // for it meanwhile) and no driver process is left (it ignores SIGTERM while it holds the phone).
+        // for it meanwhile) and no driver process is left (it ignores SIGTERM while it holds the phone). With the
+        // driver's path claimed it never starts, and the accessory is opened right away.
         std::vector<std::string> accs = oaps;
         if (direct_) {
-            std::vector<std::string> known = direct_->accessories(kDriverGraceS);
+            std::vector<std::string> known = direct_->accessories(direct_->aoapDriverClaimed() ? 0 : kDriverGraceS);
             if ((!oaps.empty() || !known.empty() || bridge_) && monoSec() >= next_driver_stop_s_) {
                 direct_drivers_ = direct_->stopAoapDriver();
                 next_driver_stop_s_ = monoSec() + 1.0;
