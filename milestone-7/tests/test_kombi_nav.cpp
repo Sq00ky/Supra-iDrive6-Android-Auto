@@ -181,7 +181,20 @@ static bool hasLog(const char* s) {
     return false;
 }
 
-static Settings noApproach() { Settings s; s.approach_mi = 0; s.min_update_s = 0; return s; }
+// The tests below pin the full-graph path (NBT_KOMBI_NAV_INPLACE=0); the in-place path has its own tests (inPlace()).
+static Settings noApproach() { Settings s; s.approach_mi = 0; s.min_update_s = 0; s.inplace = 0; return s; }
+static Settings inPlace(int mode = 1) { Settings s = noApproach(); s.inplace = mode; return s; }
+
+// method + model type of every frame (0x0004 init has no model)
+static std::string shape(const std::vector<Seen>& s, size_t from, size_t to) {
+    std::string o;
+    char b[16];
+    for (size_t i = from; i < to && i < s.size(); ++i) {
+        snprintf(b, sizeof(b), "%x/%x ", s[i].method, s[i].method == 0x0004 ? 0 : modelType(s[i].body));
+        o += b;
+    }
+    return o;
+}
 
 // One harness per test: graph, client, link, core.
 struct Rig {
@@ -316,6 +329,98 @@ static void yieldThroughChild(unsigned skip, int expect) {
 }
 
 int main() {
+    // in-place (default on the car): the first maneuver is the full graph; each next maneuver is the template's own
+    // maneuver-0 update block (no route-start state 1), patched; a guidance gap (reroute) gets the full graph again;
+    // a gap that comes back on the same maneuver doesn't; mode 2 leaves out the 0x07 guiding model
+    {
+        const char* kBlock = "3/3 e/28 a/22 b/7 a/1d a/f c/20 4/0 9/21 ";
+        Rig r(inPlace());
+        std::vector<Tick> drive = demoDrive(demoRoute());
+        for (size_t i = 0; i < drive.size(); ++i) r.feed(drive[i].m, drive[i].t);
+        r.core.step(NULL, drive.back().t + 100);
+        assert(countLog("graph: 97 frame(s) OK") == 1 && countLog("maneuver: 9 frame(s) OK") == 4);
+        std::vector<Seen> s = r.k.seen();
+        size_t blocks = 0;
+        for (size_t i = 97; i < s.size(); ++i) {
+            assert(methodAllowed(s[i].method));
+            assert(!(s[i].method == 0x0009 && modelType(s[i].body) == 33 && s[i].body[30] == 1));   // never state 1
+            if (s[i].method == 0x0003 && modelType(s[i].body) == 3) {
+                assert(shape(s, i, i + 9) == kBlock);
+                assert(s[i + 8].body[30] == 2);                    // state 2 closes the block
+                ++blocks;
+            }
+        }
+        assert(blocks == 4);
+        // byte for byte the start() graph's own maneuver-0 update block (frames 24..32 of the template)
+        std::vector<Frame> full, blk;
+        assert(r.g.start(7, "MAIN ST", "0.3", 0x01, full) && r.g.maneuver(7, "MAIN ST", "0.3", 0x01, blk));
+        assert(blk.size() == 9);
+        for (size_t i = 0; i < 9; ++i) assert(blk[i].method == full[24 + i].method && blk[i].body == full[24 + i].body);
+        assert(blk[5].body[33] == 7 && text0(blk[4].body, NULL) == "0.3" && text0(blk[0].body, NULL) == "MAIN ST");
+        std::vector<Frame> blk2;
+        assert(r.g.maneuver(7, "MAIN ST", "0.3", 0x01, blk2, NULL, false) && blk2.size() == 8);
+        for (size_t i = 0; i < blk2.size(); ++i) assert(blk2[i].method != 0x000B);
+    }
+    {
+        Rig r(inPlace());
+        r.feed(one(7, "TEST ST", curPos(400, "0.3", 5)), 0.0);
+        r.feed(one(8, "MAIN ST", curPos(400, "0.3", 5)), 1.0);
+        assert(r.k.count() == 97 + 9);
+        r.core.step(NULL, 2.0);                                     // a guidance gap (reroute) inside the grace
+        r.feed(one(8, "MAIN ST", curPos(380, "0.2", 5)), 3.0);      // back on the same maneuver: distance only
+        assert(r.k.count() == 97 + 9 + 1);
+        r.feed(one(7, "OAK AVE", curPos(500, "0.3", 5)), 4.0);      // nothing to rebuild: in place
+        assert(r.k.count() == 97 + 9 + 1 + 9);
+        r.core.step(NULL, 5.0);
+        r.feed(one(8, "ELM WAY", curPos(500, "0.3", 5)), 6.0);      // a new maneuver after a gap: full graph
+        assert(r.k.count() == 97 + 9 + 1 + 9 + 97 && countLog("graph: 97 frame(s) OK") == 2);
+        r.feed(one(7, "PINE RD", curPos(500, "0.3", 5)), 7.0);      // and in place again after it
+        assert(r.k.count() == 97 + 9 + 1 + 9 + 97 + 9);
+    }
+    {
+        Rig r(inPlace(2));
+        r.feed(one(7, "TEST ST", curPos(400, "0.3", 5)), 0.0);
+        r.feed(one(8, "MAIN ST", curPos(400, "0.3", 5)), 1.0);
+        std::vector<Seen> s = r.k.seen();
+        assert(s.size() == 97 + 8 && countMethod(s, 0x000B, 97) == 0);
+    }
+    // the KOMBI rejects the in-place update: full graph at once, full graphs until the next clear, then in place again
+    {
+        Rig r(inPlace());
+        r.feed(one(7, "TEST ST", curPos(400, "0.3", 5)), 0.0);
+        r.k.rejectNth(97 + 1);                                      // the first in-place frame
+        r.feed(one(8, "MAIN ST", curPos(400, "0.3", 5)), 1.0);
+        assert(hasLog("the KOMBI rejected the in-place update: full graphs until the next clear") && r.core.shown());
+        size_t n = r.k.count();
+        assert(n == 97 + 1 + 97 && r.core.stopped() == Core::kRunning);
+        r.feed(one(7, "OAK AVE", curPos(400, "0.3", 5)), 2.0);
+        assert(r.k.count() == n + 97);
+        r.core.clear("test");
+        n = r.k.count();
+        r.feed(one(7, "TEST ST", curPos(400, "0.3", 5)), 3.0);
+        r.feed(one(8, "MAIN ST", curPos(400, "0.3", 5)), 4.0);
+        assert(r.k.count() == n + 97 + 9);
+    }
+    // lanes in place: lanes appear on the same maneuver -> the update block with the lane model + the 0x0F ref, then a
+    // position; the next maneuver with lanes the same; lanes gone -> the block without a lane model, empty ref list
+    {
+        Rig r(inPlace());
+        r.feed(one(8, "MAIN ST", curPos(600, "0.4", 5)), 0.0);
+        r.feed(oneL(8, "MAIN ST", demoLanes(1), curPos(380, "0.2", 5)), 3.5);
+        std::vector<Seen> s = r.k.seen();
+        assert(s.size() == 97 + 10 + 1 && shape(s, 97, 107) == "3/3 e/28 a/22 b/7 a/1d 10/1b a/f c/20 4/0 9/21 ");
+        assert(getU32(s[103].body, 54) == 4 && getU32(s[103].body, 58) == kLaneModel0 && s.back().method == 0x0009);
+        assert(lastPos(s) == 4132.0);
+        r.feed(oneL(7, "OAK AVE", demoLanes(2), curPos(300, "0.2", 5)), 4.0);
+        s = r.k.seen();
+        assert(s.size() == 108 + 10 + 1 && countMethod(s, 0x0010, 108) == 1);
+        r.feed(one(7, "OAK AVE", curPos(150, "500", 6)), 8.0);
+        s = r.k.seen();
+        assert(s.size() == 119 + 9 && countMethod(s, 0x0010, 119) == 0 && getU32(s[119 + 5].body, 54) == 0);
+        r.feed(one(7, "OAK AVE", curPos(50, "150", 6)), 10.0);
+        s = r.k.seen();
+        assert(s.size() == 128 + 1 && s.back().method == 0x000A);   // a distance update, no position feed
+    }
     // demo drive: one full graph per maneuver, only whitelisted methods, ends with the factory cancel, no second one
     {
         Rig r;

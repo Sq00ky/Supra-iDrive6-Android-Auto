@@ -46,7 +46,7 @@ volatile int g_mayShow = 0;   // an arrow may be up: the fatal-signal handler se
 Core::Core(const Graph& g, const Link& link, const Settings& s, LogFn log, void* log_user)
     : g_(g), link_(link), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false),
       off_since_(0), no_dist_(false), no_dist_since_(0), sent_any_(false), last_cancel_ok_(true), stop_(kRunning),
-      t_graph_(0), t_pos_(0), has_last_pos_(false), last_pos_(0) {}
+      full_next_(false), inplace_ok_(true), t_graph_(0), t_pos_(0), has_last_pos_(false), last_pos_(0) {}
 
 void Core::log(const char* fmt, ...) {
     char buf[320];
@@ -57,13 +57,18 @@ void Core::log(const char* fmt, ...) {
     if (log_fn_) log_fn_(buf, log_user_);
 }
 
-bool Core::sendFrames(const char* label, const std::vector<Frame>& frames, bool quiet) {
+KombiClient::Result Core::sendLogged(const char* label, const std::vector<Frame>& frames, bool quiet) {
     std::string detail;
     KombiClient::Result r = link_.send(link_.user, frames, &detail);
     sent_any_ = true;
     if (!quiet || r != KombiClient::kOk)
         log("%s: %u frame(s) %s%s%s", label, (unsigned)frames.size(), r == KombiClient::kOk ? "OK" : "FAILED",
             detail.empty() || r == KombiClient::kOk ? "" : ": ", r == KombiClient::kOk ? "" : detail.c_str());
+    return r;
+}
+
+bool Core::sendFrames(const char* label, const std::vector<Frame>& frames, bool quiet) {
+    KombiClient::Result r = sendLogged(label, frames, quiet);
     if (r == KombiClient::kOk) return true;
     stop_ = r == KombiClient::kRejected ? kStoppedRejected : kStoppedLink;
     clear(r == KombiClient::kRejected ? "KOMBI rejected a frame" : "KOMBI link failed");
@@ -90,6 +95,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     if (!in) {
         no_dist_ = false;
         if (!has_shown_) return;
+        full_next_ = true;                             // guidance gap (a reroute): the next maneuver gets a full graph
         if (!off_) { off_ = true; off_since_ = now; }
         if (now - off_since_ >= s_.grace_s) clear(why_none);
         return;
@@ -130,6 +136,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     KombiLanes lanes;
     if (s_.lanes) kombiLanes(v, lanes);                  // empty = no lane row (none sent, or nothing we can map)
     bool new_man = !has_shown_ || !v.sameManeuver(shown_);
+    if (!new_man) full_next_ = false;                    // guidance came back on the same maneuver: nothing to rebuild
     // the phone adds / re-highlights / drops lanes as the junction nears: the same maneuver's graph is resent with the
     // new lane row (the car-proven path), at most every lane_resend_s
     bool lanes_changed = !new_man && lanes != shown_lanes_ && now - t_graph_ >= s_.lane_resend_s;
@@ -139,13 +146,32 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         log("%s type %d -> direction %d | %s %s | road '%s'%s", new_man ? "SHOW" : "LANES", v.aa_type, dir,
             v.dist_text.c_str(), ku == 0x05 ? "ft" : ku == 0x01 ? "mi" : "(unit kept)", v.road.c_str(),
             lane_note.c_str());
-        if (!g_.start(dir, v.road, v.dist_text, ku, frames, lanes.empty() ? NULL : &lanes)) {
-            log("internal error: the graph template has an unexpected layout");
-            stop_ = kStoppedRejected;
-            clear("template layout");
-            return;
+        const KombiLanes* lp = lanes.empty() ? NULL : &lanes;
+        bool done = false;
+        if (has_shown_ && !full_next_ && inplace_ok_ && s_.inplace > 0 &&
+            g_.maneuver(dir, v.road, v.dist_text, ku, frames, lp, s_.inplace != 2)) {
+            KombiClient::Result r = sendLogged("maneuver", frames, false);
+            if (r == KombiClient::kOk) {
+                done = true;
+            } else if (r == KombiClient::kRejected) {
+                log("the KOMBI rejected the in-place update: full graphs until the next clear");
+                inplace_ok_ = false;
+            } else {
+                stop_ = kStoppedLink;
+                clear("KOMBI link failed");
+                return;
+            }
         }
-        if (!sendFrames("graph", frames)) return;
+        if (!done) {
+            if (!g_.start(dir, v.road, v.dist_text, ku, frames, lp)) {
+                log("internal error: the graph template has an unexpected layout");
+                stop_ = kStoppedRejected;
+                clear("template layout");
+                return;
+            }
+            if (!sendFrames("graph", frames)) return;
+        }
+        full_next_ = false;
         has_shown_ = true;
         shown_ = v;
         last_dist_ = v;
@@ -203,6 +229,8 @@ void Core::forget() {
     sent_any_ = false;
     shown_lanes_.clear();
     has_last_pos_ = false;
+    full_next_ = false;
+    inplace_ok_ = true;
 }
 
 void Core::clear(const char* why) {
@@ -328,6 +356,8 @@ void KombiNav::start() {
     if (envFlag("NBT_KOMBI_NAV_SHOW_BAR") == 1) settings_.hide_bar = false;
     if (envFlag("NBT_KOMBI_NAV_YIELD") == 0) yield_enabled_ = false;
     if (envFlag("NBT_KOMBI_NAV_LANES") == 0) settings_.lanes = false;
+    e = getenv("NBT_KOMBI_NAV_INPLACE");
+    if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
     graph_ = new Graph(handle_, settings_.hide_bar ? 255 : -1);
     client_ = new KombiClient(host_, port_);
     client_->prepareEmergency(*graph_);
@@ -337,10 +367,10 @@ void KombiNav::start() {
     link.user = this;
     core_ = new Core(*graph_, link, settings_, &KombiNav::logLine, this);
     printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %g mi, bar %s, iDrive-route "
-           "yield %s, lanes %s\n", enabledNow() ? "ON" : "off",
+           "yield %s, lanes %s, in-place %d\n", enabledNow() ? "ON" : "off",
            forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", host_.c_str(), (unsigned)port_, handle_,
            settings_.approach_mi, settings_.hide_bar ? "hidden" : "factory", yield_enabled_ ? "on" : "off",
-           settings_.lanes ? "on" : "off");
+           settings_.lanes ? "on" : "off", settings_.inplace);
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
         return;

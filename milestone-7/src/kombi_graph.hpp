@@ -227,6 +227,34 @@ public:
         return lanes && !lanes->empty() ? withLanes(out, *lanes) : true;
     }
 
+    // In-place update of maneuver 0 for a new maneuver (or a lane change) on a route that is already shown: the
+    // factory's own maneuver-0 update block from the template (text resource, road, thresholds, guiding, distance,
+    // [lane model,] description, list, init, state 2), patched like start(). No route-start frames (state 1), so the
+    // cluster keeps the route instead of rebuilding it. guiding = false leaves out the 0x07 guiding model (car A/B).
+    // False = the template doesn't have the expected layout (the caller falls back to start()).
+    bool maneuver(int direction, const std::string& road, const std::string& dist, int unit,
+                  std::vector<Frame>& out, const KombiLanes* lanes = NULL, bool guiding = true) const {
+        std::vector<Frame> all;
+        out.clear();
+        if (!start(direction, road, dist, unit, all, lanes)) return false;
+        size_t from = all.size();
+        for (size_t i = 0; i < all.size(); ++i)          // the last maneuver-0 text resource opens the update block
+            if (all[i].method == 0x0003 && modelType(all[i].body) == 3 && modelIndex(all[i].body) == 0) from = i;
+        bool desc = false, dist0 = false;
+        for (size_t i = from; i < all.size(); ++i) {
+            const Frame& f = all[i];
+            if (f.method == 0x000B && !guiding) continue;
+            out.push_back(f);
+            if (f.method == 0x000A && modelIndex(f.body) == 0) {
+                desc = desc || modelType(f.body) == 15;
+                dist0 = dist0 || modelType(f.body) == 29;
+            }
+            if (f.method == 0x0009 && modelType(f.body) == 33) break;   // state 2 closes the block
+        }
+        if (!desc || !dist0 || out.empty() || out.back().method != 0x0009) { out.clear(); return false; }
+        return true;
+    }
+
     // One 0x11 destination-info update (method 0x0009, the template's frame) carrying the car's route position.
     bool position(double pos_m, std::vector<Frame>& out) const {
         out.clear();

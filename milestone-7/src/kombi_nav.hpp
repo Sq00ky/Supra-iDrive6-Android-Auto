@@ -6,7 +6,8 @@
 // route-guidance graph, sent from the OMAP straight to the KOMBI (kombi_client.hpp):
 //   guidance starts         -> full template graph with maneuver 0 patched (direction, distance + unit, road)
 //   distance text changes   -> one in-place distance frame
-//   next maneuver           -> full graph again
+//   next maneuver           -> in-place maneuver-0 update (the factory's update block, no route rebuild); the full
+//                              graph after a guidance gap (reroute), a clear, or if the KOMBI rejects the update
 //   guidance off for 8 s, Android Auto session end, the setting turned off, daemon exit, fatal signal
 //                           -> the factory cancel (arrow cleared)
 // Off by default. On with the iDrive menu checkbox "Turn arrows in cluster/HUD" (flag file /var/opt/aa/kombi-nav; a
@@ -45,8 +46,10 @@ struct Settings {
     bool lanes;            // the phone's lanes as the KOMBI lane row (NBT_KOMBI_NAV_LANES=0 turns it off)
     double lane_resend_s;  // a lane-only change on the same maneuver resends the graph at most this often
     double lane_feed_s;    // the position update the KOMBI checks lanes against: at most this often
+    int inplace;           // next maneuver / lane change on a shown route: 1 = in-place maneuver-0 update (default),
+                           // 2 = the same without the 0x07 guiding model, 0 = full graph (NBT_KOMBI_NAV_INPLACE)
     Settings() : approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
-                 min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0) {}
+                 min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1) {}
 };
 
 // What the state machine drives (callbacks, like AASession's): the real client in kombi_nav.cpp, a test's own in tests.
@@ -84,6 +87,7 @@ public:
 private:
     bool approachHold(const NavView& v, double now);
     bool sendFrames(const char* label, const std::vector<Frame>& frames, bool quiet = false);
+    KombiClient::Result sendLogged(const char* label, const std::vector<Frame>& frames, bool quiet);
     void feed(const NavView& v, double now, bool force);
     void forget();
     void log(const char* fmt, ...);
@@ -105,6 +109,8 @@ private:
     bool last_cancel_ok_;
     Stop stop_;
     KombiLanes shown_lanes_;  // the lane row in the graph we sent (empty = none)
+    bool full_next_;          // the next maneuver gets the full graph (after a guidance gap: likely a reroute)
+    bool inplace_ok_;         // false after the KOMBI rejected an in-place update (full graphs until the next clear)
     double t_graph_;
     double t_pos_;
     bool has_last_pos_;

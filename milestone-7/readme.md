@@ -470,6 +470,7 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
 | `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
 | `NBT_KOMBI_NAV_LANES=0` | No lane row in the cluster / HUD (the arrows stay) |
+| `NBT_KOMBI_NAV_INPLACE` | How the next maneuver (or a lane change) is sent on a route already shown: `1` (default) = an in-place update of the shown maneuver, the cluster's own update block, so it doesn't rebuild the route; `2` = the same without the guiding model; `0` = the whole route graph again. A guidance gap (rerouting) always sends the whole graph |
 | `NBT_KOMBI_NAV_HANDLE`, `NBT_KOMBI_NAV_HOST`, `NBT_KOMBI_NAV_PORT` | KOMBI guidance instance handle (default `0xC8`, the same on every boot seen), address (`160.48.199.96`) and port (`30502`) |
 | `NBT_DIAG=1`, `NBT_VERBOSE` | Window/LayerManager dump 8 s into a session; verbose protocol log |
 
