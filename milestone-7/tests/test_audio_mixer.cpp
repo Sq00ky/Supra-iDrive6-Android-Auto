@@ -84,6 +84,34 @@ int main() {
     m.mix(NULL, NULL, NULL, 10, false, &out[0]);
     CHECK(out[0] == 0 && out[19] == 0);
 
+    // 9. PtsRateMeter: car log 2026-11-01, ch 8 guidance, 4096-byte mono frames 42.7 ms apart = 48 kHz
+    {
+        PtsRateMeter pm;
+        uint64_t pts = 915716682615ull;
+        uint32_t r = 0;
+        int n = 0;
+        for (; n < 20 && r == 0; ++n) { r = pm.add(pts, 4096, 1); pts += 42667; }
+        CHECK(r == 48000);
+        CHECK(n >= 5 && n <= 7);                       // needs 200 ms of timestamps
+        CHECK(pm.add(pts, 4096, 1) == 48000);          // stays known
+        pm.reset();
+        pts = 1000000;
+        r = 0;
+        for (n = 0; n < 20 && r == 0; ++n) { r = pm.add(pts, 4096, 1); pts += 128000; }   // 16 kHz mono
+        CHECK(r == 16000);
+        pm.reset();
+        pts = 5000000;
+        r = 0;
+        for (n = 0; n < 20 && r == 0; ++n) { r = pm.add(pts, 8192, 2); pts += 42667; }    // 48 kHz stereo media
+        CHECK(r == 48000);
+        pm.reset();
+        pm.add(9000000, 4096, 1);
+        CHECK(pm.add(8000000, 4096, 1) == 0);          // clock went back: starts over, no result
+        CHECK(PtsRateMeter::snap(47100) == 48000 && PtsRateMeter::snap(16300) == 16000);
+        CHECK(PtsRateMeter::snap(30000) == 0 || PtsRateMeter::snap(30000) == 32000);
+        CHECK(PtsRateMeter::snap(60000) == 0);         // nothing within 8 %
+    }
+
     printf(fails ? "test_audio_mixer: %d FAILED\n" : "test_audio_mixer: all passed\n", fails);
     return fails ? 1 : 0;
 }

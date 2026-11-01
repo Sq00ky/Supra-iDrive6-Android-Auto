@@ -37,11 +37,13 @@ typedef ssize_t (*FnWrite)(snd_pcm_t*, const void*, size_t);
 typedef int (*FnFlush)(snd_pcm_t*, int);
 typedef const char* (*FnStrerror)(int);
 
-// AA formats (service discovery, include/dhu_sdp.h + addSystemAudioSink): setup config index 0 is used for all.
-const uint32_t kSrcRate[BrowserAudio::NSTREAMS] = { 48000, 16000, 16000 };
+// AA formats (service discovery, include/dhu_sdp.h + addSystemAudioSink). Media offers 48 kHz stereo, system audio
+// 16 kHz mono, guidance 16 kHz and 48 kHz mono. The phone picks one without saying which, so these are only the
+// starting rates: PtsRateMeter measures each stream from its timestamps (car 2026-11-01: guidance came at 48 kHz).
+const uint32_t kSrcRate[BrowserAudio::NSTREAMS] = { 48000, 48000, 16000 };
 const uint32_t kSrcCh[BrowserAudio::NSTREAMS]   = { 2, 1, 1 };
-// Raw ring sizes: media 2 s, guidance 12 s (the phone sends a prompt faster than real time), system 4 s.
-const size_t kRingBytes[BrowserAudio::NSTREAMS] = { 48000u * 4u * 2u, 16000u * 2u * 12u, 16000u * 2u * 4u };
+// Raw ring sizes: media 2 s, guidance 8 s at 48 kHz (the phone sends a prompt faster than real time), system 4 s.
+const size_t kRingBytes[BrowserAudio::NSTREAMS] = { 48000u * 4u * 2u, 48000u * 2u * 8u, 16000u * 2u * 4u };
 
 const uint32_t kOutCh = 2;
 const int kAudibleLevel = 64;        // |sample| above this (about -54 dBFS) counts as sound for ducking / idle
@@ -84,6 +86,8 @@ BrowserAudio::BrowserAudio()
         started_[s] = false;
         flush_[s] = false;
         frames_in_[s] = 0;
+        src_rate_[s] = kSrcRate[s];
+        rs_rate_[s] = 0;
     }
     pthread_mutex_init(&lock_, NULL);
 }
@@ -260,7 +264,8 @@ bool BrowserAudio::openPcmWith(int frag, int frags) {
     rate_ = rate;
     frag_bytes_ = (uint32_t)frag;
     for (int s = 0; s < NSTREAMS; ++s) {
-        rs_[s].configure(kSrcRate[s], kSrcCh[s], rate_, kOutCh);
+        rs_rate_[s] = src_rate_[s];
+        rs_[s].configure(rs_rate_[s], kSrcCh[s], rate_, kOutCh);
         pending_[s].clear();
     }
     mixer_.configure(rate_, kOutCh, duck_cfg_);
@@ -303,11 +308,19 @@ bool BrowserAudio::writePcm(const int16_t* buf, size_t frames) {
 // Streams
 // ---------------------------------------------------------------------------------------------------------------
 
-void BrowserAudio::onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len) {
+void BrowserAudio::onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts) {
     int s = streamForChannel(channel);
     if (s < 0 || !ring_[s] || !pcm || len == 0) return;
     ++frames_in_[s];
     ring_[s]->write(pcm, len);
+    if (pts) {
+        const uint32_t r = meter_[s].add(pts, len, kSrcCh[s]);
+        if (r && r != src_rate_[s]) {
+            printf("[Browser] AA %s stream is %u Hz (from its timestamps), not %u Hz: converting from %u Hz\n",
+                   streamName(s), r, (unsigned)src_rate_[s], r);
+            src_rate_[s] = r;   // the mixer reconfigures its resampler on the next block
+        }
+    }
     ensureMixer();
 }
 
@@ -316,6 +329,7 @@ void BrowserAudio::onAaStreamState(uint8_t channel, bool started) {
     if (s < 0 || !ring_[s]) return;
     printf("[Browser] AA %s stream %s\n", streamName(s), started ? "started" : "stopped");
     started_[s] = started;
+    if (started) meter_[s].reset();   // each stream start is measured again
     // Media paused: drop what is queued so the music stops now. Prompts and sounds play their tail out.
     if (!started && s == MEDIA) { ring_[s]->clear(); flush_[s] = true; }
     if (started) ensureMixer();
@@ -343,8 +357,14 @@ void BrowserAudio::stopMixer() {
 bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
     std::vector<int16_t>& q = pending_[s];
     if (flush_[s]) { flush_[s] = false; q.clear(); rs_[s].reset(); }
+    const uint32_t src = src_rate_[s];
+    if (src != rs_rate_[s]) {   // the session thread measured a different rate for this stream
+        rs_rate_[s] = src;
+        rs_[s].configure(src, kSrcCh[s], rate_, kOutCh);
+        q.clear();
+    }
     const size_t need = frames * kOutCh;
-    const size_t raw_block = (size_t)(kSrcRate[s] / 100u) * kSrcCh[s] * 2u;   // 10 ms of AA PCM
+    const size_t raw_block = (size_t)(src / 100u) * kSrcCh[s] * 2u;   // 10 ms of AA PCM (at most 48 kHz stereo)
     uint8_t raw[48000 / 100 * 2 * 2];
     while (q.size() < need) {
         size_t got = ring_[s]->read(raw, raw_block);
@@ -480,8 +500,9 @@ void BrowserAudio::mixerLoop() {
             block = want_block;
             for (int s = 0; s < NSTREAMS; ++s) in[s].assign(block * kOutCh, 0);
             out.assign(block * kOutCh, 0);
-            printf("[Browser] mixing %u frames (%u ms) per write at %u Hz\n", (unsigned)block,
-                   (unsigned)(block * 1000u / rate_), rate_);
+            printf("[Browser] mixing %u frames (%u ms) per write at %u Hz (AA media %u Hz stereo, guidance %u Hz "
+                   "mono, system %u Hz mono until measured)\n", (unsigned)block, (unsigned)(block * 1000u / rate_),
+                   rate_, (unsigned)src_rate_[MEDIA], (unsigned)src_rate_[GUIDANCE], (unsigned)src_rate_[SYSTEM]);
         }
         const uint64_t now = nowMs();
         bool queued = false, any_started = false;

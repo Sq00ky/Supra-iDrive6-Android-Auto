@@ -1145,9 +1145,8 @@ static void onCodecConfig(const uint8_t* config_data, size_t config_len, void* u
 }
 
 static void onAudioFrame(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data) {
-    (void)pts;
     (void)user_data;
-    if (g_browser) g_browser->onAaAudio(channel, pcm, pcm_len);
+    if (g_browser) g_browser->onAaAudio(channel, pcm, pcm_len, pts);
     else if (g_audio) g_audio->onAaAudio(channel, pcm, pcm_len);
     else if (channel == 8) speechFrame(pcm, pcm_len);
 }
