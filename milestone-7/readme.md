@@ -204,7 +204,7 @@ Off by default (opt-in):
 
 | Feature | Status |
 |---|---|
-| Android Auto turn-by-turn in the **instrument cluster and windscreen HUD** (J29 Supra), with no iDrive route: menu checkbox **Turn arrows in cluster/HUD** ([details](#turn-arrows-in-the-cluster-and-hud-j29)) | The graph the daemon sends was car-verified from a test client on a J29 (cluster + HUD, 2026-10-31); from the daemon itself not yet car-verified |
+| Android Auto turn-by-turn in the **instrument cluster and windscreen HUD** (J29 Supra), with no iDrive route: menu checkbox **Turn arrows in cluster/HUD** ([details](#turn-arrows-in-the-cluster-and-hud-j29)), with the **lane row** | Car-verified from the daemon on a J29 (cluster + HUD, 2026-11-01): arrows, distance, reroutes, the clears, the iDrive-route step-aside and the menu checkbox; the lane row car-verified from a test client with the same frames (2026-11-01) |
 
 Not done yet:
 - iDrive still reacts to touches while Android Auto is on screen.
@@ -359,9 +359,10 @@ cluster, so the arrow, distance and street show in the cluster and the windscree
 | When it clears | Guidance off for 8 s (rerouting keeps it), the phone disconnects, the box is unticked, the daemon stops (Force Stop, Restart), or the daemon crashes (cleared from the crash handler). A daemon killed with SIGKILL leaves `/dev/shmem/nbt-aad-kombi-nav.shown`; the next start sends the clear first |
 | iDrive navigation | Wins: when an iDrive route starts (seen in the system log, `sloginfo -w`), the daemon stops writing without clearing, and takes over again at the next Android Auto route. Without `sloginfo` the log says so; then don't start an iDrive route while Android Auto guides |
 | Safety | Only route-guidance model updates are sent (never create / dispose), one connection, our own SOME/IP client id; a frame the KOMBI rejects stops the feature until the next session |
+| Lane guidance | When the phone sends lanes for the next turn (Google Maps does, near the junction), the cluster and the HUD show the lane row with the lanes to take marked. Car-verified on a J29 (cluster + HUD) with left, right, straight and slight-left lanes, from a test client sending the same frames byte for byte (from the daemon itself: not yet). Lanes the daemon can't map (an unknown shape, more than 8 lanes) show no lane row rather than a wrong one. `NBT_KOMBI_NAV_LANES=0` turns lanes off (arrows as without lanes) |
 | Turning it off | Untick the box (the arrow clears within a second) or `NBT_KOMBI_NAV=0` in `nbt-aad.env` |
 
-Not covered: lane guidance, the "then" preview, the cluster's small map.
+Not covered: the "then" preview, the cluster's small map, road shields / route-number icons.
 
 ### Tips
 
@@ -468,6 +469,7 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_NAV_APPROACH_MI` | Show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once) |
 | `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
 | `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
+| `NBT_KOMBI_NAV_LANES=0` | No lane row in the cluster / HUD (the arrows stay) |
 | `NBT_KOMBI_NAV_HANDLE`, `NBT_KOMBI_NAV_HOST`, `NBT_KOMBI_NAV_PORT` | KOMBI guidance instance handle (default `0xC8`, the same on every boot seen), address (`160.48.199.96`) and port (`30502`) |
 | `NBT_DIAG=1`, `NBT_VERBOSE` | Window/LayerManager dump 8 s into a session; verbose protocol log |
 
@@ -720,11 +722,21 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
   maneuver types as androidx `Maneuver.TYPE_*`) and runs the state machine (`kombi_nav.cpp`):
   - new maneuver: the full 97-frame route-start graph, maneuver 0 patched;
   - changed distance text: one in-place distance frame (at most twice a second);
-  - no distance yet: wait up to 3 s, then `-` (never the template's own distance).
+  - no distance yet: wait up to 3 s, then `-` (never the template's own distance);
+  - lanes (0x8006 step field 3, `NavigationLane`): the graph carries a lane model; a lane-only change on the same
+    maneuver resends the graph at most every 3 s, and a 0x11 position update follows at most once a second.
 - The graph (`kombi_graph.hpp`) is a captured factory route start replayed byte for byte
   (`kombi_graph_template.hpp`, road names replaced by neutral text of the same length). Only fields proven on the
   car are changed: the direction enum in ManeuverDescription (0x0F), the distance text, its unit byte (0x01 mi,
   0x05 ft) and the red bar in ManeuverDistance (0x1D), and the road in TextResource (0x03).
+- Lanes: the lane model (0x1B, method 0x0010 setLaneGuidingData) is decoded from 126 factory frames: per lane a kind
+  (1 take, 2 other) and one arrow in the direction enum, the boundary bytes, and the section it covers (route
+  positions in metres to the destination, as the 0x1D double). It is sent right before maneuver 0's 0x0F nodes, which
+  then list it; the template's own lane models are dropped (93 frames). The KOMBI shows the lane row while the car's
+  route position from the last 0x11 destination info lies inside the section, re-checked on every 0x11, so the
+  daemon sends one after the graph and then at most once a second, from the phone's metres to the turn (clamped into
+  the section). AA lane shapes: STRAIGHT 1, NORMAL_LEFT 6, NORMAL_RIGHT 7, SLIGHT_LEFT 2 are car-verified;
+  SLIGHT_RIGHT 3, SHARP_* 4/5 and U_TURN_* 8/9 follow the enum names. No image resources (road shields) are sent.
 - Direction enum: LEFT 6, RIGHT 7 and the destination flag 10 are car-verified. The other values follow the
   KOMBI's enum names (HALF_LEFT 2, TIGHT_LEFT 4, UTURN_LEFT 8, ROUNDABOUT_CCW 15, HIGHWAY_OUT_RIGHT 29, FORK_LEFT 37,
   ...) and may still need a parked check.
