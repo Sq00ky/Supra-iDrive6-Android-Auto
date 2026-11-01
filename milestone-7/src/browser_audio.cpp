@@ -160,9 +160,30 @@ bool BrowserAudio::init() {
 // Device (mixer thread)
 // ---------------------------------------------------------------------------------------------------------------
 
+// The shim hands our parameters to A2I_Client_Open (liba2i_client check_parameter), which only takes a package
+// (= fragment) size that is a power of two of at least 32 bytes, 1..256 packages, and a whole buffer of at least twice
+// the device period. Car log 2026-11-01: "check_parameter: Invalid uSizeOfPackage: 3528" (20 ms at 44.1 kHz), which
+// snd_pcm_plugin_params reports as -22. A refused open can leave the handle half set up, so every try reopens it.
 bool BrowserAudio::openPcm() {
     if (pcm_) return true;
     if (!lib_ && !loadShim()) return false;
+    int frag = envInt("NBT_BROWSER_FRAG", 4096);
+    int frags = envInt("NBT_BROWSER_FRAGS", 5);
+    if (frag < 32) frag = 32;
+    if (frags < 1) frags = 1;
+    if (frags > 256) frags = 256;
+    while (frag & (frag - 1)) frag &= frag - 1;   // round down to a power of two
+    // First the configured size, then a deeper and a larger buffer in case the device period is long.
+    const int tries[3][2] = { { frag, frags }, { frag, frags * 2 > 256 ? 256 : frags * 2 }, { frag * 2, 8 } };
+    for (int t = 0; t < 3; ++t) {
+        if (t > 0 && tries[t][0] == tries[t - 1][0] && tries[t][1] == tries[t - 1][1]) continue;
+        if (t > 0) printf("[Browser] trying again with %d-byte fragments x%d\n", tries[t][0], tries[t][1]);
+        if (openPcmWith(tries[t][0], tries[t][1])) return true;
+    }
+    return false;
+}
+
+bool BrowserAudio::openPcmWith(int frag, int frags) {
     snd_pcm_t* h = NULL;
     int card = -1, dev = -1, rc;
     const char* sel = getenv("NBT_BROWSER_PCM");
@@ -194,10 +215,9 @@ bool BrowserAudio::openPcm() {
         printf("[Browser] snd_pcm_plugin_info failed: asking for %u Hz anyway\n", rate);
     }
 
-    // 20 ms fragments, at most 5 queued (~100 ms of latency in the shim).
-    int frag = (int)(rate / 50u) * (int)kOutCh * 2;
-    if (frag_max > 0 && frag > frag_max) frag = frag_max;
-    if (frag_min > 0 && frag < frag_min) frag = frag_min;
+    // Keep the fragment a power of two inside the device's range (4096 bytes = 1024 frames = 23 ms at 44.1 kHz).
+    while (frag_max > 0 && frag > frag_max && frag > 32) frag >>= 1;
+    while (frag_min > 0 && frag < frag_min) frag <<= 1;
 
     snd_pcm_channel_params_t p;
     memset(&p, 0, sizeof(p));
@@ -207,15 +227,15 @@ bool BrowserAudio::openPcm() {
     p.stop_mode = SND_PCM_STOP_STOP;
     p.buf.block.frag_size = frag;
     p.buf.block.frags_min = 1;
-    p.buf.block.frags_max = 5;
+    p.buf.block.frags_max = frags;
     p.format.interleave = 1;
     p.format.format = SND_PCM_SFMT_S16_LE;
     p.format.rate = (int32_t)rate;
     p.format.voices = (int32_t)kOutCh;
     rc = ((FnParams)fn_[F_PARAMS])(h, &p);
     if (rc < 0) {
-        printf("[Browser] snd_pcm_plugin_params failed: %d %s (why_failed %u)\n", rc, err ? err(rc) : "",
-               (unsigned)p.why_failed);
+        printf("[Browser] snd_pcm_plugin_params failed: %d %s (%u Hz, %d-byte fragments x%d; the reason is in "
+               "sloginfo: dev-libasound / check_parameter)\n", rc, err ? err(rc) : "", rate, frag, frags);
         ((FnClose)fn_[F_CLOSE])(h);
         return false;
     }
@@ -444,16 +464,25 @@ void BrowserAudio::mixerLoop() {
         pcm_failed_ = true;
         return;
     }
-    const size_t block = rate_ / 100u;   // 10 ms
+    // One mixer block = one device fragment: the shim puts every write into a buffer slot of its own (one fragment
+    // at most), so a short write would hand A2I a part-filled package.
+    size_t block = 0;
     std::vector<int16_t> in[NSTREAMS];
-    for (int s = 0; s < NSTREAMS; ++s) in[s].assign(block * kOutCh, 0);
-    std::vector<int16_t> out(block * kOutCh, 0);
+    std::vector<int16_t> out;
     uint64_t t0 = nowMs(), written_frames = 0;
     last_sound_ms_ = t0;
     last_stats_ms_ = t0;
     uint32_t fail_run = 0;
 
     while (!stop_) {
+        const size_t want_block = frag_bytes_ / (kOutCh * 2u);
+        if (want_block != block) {
+            block = want_block;
+            for (int s = 0; s < NSTREAMS; ++s) in[s].assign(block * kOutCh, 0);
+            out.assign(block * kOutCh, 0);
+            printf("[Browser] mixing %u frames (%u ms) per write at %u Hz\n", (unsigned)block,
+                   (unsigned)(block * 1000u / rate_), rate_);
+        }
         const uint64_t now = nowMs();
         bool queued = false, any_started = false;
         for (int s = 0; s < NSTREAMS; ++s) {

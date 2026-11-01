@@ -86,6 +86,7 @@ private:
 
     bool loadShim();
     bool openPcm();
+    bool openPcmWith(int frag, int frags);
     void closePcm();
     bool writePcm(const int16_t* buf, size_t frames);
     void ensureMixer();
