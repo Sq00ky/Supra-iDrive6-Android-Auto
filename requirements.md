@@ -3,12 +3,12 @@ As of v1.8.66, the following is required:
 1. Apple CarPlay
 2. WiFi Antenna 
 3. SSH Access to the NBT Evo Head Unit
-4. OADR/OABR on/to the Head Unit
+4. **For Retrofits** - OADR/OABR on/to the Head Unit
 
 ## Installation Requirements
 1. SSH access to the head unit
-2. A flash drive for logging
-3. ODB to ENET cable
+2. **OPTIONAL** A flash drive for logging
+3. ODB to ENET cable **ODB WiFi/Bluetooth Adapter**
 
 ### Confirmed Working Versions
 **If you have tested a version and confirmed that it is working, please submit a PR on this file!**
