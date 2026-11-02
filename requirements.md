@@ -22,7 +22,7 @@ This can be found at Navigation > Settings > Position and software version > sof
 
 The following versions have been tested and confirmed working:
 |Navigation Version|Car Model|Code Name|Year|
-|-|-|-|
+|-|-|-|-|
 |NBTevo_T24081I|Toyota Supra|J29|2024|
 |NBTevo_T214241I|Toyota Supra|J29|2022|
 |NBTevo_23236I|BMW x3|G01|2018|
