@@ -23,11 +23,19 @@ This can be found at Navigation > Settings > Position and software version > sof
 The following versions have been tested and confirmed working:
 |Navigation Version|Car Model|Year|
 |-|-|-|
-|NBTevo_T214241I |Toyota Supra|2022|
-|NBTevo_Y21432J  |BMW M2 Comp |2020|
+|NBTevo_23236I|BMW x3|G01|2018|
+|NBTevo_S19322I|BMW 4 Series|x|2018|
+|NBTevo_T20454I|BMW X3|G01|2018|
+|NBTevo_T214241I|Toyota Supra|2022|
+|NBTevo_T214241I|Toyota Supra|J29|2022|
+|NBTevo_T24081I|Toyota Supra|J29|2024|
+|NBTevo_V201531|BMW 4 Series|F32|x|
+|NBTevo_Y21432J|BMW M2 Comp |2020|
+|NBTevo_Y21432J|BMW M2|F87|x|
+|NBTevo_Y24073J|BMW 3 Series|F30|2017|
 
 ### Confirmed Non Compatible Versions
 **If you have tested a version and confirmed that it is NOT working, please submit a PR on this file!**
-|Navigation Version|Car Model|Year|
-|-|-|-|
-|x |x|x|
+|Navigation Version|Car Model|Year|Reason|
+|-|-|-|-|
+|NBTevo_T22181I|Toyota Supra|2023|HMI App Won't Install|
