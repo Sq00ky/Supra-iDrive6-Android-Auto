@@ -7,8 +7,14 @@ As of v1.8.66, the following is required:
 
 ## Installation Requirements
 1. SSH access to the head unit
-2. **OPTIONAL** A flash drive for logging
-3. ODB to ENET cable **ODB WiFi/Bluetooth Adapter**
+2. ODB to ENET cable
+3. 
+### NOT COMPATIBLE
+1. **ODB WiFi/Bluetooth Adapter**
+
+### OPTIONAL
+1. Flash Drive in FAT32/exFAT for logging
+
 
 ### Confirmed Working Versions
 **If you have tested a version and confirmed that it is working, please submit a PR on this file!**
