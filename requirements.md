@@ -33,6 +33,7 @@ The following versions have been tested and confirmed working:
 |NBTevo_Y21432J|BMW M2 Comp |2020|
 |NBTevo_Y21432J|BMW M2|F87|x|
 |NBTevo_Y24073J|BMW 3 Series|F30|2017|
+|NBTevo_Y22292I|BMW 3 Series|F30|2012 [Retrofit]|
 
 ### Confirmed Non Compatible Versions
 **If you have tested a version and confirmed that it is NOT working, please submit a PR on this file!**
