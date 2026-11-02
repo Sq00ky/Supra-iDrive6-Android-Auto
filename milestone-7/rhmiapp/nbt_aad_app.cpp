@@ -1479,7 +1479,9 @@ bmw::PluginApp* g_app = NULL;
 
 // "Open Android Auto" entry / favourite key (raAction 2): see rhmiapp/entry_key.hpp.
 bool onEntryAction(void* self, const bmw::Parcel& /*args*/) {
-    bmw::PluginApp* app = static_cast<bmw::PluginApp*>(self);
+    // Fire event 53 from the app that owns our menu (g_runApp: the one whose events 50-52 are car-proven); `self` is
+    // this entry's own pluginApp, which may be a separate instance without event 53.
+    bmw::PluginApp* app = g_runApp ? g_runApp : static_cast<bmw::PluginApp*>(self);
     DaemonState d = readDaemonState();
     bool connected = d.pid != 0 && !strcmp(d.state, "connected");
     nbt::entrykey::Action a = nbt::entrykey::decide(d.pid != 0, connected, d.pid != 0 && d.overlay != 0, g_stopPid != 0);
