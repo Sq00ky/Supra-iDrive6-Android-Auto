@@ -59,7 +59,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-22b-credits (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-25-ramlog (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -339,6 +339,28 @@ bool appLogPath(char* out, size_t n) {
     return ok;
 }
 
+// RAM log /dev/shmem/nbt-aad-app.log (v1.8.67) while no USB log is open: fresh per HMI run, hard 5 MB cap (then off
+// for the run). NBT_RAM_LOG=0 in nbt-aad.env turns it off. The first line is the version banner.
+bool envFlagOn(const char* name, bool def);
+nbt::ramlog::Capped g_ramLog;
+int g_ramLogOn = -1;   // NBT_RAM_LOG, read once
+
+void ramLog(const char* line, size_t n) {
+    pthread_mutex_lock(&g_logMutex);
+    if (g_ramLogOn < 0) g_ramLogOn = envFlagOn("NBT_RAM_LOG", true) ? 1 : 0;
+    if (g_ramLogOn == 1) {
+        if (!g_ramLog.opened) {
+            char v[96], b[320];
+            nbt::huVersion(v, sizeof(v));
+            int bn = snprintf(b, sizeof(b), "---- nbt-aad-app RAM log (%s, 5 MB cap) ----\n  Build: %s\n"
+                              "  HU software / nav version: %s\n", nbt::ramlog::kAppPath, NBT_AAD_APP_VERSION, v);
+            if (bn > 0 && bn < (int)sizeof(b)) nbt::ramlog::append(g_ramLog, nbt::ramlog::kAppPath, b, (size_t)bn);
+        }
+        nbt::ramlog::append(g_ramLog, nbt::ramlog::kAppPath, line, n);
+    }
+    pthread_mutex_unlock(&g_logMutex);
+}
+
 void alog(const char* fmt, ...) {
     char msg[384];
     va_list ap;
@@ -352,7 +374,9 @@ void alog(const char* fmt, ...) {
     if (n < 0) return;
     if (n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
     char path[192];
-    int fd = appLogPath(path, sizeof(path)) ? open(path, O_WRONLY | O_CREAT | O_APPEND, 0666) : -1;
+    bool usb = appLogPath(path, sizeof(path));
+    int fd = usb ? open(path, O_WRONLY | O_CREAT | O_APPEND, 0666) : -1;
+    if (!usb) ramLog(line, (size_t)n);
 #ifndef __QNX__
     if (fd < 0) fd = open("/tmp/nbt-aad-app.log", O_WRONLY | O_CREAT | O_APPEND, 0666);   // host tests
 #endif
@@ -1212,7 +1236,12 @@ bool onUsbLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     char path[192];
     bool now = nbt::usblog::enabled();
     if (now) {
-        if (appLogPath(path, sizeof(path))) alog("menu: save logs to USB -> on (%s, %s)", path, NBT_AAD_APP_VERSION);
+        if (appLogPath(path, sizeof(path))) {
+            alog("menu: save logs to USB -> on (%s, %s)", path, NBT_AAD_APP_VERSION);
+            char v[96];
+            nbt::huVersion(v, sizeof(v));
+            alog("HU software / nav version: %s", v);
+        }
         else alog("menu: save logs to USB -> on, no USB stick found under /mnt yet (checked every %ld s)", kUsbLogRecheckS);
     }
     if (g_runApp) showUsbLog(g_runApp);
@@ -1598,6 +1627,9 @@ void destroyApp(void* app) {
 
 __attribute__((constructor)) void libraryLoaded() {
     alog("library loaded into pid %d, %s", (int)getpid(), NBT_AAD_APP_VERSION);
+    char v[96];
+    nbt::huVersion(v, sizeof(v));
+    alog("HU software / nav version: %s", v);
 }
 
 } // namespace

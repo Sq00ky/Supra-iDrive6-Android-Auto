@@ -55,10 +55,10 @@ int main() {
     std::vector<uint8_t> a = base;
     CHECK(dropSdrChannels(a) == 0 && a == base);
 
-    // unset = browser audio mode (default since v1.8.61): nothing dropped, AA media stays on ch 9
+    // unset = Bluetooth audio mode (default again since v1.8.66): channel 9 dropped
     unsetenv("NBT_AUDIO_BT");
     std::vector<uint8_t> a2 = base;
-    CHECK(dropSdrChannels(a2) == 0 && a2 == base);
+    CHECK(dropSdrChannels(a2) == 1);
 
     // NBT_AUDIO_BT=1 -> only 9 removed (8 + 14 are required by the phone), rest intact and parseable
     setenv("NBT_AUDIO_BT", "1", 1);
@@ -128,7 +128,10 @@ int main() {
     setenv("NBT_AUDIO_BT", "1", 1);
     CHECK(audioMode() == AUDIO_MODE_BT);                     // explicit NBT_AUDIO_BT=1 keeps Bluetooth
     unsetenv("NBT_AUDIO_MODE"); unsetenv("NBT_AUDIO_BT");
-    CHECK(audioMode() == AUDIO_MODE_BROWSER);                // default since v1.8.61
+    CHECK(audioMode() == AUDIO_MODE_BT);                     // default again since v1.8.66
+    setenv("NBT_AUDIO_MODE", "browser", 1);
+    CHECK(audioMode() == AUDIO_MODE_BROWSER);                // explicit browser still works
+    unsetenv("NBT_AUDIO_MODE");
 
     printf(fails ? "test_sdr_drop: %d FAILED\n" : "test_sdr_drop: all passed\n", fails);
     return fails ? 1 : 0;

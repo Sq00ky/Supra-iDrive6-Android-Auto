@@ -452,7 +452,7 @@ static nbt::AudioManager* g_audio = NULL;       // same lifetime rule as g_video
 // audio source (browser_audio.hpp). Same lifetime rule as g_video.
 static nbt::BrowserAudio* g_browser = NULL;
 static bool g_a2iAudio = false;                 // NBT_AUDIO_MODE=a2i (or NBT_AUDIO_BT=0): the staged AudioManager
-// Bluetooth audio mode (NBT_AUDIO_MODE=bt or NBT_AUDIO_BT=1; browser is the default since v1.8.61): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
+// Bluetooth audio mode (default again since v1.8.66; NBT_AUDIO_MODE=browser selects browser audio): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
 static bool g_btAudio = false;
 static nbt::AudioRoute g_btRoute;
 static uint32_t g_btSrc = 0x3a;                 // eSRC_A2DP (audioconn -l: ConnId 0xc7 AuxInBTAudio)
@@ -1374,11 +1374,11 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.61-browser"
+#define NBT_AAD_BUILD "v1.8.67-kombi-bt-ramlog"
 
 // ---- log destination ------------------------------------------------------------------------------------------
-// Default: no log file and nothing kept in RAM (the iDrive app sends our stdout to /dev/null; from a shell it stays on
-// the terminal). NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
+// Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
+// (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
 // /var/opt/aa/usblog, usb_log.hpp) makes us append to <stick>/nbt-aad.log on the first writable /mnt/umass* stick;
 // checked at start and every 5 s, so a stick plugged in later is picked up and a removed one is let go.
 static bool g_logForced = false;
@@ -1386,11 +1386,55 @@ static char g_usbLogPath[192] = "";
 
 static bool logPersistent() { return g_logForced || g_usbLogPath[0] != 0; }
 
+// RAM log (v1.8.67, usb_log.hpp ramlog): with no USB / NBT_LOG_FILE log, stdout goes to /dev/shmem/nbt-aad.log
+// (fresh per run, 5 MB cap; NBT_RAM_LOG=0 = off). Only replaces /dev/null: a shell run on a terminal or redirected to
+// a file of the user's choosing keeps its stdout.
+static bool g_ramLog = false;      // stdout is the RAM log now
+static bool g_ramUsed = false;     // the RAM log was opened this run (later opens append)
+static bool g_ramFull = false;     // cap reached: no more RAM logging this run
+
+static bool ramLogWanted() { return nbt::envFlag("NBT_RAM_LOG") != 0 && !g_ramFull; }
+
+static bool stdoutIsNull() {
+    struct stat a, b;
+    if (fstat(1, &a) != 0 || stat("/dev/null", &b) != 0) return false;
+    return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+}
+
 static void stdoutToNull() {
     fflush(stdout);
+    g_ramLog = false;
     if (!freopen("/dev/null", "a", stdout)) return;
     setvbuf(stdout, NULL, _IOLBF, 0);
     dup2(fileno(stdout), 2);
+}
+
+// /dev/null -> RAM log when wanted; otherwise /dev/null.
+static void stdoutToRamOrNull() {
+    if (!ramLogWanted()) { stdoutToNull(); return; }
+    fflush(stdout);
+    if (!freopen(nbt::ramlog::kDaemonPath, g_ramUsed ? "a" : "w", stdout)) { stdoutToNull(); return; }
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    dup2(fileno(stdout), 2);
+    g_ramLog = true;
+    if (g_ramUsed) printf("[Log] back on the RAM log %s\n", nbt::ramlog::kDaemonPath);
+    g_ramUsed = true;
+}
+
+// Main loop, every tick: stop the RAM log before it can reach 5 MB.
+static void checkRamLogCap() {
+    if (!g_ramLog) return;
+    struct stat st;
+    if (fstat(fileno(stdout), &st) != 0 || !nbt::ramlog::daemonMustStop((long)st.st_size)) return;
+    fputs(nbt::ramlog::kFullLine, stdout);
+    g_ramFull = true;
+    stdoutToNull();
+}
+
+static void printHuVersion() {
+    char v[96];
+    nbt::huVersion(v, sizeof(v));
+    printf("  HU software / nav version: %s\n", v);
 }
 
 static void serviceUsbLog(bool atStart) {
@@ -1404,7 +1448,7 @@ static void serviceUsbLog(bool atStart) {
         if (on && nbt::usblog::isWritableDir(dir)) return;
         printf("[Log] %s: USB log closed\n", on ? "USB stick gone" : "Save logs to USB turned off");
         g_usbLogPath[0] = 0;
-        stdoutToNull();
+        stdoutToRamOrNull();
         return;
     }
     char stick[128];
@@ -1413,14 +1457,19 @@ static void serviceUsbLog(bool atStart) {
     nbt::usblog::logPath(path, sizeof(path), stick, nbt::usblog::kDaemonName);
     if (isatty(1)) printf("[Log] Save logs to USB is on: logging to %s\n", path);
     fflush(stdout);
-    if (!freopen(path, "a", stdout)) { stdoutToNull(); return; }
+    if (g_ramLog) printf("[Log] USB stick found: logging to %s (the RAM log %s stops here)\n", path, nbt::ramlog::kDaemonPath);
+    fflush(stdout);
+    if (!freopen(path, "a", stdout)) { stdoutToRamOrNull(); return; }
     setvbuf(stdout, NULL, _IOLBF, 0);
     dup2(fileno(stdout), 2);
+    g_ramLog = false;
     snprintf(g_usbLogPath, sizeof(g_usbLogPath), "%s", path);
     printf("---- nbt-aad log appended to %s (Save logs to USB, fsync every 2 s) ----\n", path);
-    if (!atStart)
-        printf("  Build: " NBT_AAD_BUILD " (%s %s): USB stick found while running, earlier lines were not saved\n",
-               __DATE__, __TIME__);
+    if (!atStart) {
+        printf("  Build: " NBT_AAD_BUILD " (%s %s): USB stick found while running, earlier lines were not saved%s\n",
+               __DATE__, __TIME__, g_ramUsed ? " here (see the RAM log)" : "");
+        printHuVersion();
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -1433,6 +1482,7 @@ int main(int argc, char* argv[]) {
     const char* log_file = getenv("NBT_LOG_FILE");
     if (log_file && *log_file) g_logForced = (freopen(log_file, "a", stdout) != NULL);
     else serviceUsbLog(true);
+    if (!logPersistent() && stdoutIsNull()) stdoutToRamOrNull();   // started by the iDrive app with no USB log
     nbt::installProcessGuards();   // first: line-buffered log, SIGPIPE ignored, fatal-signal report (setvbuf must precede any output)
     if (g_logForced) printf("---- nbt-aad log appended to %s (fsync every 2 s) ----\n", log_file);
     printf("====================================================\n");
@@ -1440,6 +1490,8 @@ int main(int argc, char* argv[]) {
     printf("  Platform: BMW NBT Evo ID6 / Toyota GR Supra (J29) \n");
     printf("  OS: QNX Neutrino RTOS (ARMv7LE)                   \n");
     printf("  Build: " NBT_AAD_BUILD " (%s %s)\n", __DATE__, __TIME__);
+    printHuVersion();
+    if (g_ramLog) printf("  Log: RAM %s (fresh per run, 5 MB cap; NBT_RAM_LOG=0 = off)\n", nbt::ramlog::kDaemonPath);
     nbt::printNbtAadBannerNotice();
     printf("====================================================\n");
     printf("----------------------------------------------------\n");
@@ -1734,6 +1786,7 @@ int main(int argc, char* argv[]) {
         if (log_sync_ticks == 2400 && unlink(kBootGuardFile) == 0)   // 10 min up: not part of a bootloop
             printf("[Main] running for 10 min: autostart bootloop guard cleared\n");
         if ((log_sync_ticks % 20) == 0) serviceUsbLog(false);   // every 5 s: stick plugged in / removed, checkbox
+        checkRamLogCap();                                         // every tick: RAM log 5 MB cap
         if (logPersistent() && (log_sync_ticks % 8) == 0) { fflush(stdout); fsync(fileno(stdout)); }
         if (act && !was_active) { g_userExit = 0; g_carExit = 0; }   // a new phone session comes up in Android Auto
         if (g_backState == 1 && (uint32_t)(monoMs() - g_backDownMs) >= backHoldMs()) {

@@ -146,7 +146,10 @@ int main() {
     unsetenv("NBT_GUIDANCE_BT"); setenv("NBT_AUDIO_BT", "0", 1);
     CHECK(retypeGuidanceSink(sdr) == 0 && audioType(sdr, 8) == 1);   // A2I mode: GUIDANCE kept
     unsetenv("NBT_AUDIO_BT");
-    { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 0 && audioType(t, 8) == 1); }   // unset = browser mode (v1.8.61): GUIDANCE kept
+    { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // unset = BT mode (default again, v1.8.66)
+    setenv("NBT_AUDIO_MODE", "browser", 1);
+    { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 0 && audioType(t, 8) == 1); }   // browser mode: GUIDANCE kept
+    unsetenv("NBT_AUDIO_MODE");
     setenv("NBT_AUDIO_BT", "1", 1);
     { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // BT mode
     setenv("NBT_AUDIO_BT", "1", 1); setenv("NBT_GUIDANCE_BT", "0", 1);
