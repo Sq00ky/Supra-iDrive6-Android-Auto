@@ -225,6 +225,7 @@ static void testBridge() {
     assert(waitSessions(3, 5.0));
     endSession();
     assert(!waitSessions(4, 4.5));
+    assert(!usb.phonePresent());   // out of sessions: still plugged in, but wireless may have the phone
     printf("session retries: ok\n");
 
     // Replug: the node goes away and comes back -> a fresh start.
@@ -344,7 +345,7 @@ static int countLines(const char* path, const char* needle) {
 }
 
 // Item 5: an aoap-switch node whose switch fails (here: no devctl on the host) is retried a second apart, up to
-// 5 times, instead of once for the whole plug-in.
+// 5 times, instead of once for the whole plug-in. After that it no longer holds wireless off.
 static void testSwitchRetries() {
     const char* dir = "/tmp/nbt_usbacc_switch";
     const char* log = "/tmp/nbt_usbacc_switch.log";
@@ -359,13 +360,17 @@ static void testSwitchRetries() {
     assert(dup2(out, 1) == 1);   // stdout is unbuffered (main)
     UsbAccessory usb(&onConnect, NULL, &owner, NULL, dir);
     assert(usb.start());
-    sleep(7);
+    sleep(1);
+    bool trying = usb.phonePresent();   // still being switched
+    sleep(6);
+    bool given_up = !usb.phonePresent();   // the node is still there, but USB gave up on it
     usb.stop();
     assert(dup2(saved, 1) == 1);
     close(saved);
     close(out);
     assert(countLines(log, "android05: accessory switch failed") == 5);
     assert(countLines(log, "android05: giving up after 5 tries") == 1);
+    assert(trying && given_up);
     printf("switch retries: ok\n");
 }
 

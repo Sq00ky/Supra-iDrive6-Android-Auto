@@ -48,6 +48,9 @@ static const double kDriverGraceS = 2.0;      // NBT_USB_DIRECT: wait this long 
 // medialauncher's own AOA request comes at plug-in, and a phone that was not answering then (still on "charging only")
 // is only switched by us anyway, from the moment "Android Auto" is chosen on it (it re-enumerates).
 static const double kSelfSwitchAfterS = 0.5;
+// After our switch the phone drops off the bus and comes back as an accessory; if its aoap-switch node is still there
+// this long after, the switch did nothing and the node no longer holds wireless off.
+static const double kSwitchSettleS = 10.0;
 
 static double monoSec() {
     struct timespec ts;
@@ -505,7 +508,6 @@ void UsbAccessory::watchLoop() {
             accs = direct_drivers_ == 0 ? known : std::vector<std::string>();
             if (bridge_ && !contains(accs, bridge_->node)) accs.push_back(bridge_->node);
         }
-        setFlag(phone_present_, !androids.empty() || accessory_plugged || !accs.empty() || (direct_ && bridge_));
 
         // Forget nodes that went away: a phone plugged in again gets a fresh start.
         for (size_t i = switches_.size(); i-- > 0;) {
@@ -535,7 +537,7 @@ void UsbAccessory::watchLoop() {
                     if (switches_[j].name == androids[i]) s = &switches_[j];
                 }
                 if (!s) {
-                    SwitchNode n = { androids[i], 0, 0, false };
+                    SwitchNode n = { androids[i], 0, 0, false, false, 0 };
                     switches_.push_back(n);
                     s = &switches_.back();
                 }
@@ -544,10 +546,13 @@ void UsbAccessory::watchLoop() {
                 TriggerResult r = trigger(path.c_str());
                 if (r != kTriggerFailed) {
                     s->done = true;
+                    s->switched = r == kTriggerSwitched;
+                    s->done_s = now;
                 } else if (++s->tries >= kMaxSwitchTries) {
                     s->done = true;
-                    printf("[UsbAccessory] %s: giving up after %d tries; unplug and replug the phone to try again\n",
-                           path.c_str(), s->tries);
+                    s->done_s = now;
+                    printf("[UsbAccessory] %s: giving up after %d tries; unplug and replug the phone to try again "
+                           "(wireless Android Auto stays available meanwhile)\n", path.c_str(), s->tries);
                 } else {
                     s->next_try_s = now + kNodeRetryS;
                 }
@@ -570,16 +575,37 @@ void UsbAccessory::watchLoop() {
                 } else if (r == kBridgeOpenFailed) {
                     if (++n->open_fails >= kMaxOpenFails)
                         printf("[UsbAccessory] %s: could not be opened %d times in a row, giving up; unplug and "
-                               "replug the phone to try again\n", accs[i].c_str(), n->open_fails);
+                               "replug the phone to try again (wireless Android Auto stays available meanwhile)\n",
+                               accs[i].c_str(), n->open_fails);
                     n->next_try_s = now + kNodeRetryS;
                 } else if (r == kBridgeFailed) {
                     n->next_try_s = now + kRetryGapS;
                 }   // kBridgeLeaked: reapBridge() already took the node out of use
             }
         }
+        setFlag(phone_present_, usbWantsPhone(androids, accs, accessory_plugged && accs.empty(), now));
 
         for (int i = 0; i < 5 && flag(is_running_); ++i) usleep(100000);
     }
+}
+
+// What phonePresent() reports. A node not looked at yet (a wireless session owns the car) counts: it is still to be
+// tried once that session ends.
+bool UsbAccessory::usbWantsPhone(const std::vector<std::string>& androids, const std::vector<std::string>& accs,
+                                 bool accessory_waiting, double now) {
+    if (bridge_ || accessory_waiting) return true;   // a session, or an accessory waiting out the driver grace
+    for (size_t i = 0; i < androids.size(); ++i) {
+        const SwitchNode* s = NULL;
+        for (size_t j = 0; j < switches_.size(); ++j) {
+            if (switches_[j].name == androids[i]) s = &switches_[j];
+        }
+        if (!s || !s->done || (s->switched && now - s->done_s < kSwitchSettleS)) return true;
+    }
+    for (size_t i = 0; i < accs.size(); ++i) {
+        const AccessoryNode* n = findNode(accs[i]);
+        if (!n || (n->sessions < kMaxSessionsPerNode && n->open_fails < kMaxOpenFails)) return true;
+    }
+    return false;
 }
 
 UsbAccessory::TriggerResult UsbAccessory::trigger(const char* path) {

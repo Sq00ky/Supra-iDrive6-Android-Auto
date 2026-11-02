@@ -910,7 +910,8 @@ static void* wirelessThread(void*) {
         if (usbPhone != usbHeld) {
             printf("[Wireless] %s\n", usbPhone ? "phone on the USB cable: Bluetooth links are left alone while it is"
                                                  " plugged in"
-                                               : "no phone on the USB cable any more: wireless Android Auto available");
+                                               : "no phone for USB any more (unplugged, or USB gave up on it): "
+                                                 "wireless Android Auto available");
             usbHeld = usbPhone;
         }
         if (usbPhone) { idleWait = false; usleep(500000); continue; }

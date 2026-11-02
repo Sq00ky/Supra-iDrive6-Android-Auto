@@ -36,8 +36,10 @@ public:
     bool start();
     void stop();   // ends the bridge too, which ends a USB session
 
-    // A phone is on the cable: an aoap-switch node (AOA phone, switched or not yet) or an accessory node exists.
-    // The wireless thread leaves the Bluetooth links alone meanwhile. Updated every scan (500 ms).
+    // A phone on the cable that USB still means to connect: a session runs, or an aoap-switch or accessory node is
+    // still to be switched or opened. A node USB gave up on, or left to another client, does not count, so it does
+    // not keep wireless off until the phone is unplugged. The wireless thread leaves the Bluetooth links alone while
+    // this is true. Updated every scan (500 ms).
     bool phonePresent() const { return flag(phone_present_); }
 
 private:
@@ -46,6 +48,8 @@ private:
         int tries;
         double next_try_s;
         bool done;              // switched, left to another client, or given up
+        bool switched;          // done by our switch: the phone comes back as an accessory
+        double done_s;
     };
     struct AccessoryNode {      // a /dev/oap* node
         std::string name;
@@ -62,6 +66,8 @@ private:
     BridgeResult startBridge(const std::string& node);   // node: an oap* name, or a UsbDirect key
     bool reapBridge(bool force);   // false: a stuck bridge was abandoned (force only)
     AccessoryNode* findNode(const std::string& name);
+    bool usbWantsPhone(const std::vector<std::string>& androids, const std::vector<std::string>& accs,
+                       bool accessory_waiting, double now);
 
     bool flag(const bool& f) const;
     void setFlag(bool& f, bool v);
