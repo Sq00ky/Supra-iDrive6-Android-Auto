@@ -462,27 +462,32 @@ bool patchChannel(const uint8_t* p, size_t n, const VidOv& o, std::vector<uint8_
 bool patchMainVideo(std::vector<uint8_t>& sdr) {
     VidOv o;
     memset(&o, 0, sizeof(o));
-    o.res = envInt("NBT_VID_RES", o.vres);
+    const char* res = getenv("NBT_VID_RES");
+    o.res = res && *res;
+    o.vres = nbt::videoResolution();
     const char* fps = getenv("NBT_VID_FPS");
     o.fps = fps && *fps;
     o.vfps = nbt::videoFps() == 30 ? 1 : 2; // VideoFPS uses 1 for 30 fps and 2 for 60 fps.
-    o.mw = envInt("NBT_VID_MW", o.vmw);
-    o.mh = envInt("NBT_VID_MH", o.vmh);
+    o.mw = o.mh = nbt::videoResolution() != 2;
+    if (envInt("NBT_VID_MW", o.vmw)) o.mw = true;
+    if (envInt("NBT_VID_MH", o.vmh)) o.mh = true;
     // Default DPI 140 (car-verified 2026-10-23, w9: rail icons no longer overlap in crop mode).
     // NBT_VID_DPI=<n> overrides, NBT_VID_DPI=0 keeps the phone's own DPI.
     // MINI round display (1180_480 coding): DPI 152 and 40 px side insets by default (car-verified on a MINI F60).
+    // Scale density with the canvas width so changing resolution keeps text at roughly the same size on the panel.
     const bool mini = miniRoundPanel();
-    o.vdpi = mini ? 152 : 140;
+    o.vdpi = ((mini ? 152 : 140) * videoCanvasWidth() + 640) / 1280;
     o.dpi = true;
     if (envInt("NBT_VID_DPI", o.vdpi) && o.vdpi <= 0) { o.dpi = false; o.vdpi = 0; }
-    // Default (car-verified in w7 on the 1280x480 panel): the phone keeps its UI inside the top rows of its
-    // 1280x720 canvas that the panel can show (480 rows -> bottom inset 240) and we show those rows 1:1. Other
-    // panels (NBT_SCREEN / carplay.ini) get 720 - rows shown at panel width, e.g. 1440x540 -> 480 rows -> 240.
-    // NBT_VID_NATIVE=1 adds a right inset of 1280 - panel width (1180x480 -> 0,240,0,100).
+    // Keep controls inside the part of the canvas the panel can show.
+    // The 720p default on 1280x480 is still 0,240,0,0 (car-verified in w7).
+    // At 480p it becomes 0,180,0,0, leaving an 800x300 UI that scales evenly to the panel.
+    // Native mode reserves hidden columns on the right. MINI bezel insets scale with the canvas.
     // NBT_VID_INSETS=off restores the plain manifest.
     char defIns[32];
-    const int side = mini ? 40 : 0;
-    snprintf(defIns, sizeof(defIns), "0,%d,%d,%d", 720 - canvasRowsShown(), side, 1280 - canvasColsShown() + side);   // t,b,l,r
+    const int side = mini ? 40 * videoCanvasWidth() / 1280 : 0;
+    snprintf(defIns, sizeof(defIns), "0,%d,%d,%d", videoCanvasHeight() - canvasRowsShown(), side,
+             videoCanvasWidth() - canvasColsShown() + side); // top, bottom, left, right
     const char* ins = getenv("NBT_VID_INSETS");
     if (!ins || !*ins) ins = defIns;
     if (strcmp(ins, "off") != 0) {
@@ -515,7 +520,7 @@ bool patchMainVideo(std::vector<uint8_t>& sdr) {
         }
     }
     if (changed) {
-        if (mini) printf("[SDR] MINI round display (carplay.ini 1180_480): default DPI 152, side insets 40 px (NBT_VID_DPI / NBT_VID_INSETS override)\n");
+        if (mini) printf("[SDR] MINI round display: side insets %d px (NBT_VID_DPI / NBT_VID_INSETS override)\n", side);
         printf("[SDR] main VideoConfig override: res=%s%d fps=%u mw=%s%d mh=%s%d dpi=%s%d insets=%s(%d,%d,%d,%d)\n",
                o.res ? "" : "(keep)", o.vres, nbt::videoFps(), o.mw ? "" : "(keep)", o.vmw, o.mh ? "" : "(keep)", o.vmh,
                o.dpi ? "" : "(keep)", o.vdpi, o.ins ? "" : "(keep)", o.it, o.ib, o.il, o.ir);
@@ -525,11 +530,12 @@ bool patchMainVideo(std::vector<uint8_t>& sdr) {
 }
 
 
-// Touchscreen geometry the phone is told about (channel 7 -> input source (4) -> touchscreen (2) -> height (2)).
-// The phone renders a 1280x720 canvas that we squash into the 480-row panel, so by default the touch space is
-// declared 1280x720 and the forwarder scales y by 1.5 (NBT_TOUCH_SY). NBT_TOUCH_CFG_H overrides the height.
+// Touch coordinates use the full video canvas, including its hidden margins.
+// Wire path: channel 7 -> input source (field 4) -> touchscreen (field 2) -> width (1), height (2).
+// For 720p this stays 1280x720. 480p needs 800x480 in both the phone's declaration and the forwarder.
+// NBT_TOUCH_CFG_H still overrides the declared height for existing calibrations.
 namespace {
-bool patchTouchscreen(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& out) {
+bool patchTouchscreen(const uint8_t* p, size_t n, int w, int h, std::vector<uint8_t>& out) {
     size_t pos = 0;
     while (pos < n) {
         size_t start = pos;
@@ -539,7 +545,7 @@ bool patchTouchscreen(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& o
         if (wt == 0) {
             uint64_t x;
             if (!getVarint(p, n, pos, x)) return false;
-            if (f == 2) { putVarint(out, key); putVarint(out, (uint64_t)h); }
+            if (f == 1 || f == 2) { putVarint(out, key); putVarint(out, (uint64_t)(f == 1 ? w : h)); }
             else out.insert(out.end(), p + start, p + pos);
         } else if (wt == 2) {
             uint64_t l; if (!getVarint(p, n, pos, l) || pos + l > n) return false; pos += (size_t)l;
@@ -550,7 +556,7 @@ bool patchTouchscreen(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& o
     }
     return true;
 }
-bool patchInputSource(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& out) {
+bool patchInputSource(const uint8_t* p, size_t n, int w, int h, std::vector<uint8_t>& out) {
     size_t pos = 0;
     while (pos < n) {
         size_t start = pos;
@@ -563,7 +569,7 @@ bool patchInputSource(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& o
             const uint8_t* body = p + pos; pos += (size_t)l;
             if (f == 2) {
                 std::vector<uint8_t> sub;
-                if (!patchTouchscreen(body, (size_t)l, h, sub)) return false;
+                if (!patchTouchscreen(body, (size_t)l, w, h, sub)) return false;
                 putLen(out, 2, sub.empty() ? NULL : &sub[0], sub.size());
             } else out.insert(out.end(), p + start, p + pos);
         }
@@ -573,7 +579,7 @@ bool patchInputSource(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& o
     }
     return true;
 }
-bool patchInputChannel(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& out, bool& is7) {
+bool patchInputChannel(const uint8_t* p, size_t n, int w, int h, std::vector<uint8_t>& out, bool& is7) {
     is7 = false;
     size_t pos = 0;
     while (pos < n) {
@@ -597,7 +603,7 @@ bool patchInputChannel(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& 
             const uint8_t* body = p + pos; pos += (size_t)l;
             if (f == 4) {
                 std::vector<uint8_t> sub;
-                if (!patchInputSource(body, (size_t)l, h, sub)) return false;
+                if (!patchInputSource(body, (size_t)l, w, h, sub)) return false;
                 putLen(out, 4, sub.empty() ? NULL : &sub[0], sub.size());
             } else out.insert(out.end(), p + start, p + pos);
         }
@@ -610,9 +616,9 @@ bool patchInputChannel(const uint8_t* p, size_t n, int h, std::vector<uint8_t>& 
 } // namespace
 
 bool patchTouchConfig(std::vector<uint8_t>& sdr) {
-    int h = 720;
+    int w = videoCanvasWidth(), h = videoCanvasHeight();
     envInt("NBT_TOUCH_CFG_H", h);
-    if (h == 480) return false;
+    if (w == 1280 && h == 480) return false;
     std::vector<uint8_t> out;
     size_t n = sdr.size(), pos = 0;
     bool changed = false;
@@ -627,7 +633,7 @@ bool patchTouchConfig(std::vector<uint8_t>& sdr) {
             const uint8_t* body = &sdr[0] + pos; pos += (size_t)l;
             bool is7 = false;
             std::vector<uint8_t> sub;
-            if (f == 1 && patchInputChannel(body, (size_t)l, h, sub, is7) && is7) {
+            if (f == 1 && patchInputChannel(body, (size_t)l, w, h, sub, is7) && is7) {
                 putLen(out, 1, sub.empty() ? NULL : &sub[0], sub.size());
                 changed = true;
             } else out.insert(out.end(), &sdr[0] + start, &sdr[0] + pos);
@@ -638,7 +644,7 @@ bool patchTouchConfig(std::vector<uint8_t>& sdr) {
         }
     }
     if (changed) {
-        printf("[SDR] touchscreen declared 1280x%d\n", h);
+        printf("[SDR] touchscreen declared %dx%d\n", w, h);
         sdr.swap(out);
     }
     return changed;

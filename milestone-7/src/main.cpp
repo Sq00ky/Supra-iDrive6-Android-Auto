@@ -1748,11 +1748,11 @@ int main(int argc, char* argv[]) {
     printf("[Car] display (LayerManager screen 0): %dx%d, CarPlay picture coded %dx%d\n",
            car.dispW, car.dispH, car.iniW, car.iniH);
     if (nbt::vidNative())
-        printf("[Car] phone canvas 1280x720 shown 1:1 (NBT_VID_NATIVE): top-left %dx%d visible, MMR dst %dx%d, touch scale 1.000\n",
-               nbt::canvasColsShown(), nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight());
+        printf("[Car] phone canvas %dx%d shown 1:1 (NBT_VID_NATIVE): top-left %dx%d visible, MMR dst %dx%d, touch scale 1.000\n",
+               nbt::videoCanvasWidth(), nbt::videoCanvasHeight(), nbt::canvasColsShown(), nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight());
     else
-        printf("[Car] phone canvas 1280x720 shown at panel width: %d rows visible, MMR dst %dx%d, touch scale %.3f\n",
-               nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight(), nbt::touchScale());
+        printf("[Car] phone canvas %dx%d scaled to fill the panel: top-left %dx%d visible, MMR dst %dx%d, touch scale %.3f\n",
+               nbt::videoCanvasWidth(), nbt::videoCanvasHeight(), nbt::canvasColsShown(), nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight(), nbt::touchScale());
 
     // 1. Initialize Video Pipeline (libscreen.so window at the panel size)
     nbt::VideoManager video;

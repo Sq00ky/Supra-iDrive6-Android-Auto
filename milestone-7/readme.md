@@ -470,11 +470,12 @@ Leave these unset unless you are testing.
 | `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
-| `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets (default `0,240,0,0` on 1280x480; MINI round display with the `1180_480` coding: `0,240,40,40`, car-verified on a MINI F60) |
-| `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20, tester-verified on a MINI F60) |
-| `NBT_VID_DPI` | Video DPI (default 140, MINI `1180_480` round display 152; `0` = phone default) |
-| `NBT_VID_RES`, `NBT_VID_MW`, `NBT_VID_MH` | Other video config overrides |
-| `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Decoder / renderer heights (default 720) |
+| `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets, calculated from the video canvas and panel size. On 1280x480 (720p) these are `0,240,0,0` and `0,180,0,0` at 480p. MINI round-display side insets are 40 px at 720p (car-verified on an F60) and 25 px at 480p. `off` keeps the manifest's insets |
+| `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20, tester-verified on a MINI F60), scaled to -12.5 at 480p |
+| `NBT_VID_DPI` | Video DPI. Defaults to 88 / 140 / 210 at 480p / 720p / 1080p. MINI defaults to 95 / 152 / 228 (720p car-verified on an F60). `0` keeps the phone's default |
+| `NBT_VID_RES` | Video profile: `1` = 800x480, `2` = 1280x720 (default), `3` = 1920x1080. Unset or invalid values use `2`. Sets phone negotiation, decoder dimensions and touch coordinates together |
+| `NBT_VID_MW`, `NBT_VID_MH` | Manual video margin width / height overrides |
+| `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Manual decoder / renderer height overrides. Defaults follow the video profile and panel size |
 | `NBT_VIDEO_DUMP=1` | Raw H.264 to `/tmp/aa_video.h264` (4 MB cap) |
 | `NBT_MMR_WAIT_S` | Wait for the MM-Renderer at start (default 90) |
 | `NBT_PURGE_ALL=1` | Destroy every MM-Renderer context, not only `aadvideoctx*`/`cpvideoctx*` |
@@ -730,15 +731,18 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    routes the processed car mic into the A2I uplink `/output_mono_AirPlayUL`, which the daemon captures and sends on
    ch 14.
 5. **Video (`video_manager`).**
-   - Screen window `1280` (1280x480 @ 60, z-order 2000) plus an MM-Renderer context fed by the hardware decoder
+   - Screen window `1280` (panel-sized, z-order 2000) plus an MM-Renderer context fed by the hardware decoder
      `/dev/name/local/mdev`.
    - The factory CarPlay context `cpvideoctx*` must be purged at start, or frames are accepted but nothing is drawn.
-   - The phone renders a 1280x720 canvas. In crop mode (the default) the phone keeps its UI in the top 480 rows
-     (bottom inset 240), and the panel shows those rows 1:1.
+   - By default the phone renders a 1280x720 canvas at 60 fps. On a 1280x480 panel it keeps its UI in the top
+     480 rows (bottom inset 240), and the panel shows those rows 1:1. With `NBT_VID_RES=1`, it renders 800x480
+     and keeps the UI in the top 300 rows, which scale evenly to fill that panel. Other panels get matching
+     insets and uniform scaling. `NBT_VID_FPS=30` selects 30 fps for either profile.
 6. **Touch (`touch_probe`).** The car sends touch as UDP to port 30567 (from 160.48.199.115:30501), where the HMI also listens;
    the daemon binds the port only while Android Auto is on screen (one socket gets each datagram). One 112-byte
    datagram per touch on the Supra, 2-4 shorter datagrams (24..64 bytes) on 1440x540 BMW units.
-   They are forwarded to the phone as input events on channel 7; the touchscreen is declared as 1280x720.
+   They are forwarded to the phone as input events on channel 7. The touchscreen is declared at the selected
+   video canvas size, normally 1280x720 or 800x480 in 480p mode.
 7. **Controller (`ccs_input`, `ccs_decoder.hpp`).** Observe-only MOST client on `DSYSMOSTServer` 4.5 that receives
    copies of the controller's FBlock 0xE5 status messages.
 
@@ -886,6 +890,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
+| `test_video_geometry` (+ `src/sdr_builder.cpp`) | 480p, 720p and 1080p at 30/60 fps across screen sizes, aspect ratio, phone insets, DPI, MINI calibration and touch coordinates |
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |

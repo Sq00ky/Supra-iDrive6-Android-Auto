@@ -16,8 +16,10 @@
 #include <time.h>
 
 // Experiment overrides (defaults keep the proven 1280x480 behaviour):
-//   NBT_VID_SRC_H = height declared to mdev (coded stream height = the phone's 1280x720 canvas, default 720)
-//   NBT_VID_DST_H = MM-Renderer destination height (720 on the 480-row panel shows the top 480 rows 1:1; 480 squashes the canvas)
+//   NBT_VID_SRC_H = height declared to mdev (defaults to the selected video canvas height)
+//   NBT_VID_DST_H = MM-Renderer destination height (derived from the canvas and panel aspect ratios)
+// At 720p on 1280x480, the default 720 destination height shows the top 480 rows at 1:1.
+// Forcing that height to 480 squashes the canvas. These manual overrides still allow older calibrations.
 static int vidEnvInt(const char* name, int def) {
     const char* e = getenv(name);
     return (e && *e) ? atoi(e) : def;
@@ -632,12 +634,12 @@ bool VideoManager::createDecoder() {
         }
 
         // Step 4: Attach Input to Hardware Video Push Engine ('H264' FourCC)
-        // Match the widescreen Android Auto SDP profile. 1280x480 preserves
-        // the car display's 8:3 aspect ratio and maps 1:1 onto the 1280x480 panel.
+        // Match the coded stream advertised to the phone, not the physical panel size.
+        // The renderer scales the whole canvas evenly and the panel clips its reserved margins.
         char in_url[256];
         snprintf(in_url, sizeof(in_url),
-                 "mdevpush:/dev/name/local/mdev?fourcc=H264&queue_capacity=60&video.frame_rate=%u&video.depth=16&video.width=1280&video.height=%d",
-                 sink_.config.fps, vidEnvInt("NBT_VID_SRC_H", 720));
+                 "mdevpush:/dev/name/local/mdev?fourcc=H264&queue_capacity=60&video.frame_rate=%u&video.depth=16&video.width=%d&video.height=%d",
+                 sink_.config.fps, nbt::videoCanvasWidth(), vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()));
         mmr_input_id_ = fn_in_attach(mmr_ctxt_, in_url, "track");
 
         // Re-apply parameters AFTER input_attach creates the track engine.
@@ -972,10 +974,10 @@ bool VideoManager::sendMdevFormat(uint32_t width, uint32_t height, uint32_t fps)
     struct FormatPayload {
         uint32_t magic;    // 2
         uint32_t fourcc;   // 'H264' (0x48323634)
-        uint32_t width;    // 1280
-        uint32_t height;   // 480 for widescreen AA profile
+        uint32_t width;    // coded stream width, not panel width
+        uint32_t height;   // coded stream height, including hidden margins
         uint32_t depth;    // 16
-        uint32_t fps;      // 60
+        uint32_t fps;      // selected Android Auto frame rate
         uint32_t rsvd0;    // 0
         uint32_t rsvd1;    // 0
     } fmt;
@@ -1174,7 +1176,7 @@ void VideoManager::workerLoop() {
                 // mdemux_process_packet; the format packet is our only observed trigger
                 // into that dispatcher, even when it is later reported unchanged.
                 bool ok = sendMdevSync() &&
-                          sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), sink_.config.fps) &&
+                          sendMdevFormat(nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps) &&
                           sendMdevConfig(&item.data[0], item.data.size());
                 mdev_initialized_ = ok;
                 if (!ok) {
@@ -1182,7 +1184,7 @@ void VideoManager::workerLoop() {
                 }
             } else {
                 if (!mdev_initialized_) {
-                    bool ok = sendMdevSync() && sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), sink_.config.fps);
+                    bool ok = sendMdevSync() && sendMdevFormat(nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps);
                     mdev_initialized_ = ok;
                     if (!ok) {
                         printf("[VideoManager] Warning: mdev format handshake failed; dropping frame until retry.\n");

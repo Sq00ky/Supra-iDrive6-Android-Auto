@@ -27,13 +27,14 @@ std::vector<uint8_t> buildServiceDiscovery(const uint8_t* base, size_t baseLen, 
 
 // Experiment hook for the main display's VideoConfig (channel 6). Environment (all optional):
 //   NBT_VID_RES  = VideoResolution enum (1 = 800x480, 2 = 1280x720, 3 = 1920x1080)
+//                  unset or invalid = 2. Decoder geometry and touch coordinates use the same canvas.
 //   NBT_VID_FPS  = 30 or 60. Defaults to 60.
 //   NBT_VID_MW / NBT_VID_MH = margin width / height (VideoConfig fields 3 / 4)
 //   NBT_VID_INSETS = "top,bottom,left,right"  -> AdditionalVideoConfig.insets (VideoConfig field 11)
 // Returns true if anything was changed (prints what it did).
 bool patchMainVideo(std::vector<uint8_t>& sdr);
 
-// Declares the touchscreen (channel 7) as 1280 x NBT_TOUCH_CFG_H (default 720).
+// Declares the touchscreen (channel 7) at the video canvas size. NBT_TOUCH_CFG_H overrides its height.
 bool patchTouchConfig(std::vector<uint8_t>& sdr);
 
 // Removes whole ChannelDescriptors (top-level field 1) by channel id. The list comes from

@@ -41,6 +41,16 @@ inline unsigned videoFps() {
     return e && strcmp(e, "30") == 0 ? 30u : 60u;
 }
 
+inline int videoResolution() {
+    const char* e = getenv("NBT_VID_RES");
+    if (e && strcmp(e, "1") == 0) return 1;
+    if (e && strcmp(e, "3") == 0) return 3;
+    return 2;
+}
+
+inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
+inline int videoCanvasHeight() { return videoResolution() == 1 ? 480 : videoResolution() == 3 ? 1080 : 720; }
+
 // Bluetooth audio mode (default ON since v1.7.5; car-verified 2026-10-23): leaves Android Auto media to the
 // phone's Bluetooth A2DP link. The ServiceDiscovery omits the AA media sink (channel 9) so the phone plays
 // media over A2DP, and the daemon asks the AudioManager for the car's Bluetooth audio
