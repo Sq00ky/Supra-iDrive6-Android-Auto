@@ -24,8 +24,8 @@ The following versions have been tested and confirmed working:
 |Navigation Version|Car Model|Code Name|Year|
 |-|-|-|
 |NBTevo_T24081I|Toyota Supra|J29|2024|
-|NBTevo_T214241I |Toyota Supra|J29|2022|
-|NBTevo_23236I||BMW x3|G01|2018|
+|NBTevo_T214241I|Toyota Supra|J29|2022|
+|NBTevo_23236I|BMW x3|G01|2018|
 |NBTevo_Y24073J|BMW 3 Series|F30|2017|
 |NBTevo_Y21432J|BMW M2|F87|
 |NBTevo_V201531|BMW 4 Series|F32|x|
