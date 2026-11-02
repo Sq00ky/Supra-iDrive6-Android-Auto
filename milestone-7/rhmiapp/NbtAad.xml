@@ -127,8 +127,7 @@
     </hmiStates>
   </pluginApp>
   <!-- One-press entry "Open Android Auto" (raAction 2), right after the menu entry. Property 55 is its UUID: without
-       one, iDrive refuses to store a plugin entry on a favourite key ("ID5 apps must supply a UUID in order to support
-       bookmarks"). Keep the UUID fixed: a new one orphans keys already stored. Connected: Android Auto comes to the
+       one, iDrive refuses to store a plugin entry on a favourite key. Keep the UUID fixed: a new one orphans keys already stored. Connected: Android Auto comes to the
        front; otherwise our menu opens (focusEvent 53) with the status, and nbt-aad is started if needed. -->
   <pluginApp applicationType="Custom" applicationWeight="199" entryButtonFocusID="32753" insertAfterFocusID="32752" insertStateID="20" text="Open Android Auto">
     <comment/>
