@@ -18,9 +18,9 @@ As of v1.8.66, the following is required:
 
 ### Confirmed Working Versions
 **If you have tested a version and confirmed that it is working, please submit a PR on this file!**
-This can be found at <FILL IN>
+This can be found at Navigation > Settings > Position and software version > software version
 
 The following versions have been tested and confirmed working:
 |Navigation Version|Car Model|Year|
 |-|-|-|
-|X|Toyota Supra|2022|
+|NBTevo_T214241I |Toyota Supra|2022|
