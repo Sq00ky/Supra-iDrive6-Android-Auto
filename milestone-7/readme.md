@@ -330,8 +330,10 @@ the key. One press then does what fits the moment:
 | On screen | Nothing |
 | Force Stop / Restart in progress | Opens the menu only |
 
-The entry carries a fixed UUID (RHMI property 55): iDrive only stores plugin entries that have one. Car-tested on a
-Supra (storing and one-press start); the menu jump (focusEvent 53) is new.
+The entry carries a fixed UUID (RHMI property 55): iDrive only stores plugin entries that have one, and the
+Start row inside the menu can't be stored at all (even with a UUID: "unable to save"), hence the separate entry.
+Keep the UUID as it is: a new one orphans keys people already stored. Car-tested on a Supra (storing, start + menu
+jump, show on connect, connected, on screen, during a stop).
 
 While Android Auto is on screen, Force Stop and Restart are ignored. Knob presses can leak to the iDrive menu
 underneath the overlay, so this stops a stray press from killing the session.
