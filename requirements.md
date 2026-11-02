@@ -24,3 +24,9 @@ The following versions have been tested and confirmed working:
 |Navigation Version|Car Model|Year|
 |-|-|-|
 |NBTevo_T214241I |Toyota Supra|2022|
+
+### Confirmed Non Compatible Versions
+**If you have tested a version and confirmed that it is NOT working, please submit a PR on this file!**
+|Navigation Version|Car Model|Year|
+|-|-|-|
+|x |x|x|
