@@ -93,6 +93,13 @@ uint64_t PcmRing::droppedBytes() const {
     return d;
 }
 
+uint32_t pickDeviceRate(uint32_t want, uint32_t force, int min_rate, int max_rate) {
+    if (force) return force;
+    if (max_rate > 0 && ((int64_t)want > max_rate || (min_rate > 0 && (int64_t)want < min_rate)))
+        return (uint32_t)max_rate;
+    return want;
+}
+
 // ---------------------------------------------------------------------------
 // PcmResampler
 // ---------------------------------------------------------------------------

@@ -81,7 +81,7 @@ void* mixerThunk(void* self) {
 } // namespace
 
 BrowserAudio::BrowserAudio()
-    : conn_(0xb8), want_rate_(48000), idle_s_(10), prompt_idle_ms_(1000), refocus_(true), shim_path_(NULL), lib_(NULL), pcm_(NULL),
+    : conn_(0xb8), want_rate_(48000), force_rate_(0), idle_s_(10), prompt_idle_ms_(1000), refocus_(true), shim_path_(NULL), lib_(NULL), pcm_(NULL),
       rate_(0), frag_bytes_(0), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
       route_state_(ROUTE_IDLE), route_since_ms_(0), route_backoff_until_ms_(0), last_sound_ms_(0), last_media_ms_(0), blocks_(0), write_errors_(0), prepares_(0),
       last_stats_ms_(0), was_ducking_(false) {
@@ -144,6 +144,13 @@ bool BrowserAudio::init() {
     for (int s = 0; s < NSTREAMS; ++s) if (!ring_[s]) ring_[s] = new PcmRing(kRingBytes[s]);
     conn_ = (uint32_t)envHex("NBT_BROWSER_CONN", 0xb8);
     want_rate_ = (uint32_t)envInt("NBT_BROWSER_RATE", 48000);
+    {
+        const int fr = envInt("NBT_BROWSER_FORCE_RATE", 0);
+        force_rate_ = fr > 0 ? (uint32_t)fr : 0u;
+    }
+    if (force_rate_)
+        printf("[Browser] NBT_BROWSER_FORCE_RATE=%u (experiment): asking the device for %u Hz whatever it reports\n",
+               force_rate_, force_rate_);
     idle_s_ = envInt("NBT_BROWSER_IDLE_S", 10);
     prompt_idle_ms_ = envInt("NBT_BROWSER_PROMPT_IDLE_MS", 1000);
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
@@ -217,13 +224,16 @@ bool BrowserAudio::openPcmWith(int frag, int frags) {
     snd_pcm_channel_info_t info;
     memset(&info, 0, sizeof(info));
     info.channel = SND_PCM_CHANNEL_PLAYBACK;
-    uint32_t rate = want_rate_;
+    uint32_t rate = pickDeviceRate(want_rate_, force_rate_, 0, 0);
     int frag_min = 0, frag_max = 0;
     if (((FnInfo)fn_[F_INFO])(h, &info) == 0) {
         printf("[Browser] device info: rates %d..%d Hz, voices %d..%d, fragment %d..%d bytes, max buffer %d\n",
                info.min_rate, info.max_rate, info.min_voices, info.max_voices, info.min_fragment_size,
                info.max_fragment_size, info.max_buffer_size);
-        if (info.max_rate > 0 && ((int)rate > info.max_rate || (int)rate < info.min_rate)) rate = (uint32_t)info.max_rate;
+        rate = pickDeviceRate(want_rate_, force_rate_, info.min_rate, info.max_rate);
+        if (force_rate_ && info.max_rate > 0 && ((int)force_rate_ > info.max_rate || (int)force_rate_ < info.min_rate))
+            printf("[Browser] NBT_BROWSER_FORCE_RATE: asking for %u Hz, outside the reported %d..%d Hz\n", force_rate_,
+                   info.min_rate, info.max_rate);
         frag_min = info.min_fragment_size;
         frag_max = info.max_fragment_size;
     } else {
@@ -264,6 +274,9 @@ bool BrowserAudio::openPcmWith(int frag, int frags) {
                su.format.voices, su.format.format, su.buf.block.frag_size, su.buf.block.frags);
         if (su.format.voices > 0 && su.format.voices != (int)kOutCh)
             printf("[Browser] WARNING: device gave %d voices, the mixer writes %u\n", su.format.voices, kOutCh);
+        if (force_rate_)
+            printf("[Browser] NBT_BROWSER_FORCE_RATE: the device %s %u Hz (got %u Hz)\n",
+                   rate == force_rate_ ? "accepted" : "did not take", force_rate_, rate);
     }
     rc = ((FnPrepare)fn_[F_PREPARE])(h, SND_PCM_CHANNEL_PLAYBACK);
     if (rc < 0) {

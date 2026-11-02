@@ -28,7 +28,10 @@
 //   NBT_BROWSER_CONN     connection id (default 0xb8; 0 = do not route, just play)
 //   NBT_BROWSER_ASOUND   shim path (default /opt/mm/lib/libasound/libasound.so)
 //   NBT_BROWSER_PCM      "card:device" instead of snd_pcm_open_preferred
-//   NBT_BROWSER_RATE     device rate to ask for (default 48000)
+//   NBT_BROWSER_RATE     device rate to ask for (default 48000; lowered to the device's reported maximum, 44100 here)
+//   NBT_BROWSER_FORCE_RATE  experiment: ask for this rate even outside the device's reported range (e.g. 48000, to
+//                        play the 48 kHz AA streams without resampling). Off by default. If the car refuses it the
+//                        device does not open and there is no AA audio that session; the reason is in sloginfo.
 //   NBT_BROWSER_IDLE_S   remove the connection after this many seconds without sound once AA media has played
 //                        (default 10, 0 = keep it until the session ends)
 //   NBT_BROWSER_PROMPT_IDLE_MS  when no AA media is playing (e.g. the user is on the radio), remove it this many ms
@@ -103,6 +106,7 @@ private:
     // config
     uint32_t conn_;
     uint32_t want_rate_;
+    uint32_t force_rate_;    // NBT_BROWSER_FORCE_RATE: ask the device for this rate whatever it reports (0 = off)
     int idle_s_;
     int prompt_idle_ms_;
     bool refocus_;
