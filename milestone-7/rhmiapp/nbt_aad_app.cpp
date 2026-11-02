@@ -14,7 +14,9 @@
 // When the phone connects after Start, the app sends iDrive back to the main menu (focusEvent 50 -> NativeStateID 1,
 // the way BMW's ActiveSeating leaves its own screen), so stray knob presses under the Android Auto overlay land
 // there and not on Force Stop / Restart. Those two rows are also ignored while the overlay is up.
-// The old one-press entry (raAction 2 -> start) is still handled, for NbtAad_Direct.xml.
+// A second entry "Open Android Auto" (raAction 2, with a UUID so a favourite key can store it; also the one entry of
+// NbtAad_Direct.xml) does the right thing in one press: connected -> Android Auto to the front; otherwise our menu
+// opens (focusEvent 53) so the status shows, and nbt-aad is started if it isn't running (rhmiapp/entry_key.hpp).
 //
 // ABI (from libSecurityMenu.so / libAppFramework.A.so, see plugin/plugin_abi.hpp notes):
 //   pluginAppInfo = { u16 1, u16 0, name, vendor, u32 rhmiVersion 1, create, destroy }
@@ -54,6 +56,7 @@
 #include "../src/usb_log.hpp"
 #include "cds_parse.hpp"
 #include "boot_guard.hpp"
+#include "entry_key.hpp"
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
@@ -229,6 +232,7 @@ const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
 const unsigned    kEvGoHome       = 50;      // <focusEvent id="50" targetModel="40"/>: NativeStateID 1 = iDrive main menu
 const unsigned    kEvGoMediaList  = 51;      // <focusEvent id="51" targetModel="41"/>: NativeStateID 20 = Media/Radio list
+const unsigned    kEvOpenMenu     = 53;      // <focusEvent id="53" target="10"/>: our menu (the Open Android Auto entry)
 const int         kHomeWindowS    = 180;     // after Start, go home on "connected" only within this time
 // Screen exclusivity (Fork F, rhmiapp-8x): while Android Auto is on screen, iDrive is held on our inert hmiState 13
 // (focusEvent 52), the way iDrive holds its own ST_CarPlay state for native CarPlay. Knob turns / pushes / tilts and
@@ -776,6 +780,7 @@ DaemonState readDaemonState() {
 bool g_focusKnown = false;     // a focus notification for our menu arrived at least once
 bool g_menuFocused = false;
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
+bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
 time_t g_startTime = 0;
 char g_prevState[24] = "idle";
 // Stop / restart in progress.
@@ -1020,6 +1025,7 @@ void beginStop(bool restart) {
     g_stopTime = time(NULL);
     g_stopStage = 0;
     g_wantHome = false;
+    g_entryStart = false;
     sendToDaemon("quit");
     alog("%s: sent 'quit' to nbt-aad pid %d", restart ? "restart" : "force stop", d.pid);
 }
@@ -1425,6 +1431,14 @@ void statusRun(void* /*self*/) {
         g_shownRow = row;
     }
     serviceHold(app, d);
+    if (connected && strcmp(g_prevState, "connected") != 0 && g_entryStart) {
+        g_entryStart = false;                            // one shot, before the return-to-menu step below moves iDrive
+        if (time(NULL) - g_startTime <= kHomeWindowS &&
+            nbt::entrykey::showOnConnect(g_focusKnown, g_menuFocused, d.overlay != 0)) {
+            sendToDaemon("show");
+            alog("connected after the Open Android Auto entry, our menu on top: asking nbt-aad to come to the front");
+        }
+    }
     if (connected && strcmp(g_prevState, "connected") != 0 && g_wantHome && holdEnabled()) {
         g_wantHome = false;                              // serviceHold() holds iDrive on state 13 instead of the main menu
     } else if (connected && strcmp(g_prevState, "connected") != 0 && g_wantHome) {
@@ -1463,9 +1477,33 @@ void* g_vtbl[2 + kVtblSlots];   // [offset-to-top, typeinfo, slots...] copied fr
 void* g_baseOnInit = NULL;
 bmw::PluginApp* g_app = NULL;
 
-bool onEntryAction(void* /*app*/, const bmw::Parcel& /*args*/) {
-    alog("entry button pressed (raAction %u, direct-start XML)", kEntryAction);
-    startDaemonOrShow();
+// "Open Android Auto" entry / favourite key (raAction 2): see rhmiapp/entry_key.hpp.
+bool onEntryAction(void* self, const bmw::Parcel& /*args*/) {
+    bmw::PluginApp* app = static_cast<bmw::PluginApp*>(self);
+    DaemonState d = readDaemonState();
+    bool connected = d.pid != 0 && !strcmp(d.state, "connected");
+    nbt::entrykey::Action a = nbt::entrykey::decide(d.pid != 0, connected, d.pid != 0 && d.overlay != 0, g_stopPid != 0);
+    alog("entry button pressed (raAction %u): nbt-aad %s (pid %d, overlay %d%s)", kEntryAction, d.state, d.pid,
+         d.overlay, g_stopPid ? ", stop/restart in progress" : "");
+    switch (a) {
+    case nbt::entrykey::kNothing:
+        alog("entry: Android Auto is already on screen");
+        return true;
+    case nbt::entrykey::kShow:
+        startDaemonOrShow();
+        return true;
+    case nbt::entrykey::kMenu:
+        break;
+    case nbt::entrykey::kStartAndMenu:
+        bootGuardReset("Open Android Auto entry");
+        startDaemonOrShow();                             // not running: launches nbt-aad
+        g_entryStart = true;
+        break;
+    }
+    if (app) {                                           // NbtAad_Direct.xml has no menu / event 53: iDrive ignores it
+        app->triggerEvent(kEvOpenMenu);
+        alog("entry: event %u -> our menu (%s)", kEvOpenMenu, a == nbt::entrykey::kStartAndMenu ? "starting" : d.state);
+    }
     return true;
 }
 
