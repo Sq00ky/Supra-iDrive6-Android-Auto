@@ -42,6 +42,11 @@ typedef const char* (*FnStrerror)(int);
 // starting rates: PtsRateMeter measures each stream from its timestamps (car 2026-11-01: guidance came at 48 kHz).
 const uint32_t kSrcRate[BrowserAudio::NSTREAMS] = { 48000, 48000, 16000 };
 const uint32_t kSrcCh[BrowserAudio::NSTREAMS]   = { 2, 1, 1 };
+// The rates each sink offers the phone: the timestamp meter only picks among these (car 2026-11-02: an uneven start
+// made it read the 48 kHz media stream as 44100 Hz, so music played 8 % slow and overflowed its ring = crackling).
+const uint32_t kOfferedMedia[] = { 48000 };
+const uint32_t kOfferedGuidance[] = { 16000, 48000 };
+const uint32_t kOfferedSystem[] = { 16000 };
 // Raw ring sizes: media 2 s, guidance 8 s at 48 kHz (the phone sends a prompt faster than real time), system 4 s.
 const size_t kRingBytes[BrowserAudio::NSTREAMS] = { 48000u * 4u * 2u, 48000u * 2u * 8u, 16000u * 2u * 4u };
 
@@ -89,6 +94,12 @@ BrowserAudio::BrowserAudio()
         src_rate_[s] = kSrcRate[s];
         rs_rate_[s] = 0;
     }
+    srate_[MEDIA].configure(kSrcRate[MEDIA], kOfferedMedia, sizeof(kOfferedMedia) / sizeof(kOfferedMedia[0]),
+                            kSrcCh[MEDIA]);
+    srate_[GUIDANCE].configure(kSrcRate[GUIDANCE], kOfferedGuidance,
+                               sizeof(kOfferedGuidance) / sizeof(kOfferedGuidance[0]), kSrcCh[GUIDANCE]);
+    srate_[SYSTEM].configure(kSrcRate[SYSTEM], kOfferedSystem, sizeof(kOfferedSystem) / sizeof(kOfferedSystem[0]),
+                             kSrcCh[SYSTEM]);
     pthread_mutex_init(&lock_, NULL);
 }
 
@@ -313,23 +324,37 @@ void BrowserAudio::onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, ui
     if (s < 0 || !ring_[s] || !pcm || len == 0) return;
     ++frames_in_[s];
     ring_[s]->write(pcm, len);
-    if (pts) {
-        const uint32_t r = meter_[s].add(pts, len, kSrcCh[s]);
-        if (r && r != src_rate_[s]) {
-            printf("[Browser] AA %s stream is %u Hz (from its timestamps), not %u Hz: converting from %u Hz\n",
-                   streamName(s), r, (unsigned)src_rate_[s], r);
-            src_rate_[s] = r;   // the mixer reconfigures its resampler on the next block
-        }
+    uint32_t mismatch = 0;
+    if (srate_[s].frame(pts, len, &mismatch)) {
+        printf("[Browser] AA %s stream is %u Hz (from its timestamps), not %u Hz: converting from %u Hz\n",
+               streamName(s), srate_[s].rate(), (unsigned)src_rate_[s], srate_[s].rate());
+        src_rate_[s] = srate_[s].rate();   // the mixer reconfigures its resampler on the next block
+    } else if (mismatch) {
+        printf("[Browser] WARNING: AA %s stream timestamps suggest %u Hz, the phone declared %u Hz: keeping the "
+               "declared rate\n", streamName(s), mismatch, srate_[s].rate());
     }
     ensureMixer();
 }
 
-void BrowserAudio::onAaStreamState(uint8_t channel, bool started) {
+void BrowserAudio::onAaStreamState(uint8_t channel, bool started, uint32_t rate, uint32_t channels) {
     int s = streamForChannel(channel);
     if (s < 0 || !ring_[s]) return;
-    printf("[Browser] AA %s stream %s\n", streamName(s), started ? "started" : "stopped");
+    if (started && rate) {
+        // The phone declared this start's format (START_INDICATION configuration_index): use it from the first frame.
+        printf("[Browser] AA %s stream started: %u Hz %s (declared by the phone)\n", streamName(s), rate,
+               channels == 1 ? "mono" : "stereo");
+        if (channels && channels != kSrcCh[s])
+            printf("[Browser] WARNING: AA %s stream declared %u channels, the mixer reads %u\n", streamName(s),
+                   channels, kSrcCh[s]);
+    } else {
+        printf("[Browser] AA %s stream %s%s\n", streamName(s), started ? "started" : "stopped",
+               started ? " without a declared format: measuring its rate from the timestamps" : "");
+    }
+    if (started) {
+        srate_[s].start(rate);
+        src_rate_[s] = srate_[s].rate();   // the mixer reconfigures its resampler before the next block
+    }
     started_[s] = started;
-    if (started) meter_[s].reset();   // each stream start is measured again
     // Media paused: drop what is queued so the music stops now. Prompts and sounds play their tail out.
     if (!started && s == MEDIA) { ring_[s]->clear(); flush_[s] = true; }
     if (started) ensureMixer();
@@ -596,6 +621,8 @@ void BrowserAudio::onSessionEnded() {
         rs_[s].reset();
         flush_[s] = false;
         frames_in_[s] = 0;
+        srate_[s].reset();            // the next phone declares (or is measured) afresh
+        src_rate_[s] = srate_[s].rate();
     }
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);

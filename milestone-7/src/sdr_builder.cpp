@@ -641,4 +641,107 @@ bool patchTouchConfig(std::vector<uint8_t>& sdr) {
     return changed;
 }
 
+namespace {
+
+// Calls fn(field, wire_type, value, data, len) for each field of a message; false on malformed input.
+// value = varint value (wt 0); data/len = payload (wt 2).
+template <typename Fn>
+bool forEachField(const uint8_t* p, size_t n, Fn& fn) {   // by reference: readers collect into themselves
+    size_t pos = 0;
+    while (pos < n) {
+        uint64_t key, v = 0, l = 0;
+        if (!getVarint(p, n, pos, key)) return false;
+        const unsigned f = (unsigned)(key >> 3), wt = (unsigned)(key & 7);
+        if (wt == 0) {
+            if (!getVarint(p, n, pos, v)) return false;
+            fn(f, wt, v, (const uint8_t*)NULL, (size_t)0);
+        } else if (wt == 2) {
+            if (!getVarint(p, n, pos, l) || l > n - pos) return false;
+            fn(f, wt, (uint64_t)0, p + pos, (size_t)l);
+            pos += (size_t)l;
+        } else if (wt == 1) {
+            if (n - pos < 8) return false;
+            pos += 8;
+        } else if (wt == 5) {
+            if (n - pos < 4) return false;
+            pos += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct AudioCfgReader {   // AudioConfig { sample_rate = 1, bit_depth = 2, channels = 3 }
+    AaAudioConfig* c;
+    void operator()(unsigned f, unsigned wt, uint64_t v, const uint8_t*, size_t) const {
+        if (wt != 0) return;
+        if (f == 1) c->sample_rate = (uint32_t)v;
+        else if (f == 2) c->bits = (uint32_t)v;
+        else if (f == 3) c->channels = (uint32_t)v;
+    }
+};
+
+struct SinkReader {       // MediaSinkService: audio_configs = 3 (repeated)
+    std::vector<AaAudioConfig>* out;
+    void operator()(unsigned f, unsigned wt, uint64_t, const uint8_t* d, size_t l) const {
+        if (f != 3 || wt != 2) return;
+        AaAudioConfig c;
+        AudioCfgReader r = { &c };
+        if (forEachField(d, l, r) && c.sample_rate) out->push_back(c);
+    }
+};
+
+struct DescriptorReader { // ChannelDescriptor: id = 1, media_sink_service = 3
+    uint64_t id;
+    const uint8_t* sink;
+    size_t sink_len;
+    void operator()(unsigned f, unsigned wt, uint64_t v, const uint8_t* d, size_t l) {
+        if (f == 1 && wt == 0) id = v;
+        else if (f == 3 && wt == 2) { sink = d; sink_len = l; }
+    }
+};
+
+struct SdrReader {        // ServiceDiscoveryResponse: channels = 1 (repeated)
+    unsigned channel;
+    std::vector<AaAudioConfig>* out;
+    void operator()(unsigned f, unsigned wt, uint64_t, const uint8_t* d, size_t l) const {
+        if (f != 1 || wt != 2) return;
+        DescriptorReader dr = { (uint64_t)-1, NULL, 0 };
+        if (!forEachField(d, l, dr) || dr.id != channel || !dr.sink) return;
+        SinkReader sr = { out };
+        forEachField(dr.sink, dr.sink_len, sr);
+    }
+};
+
+struct StartReader {      // AV START_INDICATION: session = 1, configuration_index = 2
+    uint32_t session, index;
+    void operator()(unsigned f, unsigned wt, uint64_t v, const uint8_t*, size_t) {
+        if (wt != 0) return;
+        if (f == 1) session = (uint32_t)v;
+        else if (f == 2) index = (uint32_t)v;
+    }
+};
+
+} // namespace
+
+std::vector<AaAudioConfig> sdrAudioConfigs(const uint8_t* sdr, size_t n, unsigned channel) {
+    std::vector<AaAudioConfig> out;
+    if (!sdr || n == 0) return out;
+    SdrReader r = { channel, &out };
+    forEachField(sdr, n, r);
+    return out;
+}
+
+bool resolveAudioStart(const uint8_t* payload, size_t n, const std::vector<AaAudioConfig>& offered,
+                       uint32_t* session, uint32_t* index, AaAudioConfig* out) {
+    StartReader r = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+    if (payload && n) forEachField(payload, n, r);
+    if (session) *session = r.session;
+    if (index) *index = r.index;
+    if (r.index == 0xFFFFFFFFu || r.index >= offered.size()) return false;
+    if (out) *out = offered[r.index];
+    return true;
+}
+
 } // namespace nbt

@@ -60,9 +60,11 @@ public:
     bool init();
 
     // Session thread. channel = AA channel (9 media, 8 guidance, 16 system audio); others are ignored. pts = the
-    // frame's timestamp (us); it tells which of the offered sample rates the phone chose (0 = unknown).
+    // frame's timestamp (us): measures the rate when the stream start declared none, else cross-checks it (0 = none).
     void onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts = 0);
-    void onAaStreamState(uint8_t channel, bool started);
+    // rate / channels: the format the phone declared for this stream in START_INDICATION (0 = it gave none: the rate
+    // is then measured from the timestamps, among the rates offered for the stream).
+    void onAaStreamState(uint8_t channel, bool started, uint32_t rate = 0, uint32_t channels = 0);
     // Session ended (session thread): stop the mixer, close the device, remove the connection.
     void onSessionEnded();
     // Phone closed the mic (Assistant): ask for the connection again in case the voice scenario moved the car off it.
@@ -118,8 +120,8 @@ private:
     PcmRing* ring_[NSTREAMS];
     PcmResampler rs_[NSTREAMS];
     std::vector<int16_t> pending_[NSTREAMS];   // converted (rate_, stereo), mixer thread only
-    PtsRateMeter meter_[NSTREAMS];             // session thread
-    volatile uint32_t src_rate_[NSTREAMS];     // AA sample rate per stream (set by the session thread)
+    StreamRate srate_[NSTREAMS];               // declared / measured input rate per stream (session thread)
+    volatile uint32_t src_rate_[NSTREAMS];     // srate_[s].rate() published for the mixer thread
     uint32_t rs_rate_[NSTREAMS];               // the rate rs_ is configured for (mixer thread)
     volatile bool started_[NSTREAMS];
     volatile bool flush_[NSTREAMS];

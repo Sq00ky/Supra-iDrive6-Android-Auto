@@ -485,9 +485,12 @@ Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID
 Car-verified; the default in v1.8.61..v1.8.65. Since v1.8.66 Bluetooth is the default again: put
 `NBT_AUDIO_MODE=browser` in `nbt-aad.env` to use browser audio.
 
-- The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 16 kHz mono: nav prompts, Assistant
-  speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI sounds). Media
-  then no longer goes to Bluetooth A2DP.
+- The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 16 or 48 kHz mono: nav prompts,
+  Assistant speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI
+  sounds). Media then no longer goes to Bluetooth A2DP.
+- Each stream start names the format the phone picked from the offers (`configuration_index`); the daemon converts
+  from that rate from the first frame. Only a start without a usable index falls back to measuring the rate from the
+  timestamps, and then only among the rates offered for that stream.
 - The daemon mixes the three streams and ducks the media under prompts and system sounds (`NBT_DUCK_*`).
 - It plays the mix as one more client of the car's browser audio (`/opt/mm/lib/libasound/libasound.so` ->
   `dev-libasound` -> A2I `input_stereo_3`) and asks for the browser audio source with `audioconn -b 0xb8`. The
@@ -500,7 +503,8 @@ Car-verified; the default in v1.8.61..v1.8.65. Since v1.8.66 Bluetooth is the de
   the start of a prompt is not cut off.
 - Calls are unchanged (Bluetooth hands-free). Whether `0xb8` comes back by itself after a call is not known yet.
 
-What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[Browser] PCM open: card ..`,
+What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[AASession] ch N audio sink
+offers: ..`, `[AASession] ch N audio start: config K = .. Hz`, `[Browser] PCM open: card ..`,
 `[Browser] device setup: ..`, `[Browser] connection 0xb8 granted`, `[Browser] media ducked under a prompt ..`, and the
 10 s `[Browser] blocks ..` statistics line (queued / dropped bytes per stream, route state, write errors).
 Handy checks from the shell: `audioconn -l` (is `0xb8` listed as `BrowserFront`?) and `sloginfo | grep -i preAllocate`.
@@ -865,7 +869,8 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
 | `test_pcm` | Ring buffer + resampler |
-| `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains |
+| `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates) |
+| `test_audio_format` | Offered AudioConfigs read back from the SDR, the phone's choice in AV START_INDICATION |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/kombi_nav.cpp src/kombi_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
 | `test_media_payload.py` | Media metadata payloads |
