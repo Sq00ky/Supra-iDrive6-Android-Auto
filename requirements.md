@@ -8,7 +8,7 @@ As of v1.8.66, the following is required:
 ## Installation Requirements
 1. SSH access to the head unit
 2. ODB to ENET cable
-3. 
+
 ### NOT COMPATIBLE
 1. **ODB WiFi/Bluetooth Adapter**
 
