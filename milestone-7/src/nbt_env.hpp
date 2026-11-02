@@ -35,6 +35,12 @@ inline bool knobEnabled() {
     return envFlag("NBT_KNOB") != 0;
 }
 
+// Keep 60 fps for missing or unsupported settings.
+inline unsigned videoFps() {
+    const char* e = getenv("NBT_VID_FPS");
+    return e && strcmp(e, "30") == 0 ? 30u : 60u;
+}
+
 // Bluetooth audio mode (default ON since v1.7.5; car-verified 2026-10-23): leaves Android Auto media to the
 // phone's Bluetooth A2DP link. The ServiceDiscovery omits the AA media sink (channel 9) so the phone plays
 // media over A2DP, and the daemon asks the AudioManager for the car's Bluetooth audio

@@ -636,8 +636,8 @@ bool VideoManager::createDecoder() {
         // the car display's 8:3 aspect ratio and maps 1:1 onto the 1280x480 panel.
         char in_url[256];
         snprintf(in_url, sizeof(in_url),
-                 "mdevpush:/dev/name/local/mdev?fourcc=H264&queue_capacity=60&video.frame_rate=60&video.depth=16&video.width=1280&video.height=%d",
-                 vidEnvInt("NBT_VID_SRC_H", 720));
+                 "mdevpush:/dev/name/local/mdev?fourcc=H264&queue_capacity=60&video.frame_rate=%u&video.depth=16&video.width=1280&video.height=%d",
+                 sink_.config.fps, vidEnvInt("NBT_VID_SRC_H", 720));
         mmr_input_id_ = fn_in_attach(mmr_ctxt_, in_url, "track");
 
         // Re-apply parameters AFTER input_attach creates the track engine.
@@ -1174,7 +1174,7 @@ void VideoManager::workerLoop() {
                 // mdemux_process_packet; the format packet is our only observed trigger
                 // into that dispatcher, even when it is later reported unchanged.
                 bool ok = sendMdevSync() &&
-                          sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), 60) &&
+                          sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), sink_.config.fps) &&
                           sendMdevConfig(&item.data[0], item.data.size());
                 mdev_initialized_ = ok;
                 if (!ok) {
@@ -1182,7 +1182,7 @@ void VideoManager::workerLoop() {
                 }
             } else {
                 if (!mdev_initialized_) {
-                    bool ok = sendMdevSync() && sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), 60);
+                    bool ok = sendMdevSync() && sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), sink_.config.fps);
                     mdev_initialized_ = ok;
                     if (!ok) {
                         printf("[VideoManager] Warning: mdev format handshake failed; dropping frame until retry.\n");

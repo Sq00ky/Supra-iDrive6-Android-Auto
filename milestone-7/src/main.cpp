@@ -1758,7 +1758,7 @@ int main(int argc, char* argv[]) {
     nbt::VideoManager video;
     if (!video.init((uint32_t)car.screenW,
                     (uint32_t)car.screenH,
-                    NBT_SCREEN_MAX_FPS)) {
+                    nbt::videoFps())) {
         printf("[Main] Warning: Video initialization encountered an issue.\n");
     }
     g_video = &video;

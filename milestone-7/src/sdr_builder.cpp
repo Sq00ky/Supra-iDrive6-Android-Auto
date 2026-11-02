@@ -331,7 +331,7 @@ std::vector<uint8_t> buildServiceDiscovery(const uint8_t* base, size_t baseLen, 
 // ---- main-display VideoConfig experiments ----------------------------------------------------------
 namespace {
 
-struct VidOv { bool res, mw, mh, ins, dpi; int vres, vmw, vmh, it, ib, il, ir, vdpi; };
+struct VidOv { bool res, fps, mw, mh, ins, dpi; int vres, vfps, vmw, vmh, it, ib, il, ir, vdpi; };
 
 bool envInt(const char* n, int& v) {
     const char* e = getenv(n);
@@ -348,7 +348,7 @@ bool patchVideoConfig(const uint8_t* p, size_t n, const VidOv& o, std::vector<ui
     size_t pos = 0;
     const uint8_t* f11p = NULL;
     size_t f11n = 0;
-    VarRepl vr[5] = { {1, o.res, o.vres}, {3, o.mw, o.vmw}, {4, o.mh, o.vmh}, {5, o.dpi, o.vdpi}, {9, o.dpi, o.vdpi} };
+    VarRepl vr[6] = { {1, o.res, o.vres}, {2, o.fps, o.vfps}, {3, o.mw, o.vmw}, {4, o.mh, o.vmh}, {5, o.dpi, o.vdpi}, {9, o.dpi, o.vdpi} };
     while (pos < n) {
         size_t start = pos;
         uint64_t key;
@@ -358,7 +358,7 @@ bool patchVideoConfig(const uint8_t* p, size_t n, const VidOv& o, std::vector<ui
             uint64_t x;
             if (!getVarint(p, n, pos, x)) return false;
             bool done = false;
-            for (int i = 0; i < 5; ++i)
+            for (int i = 0; i < 6; ++i)
                 if (vr[i].field == f && vr[i].on) { putVarint(out, key); putVarint(out, (uint64_t)vr[i].value); done = true; }
             if (!done) out.insert(out.end(), p + start, p + pos);
         } else if (wt == 2) {
@@ -463,6 +463,9 @@ bool patchMainVideo(std::vector<uint8_t>& sdr) {
     VidOv o;
     memset(&o, 0, sizeof(o));
     o.res = envInt("NBT_VID_RES", o.vres);
+    const char* fps = getenv("NBT_VID_FPS");
+    o.fps = fps && *fps;
+    o.vfps = nbt::videoFps() == 30 ? 1 : 2; // VideoFPS uses 1 for 30 fps and 2 for 60 fps.
     o.mw = envInt("NBT_VID_MW", o.vmw);
     o.mh = envInt("NBT_VID_MH", o.vmh);
     // Default DPI 140 (car-verified 2026-10-23, w9: rail icons no longer overlap in crop mode).
@@ -486,7 +489,7 @@ bool patchMainVideo(std::vector<uint8_t>& sdr) {
         int t = 0, b = 0, l = 0, r = 0;
         if (sscanf(ins, "%d,%d,%d,%d", &t, &b, &l, &r) >= 2) { o.ins = true; o.it = t; o.ib = b; o.il = l; o.ir = r; }
     }
-    if (!o.res && !o.mw && !o.mh && !o.ins && !o.dpi) return false;
+    if (!o.res && !o.fps && !o.mw && !o.mh && !o.ins && !o.dpi) return false;
     std::vector<uint8_t> out;
     size_t n = sdr.size(), pos = 0;
     bool changed = false;
@@ -513,8 +516,8 @@ bool patchMainVideo(std::vector<uint8_t>& sdr) {
     }
     if (changed) {
         if (mini) printf("[SDR] MINI round display (carplay.ini 1180_480): default DPI 152, side insets 40 px (NBT_VID_DPI / NBT_VID_INSETS override)\n");
-        printf("[SDR] main VideoConfig override: res=%s%d mw=%s%d mh=%s%d dpi=%s%d insets=%s(%d,%d,%d,%d)\n",
-               o.res ? "" : "(keep)", o.vres, o.mw ? "" : "(keep)", o.vmw, o.mh ? "" : "(keep)", o.vmh,
+        printf("[SDR] main VideoConfig override: res=%s%d fps=%u mw=%s%d mh=%s%d dpi=%s%d insets=%s(%d,%d,%d,%d)\n",
+               o.res ? "" : "(keep)", o.vres, nbt::videoFps(), o.mw ? "" : "(keep)", o.vmw, o.mh ? "" : "(keep)", o.vmh,
                o.dpi ? "" : "(keep)", o.vdpi, o.ins ? "" : "(keep)", o.it, o.ib, o.il, o.ir);
         sdr.swap(out);
     }

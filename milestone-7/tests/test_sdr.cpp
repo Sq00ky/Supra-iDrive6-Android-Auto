@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "sdr_builder.hpp"
+#include "nbt_env.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +30,7 @@ static bool contains(const std::vector<uint8_t>& d, const char* s) {
     return false;
 }
 int main() {
+    unsetenv("NBT_VID_FPS");
     SdrIdentity id;
     std::vector<uint8_t> a = buildServiceDiscovery(kDhuSdpProtobuf, kDhuSdpProtobufLen, id);
     bool bt; int na = countChannels(a, bt);
@@ -42,6 +44,29 @@ int main() {
     std::vector<uint8_t> b = buildServiceDiscovery(kDhuSdpProtobuf, kDhuSdpProtobufLen, id);
     int nb = countChannels(b, bt);
     assert(nb == n0 + 1 && bt && contains(b, "AA:BB:CC:DD:EE:FF"));
+    // FPS changes must leave the resolution and other display alone.
+    {
+        const uint8_t fixture[] = {
+            0x0a, 0x0c, 0x08, 0x06, 0x1a, 0x08, 0x22, 0x06, 0x08, 0x02, 0x10, 0x02, 0x28, 0x00,
+            0x0a, 0x0c, 0x08, 0x02, 0x1a, 0x08, 0x22, 0x06, 0x08, 0x02, 0x10, 0x02, 0x28, 0x00
+        };
+        const char* values[] = { "30", "60", NULL, "", "0", "24", "30fps", " 30", "-30", "999999999999999999999" };
+        setenv("NBT_VID_INSETS", "off", 1);
+        setenv("NBT_VID_DPI", "0", 1);
+        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+            if (values[i]) setenv("NBT_VID_FPS", values[i], 1); else unsetenv("NBT_VID_FPS");
+            assert(videoFps() == (i == 0 ? 30u : 60u));
+            std::vector<uint8_t> v(fixture, fixture + sizeof(fixture));
+            std::vector<uint8_t> expected = v;
+            expected[11] = (i == 0) ? 1 : 2; // Wire values: 1 = 30 fps, 2 = 60 fps.
+            patchMainVideo(v);
+            if (v != expected) {
+                printf("FAIL: NBT_VID_FPS=%s did not advertise the expected main-display FPS\n", values[i] ? values[i] : "(unset)");
+                return 1;
+            }
+        }
+        unsetenv("NBT_VID_FPS");
+    }
     // main video override
     {
         std::vector<uint8_t> v(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
