@@ -319,7 +319,7 @@ Bluetooth reconnect.
 
 ### Favourite key
 
-The second Media/Radio entry, **Open Android Auto**, can be stored on a favourite (star) key: highlight it and hold
+The second Media/Radio entry, **Open Android Auto**, can be stored on a favourite button (the numbered keys on the centre console): highlight it and hold
 the key. One press then does what fits the moment:
 
 | Android Auto | Press |
