@@ -21,8 +21,8 @@ As of v1.8.66, the following is required:
 This can be found at Navigation > Settings > Position and software version > software version
 
 The following versions have been tested and confirmed working:
-|Navigation Version|Car Model|Year|
-|-|-|-|
+|Navigation Version|Car Model|Codename|Year|
+|-|-|-|-|
 |NBTevo_23236I|BMW x3|G01|2018|
 |NBTevo_S19322I|BMW 4 Series|x|2018|
 |NBTevo_T20454I|BMW X3|G01|2018|
