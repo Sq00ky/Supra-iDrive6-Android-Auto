@@ -47,15 +47,15 @@
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
 
+#include "audio/asound_device.hpp"
 #include "audio/audio_route.hpp"
 #include "audio/backend.hpp"
 #include "audio/channels.hpp"
 #include "audio/drift.hpp"
 #include "audio/mixer.hpp"
-#include "audio/pcm_ring.hpp"
-#include "audio/playout.hpp"
 #include "audio/resampler.hpp"
-#include "audio/stream_rate.hpp"
+#include "audio/route_policy.hpp"
+#include "audio/stream_input.hpp"
 #include <pthread.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -113,14 +113,7 @@ private:
     BrowserAudio(const BrowserAudio&);
     BrowserAudio& operator=(const BrowserAudio&);
 
-    // RELEASING: `audioconn -r` queued; no new build until it has run, so a build can never be overtaken by it.
-    enum RouteState { ROUTE_IDLE = 0, ROUTE_BUILDING = 1, ROUTE_ROUTED = 2, ROUTE_RELEASING = 3 };
-
-    bool loadShim();
-    bool openPcm();
-    bool openPcmWith(int frag, int frags);
-    void closePcm();
-    bool writePcm(const int16_t* buf, size_t frames);
+    bool openPcm();   // opens dev_ and sets every stream's resampler and the mixer to its rate
     void ensureMixer();
     void stopMixer();
     // mixer thread; *got = converted samples obtained (the rest of the block is zero-padded)
@@ -158,65 +151,32 @@ private:
     uint32_t gap_late_;                  // stats interval: gaps over twice the block period
     uint32_t gap_late_total_;            // session
 
-    // Underflow reports (mixer thread, except frames_since_start_).
+    // Underflow reports (mixer thread; per-stream state in StreamInput::mix, the frame count in StreamInput::in).
     void checkUnderflow(int s, bool playing, size_t got, size_t need, uint64_t now);   // playing = started, not held
     void logUnderflowFollowUp(uint64_t now);
     UnderflowFn underflow_fn_;
     void* underflow_user_;
-    volatile uint32_t frames_since_start_[NSTREAMS];   // session thread counts, resets at each start
-    bool dry_[NSTREAMS];                 // in a dry spell that was already reported
-    uint64_t report_ms_[NSTREAMS];       // last report (0 = no follow-up pending)
-    uint64_t report_written_[NSTREAMS];  // ring bytes written at that report
-    uint32_t reports_[NSTREAMS];         // this session
 
     // config
     uint32_t conn_;
-    uint32_t want_rate_;
-    uint32_t force_rate_;    // NBT_BROWSER_FORCE_RATE: ask the device for this rate whatever it reports (0 = off)
-    int idle_s_;
-    int prompt_idle_ms_;
     bool refocus_;
     DuckConfig duck_cfg_;
-    const char* shim_path_;
 
-    // libasound shim (dlopen'ed, function pointers held as void* to keep the asound types out of this header)
-    void* lib_;
-    void* fn_[11];
-    void* pcm_;
-    uint32_t rate_;          // device rate actually set up
-    uint32_t frag_bytes_;
+    // The libasound shim and its device (mixer thread; loaded at init).
+    AsoundDevice dev_;
 
-    // streams
-    PcmRing* ring_[NSTREAMS];
-    PcmResampler rs_[NSTREAMS];
-    std::vector<int16_t> pending_[NSTREAMS];   // converted (rate_, stereo), mixer thread only
-    StreamRate srate_[NSTREAMS];               // declared / measured input rate per stream (session thread)
-    volatile uint32_t src_rate_[NSTREAMS];     // srate_[s].rate() published for the mixer thread
-    uint32_t rs_rate_[NSTREAMS];               // the rate rs_ is configured for (mixer thread)
-    volatile bool started_[NSTREAMS];
-    volatile bool flush_[NSTREAMS];
-    uint32_t frames_in_[NSTREAMS];
-    StreamWatch watch_[NSTREAMS];              // per-block gap counters for the stats line (mixer thread)
-    UnderrunGuard guard_[NSTREAMS];            // wait for late input instead of padding (mixer thread)
-    bool gap_[NSTREAMS];                       // the last block of this stream was padded: fade the next one in
+    // streams: one StreamInput per AudioStream, its fields grouped by the thread that writes them
+    StreamInput stream_[NSTREAMS];
     uint32_t wait_ms_;                         // NBT_BROWSER_WAIT_MS (0 = pad at once)
     DriftControl drift_;                       // media clock-drift trim (mixer thread)
     DriftPi drift_pi_;                         // its proportional-integral version, fed drift_'s error (mixer thread)
     bool drift_pi_on_;                         // NBT_BROWSER_DRIFT_LOOP: pi (default) applies drift_pi_, p drift_
     bool drift_on_;                            // NBT_BROWSER_DRIFT (default on)
     volatile bool drift_reset_;                // set by the session thread at a media start
-    int32_t drift_applied_;                    // trim currently set on rs_[MEDIA] (mixer thread)
+    int32_t drift_applied_;                    // trim currently set on the media resampler (mixer thread)
     uint32_t waited_blocks_, waited_ms_;       // stats interval (mixer thread)
     uint64_t waited_blocks_total_;             // session (mixer thread)
-    PrerollGate gate_[NSTREAMS];               // pre-roll: hold a started stream until it has a cushion (mixer thread)
     uint32_t preroll_ms_;                      // NBT_BROWSER_PREROLL_MS (0 = off)
-    volatile uint32_t start_seq_[NSTREAMS];    // bumped by the session thread at every START
-    uint32_t seen_seq_[NSTREAMS];              // the last start_seq_ the mixer saw (mixer thread)
-    // Whether waiting for late input is safe (waitIsSafe), per stats interval (mixer thread): device writes, the ones
-    // that blocked, and the lowest / highest lead over real time seen before a block.
-    uint32_t writes_, writes_blocked_;
-    int64_t lead_min_, lead_max_;
-    bool lead_seen_;
 
     // mixer thread
     pthread_t thread_;
@@ -225,19 +185,15 @@ private:
     volatile bool pcm_failed_;
     AudioMixer mixer_;
 
-    // route
+    // route: audioconn, and when to build / release (RoutePolicy, guarded by lock_)
     AudioRoute route_;
     pthread_mutex_t lock_;
-    RouteState route_state_;
-    uint64_t route_since_ms_;
-    uint64_t route_backoff_until_ms_;   // after a connection that was never granted
+    RoutePolicy route_policy_;
     uint64_t last_sound_ms_;
     uint64_t last_media_ms_;            // last AA media sound or open media stream (0 = none this session)
 
     // stats
     uint64_t blocks_;
-    uint32_t write_errors_;
-    uint32_t prepares_;
     uint64_t last_stats_ms_;
     bool was_ducking_;
 };
