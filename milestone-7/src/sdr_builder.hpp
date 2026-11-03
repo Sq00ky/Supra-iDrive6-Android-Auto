@@ -45,7 +45,8 @@ int dropSdrChannels(std::vector<uint8_t>& sdr);
 
 // NBT_GUIDANCE_BT=1 (experiment, off by default): declare the channel 8 audio sink as SYSTEM_AUDIO instead of
 // GUIDANCE. With no guidance sink (and no media sink in Bluetooth mode) the phone may mix nav prompts into its
-// own audio, which already plays over Bluetooth A2DP. Returns the number of fields patched (0 or 1).
+// own audio, which already plays over Bluetooth A2DP. Never in browser audio mode (ch 8 is its guidance stream and
+// ch 16 its SYSTEM_AUDIO sink): NBT_GUIDANCE_BT=1 is then ignored. Returns the number of fields patched (0 or 1).
 int retypeGuidanceSink(std::vector<uint8_t>& sdr);
 
 // Android Auto audio sink channels. 8 and 9 come from the DHU template; 16 is added by addSystemAudioSink.

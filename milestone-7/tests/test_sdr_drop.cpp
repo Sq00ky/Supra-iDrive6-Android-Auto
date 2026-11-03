@@ -99,6 +99,10 @@ int main() {
     std::vector<uint8_t> g = base;
     CHECK(dropSdrChannels(g) == 0 && g == base);
     CHECK(retypeGuidanceSink(g) == 0 && g == base);
+    // a leftover NBT_GUIDANCE_BT=1 must not turn ch 8 into a second SYSTEM_AUDIO sink next to ch 16
+    setenv("NBT_GUIDANCE_BT", "1", 1);
+    CHECK(retypeGuidanceSink(g) == 0 && g == base);
+    unsetenv("NBT_GUIDANCE_BT");
     CHECK(addSystemAudioSink(g) == 1);
     std::vector<int> cg; CHECK(channels(g, cg));
     CHECK(has(cg, 16) && has(cg, 8) && has(cg, 9) && has(cg, 14) && cg.size() == before.size() + 1);

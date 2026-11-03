@@ -213,6 +213,13 @@ int retypeGuidanceSink(std::vector<uint8_t>& sdr) {
     // NBT_GUIDANCE_BT=0 restores the GUIDANCE sink, =1 forces it on outside BT mode.
     // Unset follows Bluetooth-audio mode. 0/off/no/false keeps GUIDANCE. 1/on/yes/true forces SYSTEM_AUDIO.
     int g = nbt::envFlag("NBT_GUIDANCE_BT");
+    if (nbt::browserAudioEnabled()) {
+        // Browser mode plays ch 8 as the guidance stream (own ducking, own rate offers) and adds the SYSTEM_AUDIO sink
+        // on ch 16: retyping ch 8 would give the phone two SYSTEM_AUDIO sinks. A leftover NBT_GUIDANCE_BT=1 is ignored.
+        if (g == 1)
+            printf("[SDR] NBT_GUIDANCE_BT=1 ignored in browser audio mode: channel 8 stays GUIDANCE\n");
+        return 0;
+    }
     bool on = (g < 0) ? nbt::btAudioEnabled() : (g == 1);
     if (!on || sdr.empty()) return 0;
     // ChannelDescriptor(1){ id(1)=8, media_sink_service(3){ codec(1), audio_type(2)=1 GUIDANCE, ... } }:
