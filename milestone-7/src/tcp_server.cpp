@@ -2,9 +2,11 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "nbt_env.hpp"
 #include "tcp_server.hpp"
+#include "alt_wifi.hpp"   // which Wi-Fi the phone is offered (NBT_ALT_WIFI): listener + accept filter
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -50,7 +52,8 @@ TcpServer::TcpServer(uint16_t port)
       rebind_why_(NULL),
       sel_errs_(0),
       last_err_(0),
-      accepts_(0) {
+      accepts_(0),
+      aaNetCount_(0) {
 }
 
 TcpServer::~TcpServer() {
@@ -108,6 +111,24 @@ int TcpServer::tryConnect(const char* ip, uint16_t port, int timeout_ms) {
     return sock;
 }
 
+// The /24 of each Android Auto interface (uap0, wfd0) as far as it can be read now. Used by the accept filter when
+// the listener is bound to every interface, so a client on the head unit's other networks is still refused.
+void TcpServer::refreshAaNets() {
+    aaNetCount_ = 0;
+    const char* ifs[2] = { "uap0", "wfd0" };
+    for (int i = 0; i < 2; ++i) {
+        std::string ip;
+        if (!nbt::interfaceIpv4(ifs[i], ip)) continue;
+        struct in_addr a;
+        if (!inet_aton(ip.c_str(), &a)) continue;
+        unsigned net = ntohl(a.s_addr) & 0xffffff00u;
+        bool dup = false;
+        for (int x = 0; x < aaNetCount_; ++x) if (aaNets_[x] == net) dup = true;
+        if (!dup && aaNetCount_ < (int)(sizeof(aaNets_) / sizeof(aaNets_[0]))) aaNets_[aaNetCount_++] = net;
+    }
+    printf("[TcpServer] Android Auto networks for the accept filter: %d read\n", aaNetCount_);
+}
+
 int TcpServer::openListener() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
@@ -126,18 +147,39 @@ int TcpServer::openListener() {
     // Prefer the CarPlay AP address so a client on another interface cannot open a session.
     // The AP is often not up yet at start, so fall back to every interface and filter accepts.
     if (nbt::wirelessEnabled()) {
-        const char* ip = getenv("NBT_AP_IP");
-        if (!ip || !*ip) ip = "172.16.224.1";
-        if (inet_aton(ip, &address.sin_addr) &&
-            bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
-            printf("[TcpServer] listening on %s:%u\n", ip, (unsigned)port_);
+        // The address has to be the one the phone was told about: NBT_ALT_WIFI=DIRECT offers 172.16.222.1
+        // (wfd0), CARPLAY 172.16.224.1 (uap0). Binding the CarPlay address in DIRECT mode let the phone join
+        // the group and connect to nothing (car log 2026-11-03).
+        refreshAaNets();
+        const char* ip = nbt::wirelessListenIp();
+        if (!ip) {
+            printf("[TcpServer] listening on every interface (NBT_ALT_WIFI=%s: both subnets), accepts filtered to "
+                   "the Android Auto networks\n", nbt::altWifiName(nbt::altWifiMode()));
+        } else if (inet_aton(ip, &address.sin_addr) &&
+                   bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+            printf("[TcpServer] listening on %s:%u (NBT_ALT_WIFI=%s)\n", ip, (unsigned)port_,
+                   nbt::altWifiName(nbt::altWifiMode()));
             bound = true;
         } else {
-            printf("[TcpServer] could not bind %s:%u (%s); listening on all interfaces\n",
-                   ip, (unsigned)port_, strerror(errno));
-            memset(&address, 0, sizeof(address));
-            address.sin_family = AF_INET;
-            address.sin_port = htons(port_);
+            // The configured address is only a default: a car may number its interface differently (or the
+            // interface may not be up yet). Ask the interface itself before giving up on a specific address.
+            int saved = errno;
+            std::string ifip;
+            const char* wif = nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT
+                                  ? (getenv("NBT_WFD_IF") && *getenv("NBT_WFD_IF") ? getenv("NBT_WFD_IF") : "wfd0")
+                                  : (getenv("NBT_AP_IF") && *getenv("NBT_AP_IF") ? getenv("NBT_AP_IF") : "uap0");
+            if (nbt::interfaceIpv4(wif, ifip) && inet_aton(ifip.c_str(), &address.sin_addr) &&
+                bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
+                printf("[TcpServer] listening on %s:%u (NBT_ALT_WIFI=%s; %s, not the configured %s)\n",
+                       ifip.c_str(), (unsigned)port_, nbt::altWifiName(nbt::altWifiMode()), wif, ip);
+                bound = true;
+            } else {
+                printf("[TcpServer] could not bind %s:%u (%s) nor %s; listening on all interfaces\n", ip,
+                       (unsigned)port_, strerror(saved), wif);
+                memset(&address, 0, sizeof(address));
+                address.sin_family = AF_INET;
+                address.sin_port = htons(port_);
+            }
         }
     }
     if (!bound) {
@@ -297,12 +339,20 @@ void TcpServer::acceptLoop() {
             continue;
         }
         if (nbt::wirelessEnabled()) {
-            const char* ip = getenv("NBT_AP_IP");
-            unsigned base = inet_addr((ip && *ip) ? ip : "172.16.224.1");
+            // Which address did this connection arrive on? The phone has to be inside that network; that holds
+            // whatever the car numbers wfd0/uap0, and still keeps Ethernet/USB/OBD clients out.
             uint32_t hip = ntohl(client_addr.sin_addr.s_addr);
-            uint32_t hbase = ntohl(base);
-            if (base != INADDR_NONE && (hip & 0xffffff00u) != (hbase & 0xffffff00u)) {
-                printf("[TcpServer] refusing %s (not on the Android Auto Wi-Fi)\n", client_ip);
+            uint32_t lip = 0;
+            sockaddr_in local;
+            socklen_t llen = sizeof(local);
+            memset(&local, 0, sizeof(local));
+            if (getsockname(client_fd, reinterpret_cast<sockaddr*>(&local), &llen) == 0)
+                lip = ntohl(local.sin_addr.s_addr);
+            if (!nbt::wfdPeerInNets(hip, aaNets_, (size_t)aaNetCount_, lip)) {
+                char lip_s[INET_ADDRSTRLEN] = "?";
+                inet_ntop(AF_INET, &local.sin_addr, lip_s, sizeof(lip_s));
+                printf("[TcpServer] refusing %s (not on %s: NBT_ALT_WIFI=%s)\n", client_ip, lip_s,
+                       nbt::altWifiName(nbt::altWifiMode()));
                 close(client_fd);
                 continue;
             }

@@ -45,7 +45,7 @@ TARGET = nbt-aad
 
 .PHONY: all clean
 
-all: $(TARGET) test_display test_controls plugin rhmiapp
+all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -103,6 +103,13 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 
 -include $(OBJS:.o=.d)
 
+# Standalone read-only probe for the car's Wi-Fi Direct group (NBT_ALT_WIFI=DIRECT): prints ifconfig wfd0, the
+# decoded WFDPass/WFDWps files, raw mwud replies and the Wi-Fi persistency strings. Not part of nbt-aad.
+wfd_probe: tools/wfd_probe.cpp src/alt_wifi.hpp src/wireless_setup.hpp
+	@echo [CXX] tools/wfd_probe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/wfd_probe.cpp -lsocket -lang-c++
+	@echo [DONE] Built $@
+
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe

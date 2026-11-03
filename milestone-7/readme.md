@@ -7,6 +7,24 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.8.73-wfd: `NBT_ALT_WIFI` (experiment, off): the Wi-Fi Direct group instead of the CarPlay hotspot.**
+> Cars without the CarPlay licence have no usable `iap2.cfg`, so they were told "no Wi-Fi hotspot config" and wireless
+> Android Auto never started. They do run the Marvell Wi-Fi Direct group `wfd0` whenever Miracast is coded
+> (`wifi, mira`): Connectivity starts it at boot (`NetworkingService_wfd0.autogo = yes`), SSID `DIRECT-03-` + VIN,
+> group owner 172.16.222.1, DHCP .100-.110. Its WPA2 passphrase is stored in `/var/opt/conn/WFDPass.conf` as 20 hex
+> chars: the passphrase XORed with the hard-coded key `NBTEvo0715` (`CWifiSecurity::encDecyrptPsk` in `Connectivity`),
+> then hex - so the file itself is not the password and typing it fails. `NBT_ALT_WIFI=DIRECT` offers that group
+> instead of the CarPlay AP and nothing else; `CARPLAY` is the old behaviour (hotspot only); `BOTH` (**the default
+> since v1.8.78**) offers the CarPlay hotspot first - the path that is car-verified wherever it exists - and falls back
+> to the DIRECT group once the phone has taken the hotspot details twice without connecting. A car with no hotspot
+> config has none, so `BOTH` is DIRECT-only there, with no env line at all. The group's name is `"DIRECT-03-"` + Connectivity's WLAN device name without spaces; it is read from
+> `NBT_WFD_SSID` if set, else from `ifconfig wfd0`, else from `mwud` on 127.0.0.1:9096, else derived from
+> `/var/opt/sys/persistence/early/pers_ConnectivityWlanPersistencyPersMapper` ("Toyota51807 CarPlay" -> `Toyota51807`
+> -> `DIRECT-03-Toyota51807`). On a J29 the first three give nothing (`ifconfig` prints no `ssid` line, mwud does not
+> answer on 9096), so the derivation is the working source there: it relies on the CarPlay AP name sharing the device
+> name, so pin `NBT_WFD_SSID` if the group the phone sees differs. The decoded passphrase is printed in the log, once per value, so it can be typed into a phone's Wi-Fi settings
+> to join the group by hand. Log: `[Wireless] Wi-Fi source: ...`, `[Wireless] Wi-Fi Direct AP: ssid=...`.
+>
 > **v1.8.42-stability / rhmiapp-20 (not car-verified):** after a tester's head unit reset 5 times in a row
 > (phone ending every session right after setup, `audioconn` requests piling up until memory ran out; fixed in
 > v1.8.41-routeguard): the phone's `ByeByeRequest` is answered with `ByeByeResponse` and ends the session at once
@@ -428,6 +446,7 @@ Leave these unset unless you are testing.
 | `NBT_BTSPP_DEV` | Use only this SPP node (default: scan `/dev/btspp0..7`) |
 | `NBT_WPP_MODE=0\|1\|2` | Pin the Bluetooth handshake mode (default rotates 2, 0, 1 on failures) |
 | `NBT_AP_CFG`, `NBT_AP_IF`, `NBT_AP_IP`, `NBT_AP_BSSID` | Hotspot config path / interface / address / BSSID (default: `iap2.cfg`, `iap2_Wifi.cfg` as fallback; `uap0`, 172.16.224.1) |
+| `NBT_ALT_WIFI=DIRECT\|CARPLAY\|BOTH`, `NBT_WFD_IF`, `NBT_WFD_SSID` | **Default `BOTH`** (car-verified on a J29 over the DIRECT group). Which Wi-Fi the phone is offered. `CARPLAY` (unset) = the CarPlay hotspot, unchanged. `DIRECT` = the car's Wi-Fi Direct group only, no fallback (for cars without the CarPlay licence, where `iap2.cfg` is missing but `wfd0` runs because Miracast is coded): passphrase decoded from `/var/opt/conn/WFDPass.conf` (hex, XOR `NBTEvo0715`), SSID from `NBT_WFD_SSID`, `ifconfig <if>`, `mwud` 127.0.0.1:9096, or derived as `DIRECT-03-` + the WLAN device name from the WLAN persistency (the J29: `DIRECT-03-Toyota51807`). `BOTH` = the CarPlay hotspot first, the group only if the phone does not connect twice (DIRECT-only on cars with no hotspot config). `NBT_WFD_IF` (default `wfd0`) and `NBT_WFD_SSID` pin the interface and the group name. The passphrase is logged once per value so it can be typed into a phone by hand. Not car-verified yet |
 | `NBT_SPP_UUID_CON` | Connect UUID registered with the car's SPP service (default = AA UUID) |
 | `NBT_SPP_REREG_S` | While no Android Auto Bluetooth link is open, register the service again every this many seconds for 2 minutes, then every 30 s (default 5; `0` = off) |
 | `NBT_BT_TRACE` | `1` = read-only Bluetooth diagnostics: log, with uptime, when the phone connects to / drops from the car over Bluetooth and which services it has (`DeviceListChanged: phone ... is connected`), to see why the phone does not open the Android Auto link after the car sleeps and wakes. Off by default, not car-verified |

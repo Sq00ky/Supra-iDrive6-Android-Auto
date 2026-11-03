@@ -1,0 +1,11 @@
+# Build products (make all / make rhmiapp / make plugin). Never commit released binaries.
+release/
+*.o
+*.d
+nbt-aad
+wfd_probe
+test_display
+test_controls
+plugin/libhmiaad.so
+plugin/plugin_check
+rhmiapp/libNbtAad.so

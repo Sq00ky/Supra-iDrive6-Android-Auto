@@ -93,6 +93,7 @@
 #include "aa_session.hpp"
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
+#include "alt_wifi.hpp"
 #include "touch_probe.hpp"
 #include "ccs_input.hpp"
 #include "crash_handler.hpp"
@@ -840,6 +841,15 @@ static void recoverWifiPath(const char* why) {
 static const int kApCfgRecheckSec = 10;
 
 static bool apConfigPresent(const char* cfg) {
+    // NBT_ALT_WIFI=DIRECT/BOTH: the Wi-Fi Direct group counts as a usable Wi-Fi even when the car has no CarPlay
+    // hotspot config at all (cars without the CarPlay licence). Quiet: this runs every kApCfgRecheckSec.
+    nbt::AltWifiMode m = nbt::altWifiMode();
+    if (m != nbt::ALT_WIFI_CARPLAY) {
+        nbt::ApInfo wfd;
+        std::string used;
+        if (nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true)) return true;
+        if (m == nbt::ALT_WIFI_DIRECT) return false;
+    }
     if (cfg) {
         nbt::ApInfo ap;
         return nbt::loadCarPlayApConfig(cfg, ap, true);
@@ -848,8 +858,35 @@ static bool apConfigPresent(const char* cfg) {
 }
 
 static void logNoApConfig(const char* cfg) {
-    printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are left "
-           "alone; checking again every %d s\n", cfg ? cfg : "iap2.cfg / iap2_Wifi.cfg", kApCfgRecheckSec);
+    if (nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT)
+        printf("[Wireless] no usable Wi-Fi Direct passphrase (/var/opt/conn/WFDPass.conf, then "
+               "/fs/sda1/opt/conn/WFDPass.conf): NBT_ALT_WIFI=DIRECT has no CarPlay fallback, so wireless Android "
+               "Auto is unavailable, Bluetooth links are left alone; checking again every %d s\n", kApCfgRecheckSec);
+    else
+        printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are "
+               "left alone; checking again every %d s\n", cfg ? cfg : "iap2.cfg / iap2_Wifi.cfg", kApCfgRecheckSec);
+}
+
+// One Wi-Fi the phone may be offered. File-scope (not inside wirelessThread) because GCC 4.4.2 rejects a local
+// type as a std::vector argument even under -std=gnu++0x.
+struct ApChoice {
+    nbt::ApInfo ap;
+    std::string path;
+    const char* ifn;
+    bool direct;
+};
+
+// The Wi-Fi Direct passphrase is printed once per value (not per link attempt): it is decoded from the car's own
+// WFDPass.conf, so it can be typed into a phone's Wi-Fi settings by hand - that is how a DIRECT join gets checked
+// without the daemon getting it right first.
+static void logWfdAp(const nbt::ApInfo& ap, const std::string& path, std::string& shown) {
+    char tag[512];
+    snprintf(tag, sizeof(tag), "%s|%s|%s", path.c_str(), ap.ssid.c_str(), ap.key.c_str());
+    if (shown == tag) return;
+    shown = tag;
+    printf("[Wireless] Wi-Fi Direct AP: ssid='%s', passphrase from %s: '%s' (%u chars, decoded; type it into the "
+           "phone's Wi-Fi settings to join the group by hand)\n",
+           ap.ssid.c_str(), path.c_str(), ap.key.c_str(), (unsigned)ap.key.size());
 }
 
 static void* wirelessThread(void*) {
@@ -866,6 +903,21 @@ static void* wirelessThread(void*) {
     std::string apShown;
     const char* ifn = getenv("NBT_AP_IF");
     if (!ifn || !*ifn) ifn = "uap0";
+    const char* wfdIfn = getenv("NBT_WFD_IF");
+    if (!wfdIfn || !*wfdIfn) wfdIfn = "wfd0";
+    // NBT_ALT_WIFI: which Wi-Fi the phone is offered (see alt_wifi.hpp). CARPLAY unset = the behaviour of every
+    // earlier build.
+    const nbt::AltWifiMode altMode = nbt::altWifiMode();
+    printf("[Wireless] Wi-Fi source: %s (NBT_ALT_WIFI=%s): %s\n", nbt::altWifiName(altMode),
+           getenv("NBT_ALT_WIFI") && *getenv("NBT_ALT_WIFI") ? getenv("NBT_ALT_WIFI") : "(unset)",
+           altMode == nbt::ALT_WIFI_DIRECT
+               ? "the car's Wi-Fi Direct group only, no CarPlay fallback"
+               : (altMode == nbt::ALT_WIFI_BOTH
+                      ? "the car's Wi-Fi Direct group first, the CarPlay hotspot after two tries without a connection"
+                      : "the CarPlay hotspot only"));
+    // Watch the interface of the source offered first (CARPLAY and BOTH: the hotspot; DIRECT: wfd0). The other one
+    // is covered by the "no IP on <if>, retry" path and by recoverWifiPath() when a BOTH try falls back.
+    const char* pollIfn = altMode == nbt::ALT_WIFI_DIRECT ? wfdIfn : ifn;
 
     int apState = -1;           // ifn: -1 unknown, 0 no IP (access point off), 1 has an IP
     int apPoll = 0;
@@ -892,9 +944,9 @@ static void* wirelessThread(void*) {
         // Watch the access point while idle (every ~2 s): when it comes back after being off, the car was switched
         // off and on again under us -> refresh the firewall and the listener before the phone tries again.
         if ((apPoll++ % 4) == 0) {
-            int st = ifaceHasIpv4(ifn);
+            int st = ifaceHasIpv4(pollIfn);
             if (st >= 0 && st != apState) {
-                if (st == 0) printf("[Wireless] %s has no IP address: the car's Wi-Fi access point is off\n", ifn);
+                if (st == 0) printf("[Wireless] %s has no IP address: the car's Wi-Fi access point is off\n", pollIfn);
                 else if (apState == 0) {
                     recoverWifiPath("the car's Wi-Fi access point came back");
                     idleWait = false;   // the car woke up: start the re-registration schedule from its first step
@@ -952,41 +1004,111 @@ static void* wirelessThread(void*) {
             continue;
         }
         idleWait = false;
-        nbt::ApInfo ap;
-        std::string apPath;
-        size_t apCount = 1;
-        if (cfg) {
-            if (!nbt::loadCarPlayApConfig(cfg, ap)) {
-                close(fd);
-                logNoApConfig(cfg);
-                apCfgState = 0;
-                apCfgChecked = monoSecs();
-                continue;
+        // Which Wi-Fi this link is offered (NBT_ALT_WIFI, alt_wifi.hpp):
+        //   CARPLAY  the car's hotspot from iap2.cfg, unchanged
+        //   DIRECT   the car's Wi-Fi Direct group only, no fallback
+        //   BOTH     the hotspot first (the car-verified path), the DIRECT group after two tries without a
+        //            connection; cars that have no CarPlay config have no hotspot at all, so BOTH is DIRECT there
+        std::vector<ApChoice> directChoices;   // the Wi-Fi Direct group (wfd0)
+        std::vector<ApChoice> cpChoices;       // the CarPlay hotspot (iap2.cfg / iap2_Wifi.cfg)
+        if (altMode != nbt::ALT_WIFI_CARPLAY) {
+            nbt::ApInfo wfd;
+            std::string used;
+            // Quiet here: logWfdAp() prints the passphrase once per value, not on every link attempt.
+            bool havePass = nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true);
+            std::string wfdSsid;
+            if (havePass && nbt::resolveWfdSsid(wfdIfn, wfdSsid)) {
+                wfd.ssid = wfdSsid;
+                ApChoice c;
+                c.ap = wfd;
+                c.path = used;
+                c.ifn = wfdIfn;
+                c.direct = true;
+                directChoices.push_back(c);
+            } else if (havePass) {
+                printf("[Wireless] Wi-Fi Direct: no SSID for %s, skipping the DIRECT group on this link (NBT_WFD_SSID "
+                       "pins one)\n", wfdIfn);
+            } else {
+                printf("[Wireless] Wi-Fi Direct: no usable passphrase file (%s), skipping the DIRECT group on this "
+                       "link\n", nbt::wfdPassPaths()[0]);
             }
-            apPath = cfg;
+            if (altMode == nbt::ALT_WIFI_DIRECT) {
+                // Logged once, for the car log; a normal Wi-Fi join uses the passphrase above, not the PIN.
+                static bool wpsShown = false;
+                std::string pin, pinPath;
+                if (!wpsShown && nbt::loadWfdWpsPin(nbt::wfdWpsPaths(), nbt::wfdWpsPathCount(), pin, pinPath))
+                    wpsShown = true;
+            }
+        }
+        if (altMode != nbt::ALT_WIFI_DIRECT) {
+            if (cfg) {
+                nbt::ApInfo a;
+                if (!nbt::loadCarPlayApConfig(cfg, a)) {
+                    if (directChoices.empty()) {
+                        close(fd);
+                        logNoApConfig(cfg);
+                        apCfgState = 0;
+                        apCfgChecked = monoSecs();
+                        continue;
+                    }
+                } else {
+                    ApChoice c;
+                    c.ap = a;
+                    c.path = cfg;
+                    c.ifn = ifn;
+                    c.direct = false;
+                    cpChoices.push_back(c);
+                }
+            } else {
+                std::vector<nbt::ApCandidate> cands =
+                    nbt::collectApCandidates(nbt::kApCfgPaths, nbt::kApCfgPathCount);
+                for (size_t i = 0; i < cands.size(); ++i) {
+                    ApChoice c;
+                    c.ap = cands[i].ap;
+                    c.path = cands[i].path;
+                    c.ifn = ifn;
+                    c.direct = false;
+                    cpChoices.push_back(c);
+                }
+            }
+        }
+        // Order: CARPLAY and BOTH put the car's hotspot first, so a car that has CarPlay keeps the path that is
+        // verified there; the DIRECT group is only reached when there is no hotspot config, or BOTH falls back to
+        // it after two tries the phone took but never connected with (apNoJoin below).
+        const bool cpFirst = nbt::altWifiPrefersCarplay();
+        std::vector<ApChoice>& vFirst = cpFirst ? cpChoices : directChoices;
+        std::vector<ApChoice>& vSecond = cpFirst ? directChoices : cpChoices;
+        std::vector<ApChoice> choices = vFirst;
+        if (altMode == nbt::ALT_WIFI_BOTH) choices.insert(choices.end(), vSecond.begin(), vSecond.end());
+        if (choices.empty()) {
+            close(fd);
+            logNoApConfig(cfg);
+            apCfgState = 0;
+            apCfgChecked = monoSecs();
+            continue;
+        }
+        const size_t apCount = choices.size();
+        const ApChoice& chosen = choices[(size_t)apIdx % apCount];
+        nbt::ApInfo ap = chosen.ap;
+        const std::string apPath = chosen.path;
+        if (chosen.direct) {
+            logWfdAp(ap, apPath, apShown);
         } else {
-            std::vector<nbt::ApCandidate> cands = nbt::collectApCandidates(nbt::kApCfgPaths, nbt::kApCfgPathCount);
-            if (cands.empty()) {
-                close(fd);
-                logNoApConfig(cfg);
-                apCfgState = 0;
-                apCfgChecked = monoSecs();
-                continue;
-            }
-            apCount = cands.size();
-            const nbt::ApCandidate& c = cands[(size_t)apIdx % apCount];
-            ap = c.ap;
-            apPath = c.path;
             char tag[400];
-            snprintf(tag, sizeof(tag), "%s|%s|%u", c.path.c_str(), c.ap.ssid.c_str(), (unsigned)(apIdx % apCount));
+            snprintf(tag, sizeof(tag), "%s|%s|%u", apPath.c_str(), ap.ssid.c_str(), (unsigned)(apIdx % apCount));
             if (apShown != tag) {
                 apShown = tag;
                 printf("[Wireless] CarPlay AP: ssid='%s', passphrase from %s (%u of %u distinct)\n", ap.ssid.c_str(),
                        apPath.c_str(), (unsigned)(apIdx % apCount) + 1, (unsigned)apCount);
             }
         }
-        nbt::fillApNetworkInfo(ifn, ap);
-        if (ap.ip.empty()) { printf("[Wireless] no IP on %s, retry\n", ifn); close(fd); sleep(5); continue; }
+        nbt::fillApNetworkInfo(chosen.ifn, ap);
+        if (ap.ip.empty()) {
+            printf("[Wireless] no IP on %s, retry\n", chosen.ifn);
+            close(fd);
+            sleep(5);
+            continue;
+        }
         // Make the serial device a completely transparent 8-bit stream (no line editing, no signal
         // characters, no flow control, no CR/NL or parity/break mangling). Log what the driver says.
         struct termios tio;
@@ -1465,7 +1587,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.72-main-usb"
+#define NBT_AAD_BUILD "v1.8.78-bothdefault"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log

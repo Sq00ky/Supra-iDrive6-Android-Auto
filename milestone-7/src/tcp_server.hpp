@@ -35,6 +35,10 @@ private:
     void connectorLoop();
 
     int tryConnect(const char* ip, uint16_t port, int timeout_ms);
+
+    unsigned aaNets_[4];   // /24 of uap0 / wfd0 (host order), for the accept filter
+    int aaNetCount_;
+    void refreshAaNets();
     int openListener();                 // socket + SO_REUSEADDR + bind(INADDR_ANY:port_) + listen, -1 on failure
     void rebindNow(const char* why);
 
