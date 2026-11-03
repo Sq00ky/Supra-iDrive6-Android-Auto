@@ -849,6 +849,7 @@ bool AASession::sendServiceDiscoveryResponse() {
         dropSdrChannels(sdr);
         retypeGuidanceSink(sdr);
         addSystemAudioSink(sdr);
+        limitGuidanceOffers(sdr);
         plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
     } else {
         std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
@@ -857,6 +858,7 @@ bool AASession::sendServiceDiscoveryResponse() {
         dropSdrChannels(sdr);
         retypeGuidanceSink(sdr);
         addSystemAudioSink(sdr);
+        limitGuidanceOffers(sdr);
         plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
     }
 

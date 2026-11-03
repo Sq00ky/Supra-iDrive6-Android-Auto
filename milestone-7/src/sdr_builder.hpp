@@ -61,6 +61,16 @@ inline bool isAaAudioSinkChannel(unsigned ch) {
 // Returns 1 if added. Does nothing if channel 16 already exists.
 int addSystemAudioSink(std::vector<uint8_t>& sdr);
 
+// Keeps only the AudioConfigs with this sample rate in `channel`'s audio sink (ChannelDescriptor{ id } ->
+// media_sink_service = 3 -> audio_configs = 3), rewriting the enclosing lengths. Does nothing when no offer has that
+// rate, or when it is the only rate offered. Returns the number of offers removed.
+int keepAudioSinkRate(std::vector<uint8_t>& sdr, unsigned channel, uint32_t rate);
+
+// Browser audio mode: the guidance sink (ch 8) offers only NBT_GUIDANCE_RATE (default 48000; 0 = keep every offer).
+// The DHU template offers 16 and 48 kHz and the phone picks without asking (car 2026-11-01: 48 kHz), so one offer
+// leaves no doubt about the rate. Other modes unchanged. Returns the number of offers removed.
+int limitGuidanceOffers(std::vector<uint8_t>& sdr);
+
 // Pure helper used by dropSdrChannels (host-tested): parses "8, 9,14" into ids (max 16).
 size_t parseChannelList(const char* s, int* ids, size_t max_ids);
 

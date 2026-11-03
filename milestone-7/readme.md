@@ -448,6 +448,7 @@ Leave these unset unless you are testing.
 | `NBT_BROWSER_WAIT_MS` | Browser mode: wait up to this long for a block of a playing stream that arrives a little late instead of padding it with silence (default `30`, max `60`, `0` = pad at once). Only while the device is full, so it still holds ~92 ms and waits can't add up; real gaps fade instead of clicking |
 | `NBT_BROWSER_DRIFT` | Browser mode: `0` turns off clock-drift correction for AA media. On by default: for the first 10 s of a stream it learns how much audio the phone keeps queued, then trims the media resampler by up to ±500 ppm (under 1 cent of pitch) to hold that level, so a phone whose clock runs slow doesn't drain it and crackle after half an hour, and a fast one doesn't make the delay creep up. The 10 s stats show `[Browser] media drift: trim .. ppm, queue .. ms, target .. ms` |
 | `NBT_AA_DEFER_ACKS`, `NBT_AA_MAX_UNACKED`, `NBT_AA_ACK_FORCE_MS` | Browser mode: `0` acks AA audio frames on arrival again. On by default: a frame is acked once the mixer has taken it, as Google's head unit does, so the phone can run at most `NBT_AA_MAX_UNACKED` frames ahead (default `10`, max `64`, audio sinks only) and is paced by the car's clock. A frame unacked for `NBT_AA_ACK_FORCE_MS` (default `1000`, `0` = never) is acked anyway, so no device or a late grant slows the phone but never stalls it. Log: `[AASession] deferred audio acks, last 30 s: ..` and the session summary `[Feature] deferred_acks=on .. window_full=..` (how often the phone was held back) |
+| `NBT_GUIDANCE_RATE` | Browser mode: the only rate the guidance sink (ch 8) offers, default `48000`. The template offers 16 and 48 kHz and the phone picks one without asking (it took 48 kHz on the car), so a single offer leaves no doubt. `16000` offers only that; `0` keeps both offers. Log: `[SDR] channel 8 guidance sink: offering 48000 Hz only ..` |
 | `NBT_AA_UNDERFLOW_REPORT` | Browser mode: `0` stops telling the phone when a stream ran dry. On by default: when a playing stream that has already sent audio leaves a mixer block short (padded with silence), the phone gets an AudioUnderflowNotification (`0x800b`), once per dry spell, as Google's head unit does. What the phone does with it isn't known yet. Log: `[Browser] media ran dry ..`, `[AASession] media ran dry: AudioUnderflowNotification (0x800b) #N ..`, 5 s later `[Browser] 5 s after media underflow #N: the phone sent X ms of audio in 5000 ms, queue now Y ms` (X above 5000 = it sent extra), and the session summary `[Feature] underflow_reports=on ..` |
 | `NBT_BROWSER_FORCE_RATE` | Browser mode experiment, off by default: ask the browser device for this rate (e.g. `48000`) even though it reports 22050..44100, so the 48 kHz AA streams play without resampling. The log says whether the device took it; if the car refuses, the device doesn't open and there is no AA audio that session (reason in `sloginfo`) |
 | `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
@@ -490,8 +491,8 @@ Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID
 Car-verified; the default in v1.8.61..v1.8.65. Since v1.8.66 Bluetooth is the default again: put
 `NBT_AUDIO_MODE=browser` in `nbt-aad.env` to use browser audio.
 
-- The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 16 or 48 kHz mono: nav prompts,
-  Assistant speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI
+- The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 48 kHz mono only, see
+  `NBT_GUIDANCE_RATE`: nav prompts, Assistant speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI
   sounds). Media then no longer goes to Bluetooth A2DP.
 - Each stream start names the format the phone picked from the offers (`configuration_index`); the daemon converts
   from that rate from the first frame. Only a start without a usable index falls back to measuring the rate from the
@@ -879,7 +880,7 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates) |
 | `test_media_ack` | Deferred audio acks: acked once consumed, forced acks and skipped bytes, window-full count, a phone held to its window |
 | `test_media_msgs` | AA media-channel messages byte for byte against Google's receiver library (AudioUnderflowNotification) |
-| `test_audio_format` | Offered AudioConfigs read back from the SDR, the phone's choice in AV START_INDICATION |
+| `test_audio_format` | Offered AudioConfigs read back from the SDR, the phone's choice in AV START_INDICATION, guidance offered at one rate in browser mode |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/kombi_nav.cpp src/kombi_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
 | `test_media_payload.py` | Media metadata payloads |
