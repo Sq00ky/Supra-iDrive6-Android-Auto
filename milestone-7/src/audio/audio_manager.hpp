@@ -4,9 +4,9 @@
 #define AUDIO_MANAGER_HPP
 
 #include "a2i_client.h"
-#include "a2i_stream.hpp"
-#include "audio_route.hpp"
-#include "pcm_utils.hpp"
+#include "audio/a2i_stream.hpp"
+#include "audio/audio_route.hpp"
+#include "audio/pcm_utils.hpp"
 #include <pthread.h>
 #include <stddef.h>
 #include <vector>

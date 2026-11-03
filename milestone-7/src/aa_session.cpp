@@ -9,7 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
-#include "aa_media_msgs.hpp"
+#include "audio/aa_media_msgs.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>

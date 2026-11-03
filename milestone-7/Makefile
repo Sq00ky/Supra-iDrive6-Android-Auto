@@ -16,12 +16,12 @@ CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -
 LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -lm -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 SRCS = src/main.cpp \
-       src/audio_manager.cpp \
-       src/a2i_stream.cpp \
-       src/audio_route.cpp \
-       src/audio_mixer.cpp \
-       src/browser_audio.cpp \
-       src/pcm_utils.cpp \
+       src/audio/audio_manager.cpp \
+       src/audio/a2i_stream.cpp \
+       src/audio/audio_route.cpp \
+       src/audio/audio_mixer.cpp \
+       src/audio/browser_audio.cpp \
+       src/audio/pcm_utils.cpp \
        src/video_manager.cpp \
        src/tcp_server.cpp \
        src/usb_accessory.cpp \
@@ -32,16 +32,16 @@ SRCS = src/main.cpp \
        src/wireless_setup.cpp \
        src/touch_probe.cpp \
        src/dsi_client.cpp \
-       src/voice_scenario.cpp \
-       src/bt_play.cpp \
+       src/audio/voice_scenario.cpp \
+       src/audio/bt_play.cpp \
        src/ccs_input.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
        src/kombi_nav.cpp
 
-# C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/nbt_speex.c.
-CSRCS = src/nbt_speex.c
+# C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/nbt_speex.c.
+CSRCS = src/audio/nbt_speex.c
 CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 
 OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)

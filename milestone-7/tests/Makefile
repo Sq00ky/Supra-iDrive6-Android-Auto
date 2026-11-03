@@ -18,16 +18,16 @@ CFLAGS   := -O1 -g -Wall $(INC)
 LDLIBS   := -lpthread -lssl -lcrypto -lm
 
 # The vendored speexdsp resampler, built as C the way the daemon builds it.
-SPEEX := $(ROOT)/src/nbt_speex.c
+SPEEX := $(ROOT)/src/audio/nbt_speex.c
 
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
 SRC_test_audio_format      := src/sdr_builder.cpp
-SRC_test_audio_mixer       := src/audio_mixer.cpp
-SRC_test_audio_route       := src/audio_route.cpp
+SRC_test_audio_mixer       := src/audio/audio_mixer.cpp
+SRC_test_audio_route       := src/audio/audio_route.cpp
 SRC_test_bcl_detect        := src/wireless_setup.cpp
-SRC_test_bt_play           := src/bt_play.cpp
+SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
 SRC_test_ccs_decoder       :=
 SRC_test_ccs_push          :=
@@ -42,8 +42,8 @@ SRC_test_media_msgs        :=
 SRC_test_mmr_pps           :=
 SRC_test_most_msg          :=
 SRC_test_neutral_resume    :=
-SRC_test_pcm               := src/pcm_utils.cpp $(SPEEX)
-SRC_test_resampler         := src/pcm_utils.cpp $(SPEEX)
+SRC_test_pcm               := src/audio/pcm_utils.cpp $(SPEEX)
+SRC_test_resampler         := src/audio/pcm_utils.cpp $(SPEEX)
 SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
 SRC_test_session_lifecycle := src/aa_cryptor.cpp src/aa_session.cpp src/crash_handler.cpp src/sdr_builder.cpp
@@ -52,7 +52,7 @@ SRC_test_touch             := src/touch_probe.cpp
 SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
 SRC_test_usb_log           :=
-SRC_test_voice_scenario    := src/voice_scenario.cpp
+SRC_test_voice_scenario    := src/audio/voice_scenario.cpp
 SRC_test_wpp               := src/wireless_setup.cpp
 
 # Arguments some tests take (paths relative to milestone-7).

@@ -5,5 +5,5 @@
  * configuration nbt_speex.h declares: OUTSIDE_SPEEX, nbt_speex_ symbol prefix, fixed point. */
 #define FIXED_POINT 1
 #define EXPORT
-#include "nbt_speex.h"
-#include "../third_party/speexdsp/resample.c"
+#include "audio/nbt_speex.h"
+#include "../../third_party/speexdsp/resample.c"

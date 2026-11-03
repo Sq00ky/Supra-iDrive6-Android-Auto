@@ -47,9 +47,9 @@
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
 
-#include "audio_mixer.hpp"
-#include "audio_route.hpp"
-#include "pcm_utils.hpp"
+#include "audio/audio_mixer.hpp"
+#include "audio/audio_route.hpp"
+#include "audio/pcm_utils.hpp"
 #include <pthread.h>
 #include <stdint.h>
 #include <stddef.h>

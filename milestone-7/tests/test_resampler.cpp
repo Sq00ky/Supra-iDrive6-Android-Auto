@@ -2,7 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: PcmResampler's SPEEX engine (speexdsp, fixed point) against the LINEAR one, on the conversions browser
 // mode does: 48 kHz -> 44.1 kHz media and guidance, 16 kHz -> 44.1 kHz system sounds, mono -> stereo, drift trim.
-#include "pcm_utils.hpp"
+#include "audio/pcm_utils.hpp"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

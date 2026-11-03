@@ -18,12 +18,12 @@ include_directories(
 # so a CMake configure does not drop sources or pass -fPIC, which the readme notes produces ET_DYN.
 set(SOURCES
     src/main.cpp
-    src/audio_manager.cpp
-    src/a2i_stream.cpp
-    src/audio_route.cpp
-    src/audio_mixer.cpp
-    src/browser_audio.cpp
-    src/pcm_utils.cpp
+    src/audio/audio_manager.cpp
+    src/audio/a2i_stream.cpp
+    src/audio/audio_route.cpp
+    src/audio/audio_mixer.cpp
+    src/audio/browser_audio.cpp
+    src/audio/pcm_utils.cpp
     src/video_manager.cpp
     src/tcp_server.cpp
     src/aa_session.cpp
@@ -32,14 +32,14 @@ set(SOURCES
     src/wireless_setup.cpp
     src/touch_probe.cpp
     src/dsi_client.cpp
-    src/voice_scenario.cpp
-    src/bt_play.cpp
+    src/audio/voice_scenario.cpp
+    src/audio/bt_play.cpp
     src/ccs_input.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
     src/kombi_client.cpp
     src/kombi_nav.cpp
-    src/nbt_speex.c
+    src/audio/nbt_speex.c
 )
 
 add_executable(nbt-aad ${SOURCES})

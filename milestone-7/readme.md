@@ -925,9 +925,10 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
-  - audio: `audio_route` (`audioconn` wrapper), `voice_scenario`, `browser_audio` + `audio_mixer` (browser mode),
-    `nbt_speex.c` / `nbt_speex.h` (the vendored speexdsp resampler, `third_party/speexdsp/`),
-    `audio_manager`, `a2i_stream`, `pcm_utils`;
+  - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `audio_route` (`audioconn` wrapper),
+    `voice_scenario`, `bt_play`, `browser_audio` + `audio_mixer` (browser mode), `nbt_speex.c` / `nbt_speex.h`
+    (the vendored speexdsp resampler, `third_party/speexdsp/`), `audio_manager`, `a2i_stream`, `pcm_utils`,
+    `media_ack.hpp` + `aa_media_msgs.hpp` (deferred acks, media-channel messages);
   - cluster/HUD arrows: `kombi_nav` (+ `kombi_nav_msg.hpp`, `kombi_graph.hpp`, `kombi_graph_template.hpp`),
     `kombi_client`;
   - other: `crash_handler`, `license_text.hpp`.
@@ -968,7 +969,7 @@ project is not affiliated with or endorsed by any of them.
 ### Third-party code
 
 The browser audio mode's resampler is the speexdsp resampler (speexdsp 1.2.1, unmodified, in
-`third_party/speexdsp/`; built through `src/nbt_speex.c`). It is under its own BSD-3-Clause license, which applies to
+`third_party/speexdsp/`; built through `src/audio/nbt_speex.c`). It is under its own BSD-3-Clause license, which applies to
 those files and is reproduced here, as it requires for binary distributions (also in `third_party/speexdsp/COPYING`):
 
 ```
