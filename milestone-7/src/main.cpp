@@ -1316,6 +1316,31 @@ static bool micStart(nbt::A2ICaptureStream& mic) {
 }
 
 static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data) {
+    // Count phone video frames at the AA callback boundary, before queueing. Print one
+    // five-second average
+    struct VideoRateProbe {
+        uint64_t frames;
+        struct timespec window_start;
+        bool started;
+        VideoRateProbe() : frames(0), started(false) {}
+    };
+    static VideoRateProbe probe;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    ++probe.frames;
+    if (!probe.started) {
+        probe.window_start = now;
+        probe.started = true;
+    } else {
+        const double elapsed = (now.tv_sec - probe.window_start.tv_sec) +
+                               (now.tv_nsec - probe.window_start.tv_nsec) / 1000000000.0;
+        if (elapsed >= 5.0) {
+            printf("[VideoRate] phone frames=%llu in %.2f s (%.1f fps), requested=%u fps\n",
+                   (unsigned long long)probe.frames, elapsed, probe.frames / elapsed, nbt::videoFps());
+            probe.frames = 0;
+            probe.window_start = now;
+        }
+    }
     nbt::VideoManager* video = reinterpret_cast<nbt::VideoManager*>(user_data);
     if (video) {
         // Feed raw H.264 slice straight into the car's hardware video decoder (/dev/name/local/mdev)
