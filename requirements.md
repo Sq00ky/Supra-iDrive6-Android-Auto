@@ -32,8 +32,7 @@ The following versions have been tested and confirmed working:
 |NBTevo_V201531|BMW 4 Series|F32|x|
 |NBTEVO_v20153l|BMW M2|F87|2017|
 |NBTevo_X20511I|BMW x3|G01|2018|
-|NBTevo_Y21432J|BMW M2 Comp |2020|
-|NBTevo_Y21432J|BMW M2|F87|x|
+|NBTevo_Y21432J|BMW M2|F87|2020|
 |NBTevo_Y22292I|BMW 3 Series|F30|2012 [Retrofit]|
 |NBTevo_Y24073J|BMW 3 Series|F30|2017|
 |NBTevo_Y24073J|BMW 5 Series|G31|2017|
