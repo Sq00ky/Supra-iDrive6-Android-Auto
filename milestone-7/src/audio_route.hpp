@@ -57,7 +57,7 @@ public:
     // cancelled or found no free audioconn slot). Not called when remove() returns false.
     bool remove(uint32_t conn_id, GrantedFn onDone = 0, void* user = 0);
     bool buildFocus(uint32_t src, uint32_t sink, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0);
-    bool removeFocus(uint32_t src, uint32_t sink);
+    bool removeFocus(uint32_t src, uint32_t sink, GrantedFn onDone = 0, void* user = 0);
     // Read-only `audioconn -l` after delayMs, logged as "[AudioRoute]   | ..." (40 lines max).
     bool listConnections(const char* tag, int delayMs);
 

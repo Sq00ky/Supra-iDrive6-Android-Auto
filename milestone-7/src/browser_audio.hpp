@@ -35,6 +35,12 @@
 //                        after a prompt / system sound ends, so the radio is cut only for the prompt (default 1000,
 //                        0 = use NBT_BROWSER_IDLE_S)
 //   NBT_BROWSER_REFOCUS  build the connection again when the phone closes the mic (default on)
+//   NBT_BROWSER_PROMPT_CONN  0 turns the satnav overlay source off. Any other value leaves it on.
+//                        The direct connection id 0x31e is refused on this car (CMCommand error).
+//   NBT_BROWSER_PROMPT_FOCUS  1 (default): ask with audioconn -b <src> <sink> (AudioManagement focus).
+//                        0: audioconn -b <NBT_BROWSER_PROMPT_CONN> (ConnectionMaster id).
+//   NBT_BROWSER_PROMPT_SRC / NBT_BROWSER_PROMPT_SINK  focus source and sink (default 0xba / 0x1,
+//                        eSRC_A4A_CARPLAY_INT_MIX -> speakers). Music stays on NBT_BROWSER_CONN.
 //   NBT_DUCK_DB          media level while ducked, dB (default -12)
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
@@ -77,6 +83,11 @@ public:
     void mixerLoop();
     void routeGranted();
     void releaseDone();
+    // audioconn worker: the satnav interrupt source was granted, or its remove finished.
+    void promptGranted();
+    void promptReleased();
+    // Control thread: picture should sit under the car's audio overlay.
+    bool promptUnder() const { return prompt_under_ != 0; }
 
 private:
     BrowserAudio(const BrowserAudio&);
@@ -95,6 +106,11 @@ private:
     bool pull(int s, size_t frames, int16_t* out, bool* audible);   // mixer thread
     void requestRoute(const char* why);
     void releaseRoute(const char* why);
+    void syncPromptRoute(bool started);
+    void dropPromptSource(const char* why);
+    bool queuePromptBuild();
+    bool queuePromptRemove();
+    uint32_t promptId() const { return prompt_focus_ ? prompt_src_ : prompt_conn_; }
     bool routedForPlayback();
     void logStats(bool force);
 
@@ -134,6 +150,16 @@ private:
 
     // route
     AudioRoute route_;
+    uint32_t prompt_conn_;          // non-zero enables the satnav source; 0 = off
+    uint32_t prompt_src_;           // focus form source, default 0xba
+    uint32_t prompt_sink_;          // focus form sink, default 0x1
+    bool prompt_focus_;             // true: audioconn -b src sink; false: audioconn -b conn id
+    AudioRoute prompt_route_;       // own audioconn queue, so it does not cancel the music source
+    volatile int prompt_under_;     // 1 once 0x31e is granted
+    int prompt_state_;
+    bool prompt_drop_;              // guidance stopped while the build was still in flight
+    bool prompt_again_;             // guidance started again while the remove was in flight
+    uint64_t prompt_since_ms_;
     pthread_mutex_t lock_;
     RouteState route_state_;
     uint64_t route_since_ms_;

@@ -309,6 +309,8 @@ bool AudioRoute::remove(uint32_t conn_id, GrantedFn onDone, void* user) {
 bool AudioRoute::buildFocus(uint32_t src, uint32_t sink, GrantedFn cb, void* user, int delayMs) {
     return run('b', src, sink, true, cb, user, delayMs);
 }
-bool AudioRoute::removeFocus(uint32_t src, uint32_t sink) { return run('r', src, sink, true, 0, 0, 0); }
+bool AudioRoute::removeFocus(uint32_t src, uint32_t sink, GrantedFn onDone, void* user) {
+    return run('r', src, sink, true, onDone, user, 0);
+}
 
 } // namespace nbt

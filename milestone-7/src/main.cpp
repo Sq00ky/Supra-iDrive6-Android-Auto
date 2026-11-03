@@ -1386,7 +1386,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.68-volpopup"
+#define NBT_AAD_BUILD "v1.8.71-a2dp-nav"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1592,7 +1592,20 @@ int main(int argc, char* argv[]) {
                    g_btSrc, g_btSink);
         g_btPlay.init();
         g_audio = NULL;
-        speechInit();
+        // Test: music stays on A2DP (channel 9 dropped, car source 0xc7) and satnav PCM is played
+        // through the browser source. Channel 8 must stay GUIDANCE or the phone keeps the prompt on
+        // A2DP. The 0xba / 0x31e overlay is refused on this car and would occupy the one audioconn slot.
+        if (nbt::envFlag("NBT_NAV_BROWSER") == 1) {
+            setenv("NBT_GUIDANCE_BT", "0", 1);
+            setenv("NBT_BROWSER_PROMPT_CONN", "0", 1);
+            if (!browser.init())
+                printf("[Browser] WARNING: the libasound shim is missing: satnav prompts will be silent\n");
+            g_browser = &browser;
+            printf("[Main] split test: music on Bluetooth A2DP 0x%x, satnav through browser source 0x%x\n",
+                   g_btConn, (unsigned)nbt::envHex("NBT_BROWSER_CONN", 0xb8));
+        } else {
+            speechInit();
+        }
     } else {
         if (!audio.init()) {
             printf("[Main] Warning: Audio initialization encountered an issue.\n");
@@ -1920,7 +1933,7 @@ int main(int argc, char* argv[]) {
         if (reassert_ticks >= 0) {
             ++reassert_ticks;
             if (!want || !overlay_on) reassert_ticks = -1;
-            else if (!g_hmiPopup && (reassert_ticks == 8 || reassert_ticks == 20)) {
+            else if (!g_hmiPopup && !(g_browser && g_browser->promptUnder()) && (reassert_ticks == 8 || reassert_ticks == 20)) {
                 printf("[Main] Re-asserting overlay (%d s after it came back).\n", reassert_ticks / 4);
                 video.setVisible(true);
                 under_hmi = false;
@@ -1932,7 +1945,7 @@ int main(int argc, char* argv[]) {
                 // The HMI / LayerManager may have rearranged layers and window order since the daemon
                 // started (minutes ago, with iDrive in use): put our window back on top for the session.
                 active_ticks = 0;
-                if (want && !g_hmiPopup) {
+                if (want && !g_hmiPopup && !(g_browser && g_browser->promptUnder())) {
                     printf("[Main] Session active: re-asserting overlay (window z-order + LayerManager).\n");
                     video.setVisible(true);
                     overlay_on = true;
@@ -1940,7 +1953,7 @@ int main(int argc, char* argv[]) {
                 }
             }
             ++active_ticks;
-            if (active_ticks == 20 && want && !g_hmiPopup) {   // ~5 s in: again, in case the HMI reacted to the new source
+            if (active_ticks == 20 && want && !g_hmiPopup && !(g_browser && g_browser->promptUnder())) {   // ~5 s in: again, in case the HMI reacted to the new source
                 printf("[Main] Re-asserting overlay (5 s into the session).\n");
                 video.setVisible(true);
                 under_hmi = false;
@@ -1955,10 +1968,12 @@ int main(int argc, char* argv[]) {
         } else {
             active_ticks = 0;
         }
-        // After every setVisible(true): a car volume popup stacks the picture under HmiMain3D without
-        // telling the phone it lost the screen. The next tick with the popup gone puts z-order 2000 back.
+        // After every setVisible(true): a car volume popup, or a granted satnav interrupt source, stacks
+        // the picture under HmiMain3D without telling the phone it lost the screen. The next tick with
+        // both gone puts z-order 2000 back.
         {
-            bool popup = g_hmiPopup && want && overlay_on;
+            bool nav = g_browser && g_browser->promptUnder();
+            bool popup = (g_hmiPopup || nav) && want && overlay_on;
             if (popup != under_hmi && video.setUnderHmi(popup)) under_hmi = popup;
         }
         was_active = act;

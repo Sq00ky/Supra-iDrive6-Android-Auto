@@ -67,6 +67,8 @@ int envInt(const char* name, int def) {
 
 void routeGrantedThunk(void* self) { static_cast<BrowserAudio*>(self)->routeGranted(); }
 void releaseDoneThunk(void* self) { static_cast<BrowserAudio*>(self)->releaseDone(); }
+void promptGrantedThunk(void* self) { static_cast<BrowserAudio*>(self)->promptGranted(); }
+void promptReleasedThunk(void* self) { static_cast<BrowserAudio*>(self)->promptReleased(); }
 
 void* mixerThunk(void* self) {
     static_cast<BrowserAudio*>(self)->mixerLoop();
@@ -80,6 +82,15 @@ BrowserAudio::BrowserAudio()
       rate_(0), frag_bytes_(0), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
       route_state_(ROUTE_IDLE), route_since_ms_(0), route_backoff_until_ms_(0), last_sound_ms_(0), last_media_ms_(0), blocks_(0), write_errors_(0), prepares_(0),
       last_stats_ms_(0), was_ducking_(false) {
+    prompt_conn_ = 0x31e;
+    prompt_src_ = 0xba;
+    prompt_sink_ = 0x1;
+    prompt_focus_ = true;
+    prompt_under_ = 0;
+    prompt_state_ = ROUTE_IDLE;
+    prompt_drop_ = false;
+    prompt_again_ = false;
+    prompt_since_ms_ = 0;
     memset(fn_, 0, sizeof(fn_));
     for (int s = 0; s < NSTREAMS; ++s) {
         ring_[s] = NULL;   // allocated by init(): the object exists in every audio mode
@@ -151,12 +162,31 @@ bool BrowserAudio::init() {
     printf("[Browser] audio mode browser (NBT_AUDIO_MODE=browser; Bluetooth is the default): AA media ch %d + guidance ch %d + system audio ch %d, "
            "mixed and played through the browser audio source\n",
            AA_CH_MEDIA_AUDIO, AA_CH_GUIDANCE_AUDIO, AA_CH_SYSTEM_AUDIO);
+    prompt_conn_ = (uint32_t)envHex("NBT_BROWSER_PROMPT_CONN", 0x31e);
+    prompt_src_ = (uint32_t)envHex("NBT_BROWSER_PROMPT_SRC", 0xba);
+    prompt_sink_ = (uint32_t)envHex("NBT_BROWSER_PROMPT_SINK", 0x1);
+    {
+        int focus = envFlag("NBT_BROWSER_PROMPT_FOCUS");
+        prompt_focus_ = focus != 0;   // unset stays on: the connection-id form is refused on this car
+    }
     printf("[Browser] connection 0x%x%s, release after %d s without media / %d ms after a prompt or sound alone, "
            "ducking %d dB (attack %u / hold %u / release %u ms)\n",
            conn_, conn_ ? "" : " (NBT_BROWSER_CONN=0: not routed)", idle_s_, prompt_idle_ms_, envInt("NBT_DUCK_DB", -12),
            duck_cfg_.attack_ms, duck_cfg_.hold_ms, duck_cfg_.release_ms);
+    if (prompt_conn_ && prompt_focus_)
+        printf("[Browser] satnav overlay: audioconn -b 0x%x 0x%x while guidance plays "
+               "(AudioManagement focus, eSRC_A4A_CARPLAY_INT_MIX -> speakers). "
+               "Music stays on 0x%x. NBT_BROWSER_PROMPT_CONN=0 turns this off.\n",
+               prompt_src_, prompt_sink_, conn_);
+    else if (prompt_conn_)
+        printf("[Browser] satnav overlay: audioconn -b 0x%x while guidance plays (connection id). "
+               "Music stays on 0x%x. NBT_BROWSER_PROMPT_CONN=0 turns this off.\n", prompt_conn_, conn_);
+    else
+        printf("[Browser] satnav overlay source off (NBT_BROWSER_PROMPT_CONN=0)\n");
     bool ok = loadShim();
     if (conn_ && !route_.configure()) printf("[Browser] audioconn not found: connection 0x%x cannot be built\n", conn_);
+    if (prompt_conn_ && !prompt_route_.configure())
+        printf("[Browser] audioconn not found: satnav source 0x%x cannot be built\n", prompt_conn_);
     return ok;
 }
 
@@ -332,6 +362,7 @@ void BrowserAudio::onAaStreamState(uint8_t channel, bool started) {
     if (started) meter_[s].reset();   // each stream start is measured again
     // Media paused: drop what is queued so the music stops now. Prompts and sounds play their tail out.
     if (!started && s == MEDIA) { ring_[s]->clear(); flush_[s] = true; }
+    if (s == GUIDANCE) syncPromptRoute(started);
     if (started) ensureMixer();
 }
 
@@ -384,6 +415,150 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
     for (size_t i = 0; i < take && !loud; ++i) loud = (out[i] > kAudibleLevel || out[i] < -kAudibleLevel);
     if (audible) *audible = loud;
     return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Satnav interrupt source (connection 0x31e). Music stays on the browser source.
+// ---------------------------------------------------------------------------------------------------------------
+
+bool BrowserAudio::queuePromptBuild() {
+    if (prompt_focus_)
+        return prompt_route_.buildFocus(prompt_src_, prompt_sink_, &promptGrantedThunk, this, 0);
+    return prompt_route_.build(prompt_conn_, &promptGrantedThunk, this, 0);
+}
+
+bool BrowserAudio::queuePromptRemove() {
+    if (prompt_focus_)
+        return prompt_route_.removeFocus(prompt_src_, prompt_sink_, &promptReleasedThunk, this);
+    return prompt_route_.remove(prompt_conn_, &promptReleasedThunk, this);
+}
+
+void BrowserAudio::syncPromptRoute(bool started) {
+    if (!prompt_conn_ || !prompt_route_.available()) return;
+    if (prompt_focus_ && (!prompt_src_ || !prompt_sink_)) return;
+    if (started) {
+        pthread_mutex_lock(&lock_);
+        int st = prompt_state_;
+        if (st == ROUTE_RELEASING) {
+            prompt_again_ = true;
+            pthread_mutex_unlock(&lock_);
+            printf("[Browser] satnav prompt started while source 0x%x is releasing: it will be requested again\n", promptId());
+            return;
+        }
+        if (st != ROUTE_IDLE) {
+            prompt_drop_ = false;   // a new prompt wants the source that is already coming up
+            pthread_mutex_unlock(&lock_);
+            return;
+        }
+        prompt_state_ = ROUTE_BUILDING;
+        prompt_drop_ = false;
+        prompt_since_ms_ = nowMs();
+        pthread_mutex_unlock(&lock_);
+        if (prompt_focus_)
+            printf("[Browser] satnav prompt: requesting interrupt source audioconn -b 0x%x 0x%x (music stays on 0x%x)\n",
+                   prompt_src_, prompt_sink_, conn_);
+        else
+            printf("[Browser] satnav prompt: requesting interrupt source audioconn -b 0x%x (music stays on 0x%x)\n",
+                   prompt_conn_, conn_);
+        if (!queuePromptBuild()) {
+            pthread_mutex_lock(&lock_);
+            prompt_state_ = ROUTE_IDLE;
+            pthread_mutex_unlock(&lock_);
+            printf("[Browser] could not queue the satnav source\n");
+        }
+        return;
+    }
+
+    pthread_mutex_lock(&lock_);
+    int st = prompt_state_;
+    prompt_again_ = false;
+    prompt_under_ = 0;
+    if (st == ROUTE_IDLE || st == ROUTE_RELEASING) {
+        pthread_mutex_unlock(&lock_);
+        return;
+    }
+    if (st == ROUTE_BUILDING) {
+        prompt_drop_ = true;
+        pthread_mutex_unlock(&lock_);
+        printf("[Browser] satnav prompt ended before source 0x%x was granted: it will be released if the car grants it\n",
+               promptId());
+        return;
+    }
+    prompt_state_ = ROUTE_RELEASING;
+    pthread_mutex_unlock(&lock_);
+    if (prompt_focus_)
+        printf("[Browser] satnav prompt ended: releasing interrupt source audioconn -r 0x%x 0x%x\n", prompt_src_, prompt_sink_);
+    else
+        printf("[Browser] satnav prompt ended: releasing interrupt source audioconn -r 0x%x\n", prompt_conn_);
+    if (!queuePromptRemove()) promptReleased();
+}
+
+void BrowserAudio::dropPromptSource(const char* why) {
+    if (!prompt_conn_ || !prompt_route_.available()) {
+        prompt_under_ = 0;
+        return;
+    }
+    prompt_route_.cancelPending();
+    pthread_mutex_lock(&lock_);
+    int st = prompt_state_;
+    prompt_drop_ = true;
+    prompt_again_ = false;
+    prompt_under_ = 0;
+    if (st == ROUTE_ROUTED) prompt_state_ = ROUTE_RELEASING;
+    pthread_mutex_unlock(&lock_);
+    if (st != ROUTE_ROUTED) return;
+    if (prompt_focus_)
+        printf("[Browser] %s: releasing satnav source audioconn -r 0x%x 0x%x\n", why, prompt_src_, prompt_sink_);
+    else
+        printf("[Browser] %s: releasing satnav source audioconn -r 0x%x\n", why, prompt_conn_);
+    if (!queuePromptRemove()) promptReleased();
+}
+
+void BrowserAudio::promptGranted() {
+    pthread_mutex_lock(&lock_);
+    bool drop = prompt_drop_;
+    if (drop) {
+        prompt_drop_ = false;
+        prompt_state_ = ROUTE_RELEASING;
+        prompt_under_ = 0;
+    } else {
+        prompt_state_ = ROUTE_ROUTED;
+        prompt_under_ = 1;
+    }
+    pthread_mutex_unlock(&lock_);
+    if (drop) {
+        printf("[Browser] satnav source 0x%x granted after the prompt ended: releasing it\n", promptId());
+        if (!queuePromptRemove()) promptReleased();
+        return;
+    }
+    printf("[Browser] satnav source 0x%x granted: picture goes under the car audio overlay\n", promptId());
+}
+
+void BrowserAudio::promptReleased() {
+    bool again = false;
+    pthread_mutex_lock(&lock_);
+    again = prompt_again_;
+    prompt_again_ = false;
+    prompt_drop_ = false;
+    prompt_under_ = 0;
+    if (again) {
+        prompt_state_ = ROUTE_BUILDING;
+        prompt_since_ms_ = nowMs();
+    } else {
+        prompt_state_ = ROUTE_IDLE;
+    }
+    pthread_mutex_unlock(&lock_);
+    if (!again) {
+        printf("[Browser] satnav source 0x%x released\n", promptId());
+        return;
+    }
+    printf("[Browser] satnav prompt still playing: requesting interrupt source 0x%x again\n", promptId());
+    if (!queuePromptBuild()) {
+        pthread_mutex_lock(&lock_);
+        prompt_state_ = ROUTE_IDLE;
+        pthread_mutex_unlock(&lock_);
+        printf("[Browser] could not queue the satnav source\n");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -544,6 +719,25 @@ void BrowserAudio::mixerLoop() {
             }
         }
 
+        // A satnav build that never comes back must not stay BUILDING, or the next prompt never asks again.
+        // This is separate from the music route: both can be live, and they share one audioconn slot.
+        if (prompt_conn_) {
+            pthread_mutex_lock(&lock_);
+            int pst = prompt_state_;
+            uint64_t psince = prompt_since_ms_;
+            pthread_mutex_unlock(&lock_);
+            if (pst == ROUTE_BUILDING && psince && now - psince > 20000u) {
+                printf("[Browser] satnav source 0x%x was not granted within 20 s\n", promptId());
+                prompt_route_.cancelPending();
+                pthread_mutex_lock(&lock_);
+                if (prompt_state_ == ROUTE_BUILDING) {
+                    prompt_state_ = ROUTE_IDLE;
+                    prompt_under_ = 0;
+                }
+                pthread_mutex_unlock(&lock_);
+            }
+        }
+
         // Until the car grants the source, keep the device fed with silence and leave the AA audio queued.
         const bool play = routedForPlayback();
         bool have[NSTREAMS] = { false, false, false };
@@ -588,6 +782,7 @@ void BrowserAudio::mixerLoop() {
 
 void BrowserAudio::onSessionEnded() {
     stopMixer();
+    dropPromptSource("session ended");
     releaseRoute("session ended");
     for (int s = 0; s < NSTREAMS; ++s) {
         started_[s] = false;
@@ -606,6 +801,7 @@ void BrowserAudio::onSessionEnded() {
 
 void BrowserAudio::stop() {
     stopMixer();
+    dropPromptSource("shutdown");
     releaseRoute("shutdown");
     if (lib_) { dlclose(lib_); lib_ = NULL; }
 }
