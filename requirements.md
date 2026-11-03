@@ -31,6 +31,7 @@ The following versions have been tested and confirmed working:
 |NBTevo_T24081I|Toyota Supra|J29|2024|
 |NBTevo_V201531|BMW 4 Series|F32|x|
 |NBTEVO_v20153l|BMW M2|F87|2017|
+|NBTevo_Nxxxxxx|BMW M3|F80|2015|
 |NBTevo_X20511I|BMW x3|G01|2018|
 |NBTevo_Y21432J|BMW M2|F87|2020|
 |NBTevo_Y22292I|BMW 3 Series|F30|2012 [Retrofit]|
