@@ -155,6 +155,61 @@ void StreamWatch::onPull(bool started, size_t queued, size_t got, size_t need) {
     else if (got < need) { ++short_; ++total_gaps_; }
 }
 
+size_t estimateOutFrames(size_t ring_bytes, size_t pending_samples, uint32_t src_rate, uint32_t src_ch,
+                         uint32_t out_rate, uint32_t out_ch) {
+    const size_t pending = out_ch ? pending_samples / out_ch : 0;
+    if (!src_rate || !src_ch) return pending;
+    const uint64_t in_frames = ring_bytes / ((size_t)src_ch * 2u);
+    return pending + (size_t)(in_frames * out_rate / src_rate);
+}
+
+UnderrunGuard::UnderrunGuard(uint32_t budget_ms) : budget_ms_(budget_ms), starved_(false), timeouts_(0) {}
+
+void UnderrunGuard::reset() {
+    starved_ = false;
+    timeouts_ = 0;
+}
+
+bool UnderrunGuard::shouldWait(bool started, size_t avail_frames, size_t need_frames, uint32_t waited_ms,
+                               bool device_full) {
+    if (!budget_ms_ || !started) return false;
+    if (avail_frames >= need_frames) { starved_ = false; return false; }
+    if (starved_ || !device_full) return false;
+    if (waited_ms >= budget_ms_) { starved_ = true; ++timeouts_; return false; }
+    return true;
+}
+
+void UnderrunGuard::onPulled(bool started, size_t got_frames, size_t need_frames) {
+    if (started && got_frames >= need_frames) starved_ = false;
+}
+
+void fadeOutTail(int16_t* buf, size_t frames, size_t channels, size_t fade_frames) {
+    if (!buf || !channels || !frames) return;
+    if (fade_frames > frames) fade_frames = frames;
+    const size_t first = frames - fade_frames;
+    for (size_t f = 0; f < fade_frames; ++f) {
+        // gain (fade_frames - 1 - f) / fade_frames: the last frame reaches 0
+        const int32_t num = (int32_t)(fade_frames - 1 - f), den = (int32_t)fade_frames;
+        for (size_t c = 0; c < channels; ++c) {
+            int16_t& v = buf[(first + f) * channels + c];
+            v = (int16_t)((int32_t)v * num / den);
+        }
+    }
+}
+
+void fadeInHead(int16_t* buf, size_t frames, size_t channels, size_t fade_frames) {
+    if (!buf || !channels || !frames) return;
+    if (fade_frames > frames) fade_frames = frames;
+    for (size_t f = 0; f < fade_frames; ++f) {
+        // gain (f + 1) / (fade_frames + 1): starts just above 0, never fully silent
+        const int32_t num = (int32_t)(f + 1), den = (int32_t)(fade_frames + 1);
+        for (size_t c = 0; c < channels; ++c) {
+            int16_t& v = buf[f * channels + c];
+            v = (int16_t)((int32_t)v * num / den);
+        }
+    }
+}
+
 StreamRate::StreamRate() : default_(48000), rate_(48000), ch_(1), declared_(false), warned_(false) {}
 
 void StreamRate::configure(uint32_t default_rate, const uint32_t* offered, size_t n, uint32_t channels) {

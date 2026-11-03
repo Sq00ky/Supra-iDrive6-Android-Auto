@@ -120,6 +120,43 @@ private:
     uint64_t total_gaps_;
 };
 
+// Waiting for late input instead of padding with silence (browser mode). When the mixer's previous write blocked,
+// the device was full and has just freed one of its 5 fragments: it still holds ~4 (~92 ms), however much was waited
+// before. A wait of at most `budget` ms for a frame that is a few ms late is then inaudible, while padding puts a hole
+// in the music at once. Waiting is allowed only in that state (device_full), so waits can never add up and drain
+// the device: if the last write did not block, the block is padded, which refills it. After a wait runs out the
+// stream counts as starved and is padded at once until a whole block is available again (data really stopped,
+// e.g. a pause without STOP).
+
+// Output frames that queued input will give after conversion: ring bytes at src_rate / src_ch, plus already
+// converted pending samples (out_ch interleaved).
+size_t estimateOutFrames(size_t ring_bytes, size_t pending_samples, uint32_t src_rate, uint32_t src_ch,
+                         uint32_t out_rate, uint32_t out_ch);
+
+class UnderrunGuard {
+public:
+    explicit UnderrunGuard(uint32_t budget_ms = 30);
+    void setBudget(uint32_t ms) { budget_ms_ = ms; }   // 0 = never wait (pad at once, the old behaviour)
+    void reset();                                       // session ended
+    // Before a block, after waited_ms of waiting for it: true = wait a little longer for this stream. device_full =
+    // the mixer's previous write blocked (the device holds ~4 fragments); without it the block is padded.
+    bool shouldWait(bool started, size_t avail_frames, size_t need_frames, uint32_t waited_ms, bool device_full);
+    // After the block's pull: a whole block clears the starved state.
+    void onPulled(bool started, size_t got_frames, size_t need_frames);
+    bool starved() const { return starved_; }
+    uint32_t timeouts() const { return timeouts_; }    // waits that ran out (the block was padded)
+
+private:
+    uint32_t budget_ms_;
+    bool starved_;
+    uint32_t timeouts_;
+};
+
+// Short linear fades so a real gap (padding that could not be avoided, or the end of a prompt) is not a click:
+// fadeOutTail ramps the last fade_frames of buf[0, frames) down to silence, fadeInHead the first fade_frames up.
+void fadeOutTail(int16_t* buf, size_t frames, size_t channels, size_t fade_frames);
+void fadeInHead(int16_t* buf, size_t frames, size_t channels, size_t fade_frames);
+
 // The input rate of one AA audio stream. Each stream start may carry the phone's declared format (START_INDICATION
 // configuration_index -> the offered AudioConfig): that is used from the first frame, and the timestamps are then
 // only a cross-check (a disagreement is reported once, never acted on). Without a declaration the rate is measured

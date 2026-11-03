@@ -13,6 +13,56 @@ static int fails = 0;
 
 static bool near(float a, float b, float tol) { return a > b - tol && a < b + tol; }
 
+// Mixer / device / phone at 1 ms resolution (output frames at 44.1 kHz): the device holds 5 blocks of 1024 frames and
+// plays continuously; the mixer writes a block whenever there is room. Its write "blocked" when it had to wait for
+// that room, i.e. the device was full: only then may UnderrunGuard wait. The phone delivers 42.667 ms frames
+// (1881.6 output frames) at speed (1 = real time; 0.99 = 1 % slow), each late by 0..jitter ms, starting with lead_ms
+// of audio queued, and stops sending at stop_ms (still "started": a pause without STOP).
+struct SimResult { int gaps, underruns, max_wait_ms, waited_after_stop; double min_dev_ms; };
+static SimResult simulateMixer(uint32_t budget_ms, int jitter_ms, int lead_ms, int seconds, int stop_ms,
+                               double speed = 1.0) {
+    const double fpm = 44.1, block = 1024.0, cap = 5 * 1024.0, frame_out = 2048.0 * 44100.0 / 48000.0;
+    double ring = lead_ms * fpm, dev = cap, nominal = 0;
+    uint32_t seed = 12345u;
+    double next_arrival = 0;
+    UnderrunGuard g(budget_ms);
+    SimResult r = { 0, 0, 0, 0, 1e9 };
+    uint32_t waited = 0;
+    bool blocked = true;   // the device starts full: the first write waits for room
+    for (int t = 0; t < seconds * 1000; ++t) {
+        while (t >= next_arrival && t < stop_ms) {
+            ring += frame_out;
+            nominal += 2048.0 / 48.0 / speed;
+            seed = seed * 1103515245u + 12345u;
+            next_arrival = nominal + (jitter_ms ? (double)((seed >> 16) % (uint32_t)(jitter_ms + 1)) : 0.0);
+        }
+        bool wrote_this_ms = false;
+        while (dev <= cap - block) {
+            const size_t avail = (size_t)ring;
+            if (g.shouldWait(true, avail, (size_t)block, waited, blocked)) {
+                ++waited;
+                if ((int)waited > r.max_wait_ms) r.max_wait_ms = (int)waited;
+                if (t >= stop_ms) ++r.waited_after_stop;
+                break;   // wait this ms
+            }
+            const double got = ring < block ? (double)(size_t)ring : block;
+            ring -= got;
+            g.onPulled(true, (size_t)got, (size_t)block);
+            if (got < block) ++r.gaps;
+            dev += block;
+            waited = 0;
+            // the next write blocks if it has to wait for room (the device is full again), not if room is left now
+            blocked = !(dev <= cap - block);
+            wrote_this_ms = true;
+        }
+        (void)wrote_this_ms;
+        dev -= fpm;
+        if (dev / fpm < r.min_dev_ms) r.min_dev_ms = dev / fpm;
+        if (dev < 0) { ++r.underruns; dev = 0; }
+    }
+    return r;
+}
+
 int main() {
     // dB helper
     CHECK(near(AudioMixer::dbToGain(0), 1.0f, 1e-6f));
@@ -222,6 +272,70 @@ int main() {
         CHECK(w.totalGaps() == 3 && w.shortPulls() == 1 && w.minQueued() == 500);
         w.resetAll();                                   // session ended
         CHECK(w.totalGaps() == 0 && w.pulls() == 0);
+    }
+
+    // 13. Waiting for late input (UnderrunGuard, estimateOutFrames, fades).
+    {
+        // queued input in output frames: 48 kHz stereo ring bytes + pending stereo samples, to 44.1 kHz stereo
+        CHECK(estimateOutFrames(8192, 0, 48000, 2, 44100, 2) == 1881);            // one AA media frame
+        CHECK(estimateOutFrames(8192, 200, 48000, 2, 44100, 2) == 1981);          // + 100 pending frames
+        CHECK(estimateOutFrames(4096, 0, 48000, 1, 44100, 2) == 1881);            // guidance mono
+        CHECK(estimateOutFrames(4096, 10, 0, 1, 44100, 2) == 5);                  // unknown rate: pending only
+
+        UnderrunGuard g(30);
+        CHECK(!g.shouldWait(false, 0, 1024, 0, true));       // not started: never wait
+        CHECK(!g.shouldWait(true, 1024, 1024, 0, true));     // a whole block is there
+        CHECK(!g.shouldWait(true, 800, 1024, 0, false) && !g.starved());   // device not full: pad, not starved
+        CHECK(g.shouldWait(true, 800, 1024, 0, true));       // short, device full: wait
+        CHECK(g.shouldWait(true, 800, 1024, 28, true));
+        CHECK(!g.shouldWait(true, 800, 1024, 30, true) && g.starved() && g.timeouts() == 1);   // ran out: starved
+        CHECK(!g.shouldWait(true, 0, 1024, 0, true));        // starved: pad at once, no new wait
+        g.onPulled(true, 500, 1024);
+        CHECK(g.starved());                                  // a short block does not end it
+        CHECK(!g.shouldWait(true, 2000, 1024, 0, true) && !g.starved());   // data back: waiting allowed again
+        CHECK(g.shouldWait(true, 10, 1024, 0, true));
+        g.onPulled(true, 1024, 1024);
+        CHECK(!g.starved());
+        g.reset();
+        CHECK(g.timeouts() == 0);
+        UnderrunGuard off(0);
+        CHECK(!off.shouldWait(true, 0, 1024, 0, true));      // NBT_BROWSER_WAIT_MS=0: old behaviour
+
+        // fades: the tail ramps down to exactly 0, the head ramps up from just above 0, stereo both channels
+        int16_t b[8 * 2];
+        for (int i = 0; i < 16; ++i) b[i] = 8000;
+        fadeOutTail(b, 8, 2, 4);
+        CHECK(b[0] == 8000 && b[7] == 8000 && b[8] == 6000 && b[9] == 6000 && b[14] == 0 && b[15] == 0);
+        for (int f = 4; f < 7; ++f) CHECK(b[2 * f] > b[2 * f + 2]);
+        for (int i = 0; i < 16; ++i) b[i] = -9000;
+        fadeInHead(b, 8, 2, 4);
+        CHECK(b[0] == -1800 && b[1] == -1800 && b[6] == -7200 && b[8] == -9000 && b[15] == -9000);
+        fadeOutTail(b, 3, 2, 32);                      // fade longer than the audio: clipped to it
+        CHECK(b[4] == 0 && b[5] == 0);
+        fadeInHead(NULL, 8, 2, 4);                     // no crash
+        fadeOutTail(b, 0, 2, 4);
+
+        // Simulation, phone with no lead (as after drift drained it) and frames up to 20 ms late:
+        // padding at once leaves holes; waiting absorbs them; the device never runs dry either way.
+        SimResult pad = simulateMixer(0, 20, 0, 60, 1 << 30);
+        SimResult wait = simulateMixer(30, 20, 0, 60, 1 << 30);
+        printf("simulated 60 s, no lead, jitter 20 ms: gaps %d padding at once, %d waiting (underruns %d / %d, "
+               "longest wait %d ms, device never below %.0f ms)\n", pad.gaps, wait.gaps, pad.underruns,
+               wait.underruns, wait.max_wait_ms, wait.min_dev_ms);
+        CHECK(pad.gaps >= 1 && wait.gaps == 0);
+        CHECK(pad.underruns == 0 && wait.underruns == 0);
+        CHECK(wait.max_wait_ms <= 30 && wait.min_dev_ms >= 55);   // waits never take the device below ~62 ms
+        // With the phone's usual ~130 ms lead nothing needs waiting.
+        SimResult lead = simulateMixer(30, 20, 130, 60, 1 << 30);
+        CHECK(lead.gaps == 0 && lead.underruns == 0 && lead.max_wait_ms == 0);
+        // The phone stops sending at 10 s without a STOP: one bounded wait, then padding at once, device never dry.
+        SimResult stop = simulateMixer(30, 5, 130, 20, 10000);
+        CHECK(stop.underruns == 0 && stop.waited_after_stop <= 30 && stop.gaps > 100);
+        // A phone 1 % slow is short all the time: waiting must never add up and drain the device.
+        SimResult slow = simulateMixer(30, 10, 0, 120, 1 << 30, 0.99);
+        printf("simulated 120 s, phone 1 %% slow: gaps %d, underruns %d, device never below %.0f ms\n", slow.gaps,
+               slow.underruns, slow.min_dev_ms);
+        CHECK(slow.underruns == 0 && slow.min_dev_ms >= 55);
     }
 
     printf(fails ? "test_audio_mixer: %d FAILED\n" : "test_audio_mixer: all passed\n", fails);
