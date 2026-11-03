@@ -55,6 +55,8 @@ const int kAudibleLevel = 64;        // |sample| above this (about -54 dBFS) cou
 const uint32_t kLeadMs = 150;        // never run more than this ahead of real time
 const uint32_t kGrantTimeoutMs = 75000;
 const uint32_t kReleaseTimeoutMs = 20000;   // a remove that never reports back
+const uint32_t kWaitStepMs = 2;             // waiting for late input is checked this often
+const size_t kFadeFrames = 32;              // ~0.7 ms fade at a real gap (padding, end of a prompt)
 
 uint64_t nowMs() {
     struct timespec ts;
@@ -86,10 +88,13 @@ BrowserAudio::BrowserAudio()
       route_state_(ROUTE_IDLE), route_since_ms_(0), route_backoff_until_ms_(0), last_sound_ms_(0), last_media_ms_(0), blocks_(0), write_errors_(0), prepares_(0),
       last_stats_ms_(0), was_ducking_(false) {
     memset(fn_, 0, sizeof(fn_));
+    wait_ms_ = 30;
+    waited_blocks_ = waited_ms_ = 0;
     for (int s = 0; s < NSTREAMS; ++s) {
         ring_[s] = NULL;   // allocated by init(): the object exists in every audio mode
         started_[s] = false;
         flush_[s] = false;
+        gap_[s] = false;
         frames_in_[s] = 0;
         src_rate_[s] = kSrcRate[s];
         rs_rate_[s] = 0;
@@ -153,6 +158,12 @@ bool BrowserAudio::init() {
                force_rate_, force_rate_);
     idle_s_ = envInt("NBT_BROWSER_IDLE_S", 10);
     prompt_idle_ms_ = envInt("NBT_BROWSER_PROMPT_IDLE_MS", 1000);
+    {
+        // Above ~60 ms a wait could outlast what the device still holds when the mixer wakes (~92 ms).
+        int w = envInt("NBT_BROWSER_WAIT_MS", 30);
+        wait_ms_ = w < 0 ? 0u : (w > 60 ? 60u : (uint32_t)w);
+    }
+    for (int s = 0; s < NSTREAMS; ++s) guard_[s].setBudget(wait_ms_);
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
     shim_path_ = getenv("NBT_BROWSER_ASOUND");
     if (!shim_path_ || !*shim_path_) shim_path_ = "/opt/mm/lib/libasound/libasound.so";
@@ -392,7 +403,8 @@ void BrowserAudio::stopMixer() {
 }
 
 // Takes `frames` converted frames of stream s into out (zero-padded). Mixer thread only.
-bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
+bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_t* got_out) {
+    if (got_out) *got_out = 0;
     std::vector<int16_t>& q = pending_[s];
     if (flush_[s]) { flush_[s] = false; q.clear(); rs_[s].reset(); }
     const uint32_t src = src_rate_[s];
@@ -416,9 +428,18 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
         if (!conv.empty()) memcpy(&q[old], &conv[0], conv.size());
     }
     size_t take = q.size() < need ? q.size() : need;
-    if (take == 0) return false;
+    if (got_out) *got_out = take;
+    if (take == 0) { gap_[s] = true; return false; }
     memcpy(out, &q[0], take * 2);
-    if (take < need) memset(out + take, 0, (need - take) * 2);
+    const size_t take_frames = take / kOutCh;
+    // A real gap (padding that waiting could not avoid, or a prompt's end) fades instead of clicking: the audio
+    // before the padding ramps down, the first block after it ramps up.
+    if (gap_[s]) { fadeInHead(out, take_frames, kOutCh, kFadeFrames); gap_[s] = false; }
+    if (take < need) {
+        fadeOutTail(out, take_frames, kOutCh, kFadeFrames);
+        memset(out + take, 0, (need - take) * 2);
+        gap_[s] = true;
+    }
     q.erase(q.begin(), q.begin() + take);
     bool loud = false;
     for (size_t i = 0; i < take && !loud; ++i) loud = (out[i] > kAudibleLevel || out[i] < -kAudibleLevel);
@@ -516,6 +537,24 @@ void BrowserAudio::logStats(bool force) {
            (unsigned long long)ring_[MEDIA]->droppedBytes(), (unsigned long long)ring_[GUIDANCE]->droppedBytes(),
            (unsigned long long)ring_[SYSTEM]->droppedBytes(), (int)(mixer_.duckLevel() * 100.0f + 0.5f),
            rs == ROUTE_ROUTED ? "granted" : (rs == ROUTE_BUILDING ? "requested" : (rs == ROUTE_RELEASING ? "releasing" : "idle")), write_errors_, prepares_);
+    // Gaps since the last line, per stream while it was started: blocks that got only part of their audio (short) or
+    // none (empty) and were padded with silence, the lowest ring fill before a block, and the session's total gaps.
+    char fill[NSTREAMS][16];
+    for (int s = 0; s < NSTREAMS; ++s) {
+        if (!watch_[s].hasMin()) { snprintf(fill[s], sizeof(fill[s]), "-"); continue; }
+        const uint64_t bps = (uint64_t)src_rate_[s] * kSrcCh[s] * 2u;
+        snprintf(fill[s], sizeof(fill[s]), "%u ms", bps ? (unsigned)(watch_[s].minQueued() * 1000u / bps) : 0u);
+    }
+    printf("[Browser] gaps media/guidance/system: short %u/%u/%u, empty %u/%u/%u of %u/%u/%u blocks, lowest fill %s/%s/%s; "
+           "session gaps %llu/%llu/%llu; waited for late input %u ms over %u blocks, waits timed out (session) %u/%u/%u\n",
+           watch_[MEDIA].shortPulls(), watch_[GUIDANCE].shortPulls(), watch_[SYSTEM].shortPulls(),
+           watch_[MEDIA].emptyPulls(), watch_[GUIDANCE].emptyPulls(), watch_[SYSTEM].emptyPulls(),
+           watch_[MEDIA].pulls(), watch_[GUIDANCE].pulls(), watch_[SYSTEM].pulls(), fill[MEDIA], fill[GUIDANCE],
+           fill[SYSTEM], (unsigned long long)watch_[MEDIA].totalGaps(), (unsigned long long)watch_[GUIDANCE].totalGaps(),
+           (unsigned long long)watch_[SYSTEM].totalGaps(), waited_ms_, waited_blocks_, guard_[MEDIA].timeouts(),
+           guard_[GUIDANCE].timeouts(), guard_[SYSTEM].timeouts());
+    for (int s = 0; s < NSTREAMS; ++s) watch_[s].resetInterval();
+    waited_ms_ = waited_blocks_ = 0;
 }
 
 void BrowserAudio::mixerLoop() {
@@ -530,6 +569,7 @@ void BrowserAudio::mixerLoop() {
     std::vector<int16_t> in[NSTREAMS];
     std::vector<int16_t> out;
     uint64_t t0 = nowMs(), written_frames = 0;
+    bool last_write_blocked = false;   // the previous write waited for room: the device is full (~4 fragments queued)
     last_sound_ms_ = t0;
     last_stats_ms_ = t0;
     uint32_t fail_run = 0;
@@ -588,7 +628,32 @@ void BrowserAudio::mixerLoop() {
         const bool play = routedForPlayback();
         bool have[NSTREAMS] = { false, false, false };
         bool loud[NSTREAMS] = { false, false, false };
-        if (play) for (int s = 0; s < NSTREAMS; ++s) have[s] = pull(s, block, &in[s][0], &loud[s]);
+        if (play) {
+            // A playing stream that is a few ms short of a whole block: wait for it rather than padding a hole into
+            // the music. Only right after a write that blocked (the device is full and still holds ~4 fragments,
+            // ~92 ms), at most NBT_BROWSER_WAIT_MS per block; a stream that really stopped sending is padded at once
+            // after the first timeout.
+            uint32_t waited = 0;
+            for (;;) {
+                bool wait = false;
+                for (int s = 0; s < NSTREAMS; ++s) {
+                    const size_t avail = estimateOutFrames(ring_[s]->size(), pending_[s].size(), src_rate_[s],
+                                                           kSrcCh[s], rate_, kOutCh);
+                    if (guard_[s].shouldWait(started_[s], avail, block, waited, last_write_blocked)) wait = true;
+                }
+                if (!wait || stop_) break;
+                usleep(kWaitStepMs * 1000u);
+                waited += kWaitStepMs;
+            }
+            if (waited) { ++waited_blocks_; waited_ms_ += waited; }
+            for (int s = 0; s < NSTREAMS; ++s) {
+                const size_t queued_before = ring_[s]->size();
+                size_t got = 0;
+                have[s] = pull(s, block, &in[s][0], &loud[s], &got);
+                watch_[s].onPull(started_[s], queued_before, got, block * kOutCh);
+                guard_[s].onPulled(started_[s], got / kOutCh, block);
+            }
+        }
         const bool duck = loud[GUIDANCE] || loud[SYSTEM];
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
                    have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck, &out[0]);
@@ -600,7 +665,11 @@ void BrowserAudio::mixerLoop() {
             was_ducking_ = ducking;
         }
 
-        if (writePcm(&out[0], block)) {
+        // A write that took at least half a block period blocked: the device was full (WAIT above relies on this).
+        const uint64_t write_start = nowMs();
+        const bool wrote = writePcm(&out[0], block);
+        last_write_blocked = wrote && nowMs() - write_start >= (uint64_t)(block * 1000u / rate_) / 2u;
+        if (wrote) {
             fail_run = 0;
             ++blocks_;
             written_frames += block;
@@ -636,6 +705,9 @@ void BrowserAudio::onSessionEnded() {
         rs_[s].reset();
         flush_[s] = false;
         frames_in_[s] = 0;
+        watch_[s].resetAll();
+        guard_[s].reset();
+        gap_[s] = false;
         srate_[s].reset();            // the next phone declares (or is measured) afresh
         src_rate_[s] = srate_[s].rate();
     }
@@ -644,6 +716,7 @@ void BrowserAudio::onSessionEnded() {
     route_backoff_until_ms_ = 0;
     pthread_mutex_unlock(&lock_);
     last_media_ms_ = 0;
+    waited_ms_ = waited_blocks_ = 0;
 }
 
 void BrowserAudio::stop() {

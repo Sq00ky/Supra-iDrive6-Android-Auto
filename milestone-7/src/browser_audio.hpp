@@ -38,6 +38,9 @@
 //                        after a prompt / system sound ends, so the radio is cut only for the prompt (default 1000,
 //                        0 = use NBT_BROWSER_IDLE_S)
 //   NBT_BROWSER_REFOCUS  build the connection again when the phone closes the mic (default on)
+//   NBT_BROWSER_WAIT_MS  wait up to this long for a block of a playing stream that is a little late, instead of padding
+//                        it with silence (default 30, max 60, 0 = pad at once). Only while the device is full (the
+//                        previous write blocked), so it still holds ~92 ms and waits cannot add up.
 //   NBT_DUCK_DB          media level while ducked, dB (default -12)
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
@@ -97,7 +100,8 @@ private:
     bool writePcm(const int16_t* buf, size_t frames);
     void ensureMixer();
     void stopMixer();
-    bool pull(int s, size_t frames, int16_t* out, bool* audible);   // mixer thread
+    // mixer thread; *got = converted samples obtained (the rest of the block is zero-padded)
+    bool pull(int s, size_t frames, int16_t* out, bool* audible, size_t* got);
     void requestRoute(const char* why);
     void releaseRoute(const char* why);
     bool routedForPlayback();
@@ -130,6 +134,11 @@ private:
     volatile bool started_[NSTREAMS];
     volatile bool flush_[NSTREAMS];
     uint32_t frames_in_[NSTREAMS];
+    StreamWatch watch_[NSTREAMS];              // per-block gap counters for the stats line (mixer thread)
+    UnderrunGuard guard_[NSTREAMS];            // wait for late input instead of padding (mixer thread)
+    bool gap_[NSTREAMS];                       // the last block of this stream was padded: fade the next one in
+    uint32_t wait_ms_;                         // NBT_BROWSER_WAIT_MS (0 = pad at once)
+    uint32_t waited_blocks_, waited_ms_;       // stats interval (mixer thread)
 
     // mixer thread
     pthread_t thread_;
