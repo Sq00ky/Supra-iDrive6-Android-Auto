@@ -1338,9 +1338,9 @@ static void onAudioFrame(uint8_t channel, const uint8_t* pcm, size_t pcm_len, ui
     else if (channel == 8) speechFrame(pcm, pcm_len);
 }
 
-static void onAudioState(uint8_t channel, bool started, void* user_data) {
+static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data) {
     (void)user_data;
-    if (g_browser) g_browser->onAaStreamState(channel, started);
+    if (g_browser) g_browser->onAaStreamState(channel, started, rate, channels);
     else if (g_audio) g_audio->onAaStreamState(channel, started);
     else if (channel == 8) speechState(started);
 }

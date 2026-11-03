@@ -112,6 +112,95 @@ int main() {
         CHECK(PtsRateMeter::snap(60000) == 0);         // nothing within 8 %
     }
 
+    // 10. Car log 2026-11-02, media ch 9 (8192-byte stereo frames at 48 kHz): the first gaps were uneven, so the first
+    //     231 ms measure 44.4 kHz. Unrestricted that snaps to 44100 (the bug); restricted to the offered 48000 it can't.
+    {
+        const uint32_t gaps[] = { 41858, 43686, 44379, 59164, 41699 };
+        PtsRateMeter free_m, media;
+        const uint32_t offered[] = { 48000 };
+        media.setCandidates(offered, 1);
+        uint64_t pts = 998508798953ull;
+        uint32_t rf = 0, rm = 0;
+        for (int n = 0; n < 40 && (rf == 0 || rm == 0); ++n) {
+            if (!rf) rf = free_m.add(pts, 8192, 2);
+            if (!rm) rm = media.add(pts, 8192, 2);
+            pts += n < 5 ? gaps[n] : 42667;
+        }
+        CHECK(rf == 44100);                            // what the car did
+        CHECK(rm == 48000);                            // the fix
+        media.reset();                                 // a new stream keeps the candidates
+        pts = 1000;
+        rm = 0;
+        for (int n = 0; n < 40 && rm == 0; ++n) { rm = media.add(pts, 8192, 2); pts += 42667; }
+        CHECK(rm == 48000);
+
+        // Guidance is offered 16 and 48 kHz: the same uneven start still picks 48000, a 16 kHz stream picks 16000.
+        PtsRateMeter g;
+        const uint32_t gofs[] = { 16000, 48000 };
+        g.setCandidates(gofs, 2);
+        pts = 5000;
+        uint32_t rg = 0;
+        for (int n = 0; n < 40 && rg == 0; ++n) { rg = g.add(pts, 4096, 1); pts += n < 5 ? gaps[n] : 42667; }
+        CHECK(rg == 48000);
+        g.reset();
+        pts = 5000;
+        rg = 0;
+        for (int n = 0; n < 40 && rg == 0; ++n) { rg = g.add(pts, 4096, 1); pts += 128000; }
+        CHECK(rg == 16000);
+        CHECK(PtsRateMeter::snapTo(30000, gofs, 2, 25) == 0);   // far from both: unknown, keep the default
+    }
+
+    // 11. StreamRate: the phone's declared format (START_INDICATION) wins from the first frame; timestamps only
+    //     cross-check it; without a declaration the rate is measured among the offered rates.
+    {
+        const uint32_t gofs[] = { 16000, 48000 };
+        StreamRate g;
+        g.configure(48000, gofs, 2, 1);
+        CHECK(g.rate() == 48000 && !g.declared());
+
+        // a) declared 16 kHz: used at once, before any frame
+        g.start(16000);
+        CHECK(g.rate() == 16000 && g.declared());
+        uint64_t pts = 1000;
+        uint32_t mm = 0, warns = 0;
+        bool changed = false;
+        for (int n = 0; n < 20; ++n) { changed |= g.frame(pts, 4096, &mm); if (mm) ++warns; pts += 128000; }
+        CHECK(!changed && warns == 0 && g.rate() == 16000);   // timestamps agree: silent
+
+        // b) declared 16 kHz but the timestamps say 48 kHz: keep the declaration, warn exactly once
+        g.start(16000);
+        pts = 1000; warns = 0; changed = false;
+        uint32_t seen = 0;
+        for (int n = 0; n < 40; ++n) {
+            changed |= g.frame(pts, 4096, &mm);
+            if (mm) { ++warns; seen = mm; }
+            pts += 42667;
+        }
+        CHECK(!changed && warns == 1 && seen == 48000 && g.rate() == 16000);
+
+        // c) no declaration: measured, limited to the offers (car's uneven start still gives 48000)
+        const uint32_t gaps[] = { 41858, 43686, 44379, 59164, 41699 };
+        g.start(0);
+        CHECK(!g.declared() && g.rate() == 16000);            // keeps the last rate until measured
+        pts = 5000; changed = false;
+        for (int n = 0; n < 40; ++n) { changed |= g.frame(pts, 4096, &mm); CHECK(mm == 0); pts += n < 5 ? gaps[n] : 42667; }
+        CHECK(changed && g.rate() == 48000);
+
+        // d) session end: back to the default, nothing declared; pts 0 frames are ignored
+        g.reset();
+        CHECK(g.rate() == 48000 && !g.declared());
+        CHECK(!g.frame(0, 4096, &mm) && mm == 0);
+
+        // e) media (one offer, stereo): declared 48000 from the start, timestamps agree
+        const uint32_t mofs[] = { 48000 };
+        StreamRate m;
+        m.configure(48000, mofs, 1, 2);
+        m.start(48000);
+        pts = 998508798953ull; warns = 0;
+        for (int n = 0; n < 40; ++n) { m.frame(pts, 8192, &mm); if (mm) ++warns; pts += n < 5 ? gaps[n] : 42667; }
+        CHECK(m.rate() == 48000 && warns == 0);
+    }
+
     printf(fails ? "test_audio_mixer: %d FAILED\n" : "test_audio_mixer: all passed\n", fails);
     return fails ? 1 : 0;
 }

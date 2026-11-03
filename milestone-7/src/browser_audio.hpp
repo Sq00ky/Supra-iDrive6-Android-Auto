@@ -28,7 +28,10 @@
 //   NBT_BROWSER_CONN     connection id (default 0xb8; 0 = do not route, just play)
 //   NBT_BROWSER_ASOUND   shim path (default /opt/mm/lib/libasound/libasound.so)
 //   NBT_BROWSER_PCM      "card:device" instead of snd_pcm_open_preferred
-//   NBT_BROWSER_RATE     device rate to ask for (default 48000)
+//   NBT_BROWSER_RATE     device rate to ask for (default 48000; lowered to the device's reported maximum, 44100 here)
+//   NBT_BROWSER_FORCE_RATE  experiment: ask for this rate even outside the device's reported range (e.g. 48000, to
+//                        play the 48 kHz AA streams without resampling). Off by default. If the car refuses it the
+//                        device does not open and there is no AA audio that session; the reason is in sloginfo.
 //   NBT_BROWSER_IDLE_S   remove the connection after this many seconds without sound once AA media has played
 //                        (default 10, 0 = keep it until the session ends)
 //   NBT_BROWSER_PROMPT_IDLE_MS  when no AA media is playing (e.g. the user is on the radio), remove it this many ms
@@ -60,9 +63,11 @@ public:
     bool init();
 
     // Session thread. channel = AA channel (9 media, 8 guidance, 16 system audio); others are ignored. pts = the
-    // frame's timestamp (us); it tells which of the offered sample rates the phone chose (0 = unknown).
+    // frame's timestamp (us): measures the rate when the stream start declared none, else cross-checks it (0 = none).
     void onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts = 0);
-    void onAaStreamState(uint8_t channel, bool started);
+    // rate / channels: the format the phone declared for this stream in START_INDICATION (0 = it gave none: the rate
+    // is then measured from the timestamps, among the rates offered for the stream).
+    void onAaStreamState(uint8_t channel, bool started, uint32_t rate = 0, uint32_t channels = 0);
     // Session ended (session thread): stop the mixer, close the device, remove the connection.
     void onSessionEnded();
     // Phone closed the mic (Assistant): ask for the connection again in case the voice scenario moved the car off it.
@@ -101,6 +106,7 @@ private:
     // config
     uint32_t conn_;
     uint32_t want_rate_;
+    uint32_t force_rate_;    // NBT_BROWSER_FORCE_RATE: ask the device for this rate whatever it reports (0 = off)
     int idle_s_;
     int prompt_idle_ms_;
     bool refocus_;
@@ -118,8 +124,8 @@ private:
     PcmRing* ring_[NSTREAMS];
     PcmResampler rs_[NSTREAMS];
     std::vector<int16_t> pending_[NSTREAMS];   // converted (rate_, stereo), mixer thread only
-    PtsRateMeter meter_[NSTREAMS];             // session thread
-    volatile uint32_t src_rate_[NSTREAMS];     // AA sample rate per stream (set by the session thread)
+    StreamRate srate_[NSTREAMS];               // declared / measured input rate per stream (session thread)
+    volatile uint32_t src_rate_[NSTREAMS];     // srate_[s].rate() published for the mixer thread
     uint32_t rs_rate_[NSTREAMS];               // the rate rs_ is configured for (mixer thread)
     volatile bool started_[NSTREAMS];
     volatile bool flush_[NSTREAMS];

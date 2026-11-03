@@ -42,6 +42,11 @@ typedef const char* (*FnStrerror)(int);
 // starting rates: PtsRateMeter measures each stream from its timestamps (car 2026-11-01: guidance came at 48 kHz).
 const uint32_t kSrcRate[BrowserAudio::NSTREAMS] = { 48000, 48000, 16000 };
 const uint32_t kSrcCh[BrowserAudio::NSTREAMS]   = { 2, 1, 1 };
+// The rates each sink offers the phone: the timestamp meter only picks among these (car 2026-11-02: an uneven start
+// made it read the 48 kHz media stream as 44100 Hz, so music played 8 % slow and overflowed its ring = crackling).
+const uint32_t kOfferedMedia[] = { 48000 };
+const uint32_t kOfferedGuidance[] = { 16000, 48000 };
+const uint32_t kOfferedSystem[] = { 16000 };
 // Raw ring sizes: media 2 s, guidance 8 s at 48 kHz (the phone sends a prompt faster than real time), system 4 s.
 const size_t kRingBytes[BrowserAudio::NSTREAMS] = { 48000u * 4u * 2u, 48000u * 2u * 8u, 16000u * 2u * 4u };
 
@@ -76,7 +81,7 @@ void* mixerThunk(void* self) {
 } // namespace
 
 BrowserAudio::BrowserAudio()
-    : conn_(0xb8), want_rate_(48000), idle_s_(10), prompt_idle_ms_(1000), refocus_(true), shim_path_(NULL), lib_(NULL), pcm_(NULL),
+    : conn_(0xb8), want_rate_(48000), force_rate_(0), idle_s_(10), prompt_idle_ms_(1000), refocus_(true), shim_path_(NULL), lib_(NULL), pcm_(NULL),
       rate_(0), frag_bytes_(0), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
       route_state_(ROUTE_IDLE), route_since_ms_(0), route_backoff_until_ms_(0), last_sound_ms_(0), last_media_ms_(0), blocks_(0), write_errors_(0), prepares_(0),
       last_stats_ms_(0), was_ducking_(false) {
@@ -89,6 +94,12 @@ BrowserAudio::BrowserAudio()
         src_rate_[s] = kSrcRate[s];
         rs_rate_[s] = 0;
     }
+    srate_[MEDIA].configure(kSrcRate[MEDIA], kOfferedMedia, sizeof(kOfferedMedia) / sizeof(kOfferedMedia[0]),
+                            kSrcCh[MEDIA]);
+    srate_[GUIDANCE].configure(kSrcRate[GUIDANCE], kOfferedGuidance,
+                               sizeof(kOfferedGuidance) / sizeof(kOfferedGuidance[0]), kSrcCh[GUIDANCE]);
+    srate_[SYSTEM].configure(kSrcRate[SYSTEM], kOfferedSystem, sizeof(kOfferedSystem) / sizeof(kOfferedSystem[0]),
+                             kSrcCh[SYSTEM]);
     pthread_mutex_init(&lock_, NULL);
 }
 
@@ -133,6 +144,13 @@ bool BrowserAudio::init() {
     for (int s = 0; s < NSTREAMS; ++s) if (!ring_[s]) ring_[s] = new PcmRing(kRingBytes[s]);
     conn_ = (uint32_t)envHex("NBT_BROWSER_CONN", 0xb8);
     want_rate_ = (uint32_t)envInt("NBT_BROWSER_RATE", 48000);
+    {
+        const int fr = envInt("NBT_BROWSER_FORCE_RATE", 0);
+        force_rate_ = fr > 0 ? (uint32_t)fr : 0u;
+    }
+    if (force_rate_)
+        printf("[Browser] NBT_BROWSER_FORCE_RATE=%u (experiment): asking the device for %u Hz whatever it reports\n",
+               force_rate_, force_rate_);
     idle_s_ = envInt("NBT_BROWSER_IDLE_S", 10);
     prompt_idle_ms_ = envInt("NBT_BROWSER_PROMPT_IDLE_MS", 1000);
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
@@ -206,13 +224,16 @@ bool BrowserAudio::openPcmWith(int frag, int frags) {
     snd_pcm_channel_info_t info;
     memset(&info, 0, sizeof(info));
     info.channel = SND_PCM_CHANNEL_PLAYBACK;
-    uint32_t rate = want_rate_;
+    uint32_t rate = pickDeviceRate(want_rate_, force_rate_, 0, 0);
     int frag_min = 0, frag_max = 0;
     if (((FnInfo)fn_[F_INFO])(h, &info) == 0) {
         printf("[Browser] device info: rates %d..%d Hz, voices %d..%d, fragment %d..%d bytes, max buffer %d\n",
                info.min_rate, info.max_rate, info.min_voices, info.max_voices, info.min_fragment_size,
                info.max_fragment_size, info.max_buffer_size);
-        if (info.max_rate > 0 && ((int)rate > info.max_rate || (int)rate < info.min_rate)) rate = (uint32_t)info.max_rate;
+        rate = pickDeviceRate(want_rate_, force_rate_, info.min_rate, info.max_rate);
+        if (force_rate_ && info.max_rate > 0 && ((int)force_rate_ > info.max_rate || (int)force_rate_ < info.min_rate))
+            printf("[Browser] NBT_BROWSER_FORCE_RATE: asking for %u Hz, outside the reported %d..%d Hz\n", force_rate_,
+                   info.min_rate, info.max_rate);
         frag_min = info.min_fragment_size;
         frag_max = info.max_fragment_size;
     } else {
@@ -253,6 +274,9 @@ bool BrowserAudio::openPcmWith(int frag, int frags) {
                su.format.voices, su.format.format, su.buf.block.frag_size, su.buf.block.frags);
         if (su.format.voices > 0 && su.format.voices != (int)kOutCh)
             printf("[Browser] WARNING: device gave %d voices, the mixer writes %u\n", su.format.voices, kOutCh);
+        if (force_rate_)
+            printf("[Browser] NBT_BROWSER_FORCE_RATE: the device %s %u Hz (got %u Hz)\n",
+                   rate == force_rate_ ? "accepted" : "did not take", force_rate_, rate);
     }
     rc = ((FnPrepare)fn_[F_PREPARE])(h, SND_PCM_CHANNEL_PLAYBACK);
     if (rc < 0) {
@@ -313,23 +337,37 @@ void BrowserAudio::onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, ui
     if (s < 0 || !ring_[s] || !pcm || len == 0) return;
     ++frames_in_[s];
     ring_[s]->write(pcm, len);
-    if (pts) {
-        const uint32_t r = meter_[s].add(pts, len, kSrcCh[s]);
-        if (r && r != src_rate_[s]) {
-            printf("[Browser] AA %s stream is %u Hz (from its timestamps), not %u Hz: converting from %u Hz\n",
-                   streamName(s), r, (unsigned)src_rate_[s], r);
-            src_rate_[s] = r;   // the mixer reconfigures its resampler on the next block
-        }
+    uint32_t mismatch = 0;
+    if (srate_[s].frame(pts, len, &mismatch)) {
+        printf("[Browser] AA %s stream is %u Hz (from its timestamps), not %u Hz: converting from %u Hz\n",
+               streamName(s), srate_[s].rate(), (unsigned)src_rate_[s], srate_[s].rate());
+        src_rate_[s] = srate_[s].rate();   // the mixer reconfigures its resampler on the next block
+    } else if (mismatch) {
+        printf("[Browser] WARNING: AA %s stream timestamps suggest %u Hz, the phone declared %u Hz: keeping the "
+               "declared rate\n", streamName(s), mismatch, srate_[s].rate());
     }
     ensureMixer();
 }
 
-void BrowserAudio::onAaStreamState(uint8_t channel, bool started) {
+void BrowserAudio::onAaStreamState(uint8_t channel, bool started, uint32_t rate, uint32_t channels) {
     int s = streamForChannel(channel);
     if (s < 0 || !ring_[s]) return;
-    printf("[Browser] AA %s stream %s\n", streamName(s), started ? "started" : "stopped");
+    if (started && rate) {
+        // The phone declared this start's format (START_INDICATION configuration_index): use it from the first frame.
+        printf("[Browser] AA %s stream started: %u Hz %s (declared by the phone)\n", streamName(s), rate,
+               channels == 1 ? "mono" : "stereo");
+        if (channels && channels != kSrcCh[s])
+            printf("[Browser] WARNING: AA %s stream declared %u channels, the mixer reads %u\n", streamName(s),
+                   channels, kSrcCh[s]);
+    } else {
+        printf("[Browser] AA %s stream %s%s\n", streamName(s), started ? "started" : "stopped",
+               started ? " without a declared format: measuring its rate from the timestamps" : "");
+    }
+    if (started) {
+        srate_[s].start(rate);
+        src_rate_[s] = srate_[s].rate();   // the mixer reconfigures its resampler before the next block
+    }
     started_[s] = started;
-    if (started) meter_[s].reset();   // each stream start is measured again
     // Media paused: drop what is queued so the music stops now. Prompts and sounds play their tail out.
     if (!started && s == MEDIA) { ring_[s]->clear(); flush_[s] = true; }
     if (started) ensureMixer();
@@ -364,8 +402,10 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
         q.clear();
     }
     const size_t need = frames * kOutCh;
-    const size_t raw_block = (size_t)(src / 100u) * kSrcCh[s] * 2u;   // 10 ms of AA PCM (at most 48 kHz stereo)
+    // 10 ms of AA PCM per read, but never more than this buffer (sized for 48 kHz stereo): a stream that declares a
+    // higher rate is read in more, smaller steps instead of overflowing it.
     uint8_t raw[48000 / 100 * 2 * 2];
+    const size_t raw_block = pcmChunkBytes(src, kSrcCh[s], 10u, sizeof(raw));
     while (q.size() < need) {
         size_t got = ring_[s]->read(raw, raw_block);
         if (got == 0) break;
@@ -596,6 +636,8 @@ void BrowserAudio::onSessionEnded() {
         rs_[s].reset();
         flush_[s] = false;
         frames_in_[s] = 0;
+        srate_[s].reset();            // the next phone declares (or is measured) afresh
+        src_rate_[s] = srate_[s].rate();
     }
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);

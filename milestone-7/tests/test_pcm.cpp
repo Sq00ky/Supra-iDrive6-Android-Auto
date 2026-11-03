@@ -32,5 +32,33 @@ int main() {
     std::vector<int16_t> big2(4800*2,1000), o3; d.process(&big2[0],4800,o3);
     printf("48k->44.1k: 4800 -> %u frames\n",(unsigned)(o3.size()/2));
     assert(o3.size()/2>=4408 && o3.size()/2<=4412);
+    // device rate choice: the car's browser device reports 22050..44100
+    assert(pickDeviceRate(48000, 0, 22050, 44100) == 44100);    // default: lowered to the reported maximum
+    assert(pickDeviceRate(32000, 0, 22050, 44100) == 32000);    // inside the range: kept
+    assert(pickDeviceRate(16000, 0, 22050, 44100) == 44100);    // below the range: the maximum
+    assert(pickDeviceRate(48000, 0, 0, 0) == 48000);            // range unknown: as configured
+    assert(pickDeviceRate(48000, 48000, 22050, 44100) == 48000); // NBT_BROWSER_FORCE_RATE: asked for as is
+    assert(pickDeviceRate(44100, 48000, 0, 0) == 48000);
+    // with a forced 48 kHz device, guidance (48 kHz mono) is only copied to both channels: every sample exact, one
+    // frame late (the interpolator holds the previous frame; 21 us), across process() calls
+    PcmResampler g; g.configure(48000,1,48000,2); assert(!g.passthrough());
+    int16_t gm[64]; for(int i=0;i<64;i++) gm[i]=(int16_t)(i*311-9000);
+    std::vector<int16_t> go; g.process(gm,32,go); g.process(gm+32,32,go);
+    assert(go.size()==128);
+    assert(go[0]==gm[0] && go[1]==gm[0]);
+    for(int i=1;i<64;i++) assert(go[2*i]==gm[i-1] && go[2*i+1]==gm[i-1]);
+    // read chunk for the mixer's fixed 1920-byte buffer (10 ms of 48 kHz stereo)
+    const size_t cap = 48000/100*2*2;
+    assert(pcmChunkBytes(48000,2,10,cap) == 1920);               // media: exactly the buffer
+    assert(pcmChunkBytes(48000,1,10,cap) == 960);                // guidance at 48 kHz
+    assert(pcmChunkBytes(16000,1,10,cap) == 320);                // system / guidance at 16 kHz
+    assert(pcmChunkBytes(44100,2,10,cap) == 441*4);              // whole frames
+    assert(pcmChunkBytes(96000,2,10,cap) == 1920);               // too high a rate: capped, no overflow
+    assert(pcmChunkBytes(192000,2,10,cap) == 1920);
+    assert(pcmChunkBytes(0,2,10,cap) == 4);                      // rate 0: one frame, never 0 (no stall)
+    assert(pcmChunkBytes(50,1,10,cap) == 2);
+    assert(pcmChunkBytes(48000,2,10,1922) == 1920);              // cap rounded down to whole frames
+    assert(pcmChunkBytes(48000,2,10,3) == 0);                    // cap below one frame
+    assert(pcmChunkBytes(48000,0,10,cap) == 960);                // channels 0 counts as mono
     puts("PASS"); return 0;
 }

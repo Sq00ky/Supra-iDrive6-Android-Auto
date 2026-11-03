@@ -279,6 +279,7 @@ bool AASession::start(int client_fd) {
     rx_note_count_ = 0;
     rx_start_s_ = monoS();
     memset(av_session_, 0, sizeof(av_session_));
+    for (int c = 0; c < 32; ++c) offered_audio_[c].clear();   // filled again when this session sends its SDR
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
     setRunning(true);
 
@@ -690,6 +691,18 @@ bool AASession::sendServiceDiscoveryResponse() {
         plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
     }
 
+    // Remember what each audio sink offered: the phone names its choice by position in START_INDICATION.
+    const uint8_t audio_chs[3] = { AA_CH_GUIDANCE_AUDIO, AA_CH_MEDIA_AUDIO, AA_CH_SYSTEM_AUDIO };
+    for (int i = 0; i < 3; ++i) {
+        std::vector<AaAudioConfig>& o = offered_audio_[audio_chs[i]];
+        o = sdrAudioConfigs(&plain_sdr[2], plain_sdr.size() - 2, audio_chs[i]);
+        if (o.empty()) continue;
+        printf("[AASession] ch %u audio sink offers:", audio_chs[i]);
+        for (size_t k = 0; k < o.size(); ++k)
+            printf(" [%u] %u Hz %u-bit %s", (unsigned)k, o[k].sample_rate, o[k].bits, o[k].channels == 1 ? "mono" : "stereo");
+        printf("\n");
+    }
+
     std::vector<uint8_t> encrypted_payload;
     if (cryptor_.encrypt(&plain_sdr[0], plain_sdr.size(), encrypted_payload)) {
         printf("[AASession] >>> Sent Google DHU ServiceDiscoveryResponse (%u bytes: All Channels, Audio, Video, Sensors, Input)!\n",
@@ -1063,12 +1076,33 @@ void AASession::sessionLoop() {
                 if (sess != 0xFFFFFFFFu) av_session_[channel & 31] = sess;
                 printf("[AASession] >>> Received AV START_INDICATION on Channel %u (session %u)! Projection ACTIVE!\n", channel,
                        sess == 0xFFFFFFFFu ? 0u : sess);
-                if (isAaAudioSinkChannel(channel) && audio_state_cb_) {
-                    audio_state_cb_(channel, true, audio_state_user_data_);
+                if (isAaAudioSinkChannel(channel)) {
+                    // configuration_index (field 2) = the phone's pick among this sink's offers (our setup response's
+                    // "config 0" is not binding: car 2026-11-01 guidance came at offer 1 = 48 kHz).
+                    const std::vector<AaAudioConfig>& offered = offered_audio_[channel & 31];
+                    // Always resolved, even for a bare START_INDICATION (no payload): idx then comes back as absent
+                    // (0xFFFFFFFF) and is logged as "without a configuration index", not as index 0.
+                    uint32_t s2 = 0xFFFFFFFFu, idx = 0xFFFFFFFFu;
+                    AaAudioConfig fmt;
+                    const bool known = resolveAudioStart(frame_data.size() > 2 ? &frame_data[2] : NULL,
+                                                         frame_data.size() > 2 ? frame_data.size() - 2 : 0, offered,
+                                                         &s2, &idx, &fmt);
+                    if (known)
+                        printf("[AASession] ch %u audio start: config %u = %u Hz %u-bit %s (%u offered)\n", channel, idx,
+                               fmt.sample_rate, fmt.bits, fmt.channels == 1 ? "mono" : "stereo", (unsigned)offered.size());
+                    else if (idx == 0xFFFFFFFFu)
+                        printf("[AASession] ch %u audio start without a configuration index (%u offered): format unknown\n",
+                               channel, (unsigned)offered.size());
+                    else
+                        printf("[AASession] ch %u audio start with configuration index %u, but %u offered: format unknown\n",
+                               channel, idx, (unsigned)offered.size());
+                    if (audio_state_cb_)
+                        audio_state_cb_(channel, true, known ? fmt.sample_rate : 0, known ? fmt.channels : 0,
+                                        audio_state_user_data_);
                 }
             } else if (msg_id == 0x8002 && isAaAudioSinkChannel(channel)) { // AV STOP_INDICATION (audio)
                 printf("[AASession] >>> Received AV STOP_INDICATION on Channel %u.\n", channel);
-                if (audio_state_cb_) audio_state_cb_(channel, false, audio_state_user_data_);
+                if (audio_state_cb_) audio_state_cb_(channel, false, 0, 0, audio_state_user_data_);
             } else if (msg_id == 0x8002 && (channel == 3 || channel == 5 || channel == 7)) {
                 // Input BindingRequest: accept it even when touch forwarding is off. The knob, the
                 // microphone wake-up, and video focus share channel 7, and the phone waits for this.

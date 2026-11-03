@@ -40,6 +40,16 @@ private:
     mutable pthread_mutex_t mutex_;
 };
 
+// The output device rate to ask for. want = the configured rate, kept if the device's reported range allows it, else
+// its maximum (this car's browser device reports 22050..44100, so 48000 becomes 44100). force (non-zero) is asked for
+// as is, whatever the device reports (NBT_BROWSER_FORCE_RATE experiment). min/max <= 0 = range unknown.
+uint32_t pickDeviceRate(uint32_t want, uint32_t force, int min_rate, int max_rate);
+
+// Bytes of 16-bit PCM to read per step: `ms` milliseconds at rate / channels, in whole frames, at least one frame and
+// at most `cap` bytes (rounded down to whole frames). Keeps a fixed read buffer safe whatever rate a stream declares.
+// Returns 0 only if cap is smaller than one frame.
+size_t pcmChunkBytes(uint32_t rate, uint32_t channels, uint32_t ms, size_t cap);
+
 // Streaming linear-interpolation resampler + channel mapper for interleaved
 // signed 16-bit little-endian PCM. State is kept between process() calls so
 // consecutive chunks join without clicks.

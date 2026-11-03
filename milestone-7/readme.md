@@ -466,6 +466,7 @@ Leave these unset unless you are testing.
 | `NBT_BROWSER_CONN`, `NBT_BROWSER_IDLE_S`, `NBT_BROWSER_PROMPT_IDLE_MS`, `NBT_BROWSER_REFOCUS`, `NBT_BROWSER_PCM`, `NBT_BROWSER_RATE`, `NBT_BROWSER_FRAG`, `NBT_BROWSER_FRAGS`, `NBT_BROWSER_ASOUND` | Browser mode: connection id (default `0xb8`, `0` = don't route), release the source after N s without sound once AA media has played (default `10`, `0` = keep it until the session ends), release it N ms after a prompt or system sound when no AA media is playing (default `1000`, `0` = use the 10 s rule), ask for it again when the mic closes (default on), `card:device` instead of the preferred device, device rate (default `48000`; this car's browser device takes 22050..44100, so 44100 is used), fragment size in bytes (default `4096`, rounded down to a power of two: A2I refuses any other size), fragment count (default `5`; if the device refuses, the daemon tries twice the count, then 8 fragments of twice the size), shim path (default `/opt/mm/lib/libasound/libasound.so`) |
 | `NBT_DUCK_DB`, `NBT_DUCK_ATTACK_MS`, `NBT_DUCK_HOLD_MS`, `NBT_DUCK_RELEASE_MS`, `NBT_MEDIA_GAIN_DB`, `NBT_GUIDANCE_GAIN_DB`, `NBT_SYSTEM_GAIN_DB` | Browser mode ducking: media level under a prompt or system sound (default `-12` dB), ramp down / hold / ramp up (default `80` / `600` / `500` ms), fixed per-stream gains (default `0` dB) |
 | `NBT_SYSTEM_SINK` | `1` / `0` forces the SYSTEM_AUDIO sink (ch 16) in / out of service discovery (default: in browser mode only) |
+| `NBT_BROWSER_FORCE_RATE` | Browser mode experiment, off by default: ask the browser device for this rate (e.g. `48000`) even though it reports 22050..44100, so the 48 kHz AA streams play without resampling. The log says whether the device took it; if the car refuses, the device doesn't open and there is no AA audio that session (reason in `sloginfo`) |
 | `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
@@ -506,9 +507,12 @@ Old "squashed" picture mode: `NBT_VID_INSETS=off`, `NBT_VID_SRC_H=480`, `NBT_VID
 Car-verified; the default in v1.8.61..v1.8.65. Since v1.8.66 Bluetooth is the default again: put
 `NBT_AUDIO_MODE=browser` in `nbt-aad.env` to use browser audio.
 
-- The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 16 kHz mono: nav prompts, Assistant
-  speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI sounds). Media
-  then no longer goes to Bluetooth A2DP.
+- The phone gets three audio sinks: media (ch 9, 48 kHz stereo), guidance (ch 8, 16 or 48 kHz mono: nav prompts,
+  Assistant speech, message read-outs) and a new system-audio sink (ch 16, 16 kHz mono: notification chimes, UI
+  sounds). Media then no longer goes to Bluetooth A2DP.
+- Each stream start names the format the phone picked from the offers (`configuration_index`); the daemon converts
+  from that rate from the first frame. Only a start without a usable index falls back to measuring the rate from the
+  timestamps, and then only among the rates offered for that stream.
 - The daemon mixes the three streams and ducks the media under prompts and system sounds (`NBT_DUCK_*`).
 - It plays the mix as one more client of the car's browser audio (`/opt/mm/lib/libasound/libasound.so` ->
   `dev-libasound` -> A2I `input_stereo_3`) and asks for the browser audio source with `audioconn -b 0xb8`. The
@@ -521,7 +525,8 @@ Car-verified; the default in v1.8.61..v1.8.65. Since v1.8.66 Bluetooth is the de
   the start of a prompt is not cut off.
 - Calls are unchanged (Bluetooth hands-free). Whether `0xb8` comes back by itself after a call is not known yet.
 
-What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[Browser] PCM open: card ..`,
+What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[AASession] ch N audio sink
+offers: ..`, `[AASession] ch N audio start: config K = .. Hz`, `[Browser] PCM open: card ..`,
 `[Browser] device setup: ..`, `[Browser] connection 0xb8 granted`, `[Browser] media ducked under a prompt ..`, and the
 10 s `[Browser] blocks ..` statistics line (queued / dropped bytes per stream, route state, write errors).
 Handy checks from the shell: `audioconn -l` (is `0xb8` listed as `BrowserFront`?) and `sloginfo | grep -i preAllocate`.
@@ -886,7 +891,8 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine):
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
 | `test_pcm` | Ring buffer + resampler |
-| `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains |
+| `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates) |
+| `test_audio_format` | Offered AudioConfigs read back from the SDR, the phone's choice in AV START_INDICATION |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/kombi_nav.cpp src/kombi_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
 | `test_media_payload.py` | Media metadata payloads |

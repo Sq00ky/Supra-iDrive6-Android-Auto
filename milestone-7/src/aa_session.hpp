@@ -9,6 +9,7 @@
 #include <map>
 #include <pthread.h>
 #include "aa_cryptor.hpp"
+#include "sdr_builder.hpp"
 #include "touch_types.hpp"
 
 namespace nbt {
@@ -18,7 +19,9 @@ typedef void (*VideoFrameCallback)(uint32_t frame_index, const uint8_t* nal_data
 typedef void (*CodecConfigCallback)(const uint8_t* config_data, size_t config_len, void* user_data);
 // Android Auto PCM (ch 8 speech / ch 9 media / ch 16 system audio, message 0x0000 = 8-byte PTS + PCM) and stream state.
 typedef void (*AudioFrameCallback)(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data);
-typedef void (*AudioStateCallback)(uint8_t channel, bool started, void* user_data);
+// started: rate / channels = the AudioConfig the phone chose for this stream (START_INDICATION configuration_index
+// looked up in what our SDR offered), 0 / 0 when it gave no usable index. Stop: 0 / 0.
+typedef void (*AudioStateCallback)(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data);
 // Phone asked for video focus (VideoFocusRequest 0x8007 on the video channel): projected=false is the
 // "exit to car" icon (focus_mode UNFOCUSED/NATIVE), projected=true asks to come back. reason = focus_reason.
 typedef void (*VideoFocusCallback)(bool projected, uint32_t reason, void* user_data);
@@ -136,6 +139,8 @@ private:
     void* audio_state_user_data_;
     uint32_t audio_frames_[3];   // [0] = ch 8 speech, [1] = ch 9 media, [2] = ch 16 system (session thread only)
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
+    // AudioConfigs our ServiceDiscoveryResponse offered per audio sink channel, in order (session thread).
+    std::vector<AaAudioConfig> offered_audio_[32];
 
     std::map<uint8_t, std::vector<uint8_t> > reassembly_;
     std::map<uint8_t, uint32_t> reassembly_total_;   // size the phone announced on the FIRST fragment

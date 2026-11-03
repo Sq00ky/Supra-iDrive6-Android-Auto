@@ -45,7 +45,8 @@ int dropSdrChannels(std::vector<uint8_t>& sdr);
 
 // NBT_GUIDANCE_BT=1 (experiment, off by default): declare the channel 8 audio sink as SYSTEM_AUDIO instead of
 // GUIDANCE. With no guidance sink (and no media sink in Bluetooth mode) the phone may mix nav prompts into its
-// own audio, which already plays over Bluetooth A2DP. Returns the number of fields patched (0 or 1).
+// own audio, which already plays over Bluetooth A2DP. Never in browser audio mode (ch 8 is its guidance stream and
+// ch 16 its SYSTEM_AUDIO sink): NBT_GUIDANCE_BT=1 is then ignored. Returns the number of fields patched (0 or 1).
 int retypeGuidanceSink(std::vector<uint8_t>& sdr);
 
 // Android Auto audio sink channels. 8 and 9 come from the DHU template; 16 is added by addSystemAudioSink.
@@ -62,6 +63,24 @@ int addSystemAudioSink(std::vector<uint8_t>& sdr);
 
 // Pure helper used by dropSdrChannels (host-tested): parses "8, 9,14" into ids (max 16).
 size_t parseChannelList(const char* s, int* ids, size_t max_ids);
+
+// One AudioConfig an audio sink offers the phone (MediaSinkService.audio_configs, field 3:
+// { sample_rate = 1, bit_depth = 2, channels = 3 }).
+struct AaAudioConfig {
+    uint32_t sample_rate, bits, channels;
+    AaAudioConfig() : sample_rate(0), bits(0), channels(0) {}
+};
+
+// The AudioConfigs the SDR offers for `channel`, in order (ChannelDescriptor{ id = 1 } -> media_sink_service = 3 ->
+// audio_configs = 3). The phone picks one by its position in this list. Empty if the channel has no audio sink.
+std::vector<AaAudioConfig> sdrAudioConfigs(const uint8_t* sdr, size_t n, unsigned channel);
+
+// AV START_INDICATION payload (after the 2-byte message id): { session = 1, configuration_index = 2 }. The index is
+// the phone's choice among the channel's offered AudioConfigs (car 2026-11-01: guidance starts all said 1 = the
+// second offer, 48 kHz, while our setup response had asked for config 0). Sets *session / *index (0xFFFFFFFF when
+// absent) and returns true with *out filled if the index points into `offered`.
+bool resolveAudioStart(const uint8_t* payload, size_t n, const std::vector<AaAudioConfig>& offered,
+                       uint32_t* session, uint32_t* index, AaAudioConfig* out);
 
 } // namespace nbt
 
