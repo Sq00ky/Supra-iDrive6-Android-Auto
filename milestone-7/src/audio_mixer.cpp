@@ -135,6 +135,26 @@ uint32_t PtsRateMeter::add(uint64_t pts_us, size_t bytes, uint32_t channels) {
     return 0;
 }
 
+StreamWatch::StreamWatch() : pulls_(0), short_(0), empty_(0), min_queued_(0), total_gaps_(0) {}
+
+void StreamWatch::resetInterval() {
+    pulls_ = short_ = empty_ = 0;
+    min_queued_ = 0;
+}
+
+void StreamWatch::resetAll() {
+    resetInterval();
+    total_gaps_ = 0;
+}
+
+void StreamWatch::onPull(bool started, size_t queued, size_t got, size_t need) {
+    if (!started) return;
+    if (pulls_ == 0 || queued < min_queued_) min_queued_ = queued;
+    ++pulls_;
+    if (got == 0) { ++empty_; ++total_gaps_; }
+    else if (got < need) { ++short_; ++total_gaps_; }
+}
+
 StreamRate::StreamRate() : default_(48000), rate_(48000), ch_(1), declared_(false), warned_(false) {}
 
 void StreamRate::configure(uint32_t default_rate, const uint32_t* offered, size_t n, uint32_t channels) {

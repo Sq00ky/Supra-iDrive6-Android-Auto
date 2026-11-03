@@ -93,6 +93,33 @@ private:
     size_t ncand_;
 };
 
+// Health counters for one AA stream in the mixer (stats interval + session totals). The 10 s stats line only sampled
+// the ring once, so a dip in between left no trace; this counts every mixer block of a started stream:
+//   short = the block got some audio but not a whole block (the rest was padded)
+//   empty = the block got no audio at all
+// and keeps the lowest ring fill (bytes, read before the block) seen in the interval.
+class StreamWatch {
+public:
+    StreamWatch();
+    void resetInterval();      // after each stats line
+    void resetAll();           // session ended
+    // One mixer block. started = the stream is between START and STOP; queued = ring bytes before the pull;
+    // got / need = converted samples obtained / wanted. Blocks of a stopped stream (its tail) are not counted.
+    void onPull(bool started, size_t queued, size_t got, size_t need);
+
+    uint32_t pulls() const { return pulls_; }
+    uint32_t shortPulls() const { return short_; }
+    uint32_t emptyPulls() const { return empty_; }
+    bool hasMin() const { return pulls_ > 0; }
+    size_t minQueued() const { return min_queued_; }
+    uint64_t totalGaps() const { return total_gaps_; }   // short + empty since the session started
+
+private:
+    uint32_t pulls_, short_, empty_;
+    size_t min_queued_;
+    uint64_t total_gaps_;
+};
+
 // The input rate of one AA audio stream. Each stream start may carry the phone's declared format (START_INDICATION
 // configuration_index -> the offered AudioConfig): that is used from the first frame, and the timestamps are then
 // only a cross-check (a disagreement is reported once, never acted on). Without a declaration the rate is measured

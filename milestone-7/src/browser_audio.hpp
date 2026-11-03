@@ -97,7 +97,8 @@ private:
     bool writePcm(const int16_t* buf, size_t frames);
     void ensureMixer();
     void stopMixer();
-    bool pull(int s, size_t frames, int16_t* out, bool* audible);   // mixer thread
+    // mixer thread; *got = converted samples obtained (the rest of the block is zero-padded)
+    bool pull(int s, size_t frames, int16_t* out, bool* audible, size_t* got);
     void requestRoute(const char* why);
     void releaseRoute(const char* why);
     bool routedForPlayback();
@@ -130,6 +131,7 @@ private:
     volatile bool started_[NSTREAMS];
     volatile bool flush_[NSTREAMS];
     uint32_t frames_in_[NSTREAMS];
+    StreamWatch watch_[NSTREAMS];              // per-block gap counters for the stats line (mixer thread)
 
     // mixer thread
     pthread_t thread_;

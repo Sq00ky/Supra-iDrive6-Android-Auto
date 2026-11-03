@@ -392,7 +392,8 @@ void BrowserAudio::stopMixer() {
 }
 
 // Takes `frames` converted frames of stream s into out (zero-padded). Mixer thread only.
-bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
+bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_t* got_out) {
+    if (got_out) *got_out = 0;
     std::vector<int16_t>& q = pending_[s];
     if (flush_[s]) { flush_[s] = false; q.clear(); rs_[s].reset(); }
     const uint32_t src = src_rate_[s];
@@ -416,6 +417,7 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
         if (!conv.empty()) memcpy(&q[old], &conv[0], conv.size());
     }
     size_t take = q.size() < need ? q.size() : need;
+    if (got_out) *got_out = take;
     if (take == 0) return false;
     memcpy(out, &q[0], take * 2);
     if (take < need) memset(out + take, 0, (need - take) * 2);
@@ -516,6 +518,22 @@ void BrowserAudio::logStats(bool force) {
            (unsigned long long)ring_[MEDIA]->droppedBytes(), (unsigned long long)ring_[GUIDANCE]->droppedBytes(),
            (unsigned long long)ring_[SYSTEM]->droppedBytes(), (int)(mixer_.duckLevel() * 100.0f + 0.5f),
            rs == ROUTE_ROUTED ? "granted" : (rs == ROUTE_BUILDING ? "requested" : (rs == ROUTE_RELEASING ? "releasing" : "idle")), write_errors_, prepares_);
+    // Gaps since the last line, per stream while it was started: blocks that got only part of their audio (short) or
+    // none (empty) and were padded with silence, the lowest ring fill before a block, and the session's total gaps.
+    char fill[NSTREAMS][16];
+    for (int s = 0; s < NSTREAMS; ++s) {
+        if (!watch_[s].hasMin()) { snprintf(fill[s], sizeof(fill[s]), "-"); continue; }
+        const uint64_t bps = (uint64_t)src_rate_[s] * kSrcCh[s] * 2u;
+        snprintf(fill[s], sizeof(fill[s]), "%u ms", bps ? (unsigned)(watch_[s].minQueued() * 1000u / bps) : 0u);
+    }
+    printf("[Browser] gaps media/guidance/system: short %u/%u/%u, empty %u/%u/%u of %u/%u/%u blocks, lowest fill %s/%s/%s; "
+           "session gaps %llu/%llu/%llu\n",
+           watch_[MEDIA].shortPulls(), watch_[GUIDANCE].shortPulls(), watch_[SYSTEM].shortPulls(),
+           watch_[MEDIA].emptyPulls(), watch_[GUIDANCE].emptyPulls(), watch_[SYSTEM].emptyPulls(),
+           watch_[MEDIA].pulls(), watch_[GUIDANCE].pulls(), watch_[SYSTEM].pulls(), fill[MEDIA], fill[GUIDANCE],
+           fill[SYSTEM], (unsigned long long)watch_[MEDIA].totalGaps(), (unsigned long long)watch_[GUIDANCE].totalGaps(),
+           (unsigned long long)watch_[SYSTEM].totalGaps());
+    for (int s = 0; s < NSTREAMS; ++s) watch_[s].resetInterval();
 }
 
 void BrowserAudio::mixerLoop() {
@@ -588,7 +606,14 @@ void BrowserAudio::mixerLoop() {
         const bool play = routedForPlayback();
         bool have[NSTREAMS] = { false, false, false };
         bool loud[NSTREAMS] = { false, false, false };
-        if (play) for (int s = 0; s < NSTREAMS; ++s) have[s] = pull(s, block, &in[s][0], &loud[s]);
+        if (play) {
+            for (int s = 0; s < NSTREAMS; ++s) {
+                const size_t queued_before = ring_[s]->size();
+                size_t got = 0;
+                have[s] = pull(s, block, &in[s][0], &loud[s], &got);
+                watch_[s].onPull(started_[s], queued_before, got, block * kOutCh);
+            }
+        }
         const bool duck = loud[GUIDANCE] || loud[SYSTEM];
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
                    have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck, &out[0]);
@@ -636,6 +661,7 @@ void BrowserAudio::onSessionEnded() {
         rs_[s].reset();
         flush_[s] = false;
         frames_in_[s] = 0;
+        watch_[s].resetAll();
         srate_[s].reset();            // the next phone declares (or is measured) afresh
         src_rate_[s] = srate_[s].rate();
     }

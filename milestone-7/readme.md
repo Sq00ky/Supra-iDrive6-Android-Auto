@@ -507,7 +507,9 @@ Car-verified; the default in v1.8.61..v1.8.65. Since v1.8.66 Bluetooth is the de
 What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[AASession] ch N audio sink
 offers: ..`, `[AASession] ch N audio start: config K = .. Hz`, `[Browser] PCM open: card ..`,
 `[Browser] device setup: ..`, `[Browser] connection 0xb8 granted`, `[Browser] media ducked under a prompt ..`, and the
-10 s `[Browser] blocks ..` statistics line (queued / dropped bytes per stream, route state, write errors).
+10 s `[Browser] blocks ..` statistics line (queued / dropped bytes per stream, route state, write errors) with its
+`[Browser] gaps ..` line: mixer blocks of a playing stream that got only part of their audio (short) or none (empty)
+and were padded with silence, the lowest buffer fill in the interval, and the session's total gaps.
 Handy checks from the shell: `audioconn -l` (is `0xb8` listed as `BrowserFront`?) and `sloginfo | grep -i preAllocate`.
 
 ## Logs

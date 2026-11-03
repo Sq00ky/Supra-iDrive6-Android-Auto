@@ -201,6 +201,29 @@ int main() {
         CHECK(m.rate() == 48000 && warns == 0);
     }
 
+    // 12. StreamWatch: per-block gap counters of a started stream; a stopped stream's tail is not counted.
+    {
+        StreamWatch w;
+        CHECK(!w.hasMin() && w.pulls() == 0 && w.totalGaps() == 0);
+        const size_t need = 2048;                       // one block: 1024 frames stereo
+        w.onPull(true, 30000, need, need);              // full block
+        w.onPull(true, 25000, 900, need);               // short: part of a block
+        w.onPull(true, 0, 0, need);                     // empty
+        w.onPull(true, 12000, need, need);
+        w.onPull(false, 0, 0, need);                    // stream stopped: its tail / silence is not a gap
+        CHECK(w.pulls() == 4 && w.shortPulls() == 1 && w.emptyPulls() == 1);
+        CHECK(w.hasMin() && w.minQueued() == 0 && w.totalGaps() == 2);
+        w.resetInterval();                              // next stats line: interval cleared, total kept
+        CHECK(w.pulls() == 0 && !w.hasMin() && w.shortPulls() == 0 && w.totalGaps() == 2);
+        w.onPull(true, 40000, need, need);
+        w.onPull(true, 35000, need, need);
+        CHECK(w.minQueued() == 35000 && w.totalGaps() == 2);   // lowest fill of this interval only
+        w.onPull(true, 500, 10, need);
+        CHECK(w.totalGaps() == 3 && w.shortPulls() == 1 && w.minQueued() == 500);
+        w.resetAll();                                   // session ended
+        CHECK(w.totalGaps() == 0 && w.pulls() == 0);
+    }
+
     printf(fails ? "test_audio_mixer: %d FAILED\n" : "test_audio_mixer: all passed\n", fails);
     return fails ? 1 : 0;
 }
