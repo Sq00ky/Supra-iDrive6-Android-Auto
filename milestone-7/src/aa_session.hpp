@@ -93,7 +93,9 @@ private:
     bool sendChannelOpenRequest(uint8_t channel_id);
     bool sendAvSetupResponse(uint8_t channel);
     bool sendVideoFocusIndication(uint8_t channel, bool focused = true, bool unrequested = false);
-    bool sendAvMediaAck(uint8_t channel);   // one frame acked
+    // One frame acked. rx_wall_ns != 0: also its arrival time (Ack field 3, wall clock in ns), as the DHU's audio
+    // sinks send it; 0 = none (video).
+    bool sendAvMediaAck(uint8_t channel, uint64_t rx_wall_ns = 0);
     bool sendAudioFocusResponse(uint8_t focus_state);
     bool readExact(uint8_t* buffer, size_t length);
     static uint32_t rxTimeoutMs();
@@ -161,6 +163,7 @@ private:
     bool session_defer_acks_;        // this session (session thread)
     uint32_t audio_max_unacked_;     // NBT_AA_MAX_UNACKED: window our AV setup response gives audio sinks (default 10)
     uint64_t ack_force_ns_;          // NBT_AA_ACK_FORCE_MS in ns (0 = never force)
+    bool ack_times_;                 // NBT_AA_ACK_TIMES (default on): audio acks carry the frame's arrival time
     MediaAckLedger ack_ledger_[3];
     pthread_mutex_t ack_mutex_;
     double ack_stats_s_;             // last periodic ack stats line (session thread)
