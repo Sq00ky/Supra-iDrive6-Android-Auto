@@ -126,6 +126,15 @@ private:
     ConsumedFn consumed_fn_;
     void* consumed_user_;
 
+    // Mixer thread scheduling: NBT_BROWSER_PRIO (applied by the mixer thread itself) and how late its writes come.
+    void raiseMixerPriority();
+    int prio_want_;                      // NBT_BROWSER_PRIO (0 = leave the thread's priority alone)
+    int prio_now_;                       // the mixer thread's priority after raiseMixerPriority (-1 = unknown)
+    uint64_t last_write_ms_;             // start of the previous device write (0 = none yet)
+    uint32_t gap_max_ms_;                // stats interval: longest time between two device write starts
+    uint32_t gap_late_;                  // stats interval: gaps over twice the block period
+    uint32_t gap_late_total_;            // session
+
     // Underflow reports (mixer thread, except frames_since_start_).
     void checkUnderflow(int s, size_t got, size_t need, uint64_t now);
     void logUnderflowFollowUp(uint64_t now);

@@ -9,6 +9,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/asoundlib.h>   // types and constants only: every function comes from the dlopen'ed shim
 
 namespace nbt {
@@ -92,6 +94,10 @@ BrowserAudio::BrowserAudio()
     consumed_user_ = NULL;
     underflow_fn_ = NULL;
     underflow_user_ = NULL;
+    prio_want_ = 15;
+    prio_now_ = -1;
+    last_write_ms_ = 0;
+    gap_max_ms_ = gap_late_ = gap_late_total_ = 0;
     for (int s = 0; s < NSTREAMS; ++s) {
         frames_since_start_[s] = 0;
         dry_[s] = false;
@@ -220,6 +226,9 @@ bool BrowserAudio::init() {
     }
     for (int s = 0; s < NSTREAMS; ++s) guard_[s].setBudget(wait_ms_);
     drift_on_ = envFlag("NBT_BROWSER_DRIFT") != 0;   // unset (-1) or on (1): correct media clock drift
+    // Mixer thread priority: 15 by default, above the default 10 that the HMI and video threads compete at, below
+    // the 21 of the USB reader. 0 = leave it alone. The car's own audio threads should stay above it (check with pidin).
+    prio_want_ = (int)envRange("NBT_BROWSER_PRIO", 15, 0, 63);
     drift_.configure(DriftConfig());
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
     shim_path_ = getenv("NBT_BROWSER_ASOUND");
@@ -621,6 +630,14 @@ void BrowserAudio::logStats(bool force) {
            guard_[GUIDANCE].timeouts(), guard_[SYSTEM].timeouts());
     for (int s = 0; s < NSTREAMS; ++s) watch_[s].resetInterval();
     waited_ms_ = waited_blocks_ = 0;
+    // Mixer timing: the longest time between two device writes in the interval against the block period. Late gaps
+    // (over twice the period) eat the device's ~4 fragments of headroom; if they show up, raise NBT_BROWSER_PRIO.
+    if (rate_ && frag_bytes_) {
+        const uint32_t period = (uint32_t)(frag_bytes_ / (kOutCh * 2u) * 1000u / rate_);
+        printf("[Browser] mixer timing: block %u ms, longest gap between writes %u ms, late gaps (> %u ms) %u, session "
+               "%u, thread priority %d\n", period, gap_max_ms_, 2u * period, gap_late_, gap_late_total_, prio_now_);
+    }
+    gap_max_ms_ = gap_late_ = 0;
     // Media drift correction: the trim now applied, the smoothed media queue and the level it holds.
     if (!drift_on_)
         printf("[Browser] media drift correction off (NBT_BROWSER_DRIFT=0)\n");
@@ -631,7 +648,29 @@ void BrowserAudio::logStats(bool force) {
                drift_.smoothed(), drift_.target());
 }
 
+// Mixer thread: it must write a device fragment every ~23 ms with ~92 ms of headroom, and with deferred acks its
+// consumption also paces the phone, so it should not wait behind HMI or video work for the CPU. QNX mutexes inherit
+// priority, so the ring mutex shared with the session thread can't invert it.
+void BrowserAudio::raiseMixerPriority() {
+    struct sched_param sp;
+    int policy = 0;
+    if (pthread_getschedparam(pthread_self(), &policy, &sp) != 0) return;
+    const int before = sp.sched_priority;
+    prio_now_ = before;
+    if (prio_want_ <= 0 || before >= prio_want_) {
+        printf("[Browser] mixer thread priority %d (NBT_BROWSER_PRIO=%d: %s)\n", before, prio_want_,
+               prio_want_ <= 0 ? "left alone" : "already at least that");
+        return;
+    }
+    sp.sched_priority = prio_want_;
+    const int r = pthread_setschedparam(pthread_self(), policy, &sp);
+    if (r == 0) prio_now_ = prio_want_;
+    printf("[Browser] mixer thread priority %d -> %d%s%s (NBT_BROWSER_PRIO)\n", before, prio_now_,
+           r == 0 ? "" : ": not set, ", r == 0 ? "" : strerror(r));
+}
+
 void BrowserAudio::mixerLoop() {
+    raiseMixerPriority();
     if (!openPcm()) {
         printf("[Browser] no output device: AA audio is dropped for this session\n");
         pcm_failed_ = true;
@@ -758,6 +797,14 @@ void BrowserAudio::mixerLoop() {
 
         // A write that took at least half a block period blocked: the device was full (WAIT above relies on this).
         const uint64_t write_start = nowMs();
+        // Lateness: time since the previous write started. A blocking write paces it at one block period; much more
+        // means the mixer thread was late (waiting for the CPU, or a slow log write), eating the device's headroom.
+        if (last_write_ms_) {
+            const uint32_t gap = (uint32_t)(write_start - last_write_ms_);
+            if (gap > gap_max_ms_) gap_max_ms_ = gap;
+            if (gap > 2u * (uint32_t)(block * 1000u / rate_)) { ++gap_late_; ++gap_late_total_; }
+        }
+        last_write_ms_ = write_start;
         const bool wrote = writePcm(&out[0], block);
         last_write_blocked = wrote && nowMs() - write_start >= (uint64_t)(block * 1000u / rate_) / 2u;
         if (wrote) {
@@ -777,6 +824,7 @@ void BrowserAudio::mixerLoop() {
             fail_run = 0;
             t0 = nowMs();
             written_frames = 0;
+            last_write_ms_ = 0;   // the reopen pause is not lateness
         }
 
         // A blocking write paces us already; this only guards a shim that returns at once.
@@ -812,6 +860,8 @@ void BrowserAudio::onSessionEnded() {
         report_ms_[s] = 0;
         reports_[s] = 0;
     }
+    last_write_ms_ = 0;
+    gap_max_ms_ = gap_late_ = gap_late_total_ = 0;
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);
     route_backoff_until_ms_ = 0;
