@@ -56,7 +56,10 @@ int main() {
     CHECK(!resolveAudioStart(guidance, sizeof(guidance), std::vector<AaAudioConfig>(), &sess, &idx, &c));
     const uint8_t truncated[] = { 0x08, 0x83 };                // malformed varint: no crash, no result
     CHECK(!resolveAudioStart(truncated, sizeof(truncated), g, &sess, &idx, &c));
+    // a bare START_INDICATION (no payload) reports the index as absent, not as 0 (the session logs it that way)
+    sess = 7; idx = 0;
     CHECK(!resolveAudioStart(NULL, 0, g, &sess, &idx, &c));
+    CHECK(idx == 0xFFFFFFFFu && sess == 0xFFFFFFFFu);
 
     printf(fails ? "test_audio_format: %d FAILED\n" : "test_audio_format: all passed\n", fails);
     return fails ? 1 : 0;

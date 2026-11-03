@@ -1080,10 +1080,13 @@ void AASession::sessionLoop() {
                     // configuration_index (field 2) = the phone's pick among this sink's offers (our setup response's
                     // "config 0" is not binding: car 2026-11-01 guidance came at offer 1 = 48 kHz).
                     const std::vector<AaAudioConfig>& offered = offered_audio_[channel & 31];
-                    uint32_t s2 = 0, idx = 0;
+                    // Always resolved, even for a bare START_INDICATION (no payload): idx then comes back as absent
+                    // (0xFFFFFFFF) and is logged as "without a configuration index", not as index 0.
+                    uint32_t s2 = 0xFFFFFFFFu, idx = 0xFFFFFFFFu;
                     AaAudioConfig fmt;
-                    const bool known = frame_data.size() > 2 &&
-                        resolveAudioStart(&frame_data[2], frame_data.size() - 2, offered, &s2, &idx, &fmt);
+                    const bool known = resolveAudioStart(frame_data.size() > 2 ? &frame_data[2] : NULL,
+                                                         frame_data.size() > 2 ? frame_data.size() - 2 : 0, offered,
+                                                         &s2, &idx, &fmt);
                     if (known)
                         printf("[AASession] ch %u audio start: config %u = %u Hz %u-bit %s (%u offered)\n", channel, idx,
                                fmt.sample_rate, fmt.bits, fmt.channels == 1 ? "mono" : "stereo", (unsigned)offered.size());
