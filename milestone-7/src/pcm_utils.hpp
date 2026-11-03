@@ -74,7 +74,8 @@ public:
     void reset();
 
     // Kept across configure() / reset(); a change restarts the conversion (a short discontinuity). quality 0..10
-    // (speex only; 5 = 80 taps, ~100 dB stopband).
+    // (speex only; 5 = 80 taps, ~100 dB stopband). If speexdsp can't be set up on first use, the resampler carries on
+    // with LINEAR and engine() says so: callers compare it with what they asked for.
     void setEngine(Engine e, int quality = 5);
     Engine engine() const { return engine_; }
     int quality() const { return quality_; }

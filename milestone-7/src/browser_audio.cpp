@@ -551,6 +551,14 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
         const uint64_t t0 = nowUs();
         rs_[s].processBytes(raw, got, conv);
         rs_us_ += nowUs() - t0;
+        if (rs_engine_ == PcmResampler::SPEEX && rs_[s].engine() != PcmResampler::SPEEX && !rs_failed_) {
+            // PcmResampler couldn't set speexdsp up and carried on with linear interpolation: make that visible and
+            // switch every stream, so the logs, the health check and an A/B by ear name the engine really in use.
+            rs_failed_ = true;
+            printf("[Browser] WARNING: speexdsp resampler could not start (%s stream): falling back to linear for "
+                   "this session\n", streamName(s));
+            setResampler(PcmResampler::LINEAR, "speexdsp could not start");
+        }
         size_t old = q.size();
         q.resize(old + conv.size() / 2);
         if (!conv.empty()) memcpy(&q[old], &conv[0], conv.size());
@@ -877,7 +885,10 @@ void BrowserAudio::mixerLoop() {
             // the music. Only right after a write that blocked (the device is full and still holds ~4 fragments,
             // ~92 ms), at most NBT_BROWSER_WAIT_MS per block; a stream that really stopped sending is padded at once
             // after the first timeout.
+            // The time waited is measured, not counted in steps: a usleep(2000) rounds up to the next clock tick and
+            // may wake late, so counted steps would let a 60 ms budget really take ~90 ms, about all the device holds.
             uint32_t waited = 0;
+            const uint64_t wait_start = nowUs();
             for (;;) {
                 bool wait = false;
                 for (int s = 0; s < NSTREAMS; ++s) {
@@ -887,7 +898,7 @@ void BrowserAudio::mixerLoop() {
                 }
                 if (!wait || stop_) break;
                 usleep(kWaitStepMs * 1000u);
-                waited += kWaitStepMs;
+                waited = (uint32_t)((nowUs() - wait_start) / 1000u);
             }
             if (waited) { ++waited_blocks_; waited_ms_ += waited; }
             for (int s = 0; s < NSTREAMS; ++s) {
