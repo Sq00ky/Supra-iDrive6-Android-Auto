@@ -71,6 +71,8 @@ public:
     // consumer reports its bytes taken (postAudioConsumed), or after NBT_AA_ACK_FORCE_MS (default 1000) unacked. Off:
     // acked on arrival (the consumer cannot report). Set before start(); applies from the next session.
     void setDeferredAudioAcks(bool on);
+    // The ack window audio sinks get (NBT_AA_MAX_UNACKED, default 10): how many frames the phone may have unacked.
+    static uint32_t audioAckWindow();
     // The audio consumer took `bytes` of `channel`'s PCM, oldest first (played, or dropped). Thread-safe (mixer thread);
     // the acks go out from the session thread, woken through the wake pipe.
     void postAudioConsumed(uint8_t channel, size_t bytes);

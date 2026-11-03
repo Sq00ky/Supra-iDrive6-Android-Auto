@@ -127,8 +127,26 @@ size_t pcmChunkBytes(uint32_t rate, uint32_t channels, uint32_t ms, size_t cap) 
 
 PcmResampler::PcmResampler()
     : src_rate_(48000), src_ch_(2), dst_rate_(48000), dst_ch_(2),
-      step_q16_(65536), phase_q16_(0), have_prev_(false), passthrough_(true) {
+      step_q32_(1ull << 32), phase_q32_(0), trim_ppm_(0), have_prev_(false), passthrough_(true) {
     memset(prev_, 0, sizeof(prev_));
+}
+
+void PcmResampler::updateStep() {
+    const uint64_t base = ((uint64_t)src_rate_ << 32) / dst_rate_;
+    step_q32_ = base * (uint64_t)(1000000 + trim_ppm_) / 1000000u;   // base < 2^36, x ~1e6 fits in 64 bits
+    const bool pass = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_) && trim_ppm_ == 0;
+    if (pass != passthrough_) {   // switching between copying and interpolating: start interpolation afresh
+        have_prev_ = false;
+        phase_q32_ = 0;
+    }
+    passthrough_ = pass;
+}
+
+void PcmResampler::setTrimPpm(int32_t ppm) {
+    if (ppm > 20000) ppm = 20000;
+    if (ppm < -20000) ppm = -20000;
+    trim_ppm_ = ppm;
+    updateStep();
 }
 
 void PcmResampler::configure(uint32_t src_rate, uint32_t src_channels,
@@ -137,13 +155,13 @@ void PcmResampler::configure(uint32_t src_rate, uint32_t src_channels,
     dst_rate_ = dst_rate ? dst_rate : 48000;
     src_ch_ = src_channels < 1 ? 1 : (src_channels > 8 ? 8 : src_channels);
     dst_ch_ = dst_channels < 1 ? 1 : (dst_channels > 8 ? 8 : dst_channels);
-    step_q16_ = static_cast<uint32_t>((static_cast<uint64_t>(src_rate_) << 16) / dst_rate_);
-    passthrough_ = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_);
+    updateStep();   // keeps trim_ppm_
+    passthrough_ = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_) && trim_ppm_ == 0;
     reset();
 }
 
 void PcmResampler::reset() {
-    phase_q16_ = 0;
+    phase_q32_ = 0;
     have_prev_ = false;
     memset(prev_, 0, sizeof(prev_));
 }
@@ -184,19 +202,20 @@ void PcmResampler::process(const int16_t* in, size_t in_frames, std::vector<int1
         if (!have_prev_) {
             for (uint32_t c = 0; c < src_ch_; ++c) prev_[c] = cur[c];
             have_prev_ = true;
-            phase_q16_ = 0;
+            phase_q32_ = 0;
         }
 
-        while (phase_q16_ < 65536U) {
+        const uint64_t one = 1ull << 32;
+        while (phase_q32_ < one) {
             int32_t interp[8];
             for (uint32_t c = 0; c < src_ch_; ++c) {
-                int64_t d = static_cast<int64_t>(cur[c]) - prev_[c];
-                interp[c] = prev_[c] + static_cast<int32_t>((d * static_cast<int64_t>(phase_q16_)) >> 16);
+                int64_t d = static_cast<int64_t>(cur[c]) - prev_[c];   // |d| < 2^16, phase < 2^32: fits
+                interp[c] = prev_[c] + static_cast<int32_t>((d * static_cast<int64_t>(phase_q32_)) >> 32);
             }
             emit(interp, out);
-            phase_q16_ += step_q16_;
+            phase_q32_ += step_q32_;
         }
-        phase_q16_ -= 65536U;
+        phase_q32_ -= one;
         for (uint32_t c = 0; c < src_ch_; ++c) prev_[c] = cur[c];
     }
 }

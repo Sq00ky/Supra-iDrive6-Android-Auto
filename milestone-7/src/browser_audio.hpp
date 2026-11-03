@@ -41,6 +41,8 @@
 //   NBT_BROWSER_WAIT_MS  wait up to this long for a block of a playing stream that is a little late, instead of padding
 //                        it with silence (default 30, max 60, 0 = pad at once). Only while the device is full (the
 //                        previous write blocked), so it still holds ~92 ms and waits cannot add up.
+//   NBT_BROWSER_DRIFT    0 = no clock-drift correction for AA media (default on: after learning the level the phone
+//                        keeps queued for 10 s, the media resampler is trimmed by up to +/-500 ppm to hold it)
 //   NBT_DUCK_DB          media level while ducked, dB (default -12)
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
@@ -86,6 +88,9 @@ public:
     // (deferred acks, media_ack.hpp). Called from the mixer and session threads. Set before the first session.
     typedef void (*ConsumedFn)(uint8_t channel, size_t bytes, void* user);
     void setConsumedCallback(ConsumedFn fn, void* user) { consumed_fn_ = fn; consumed_user_ = user; }
+    // With deferred acks: the ack window in frames (0 = acks on arrival). A phone held to it keeps about window x
+    // frame length of media queued, so the drift loop's target cap is raised to cover that. Set before the first session.
+    void setAckWindow(uint32_t frames) { ack_window_ = frames; }
 
     // A started stream that had already sent audio ran dry: a mixer block got less than a whole block and was padded.
     // Called once per dry spell (again only after a whole block was available), from the mixer thread. AASession
@@ -123,6 +128,17 @@ private:
 
     ConsumedFn consumed_fn_;
     void* consumed_user_;
+    uint32_t ack_window_;                  // setAckWindow (0 = acks on arrival)
+    volatile uint32_t media_frame_us_;     // length of the last AA media frame (session thread writes)
+
+    // Mixer thread scheduling: NBT_BROWSER_PRIO (applied by the mixer thread itself) and how late its writes come.
+    void raiseMixerPriority();
+    int prio_want_;                      // NBT_BROWSER_PRIO (0 = leave the thread's priority alone)
+    int prio_now_;                       // the mixer thread's priority after raiseMixerPriority (-1 = unknown)
+    uint64_t last_write_ms_;             // start of the previous device write (0 = none yet)
+    uint32_t gap_max_ms_;                // stats interval: longest time between two device write starts
+    uint32_t gap_late_;                  // stats interval: gaps over twice the block period
+    uint32_t gap_late_total_;            // session
 
     // Underflow reports (mixer thread, except frames_since_start_).
     void checkUnderflow(int s, size_t got, size_t need, uint64_t now);
@@ -166,6 +182,12 @@ private:
     UnderrunGuard guard_[NSTREAMS];            // wait for late input instead of padding (mixer thread)
     bool gap_[NSTREAMS];                       // the last block of this stream was padded: fade the next one in
     uint32_t wait_ms_;                         // NBT_BROWSER_WAIT_MS (0 = pad at once)
+    DriftControl drift_;                       // media clock-drift trim (mixer thread)
+    DriftPi drift_pi_;                         // its proportional-integral version, fed drift_'s error (mixer thread)
+    bool drift_pi_on_;                         // NBT_BROWSER_DRIFT_LOOP: pi (default) applies drift_pi_, p drift_
+    bool drift_on_;                            // NBT_BROWSER_DRIFT (default on)
+    volatile bool drift_reset_;                // set by the session thread at a media start
+    int32_t drift_applied_;                    // trim currently set on rs_[MEDIA] (mixer thread)
     uint32_t waited_blocks_, waited_ms_;       // stats interval (mixer thread)
 
     // mixer thread

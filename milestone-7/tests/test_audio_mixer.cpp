@@ -2,7 +2,9 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: three-input mixer and media ducking (browser audio mode).
 #include "audio_mixer.hpp"
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <vector>
 
@@ -60,6 +62,100 @@ static SimResult simulateMixer(uint32_t budget_ms, int jitter_ms, int lead_ms, i
         if (dev / fpm < r.min_dev_ms) r.min_dev_ms = dev / fpm;
         if (dev < 0) { ++r.underruns; dev = 0; }
     }
+    return r;
+}
+
+// Media drift, closed loop at 1 ms resolution in ms of audio: the phone delivers 42.667 ms frames at its own speed
+// (phone_ppm > 0 = fast), each late by 0..jitter ms, starting with lead_ms queued; the mixer takes a 23.2 ms block
+// per block period, scaled by the trim DriftControl returns (or no trim when correct = false).
+// pi = true: the trim comes from DriftPi (fed DriftControl's smoothed queue minus its target) instead of DriftControl.
+// late_err = the mean |smoothed queue - target| over the last quarter of the run (the steady offset).
+struct DriftSim { double final_ema, target, final_ppm, max_fill, late_err, integral; int gaps_after_learn, max_abs_ppm;
+                  bool quiet_learning; };
+static DriftSim simulateDrift(double phone_ppm, int jitter_ms, double lead_ms, int seconds, bool correct,
+                              bool pi = false) {
+    DriftControl dc;
+    DriftPi dp;
+    double err_sum = 0;
+    long err_n = 0;
+    const double frame_ms = 2048.0 / 48.0, block_ms = 1024.0 / 44.1;
+    double fill = lead_ms, nominal = 0, next_arrival = 0, next_block = block_ms;
+    uint32_t seed = 777u;
+    int32_t ppm = 0;
+    DriftSim r = { 0, 0, 0, 0, 0, 0, 0, 0, true };
+    for (int t = 0; t < seconds * 1000; ++t) {
+        while (t >= next_arrival) {
+            fill += frame_ms;
+            nominal += frame_ms / (1.0 + phone_ppm * 1e-6);
+            seed = seed * 1103515245u + 12345u;
+            next_arrival = nominal + (jitter_ms ? (double)((seed >> 16) % (uint32_t)(jitter_ms + 1)) : 0.0);
+        }
+        while (t >= next_block) {
+            const double need = block_ms * (1.0 + ppm * 1e-6);
+            if (fill < need) {
+                if (!dc.learning() || !correct) { if (t > 10000) ++r.gaps_after_learn; }
+                fill = 0;
+            } else {
+                fill -= need;
+            }
+            if (correct) {
+                ppm = dc.update(fill, (uint64_t)t);
+                if (pi) ppm = dc.learning() ? 0 : dp.update(dc.smoothed() - dc.target(), (uint64_t)t);
+                if (dc.learning() && ppm != 0) r.quiet_learning = false;
+            }
+            if (t > seconds * 750 && !dc.learning()) { err_sum += fabs(dc.smoothed() - dc.target()); ++err_n; }
+            if (abs(ppm) > r.max_abs_ppm) r.max_abs_ppm = abs(ppm);
+            if (t > 20000 && fill > r.max_fill) r.max_fill = fill;
+            next_block += block_ms;
+        }
+    }
+    r.final_ema = dc.smoothed();
+    r.target = dc.target();
+    r.final_ppm = ppm;
+    r.late_err = err_n ? err_sum / err_n : 0;
+    r.integral = dp.integral();
+    return r;
+}
+
+// Deferred acks, closed loop at 1 ms: the phone is held to the ack window. It sends a frame (42.667 ms of audio,
+// arriving 2..2+jitter ms later) whenever fewer than `window` frames are unacked; a frame is acked once the mixer
+// has consumed all of it. Its own clock doesn't matter: our consumption paces it. raise_cap = what BrowserAudio does
+// under deferred acks (target cap = window x frame + 60 ms); pi = DriftPi sets the trim.
+struct PacedSim { int32_t final_ppm, max_abs_ppm; int gaps; double target, ema; };
+static PacedSim simulatePaced(uint32_t window, int jitter_ms, int seconds, bool raise_cap, bool pi) {
+    DriftControl dc;
+    DriftPi dp;
+    const double frame_ms = 2048.0 / 48.0, block_ms = 1024.0 / 44.1;
+    if (raise_cap) dc.raiseMaxTarget((uint32_t)(window * frame_ms) + 60u);
+    double fill = 0, consumed = 0, next_block = block_ms;
+    long sent = 0;
+    std::vector<double> in_flight;   // arrival times of sent frames not arrived yet
+    uint32_t seed = 4242u;
+    int32_t ppm = 0;
+    PacedSim r = { 0, 0, 0, 0, 0 };
+    for (int t = 0; t < seconds * 1000; ++t) {
+        const long acked = (long)(consumed / frame_ms);
+        while (sent - acked < (long)window) {      // the phone fills its window
+            seed = seed * 1103515245u + 12345u;
+            in_flight.push_back(t + 2.0 + (jitter_ms ? (double)((seed >> 16) % (uint32_t)(jitter_ms + 1)) : 0.0));
+            ++sent;
+        }
+        for (size_t i = 0; i < in_flight.size();) {
+            if (in_flight[i] <= t) { fill += frame_ms; in_flight.erase(in_flight.begin() + i); } else ++i;
+        }
+        while (t >= next_block) {
+            const double need = block_ms * (1.0 + ppm * 1e-6);
+            if (fill < need) { if (t > 20000) ++r.gaps; consumed += fill; fill = 0; }
+            else { fill -= need; consumed += need; }
+            ppm = dc.update(fill, (uint64_t)t);
+            if (pi) ppm = dc.learning() ? 0 : dp.update(dc.smoothed() - dc.target(), (uint64_t)t);
+            if (abs(ppm) > r.max_abs_ppm) r.max_abs_ppm = abs(ppm);
+            next_block += block_ms;
+        }
+    }
+    r.final_ppm = ppm;
+    r.target = dc.target();
+    r.ema = dc.smoothed();
     return r;
 }
 
@@ -336,6 +432,113 @@ int main() {
         printf("simulated 120 s, phone 1 %% slow: gaps %d, underruns %d, device never below %.0f ms\n", slow.gaps,
                slow.underruns, slow.min_dev_ms);
         CHECK(slow.underruns == 0 && slow.min_dev_ms >= 55);
+    }
+
+    // 14. DriftControl: learn the natural level, then a slow bounded trim that holds it against clock drift.
+    {
+        DriftControl d;
+        CHECK(d.learning() && d.update(130, 0) == 0);
+        for (uint64_t t = 23; t < 10000; t += 23) CHECK(d.update(130, t) == 0);   // learning: no trim
+        d.update(130, 10010);
+        CHECK(!d.learning() && near((float)d.target(), 130.0f, 0.5f));
+        // queue 20 ms above target for a while: positive trim (play faster), slewed (<= 20 ppm/s), capped by kp
+        int32_t p = 0;
+        for (uint64_t t = 10033; t < 11033; t += 23) p = d.update(150, t);
+        CHECK(p > 0 && p <= 21);                        // 1 s of slew at most
+        for (uint64_t t = 11033; t < 60000; t += 23) p = d.update(150, t);
+        CHECK(p >= 190 && p <= 200);                    // ~10 ppm per ms of (smoothed) error
+        for (uint64_t t = 60000; t < 200000; t += 23) p = d.update(1000, t);
+        CHECK(p == 500);                                // capped at +/-500 ppm
+        for (uint64_t t = 200000; t < 400000; t += 23) p = d.update(0, t);
+        CHECK(p == -500);
+        d.reset();
+        CHECK(d.learning() && d.ppm() == 0);
+        // target bounds: too little lead is raised to 60 ms, a backlog is lowered to 300 ms
+        DriftControl lo, hi;
+        for (uint64_t t = 0; t <= 10100; t += 23) { lo.update(5, t); hi.update(900, t); }
+        CHECK(near((float)lo.target(), 60.0f, 0.01f) && near((float)hi.target(), 300.0f, 0.01f));
+
+        // Closed loop, one hour, the 1 Nov lead (130 ms), arrivals up to 15 ms late.
+        const double cases[] = { -100, 100, -300, 300, 0 };
+        for (int i = 0; i < 5; ++i) {
+            DriftSim s = simulateDrift(cases[i], 15, 130, 3600, true);
+            printf("drift %+5.0f ppm, 1 h corrected: trim %+5.0f ppm, queue %.0f ms (target %.0f), max %.0f ms, "
+                   "gaps %d\n", cases[i], s.final_ppm, s.final_ema, s.target, s.max_fill, s.gaps_after_learn);
+            CHECK(s.quiet_learning);
+            CHECK(s.gaps_after_learn == 0);
+            CHECK(fabs(s.final_ppm - cases[i]) <= 20);              // the trim converges to the drift
+            CHECK(fabs(s.final_ema - s.target) <= 40);               // the queue stays near its natural level
+            CHECK(s.max_abs_ppm <= 500);
+        }
+        // Without correction a phone 100 ppm slow drains the 130 ms lead within the hour and then gaps.
+        DriftSim slow = simulateDrift(-100, 15, 130, 3600, false);
+        printf("drift  -100 ppm, 1 h uncorrected: gaps %d\n", slow.gaps_after_learn);
+        CHECK(slow.gaps_after_learn > 0);
+        // No drift: the trim stays tiny (jitter and the frame sawtooth are smoothed out).
+        DriftSim zero = simulateDrift(0, 15, 130, 600, true);
+        CHECK(zero.max_abs_ppm <= 25);
+        // No lead at all: the 60 ms floor builds one up by playing slightly slower.
+        DriftSim none = simulateDrift(0, 5, 0, 900, true);
+        CHECK(none.target == 60 && none.final_ema >= 40);
+    }
+
+    // 15. DriftPi: the same loop with an integral term. It holds the queue on target where the P loop stays off by
+    //     ~0.1 ms per ppm, and its integral settles on the phone's clock error.
+    {
+        DriftPi p;
+        CHECK(near((float)p.kp(), 14.14f, 0.01f) && near((float)p.ki(), 0.1f, 0.0001f));
+        CHECK(p.update(10, 0) == 0);                       // first call: starts the clock only
+        int32_t v = 0;
+        for (uint64_t t = 23; t <= 1000; t += 23) v = p.update(10, t);
+        CHECK(v > 0 && v <= 21);                           // slewed like DriftControl (<= 20 ppm/s)
+        // A held error at the cap does not wind the integral up beyond the cap.
+        for (uint64_t t = 1000; t < 400000; t += 23) v = p.update(1000, t);
+        CHECK(v == 500 && p.integral() <= 500.0);
+        for (uint64_t t = 400000; t < 900000; t += 23) v = p.update(-1000, t);
+        CHECK(v == -500 && p.integral() >= -500.0);
+        p.reset();
+        CHECK(p.ppm() == 0 && p.integral() == 0);
+
+        const double cases[] = { -100, 100, -300, 300, 0 };
+        for (int i = 0; i < 5; ++i) {
+            DriftSim pi = simulateDrift(cases[i], 15, 130, 3600, true, true);
+            DriftSim pp = simulateDrift(cases[i], 15, 130, 3600, true, false);
+            printf("drift %+5.0f ppm, 1 h: PI queue off target %.1f ms (integral %+.0f ppm, trim %+.0f), "
+                   "P %.1f ms (trim %+.0f); PI max %.0f ms, gaps %d\n", cases[i], pi.late_err, pi.integral,
+                   pi.final_ppm, pp.late_err, pp.final_ppm, pi.max_fill, pi.gaps_after_learn);
+            CHECK(pi.quiet_learning);
+            CHECK(pi.gaps_after_learn == 0);
+            CHECK(pi.max_abs_ppm <= 500);
+            CHECK(fabs(pi.final_ppm - cases[i]) <= 20);           // trim = the drift
+            CHECK(fabs(pi.integral - cases[i]) <= 20);            // and the integral reads it
+            CHECK(pi.late_err <= 4.0);                            // on target, within the jitter
+            if (cases[i] != 0) CHECK(pi.late_err < pp.late_err);  // closer than the P loop
+        }
+    }
+
+    // 16. Deferred acks: a phone held to the 10-frame window keeps ~400 ms queued, whatever the trim. With the old
+    //     300 ms target cap both loops pin the trim at +500 ppm; with the cap raised to cover the window they settle
+    //     at the queue the window gives and leave the trim near 0.
+    {
+        CHECK(DriftControl().maxTarget() == 300);
+        DriftControl c;
+        c.raiseMaxTarget(200);
+        CHECK(c.maxTarget() == 300);   // never lowered
+        c.raiseMaxTarget(487);
+        c.reset();
+        CHECK(c.maxTarget() == 487);   // kept across reset
+        for (int pi = 0; pi < 2; ++pi) {
+            PacedSim stuck = simulatePaced(10, 5, 900, false, pi != 0);
+            PacedSim fixed = simulatePaced(10, 5, 900, true, pi != 0);
+            printf("paced by acks (%s): 300 ms cap: trim %+d ppm (target %.0f, queue %.0f ms); raised cap: trim %+d ppm, "
+                   "max %d (target %.0f, queue %.0f ms), gaps %d\n", pi ? "PI" : "P", stuck.final_ppm, stuck.target,
+                   stuck.ema, fixed.final_ppm, fixed.max_abs_ppm, fixed.target, fixed.ema, fixed.gaps);
+            CHECK(stuck.final_ppm == 500);                  // the bug the raised cap fixes
+            CHECK(abs(fixed.final_ppm) <= 30);
+            CHECK(fixed.max_abs_ppm <= 60);
+            CHECK(fixed.gaps == 0);
+            CHECK(fixed.target > 300);
+        }
     }
 
     printf(fails ? "test_audio_mixer: %d FAILED\n" : "test_audio_mixer: all passed\n", fails);
