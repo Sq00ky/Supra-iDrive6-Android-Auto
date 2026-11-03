@@ -66,6 +66,7 @@ The plugin is loaded by iDrive itself, so it's *always* in use while the car is 
 Move the current plugin aside and copy in the new one:
 ```bash
 rm -r /opt/aa/NbtAad.old
+mv /opt/hmi/ID5/data/ro/Plugins/NbtAad/LibNbtAad.so /opt/hmi/ID5/data/ro/Plugins/NbtAad/LibNbtAad.so.old
 mv /opt/hmi/ID5/data/ro/Plugins/NbtAad /opt/aa/NbtAad.old
 mkdir -p /opt/hmi/ID5/data/ro/Plugins/NbtAad
 cd /opt/hmi/ID5/data/ro/Plugins/NbtAad/
