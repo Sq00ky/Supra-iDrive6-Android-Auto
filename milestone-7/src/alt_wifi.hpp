@@ -468,6 +468,40 @@ inline bool wfdDeviceNameFromPersistency(const std::string& text, std::string& o
     return false;
 }
 
+// A car without CarPlay has no "<name> CarPlay" run at all: its WLAN persistency holds the device name and then the
+// encrypted passphrase (20 uppercase hex), because Connectivity's startUp() sets NetworkDeviceName from
+// removeWhiteSpaces(mVin) when its persisted configuration is empty. So the run directly before the secret is the
+// device name there. Both shapes are accepted: whatever precedes the secret, minus an optional "CarPlay" suffix.
+inline bool wfdDeviceNameNearSecret(const std::string& text, std::string& out) {
+    std::string prev, run;
+    bool havePrev = false;
+    for (size_t i = 0; i <= text.size(); ++i) {
+        unsigned char c = i < text.size() ? (unsigned char)text[i] : 0;
+        if (c >= 0x20 && c < 0x7f) { run.push_back((char)c); continue; }
+        if (run.size() == 20) {
+            bool hex20 = true;
+            for (size_t x = 0; x < run.size(); ++x)
+                if (!((run[x] >= '0' && run[x] <= '9') || (run[x] >= 'A' && run[x] <= 'F'))) hex20 = false;
+            if (hex20 && havePrev) {                       // the secret: take what came just before it
+                std::string name = wfdNoSpaces(wfdTrim(prev));
+                const size_t sl = strlen("CarPlay");
+                if (name.size() > sl && name.compare(name.size() - sl, sl, "CarPlay") == 0)
+                    name = wfdNoSpaces(wfdTrim(name.substr(0, name.size() - sl)));
+                if (!name.empty()) {
+                    out = name;
+                    return true;
+                }
+            }
+        }
+        if (!run.empty()) {
+            prev = run;
+            havePrev = true;
+        }
+        run.clear();
+    }
+    return false;
+}
+
 inline const char* const* wfdPersistPaths() {
     static const char* const p[] = { "/var/opt/sys/persistence/early/pers_ConnectivityWlanPersistencyPersMapper" };
     return p;
@@ -646,7 +680,7 @@ inline bool resolveWfdSsid(const char* ifname, std::string& ssid) {
             cached = ssid;
             return true;
         }
-        if (!wfdDeviceNameFromPersistency(text, name)) continue;
+        if (!wfdDeviceNameFromPersistency(text, name) && !wfdDeviceNameNearSecret(text, name)) continue;
         ssid = wfdSsidFromDeviceName(name);
         printf("[Wireless] Wi-Fi Direct SSID: '%s' (derived: Connectivity persistency names this car '%s', group "
                "= DIRECT-03- + name without spaces)\n", ssid.c_str(), name.c_str());

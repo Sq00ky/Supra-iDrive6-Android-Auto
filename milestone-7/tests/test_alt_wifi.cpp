@@ -125,6 +125,21 @@ int main() {
     dev.clear();
     CHECK(nbt::wfdDeviceNameFromPersistency("BMW 51709 CarPlay\n", dev));
     CHECK(dev == "BMW51709");
+    // No-CarPlay car: the persistency holds the device name and then the encrypted secret, nothing else
+    dev.clear();
+    CHECK(nbt::wfdDeviceNameNearSecret("\001MINI39103\002240B6170131A7370505E\002", dev));
+    CHECK(dev == "MINI39103");
+    dev.clear();
+    CHECK(nbt::wfdDeviceNameNearSecret("\001RR129132\002\0010F1E2D3C4B5A69788790\002", dev));
+    CHECK(dev == "RR129132");
+    // same rule still works on a CarPlay car, where the run before the secret carries the suffix
+    dev.clear();
+    CHECK(nbt::wfdDeviceNameNearSecret("\001Toyota51807\002\001Toyota51807 CarPlay\002\001240B6170131A7370505E\002", dev));
+    CHECK(dev == "Toyota51807");
+    // a secret with no name before it gives nothing rather than a guess
+    dev.clear();
+    CHECK(!nbt::wfdDeviceNameNearSecret("\001240B6170131A7370505E\002", dev));
+
     // Connectivity persists the group configuration itself (SSID included), so a blob may name the group outright
     std::string ssidx;
     // (octal escapes: \x01D would be read as the single byte 0x1D)

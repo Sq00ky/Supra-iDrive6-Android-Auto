@@ -21,7 +21,8 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > the head unit's own accessory name without spaces. It is read from `NBT_WFD_SSID` if set, else `ifconfig wfd0`, else
 > `mwud` on 127.0.0.1:9096, else the car's iAP2 configs (`iap2.cfg [accessory] name=` - `Toyota51807` on a J29,
 > `BMW 34567` in the factory BMW config - and `iap2_Wifi.cfg` carries `SSID=<name> CarPlay`), else Connectivity's WLAN
-> persistency, which can hold the group SSID itself and otherwise the `<name> CarPlay` pair. On a J29 `ifconfig` prints
+> persistency, which can hold the group SSID itself, otherwise the `<name> CarPlay` pair, otherwise (cars without any
+> CarPlay config) the device name sitting directly before the encrypted passphrase. On a J29 `ifconfig` prints
 > no `ssid` line and mwud does not answer on 9096, so the config/persistency rungs are what work there; pin
 > `NBT_WFD_SSID` if the phone shows a different group. The decoded passphrase is printed in the log, once per value, so it can be typed into a phone's Wi-Fi settings
 > to join the group by hand. Log: `[Wireless] Wi-Fi source: ...`, `[Wireless] Wi-Fi Direct AP: ssid=...`.
