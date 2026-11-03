@@ -100,6 +100,16 @@ uint32_t pickDeviceRate(uint32_t want, uint32_t force, int min_rate, int max_rat
     return want;
 }
 
+size_t pcmChunkBytes(uint32_t rate, uint32_t channels, uint32_t ms, size_t cap) {
+    const size_t frame = (size_t)(channels ? channels : 1) * 2u;
+    if (cap < frame) return 0;
+    size_t frames = (size_t)((uint64_t)rate * ms / 1000u);
+    if (frames < 1) frames = 1;
+    const size_t max_frames = cap / frame;
+    if (frames > max_frames) frames = max_frames;
+    return frames * frame;
+}
+
 // ---------------------------------------------------------------------------
 // PcmResampler
 // ---------------------------------------------------------------------------

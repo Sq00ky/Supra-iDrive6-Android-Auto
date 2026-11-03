@@ -402,8 +402,10 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible) {
         q.clear();
     }
     const size_t need = frames * kOutCh;
-    const size_t raw_block = (size_t)(src / 100u) * kSrcCh[s] * 2u;   // 10 ms of AA PCM (at most 48 kHz stereo)
+    // 10 ms of AA PCM per read, but never more than this buffer (sized for 48 kHz stereo): a stream that declares a
+    // higher rate is read in more, smaller steps instead of overflowing it.
     uint8_t raw[48000 / 100 * 2 * 2];
+    const size_t raw_block = pcmChunkBytes(src, kSrcCh[s], 10u, sizeof(raw));
     while (q.size() < need) {
         size_t got = ring_[s]->read(raw, raw_block);
         if (got == 0) break;

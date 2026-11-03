@@ -47,5 +47,18 @@ int main() {
     assert(go.size()==128);
     assert(go[0]==gm[0] && go[1]==gm[0]);
     for(int i=1;i<64;i++) assert(go[2*i]==gm[i-1] && go[2*i+1]==gm[i-1]);
+    // read chunk for the mixer's fixed 1920-byte buffer (10 ms of 48 kHz stereo)
+    const size_t cap = 48000/100*2*2;
+    assert(pcmChunkBytes(48000,2,10,cap) == 1920);               // media: exactly the buffer
+    assert(pcmChunkBytes(48000,1,10,cap) == 960);                // guidance at 48 kHz
+    assert(pcmChunkBytes(16000,1,10,cap) == 320);                // system / guidance at 16 kHz
+    assert(pcmChunkBytes(44100,2,10,cap) == 441*4);              // whole frames
+    assert(pcmChunkBytes(96000,2,10,cap) == 1920);               // too high a rate: capped, no overflow
+    assert(pcmChunkBytes(192000,2,10,cap) == 1920);
+    assert(pcmChunkBytes(0,2,10,cap) == 4);                      // rate 0: one frame, never 0 (no stall)
+    assert(pcmChunkBytes(50,1,10,cap) == 2);
+    assert(pcmChunkBytes(48000,2,10,1922) == 1920);              // cap rounded down to whole frames
+    assert(pcmChunkBytes(48000,2,10,3) == 0);                    // cap below one frame
+    assert(pcmChunkBytes(48000,0,10,cap) == 960);                // channels 0 counts as mono
     puts("PASS"); return 0;
 }
