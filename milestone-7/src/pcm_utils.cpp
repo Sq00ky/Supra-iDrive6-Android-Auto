@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "pcm_utils.hpp"
+#include "nbt_speex.h"
 #include <string.h>
 
 namespace nbt {
@@ -126,15 +127,53 @@ size_t pcmChunkBytes(uint32_t rate, uint32_t channels, uint32_t ms, size_t cap) 
 // ---------------------------------------------------------------------------
 
 PcmResampler::PcmResampler()
-    : src_rate_(48000), src_ch_(2), dst_rate_(48000), dst_ch_(2),
+    : engine_(LINEAR), quality_(5), spx_(NULL), spx_trim_(0), spx_since_(0), in_count_(0), out_count_(0),
+      src_rate_(48000), src_ch_(2), dst_rate_(48000), dst_ch_(2),
       step_q32_(1ull << 32), phase_q32_(0), trim_ppm_(0), have_prev_(false), passthrough_(true) {
     memset(prev_, 0, sizeof(prev_));
+}
+
+PcmResampler::~PcmResampler() { destroySpeex(); }
+
+void PcmResampler::destroySpeex() {
+    if (spx_) nbt_speex_resampler_destroy(static_cast<SpeexResamplerState*>(spx_));
+    spx_ = NULL;
+}
+
+void PcmResampler::setEngine(Engine e, int quality) {
+    if (quality < 0) quality = 0;
+    if (quality > 10) quality = 10;
+    if (e == engine_ && quality == quality_) return;
+    engine_ = e;
+    quality_ = quality;
+    destroySpeex();   // re-created on the next process() with the new settings
+    updateStep();
+    reset();
+}
+
+// in/out ratio = src/dst * (1 + trim): reduced to 32-bit numerator / denominator (speex wants spx_uint32_t).
+static uint64_t gcd64(uint64_t a, uint64_t b) { while (b) { const uint64_t t = a % b; a = b; b = t; } return a; }
+
+bool PcmResampler::applySpeexRatio() {
+    uint64_t num = (uint64_t)src_rate_ * (uint64_t)(1000000 + trim_ppm_);
+    uint64_t den = (uint64_t)dst_rate_ * 1000000u;
+    const uint64_t g = gcd64(num, den);
+    if (g > 1) { num /= g; den /= g; }
+    while (num > 0xFFFFFFFFull || den > 0xFFFFFFFFull) { num >>= 1; den >>= 1; }   // < 1e-9 of ratio error
+    if (!num || !den) return false;
+    const int err = nbt_speex_resampler_set_rate_frac(static_cast<SpeexResamplerState*>(spx_), (spx_uint32_t)num,
+                                                      (spx_uint32_t)den, src_rate_, dst_rate_);
+    spx_trim_ = trim_ppm_;
+    spx_since_ = 0;
+    return err == RESAMPLER_ERR_SUCCESS;
 }
 
 void PcmResampler::updateStep() {
     const uint64_t base = ((uint64_t)src_rate_ << 32) / dst_rate_;
     step_q32_ = base * (uint64_t)(1000000 + trim_ppm_) / 1000000u;   // base < 2^36, x ~1e6 fits in 64 bits
-    const bool pass = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_) && trim_ppm_ == 0;
+    // SPEEX stays filtering once it has started (a later return to 1:1 and no trim): switching back to copying
+    // would jump by the filter's latency.
+    const bool pass = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_) && trim_ppm_ == 0 && !spx_;
     if (pass != passthrough_) {   // switching between copying and interpolating: start interpolation afresh
         have_prev_ = false;
         phase_q32_ = 0;
@@ -155,6 +194,7 @@ void PcmResampler::configure(uint32_t src_rate, uint32_t src_channels,
     dst_rate_ = dst_rate ? dst_rate : 48000;
     src_ch_ = src_channels < 1 ? 1 : (src_channels > 8 ? 8 : src_channels);
     dst_ch_ = dst_channels < 1 ? 1 : (dst_channels > 8 ? 8 : dst_channels);
+    destroySpeex();   // new rates / channels: re-created on the next process()
     updateStep();   // keeps trim_ppm_
     passthrough_ = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_) && trim_ppm_ == 0;
     reset();
@@ -164,6 +204,11 @@ void PcmResampler::reset() {
     phase_q32_ = 0;
     have_prev_ = false;
     memset(prev_, 0, sizeof(prev_));
+    if (spx_) {
+        SpeexResamplerState* st = static_cast<SpeexResamplerState*>(spx_);
+        nbt_speex_resampler_reset_mem(st);
+        nbt_speex_resampler_skip_zeros(st);   // no leading run of zeros (the filter's latency) after a restart
+    }
 }
 
 void PcmResampler::emit(const int32_t* frame, std::vector<int16_t>& out) const {
@@ -189,12 +234,56 @@ void PcmResampler::emit(const int32_t* frame, std::vector<int16_t>& out) const {
 
 void PcmResampler::process(const int16_t* in, size_t in_frames, std::vector<int16_t>& out) {
     if (!in || in_frames == 0) return;
+    in_count_ += in_frames;
+    const size_t before = out.size();
 
     if (passthrough_) {
         out.insert(out.end(), in, in + in_frames * dst_ch_);
-        return;
+    } else if (engine_ == SPEEX) {
+        processSpeex(in, in_frames, out);
+    } else {
+        processLinear(in, in_frames, out);
     }
+    out_count_ += (out.size() - before) / dst_ch_;
+}
 
+void PcmResampler::processSpeex(const int16_t* in, size_t in_frames, std::vector<int16_t>& out) {
+    if (!spx_) {
+        int err = 0;
+        spx_ = nbt_speex_resampler_init(src_ch_, src_rate_, dst_rate_, quality_, &err);
+        if (!spx_ || err != RESAMPLER_ERR_SUCCESS || !applySpeexRatio()) {
+            destroySpeex();
+            engine_ = LINEAR;   // can't set it up: carry on with the linear engine
+            processLinear(in, in_frames, out);
+            return;
+        }
+        nbt_speex_resampler_skip_zeros(static_cast<SpeexResamplerState*>(spx_));
+        updateStep();   // passthrough_ off from now on
+    } else if (spx_trim_ != trim_ppm_ && spx_since_ >= dst_rate_) {
+        applySpeexRatio();   // at most once per second of output
+    }
+    SpeexResamplerState* st = static_cast<SpeexResamplerState*>(spx_);
+    const spx_uint32_t chunk = 1024;   // output frames per call
+    if (spx_buf_.size() < chunk * src_ch_) spx_buf_.resize(chunk * src_ch_);
+    const int16_t* ip = in;
+    size_t left = in_frames;
+    while (left > 0) {
+        spx_uint32_t in_len = (spx_uint32_t)left;
+        spx_uint32_t out_len = chunk;
+        nbt_speex_resampler_process_interleaved_int(st, ip, &in_len, &spx_buf_[0], &out_len);
+        for (spx_uint32_t f = 0; f < out_len; ++f) {
+            int32_t frame[8];
+            for (uint32_t c = 0; c < src_ch_; ++c) frame[c] = spx_buf_[f * src_ch_ + c];
+            emit(frame, out);
+        }
+        spx_since_ += out_len;
+        ip += (size_t)in_len * src_ch_;
+        left -= in_len;
+        if (in_len == 0 && out_len == 0) break;   // no progress: never spin
+    }
+}
+
+void PcmResampler::processLinear(const int16_t* in, size_t in_frames, std::vector<int16_t>& out) {
     for (size_t f = 0; f < in_frames; ++f) {
         int32_t cur[8];
         for (uint32_t c = 0; c < src_ch_; ++c) cur[c] = in[f * src_ch_ + c];

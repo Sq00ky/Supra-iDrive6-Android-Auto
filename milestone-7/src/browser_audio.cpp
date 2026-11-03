@@ -66,6 +66,12 @@ uint64_t nowMs() {
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
+uint64_t nowUs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
+}
+
 int envInt(const char* name, int def) {
     const char* e = getenv(name);
     if (!e || !*e) return def;
@@ -94,6 +100,13 @@ BrowserAudio::BrowserAudio()
     consumed_user_ = NULL;
     underflow_fn_ = NULL;
     underflow_user_ = NULL;
+    rs_engine_ = PcmResampler::SPEEX;
+    rs_engine_cfg_ = PcmResampler::SPEEX;
+    rs_quality_ = 5;
+    rs_switch_path_ = "";
+    rs_switch_check_ms_ = 0;
+    rs_us_ = 0;
+    rs_failed_ = false;
     prio_want_ = 15;
     prio_now_ = -1;
     last_write_ms_ = 0;
@@ -229,6 +242,25 @@ bool BrowserAudio::init() {
     // Mixer thread priority: 15 by default, above the default 10 that the HMI and video threads compete at, below
     // the 21 of the USB reader. 0 = leave it alone. The car's own audio threads should stay above it (check with pidin).
     prio_want_ = (int)envRange("NBT_BROWSER_PRIO", 15, 0, 63);
+    // Resampler: speexdsp by default (flat to ~19.5 kHz, no aliasing, no treble wobble under the drift trim);
+    // NBT_BROWSER_RESAMPLER=linear goes back to linear interpolation.
+    {
+        const char* e = getenv("NBT_BROWSER_RESAMPLER");
+        rs_engine_ = (e && strcmp(e, "linear") == 0) ? PcmResampler::LINEAR : PcmResampler::SPEEX;
+        rs_engine_cfg_ = rs_engine_;
+        rs_quality_ = (int)envRange("NBT_BROWSER_SPEEX_Q", 5, 0, 10);
+        rs_switch_path_ = getenv("NBT_BROWSER_RESAMPLER_FILE");
+        if (!rs_switch_path_) rs_switch_path_ = "/tmp/nbt_resampler";
+        for (int s = 0; s < NSTREAMS; ++s) rs_[s].setEngine(rs_engine_, rs_quality_);
+        if (rs_engine_ == PcmResampler::SPEEX)
+            printf("[Browser] resampler: speexdsp, quality %d (NBT_BROWSER_RESAMPLER / NBT_BROWSER_SPEEX_Q)\n",
+                   rs_quality_);
+        else
+            printf("[Browser] resampler: linear interpolation (NBT_BROWSER_RESAMPLER=linear)\n");
+        if (*rs_switch_path_)
+            printf("[Browser] switch it while playing: echo linear > %s (or speex); rm %s = back to the setting\n",
+                   rs_switch_path_, rs_switch_path_);
+    }
     drift_.configure(DriftConfig());
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
     shim_path_ = getenv("NBT_BROWSER_ASOUND");
@@ -367,6 +399,7 @@ bool BrowserAudio::openPcmWith(int frag, int frags) {
     for (int s = 0; s < NSTREAMS; ++s) {
         rs_rate_[s] = src_rate_[s];
         rs_[s].configure(rs_rate_[s], kSrcCh[s], rate_, kOutCh);
+        rs_[s].resetCounters();
         pending_[s].clear();
     }
     mixer_.configure(rate_, kOutCh, duck_cfg_);
@@ -485,6 +518,7 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
     if (src != rs_rate_[s]) {   // the session thread measured a different rate for this stream
         rs_rate_[s] = src;
         rs_[s].configure(src, kSrcCh[s], rate_, kOutCh);
+        rs_[s].resetCounters();   // the ratio check must not mix two rates
         q.clear();
     }
     const size_t need = frames * kOutCh;
@@ -497,7 +531,9 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
         if (got == 0) break;
         consumed(s, got);
         std::vector<uint8_t> conv;
+        const uint64_t t0 = nowUs();
         rs_[s].processBytes(raw, got, conv);
+        rs_us_ += nowUs() - t0;
         size_t old = q.size();
         q.resize(old + conv.size() / 2);
         if (!conv.empty()) memcpy(&q[old], &conv[0], conv.size());
@@ -601,7 +637,9 @@ void BrowserAudio::refocus(const char* why) {
 void BrowserAudio::logStats(bool force) {
     uint64_t now = nowMs();
     if (!force && now - last_stats_ms_ < 10000) return;
+    const uint64_t interval_ms = now - last_stats_ms_;
     last_stats_ms_ = now;
+    checkResamplerHealth(interval_ms);
     pthread_mutex_lock(&lock_);
     int rs = route_state_;
     pthread_mutex_unlock(&lock_);
@@ -667,6 +705,68 @@ void BrowserAudio::raiseMixerPriority() {
     if (r == 0) prio_now_ = prio_want_;
     printf("[Browser] mixer thread priority %d -> %d%s%s (NBT_BROWSER_PRIO)\n", before, prio_now_,
            r == 0 ? "" : ": not set, ", r == 0 ? "" : strerror(r));
+}
+
+static const char* engineName(PcmResampler::Engine e) { return e == PcmResampler::SPEEX ? "speexdsp" : "linear"; }
+
+void BrowserAudio::setResampler(PcmResampler::Engine e, const char* why) {
+    if (e == rs_engine_) return;
+    rs_engine_ = e;
+    for (int s = 0; s < NSTREAMS; ++s) {
+        rs_[s].setEngine(e, rs_quality_);   // restarts the conversion: a few ms discontinuity
+        rs_[s].resetCounters();
+    }
+    printf("[Browser] resampler -> %s (%s)\n", engineName(e), why);
+}
+
+// The switch file: "linear" or "speex" in it selects that engine; no file = the NBT_BROWSER_RESAMPLER setting. After
+// a fallback (checkResamplerHealth) speex stays off for the session.
+void BrowserAudio::checkResamplerSwitch(uint64_t now) {
+    if (!*rs_switch_path_ || now - rs_switch_check_ms_ < 1000) return;
+    rs_switch_check_ms_ = now;
+    PcmResampler::Engine want = rs_engine_cfg_;
+    FILE* f = fopen(rs_switch_path_, "r");
+    if (f) {
+        char word[16] = { 0 };
+        if (fscanf(f, "%15s", word) == 1) {
+            if (strcmp(word, "linear") == 0) want = PcmResampler::LINEAR;
+            else if (strcmp(word, "speex") == 0) want = PcmResampler::SPEEX;
+        }
+        fclose(f);
+    }
+    if (want == PcmResampler::SPEEX && rs_failed_) return;
+    setResampler(want, f ? "switch file" : "switch file removed: back to NBT_BROWSER_RESAMPLER");
+}
+
+// Each stats interval: CPU spent converting, and whether each stream's output / input frame count matches its rates
+// (and trim). Speex that costs over a quarter of the time or gets the ratio wrong by over 2 % falls back to linear.
+void BrowserAudio::checkResamplerHealth(uint64_t interval_ms) {
+    if (!interval_ms || !rate_) return;
+    const double cpu_pct = (double)rs_us_ / 10.0 / (double)interval_ms;   // us / (ms * 1000) * 100
+    char ratios[NSTREAMS][24];
+    bool bad = false;
+    for (int s = 0; s < NSTREAMS; ++s) {
+        const uint64_t in = rs_[s].inFrames(), out = rs_[s].outFrames();
+        ratios[s][0] = 0;
+        snprintf(ratios[s], sizeof(ratios[s]), "-");
+        if (in >= rs_rate_[s] && rs_rate_[s]) {   // at least a second of input
+            const double want = (double)rate_ / (double)rs_rate_[s] / (1.0 + rs_[s].trimPpm() * 1e-6);
+            const double got = (double)out / (double)in;
+            const double err = got / want - 1.0;
+            snprintf(ratios[s], sizeof(ratios[s]), "%+.3f %%", err * 100.0);
+            if (err > 0.02 || err < -0.02) bad = true;
+        }
+        rs_[s].resetCounters();
+    }
+    printf("[Browser] resampler %s: %.1f ms CPU per s (%.2f %%), output/input vs rates media/guidance/system %s/%s/%s\n",
+           engineName(rs_engine_), cpu_pct * 10.0, cpu_pct, ratios[MEDIA], ratios[GUIDANCE], ratios[SYSTEM]);
+    rs_us_ = 0;
+    if (rs_engine_ == PcmResampler::SPEEX && (cpu_pct > 25.0 || bad)) {
+        rs_failed_ = true;
+        printf("[Browser] WARNING: speexdsp resampler %s: falling back to linear for this session\n",
+               bad ? "produced the wrong number of frames" : "used too much CPU");
+        setResampler(PcmResampler::LINEAR, "fallback");
+    }
 }
 
 void BrowserAudio::mixerLoop() {
@@ -834,6 +934,7 @@ void BrowserAudio::mixerLoop() {
         else if (elapsed > played_ms + 1000) { t0 = nowMs(); written_frames = 0; }   // fell behind: re-anchor
 
         logUnderflowFollowUp(nowMs());
+        checkResamplerSwitch(nowMs());
         logStats(false);
     }
     logStats(true);
@@ -862,6 +963,9 @@ void BrowserAudio::onSessionEnded() {
     }
     last_write_ms_ = 0;
     gap_max_ms_ = gap_late_ = gap_late_total_ = 0;
+    rs_us_ = 0;
+    rs_failed_ = false;    // the next session tries the configured resampler again
+    setResampler(rs_engine_cfg_, "new session");
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);
     route_backoff_until_ms_ = 0;
