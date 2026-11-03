@@ -24,9 +24,14 @@ set(SOURCES
     src/audio/mic_uplink.cpp
     src/audio/a2i_stream.cpp
     src/audio/audio_route.cpp
-    src/audio/audio_mixer.cpp
+    src/audio/mixer.cpp
+    src/audio/playout.cpp
+    src/audio/drift.cpp
+    src/audio/stream_rate.cpp
     src/audio/browser_audio.cpp
-    src/audio/pcm_utils.cpp
+    src/audio/pcm_ring.cpp
+    src/audio/resampler.cpp
+    src/audio/asound_device.cpp
     src/video_manager.cpp
     src/tcp_server.cpp
     src/aa_session.cpp
@@ -42,7 +47,7 @@ set(SOURCES
     src/crash_handler.cpp
     src/kombi_client.cpp
     src/kombi_nav.cpp
-    src/audio/nbt_speex.c
+    src/audio/speex.c
 )
 
 add_executable(nbt-aad ${SOURCES})

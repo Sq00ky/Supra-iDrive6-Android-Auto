@@ -1,57 +1,18 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-#ifndef PCM_UTILS_HPP
-#define PCM_UTILS_HPP
-
-// PCM helpers for the A2I audio path (C++03 / GCC 4.4 compatible).
+#ifndef AUDIO_RESAMPLER_HPP
+#define AUDIO_RESAMPLER_HPP
 
 #include <stdint.h>
 #include <stddef.h>
 #include <vector>
-#include <pthread.h>
 
 namespace nbt {
-
-// Thread-safe byte ring buffer. The producer never blocks: when the ring is
-// full the OLDEST bytes are discarded so playback latency stays bounded.
-class PcmRing {
-public:
-    explicit PcmRing(size_t capacity);
-    ~PcmRing();
-
-    // Returns the number of bytes that had to be dropped to make room.
-    size_t write(const uint8_t* data, size_t len);
-    // Copies up to len bytes into out; returns the number copied.
-    size_t read(uint8_t* out, size_t len);
-    size_t size() const;
-    size_t capacity() const { return capacity_; }
-    size_t clear();   // returns the bytes discarded
-    uint64_t droppedBytes() const;
-    uint64_t writtenBytes() const;   // every byte ever written (dropped ones too)
-
-private:
-    PcmRing(const PcmRing&);
-    PcmRing& operator=(const PcmRing&);
-
-    std::vector<uint8_t> buf_;
-    size_t capacity_;
-    size_t head_;   // read index
-    size_t used_;
-    uint64_t dropped_;
-    uint64_t written_;
-    mutable pthread_mutex_t mutex_;
-};
-
-// The output device rate to ask for. want = the configured rate, kept if the device's reported range allows it, else
-// its maximum (this car's browser device reports 22050..44100, so 48000 becomes 44100). force (non-zero) is asked for
-// as is, whatever the device reports (NBT_BROWSER_FORCE_RATE experiment). min/max <= 0 = range unknown.
-uint32_t pickDeviceRate(uint32_t want, uint32_t force, int min_rate, int max_rate);
 
 // Bytes of 16-bit PCM to read per step: `ms` milliseconds at rate / channels, in whole frames, at least one frame and
 // at most `cap` bytes (rounded down to whole frames). Keeps a fixed read buffer safe whatever rate a stream declares.
 // Returns 0 only if cap is smaller than one frame.
 size_t pcmChunkBytes(uint32_t rate, uint32_t channels, uint32_t ms, size_t cap);
-
 // Streaming resampler + channel mapper for interleaved signed 16-bit little-endian PCM. State is kept between
 // process() calls so consecutive chunks join without clicks.
 //
@@ -59,7 +20,7 @@ size_t pcmChunkBytes(uint32_t rate, uint32_t channels, uint32_t ms, size_t cap);
 //   LINEAR  linear interpolation (the default; the Bluetooth / A2I paths use it). Cheap, but its response is a
 //           triangle filter, sinc^2(f/fs): about -2.9 dB at 15 kHz from 48 kHz, nothing stops 22-24 kHz folding back
 //           when going to 44.1 kHz, and under a drift trim the treble pulses as the interpolation point drifts.
-//   SPEEX   the speexdsp resampler (nbt_speex.h, BSD-3), fixed point, windowed-sinc polyphase filter: flat to ~89 %
+//   SPEEX   the speexdsp resampler (speex.h, BSD-3), fixed point, windowed-sinc polyphase filter: flat to ~89 %
 //           of the lower Nyquist, 80-100 dB stopband (quality 4-5), about 1 ms latency. Resamples at the source
 //           channel count; channel mapping runs after it.
 class PcmResampler {
@@ -135,4 +96,4 @@ private:
 
 } // namespace nbt
 
-#endif // PCM_UTILS_HPP
+#endif // AUDIO_RESAMPLER_HPP

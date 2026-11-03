@@ -7,7 +7,7 @@
 #include "audio/a2i_stream.hpp"
 #include "audio/audio_route.hpp"
 #include "audio/backend.hpp"
-#include "audio/pcm_utils.hpp"
+#include "audio/resampler.hpp"
 #include <pthread.h>
 #include <stddef.h>
 #include <vector>

@@ -21,7 +21,7 @@
 //
 // Pipeline: session thread -> per-stream raw rings (AA format) -> mixer thread: resample to the device rate,
 // mix MEDIA (ch 9) + GUIDANCE (ch 8) + SYSTEM_AUDIO (ch 16) with media ducked under the other two
-// (audio_mixer.hpp), write blocking to the shim. The connection is built when the first stream needs it and
+// (mixer.hpp), write blocking to the shim. The connection is built when the first stream needs it and
 // removed after NBT_BROWSER_IDLE_S without sound; queued audio waits for the grant, so a prompt is not cut.
 //
 // Environment:
@@ -47,11 +47,15 @@
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
 
-#include "audio/audio_mixer.hpp"
 #include "audio/audio_route.hpp"
 #include "audio/backend.hpp"
 #include "audio/channels.hpp"
-#include "audio/pcm_utils.hpp"
+#include "audio/drift.hpp"
+#include "audio/mixer.hpp"
+#include "audio/pcm_ring.hpp"
+#include "audio/playout.hpp"
+#include "audio/resampler.hpp"
+#include "audio/stream_rate.hpp"
 #include <pthread.h>
 #include <stdint.h>
 #include <stddef.h>

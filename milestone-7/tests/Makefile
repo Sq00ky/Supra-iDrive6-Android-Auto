@@ -18,14 +18,14 @@ CFLAGS   := -O1 -g -Wall $(INC)
 LDLIBS   := -lpthread -lssl -lcrypto -lm
 
 # The vendored speexdsp resampler, built as C the way the daemon builds it.
-SPEEX := $(ROOT)/src/audio/nbt_speex.c
+SPEEX := $(ROOT)/src/audio/speex.c
 
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
 SRC_test_audio_channels    :=
 SRC_test_audio_format      := src/sdr_builder.cpp
-SRC_test_audio_mixer       := src/audio/audio_mixer.cpp
+SRC_test_audio_mixer       := src/audio/mixer.cpp src/audio/playout.cpp src/audio/drift.cpp src/audio/stream_rate.cpp
 SRC_test_audio_route       := src/audio/audio_route.cpp
 SRC_test_bcl_detect        := src/wireless_setup.cpp
 SRC_test_bt_play           := src/audio/bt_play.cpp
@@ -43,8 +43,8 @@ SRC_test_media_msgs        :=
 SRC_test_mmr_pps           :=
 SRC_test_most_msg          :=
 SRC_test_neutral_resume    :=
-SRC_test_pcm               := src/audio/pcm_utils.cpp $(SPEEX)
-SRC_test_resampler         := src/audio/pcm_utils.cpp $(SPEEX)
+SRC_test_pcm               := src/audio/pcm_ring.cpp src/audio/resampler.cpp src/audio/asound_device.cpp $(SPEEX)
+SRC_test_resampler         := src/audio/resampler.cpp $(SPEEX)
 SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
 SRC_test_session_lifecycle := src/aa_cryptor.cpp src/aa_session.cpp src/crash_handler.cpp src/sdr_builder.cpp
@@ -72,11 +72,11 @@ $(OUT):
 	@mkdir -p $(OUT)
 
 # speexdsp object, shared by the tests that need it (plain and TSAN builds).
-$(OUT)/nbt_speex.o: $(SPEEX) | $(OUT)
+$(OUT)/speex.o: $(SPEEX) | $(OUT)
 	$(HOST_CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 srcs = $(addprefix $(ROOT)/,$(filter-out $(SPEEX),$(SRC_$(1))))
-objs = $(if $(filter $(SPEEX),$(SRC_$(1))),$(OUT)/nbt_speex.o)
+objs = $(if $(filter $(SPEEX),$(SRC_$(1))),$(OUT)/speex.o)
 
 define TEST_RULES
 $(1): $(OUT)/$(1)

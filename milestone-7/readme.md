@@ -911,7 +911,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_media_ack` | Deferred audio acks: acked once consumed, forced acks and skipped bytes, window-full count, a phone held to its window |
 | `test_media_msgs` | AA media-channel messages byte for byte against Google's receiver library (media ack with arrival times, AudioUnderflowNotification) |
 | `test_audio_format` | Offered AudioConfigs read back from the SDR, the phone's choice in AV START_INDICATION, guidance offered at one rate in browser mode |
-| `test_resampler` | speexdsp vs linear: passband 1-18 kHz, the 23 kHz alias, output length at 48 / 16 / 44.1 kHz, drift trim, chunked = whole, no click on trim changes, passthrough, engine switch, every trim clean across ±2 % (fixed-point speex needs a ratio denominator below 2^15) (link `src/nbt_speex.c` built as C) |
+| `test_resampler` | speexdsp vs linear: passband 1-18 kHz, the 23 kHz alias, output length at 48 / 16 / 44.1 kHz, drift trim, chunked = whole, no click on trim changes, passthrough, engine switch, every trim clean across ±2 % (fixed-point speex needs a ratio denominator below 2^15) (link `src/audio/speex.c` built as C) |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/kombi_nav.cpp src/kombi_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
 | `test_media_payload.py` | Media metadata payloads |
@@ -927,10 +927,12 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
-    drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` (+ `audio_mixer`) and
-    `a2i_audio` (+ `a2i_stream`); `channels.hpp` (AA channel <-> stream table), `mic_uplink` (car mic),
-    `audio_route` (`audioconn` wrapper), `voice_scenario`, `pcm_utils`, `nbt_speex.c` / `nbt_speex.h` (the
-    vendored speexdsp resampler, `third_party/speexdsp/`), `media_ack.hpp` + `aa_media_msgs.hpp` (deferred acks,
+    drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
+    (+ `a2i_stream`); browser mode's DSP: `mixer` (ducking, fades), `playout` (gap counters, late-input wait,
+    pre-roll), `drift` (clock-drift loops), `stream_rate` (declared / measured rates), `resampler` (linear and
+    speexdsp, through `speex.c` / `speex.h` and the vendored `third_party/speexdsp/`), `pcm_ring`,
+    `asound_device` (device rate); `channels.hpp` (AA channel <-> stream table), `mic_uplink` (car mic),
+    `audio_route` (`audioconn` wrapper), `voice_scenario`, `media_ack.hpp` + `aa_media_msgs.hpp` (deferred acks,
     media-channel messages);
   - cluster/HUD arrows: `kombi_nav` (+ `kombi_nav_msg.hpp`, `kombi_graph.hpp`, `kombi_graph_template.hpp`),
     `kombi_client`;
@@ -972,7 +974,7 @@ project is not affiliated with or endorsed by any of them.
 ### Third-party code
 
 The browser audio mode's resampler is the speexdsp resampler (speexdsp 1.2.1, unmodified, in
-`third_party/speexdsp/`; built through `src/audio/nbt_speex.c`). It is under its own BSD-3-Clause license, which applies to
+`third_party/speexdsp/`; built through `src/audio/speex.c`). It is under its own BSD-3-Clause license, which applies to
 those files and is reproduced here, as it requires for binary distributions (also in `third_party/speexdsp/COPYING`):
 
 ```

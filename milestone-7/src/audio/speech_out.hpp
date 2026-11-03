@@ -16,7 +16,7 @@
 
 #include "audio/a2i_stream.hpp"
 #include "audio/audio_route.hpp"
-#include "audio/pcm_utils.hpp"
+#include "audio/resampler.hpp"
 #include <stddef.h>
 #include <stdint.h>
 #include <vector>

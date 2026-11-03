@@ -5,9 +5,9 @@
  * OUTSIDE_SPEEX (no speexdsp build system or types header), every symbol renamed with the nbt_speex prefix so it can't
  * clash with another speex in the process, fixed point (int16 in and out, integer multiply-adds: no float work on
  * the softfp, non-NEON head unit). Include this header, never third_party/speexdsp/speex_resampler.h directly.
- * The code itself is compiled once, in nbt_speex.c. */
-#ifndef NBT_SPEEX_H
-#define NBT_SPEEX_H
+ * The code itself is compiled once, in speex.c. */
+#ifndef AUDIO_SPEEX_H
+#define AUDIO_SPEEX_H
 
 #ifndef OUTSIDE_SPEEX
 #define OUTSIDE_SPEEX 1
@@ -16,6 +16,6 @@
 #define RANDOM_PREFIX nbt_speex
 #endif
 
-#include "../third_party/speexdsp/speex_resampler.h"
+#include "../../third_party/speexdsp/speex_resampler.h"
 
-#endif /* NBT_SPEEX_H */
+#endif /* AUDIO_SPEEX_H */

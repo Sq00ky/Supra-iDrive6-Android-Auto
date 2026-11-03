@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: three-input mixer and media ducking (browser audio mode).
-#include "audio/audio_mixer.hpp"
+#include "audio/drift.hpp"
+#include "audio/mixer.hpp"
+#include "audio/playout.hpp"
+#include "audio/stream_rate.hpp"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

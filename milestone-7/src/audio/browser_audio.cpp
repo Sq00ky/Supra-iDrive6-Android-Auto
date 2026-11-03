@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "audio/browser_audio.hpp"
+#include "audio/asound_device.hpp"
 #include "nbt_env.hpp"
 #include "sdr_builder.hpp"
 #include <dlfcn.h>

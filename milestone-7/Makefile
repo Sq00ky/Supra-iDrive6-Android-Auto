@@ -22,9 +22,14 @@ SRCS = src/main.cpp \
        src/audio/mic_uplink.cpp \
        src/audio/a2i_stream.cpp \
        src/audio/audio_route.cpp \
-       src/audio/audio_mixer.cpp \
+       src/audio/mixer.cpp \
+       src/audio/playout.cpp \
+       src/audio/drift.cpp \
+       src/audio/stream_rate.cpp \
        src/audio/browser_audio.cpp \
-       src/audio/pcm_utils.cpp \
+       src/audio/pcm_ring.cpp \
+       src/audio/resampler.cpp \
+       src/audio/asound_device.cpp \
        src/video_manager.cpp \
        src/tcp_server.cpp \
        src/usb_accessory.cpp \
@@ -43,8 +48,8 @@ SRCS = src/main.cpp \
        src/kombi_client.cpp \
        src/kombi_nav.cpp
 
-# C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/nbt_speex.c.
-CSRCS = src/audio/nbt_speex.c
+# C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
+CSRCS = src/audio/speex.c
 CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 
 OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
