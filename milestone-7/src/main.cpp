@@ -143,6 +143,9 @@ static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the 
 // and exits before touching the screen, firewall or Bluetooth. "show" puts the overlay back on top, "quit" stops.
 static volatile sig_atomic_t g_showReq = 0;
 static volatile sig_atomic_t g_hideReq = 0;   // iDrive app: a hard key took iDrive away from our held state (Fork F)
+// iDrive app: state 13 lost focus while still visible (car volume bar, or another HMI popup). The picture
+// drops under HmiMain3D until focus comes back. The phone session stays focused. 0/1.
+static volatile sig_atomic_t g_hmiPopup = 0;
 static int g_ctlFd = -1;
 
 // ---- Screen ownership: who should see the display right now ---------------------------------------------
@@ -366,6 +369,15 @@ static void* ctlThread(void*) {
         else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
         else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] [%9.3f] 'quit' received.\n", upSec()); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
+        else if (!strncmp(buf, "popup ", 6)) {
+            int v = atoi(buf + 6) ? 1 : 0;
+            if (v != (int)g_hmiPopup) {
+                g_hmiPopup = v;
+                g_mainWake = 1;
+                printf("[Ctl] [%9.3f] car popup %s: Android Auto picture %s\n", upSec(),
+                       v ? "up (volume)" : "gone", v ? "under the HMI" : "back on top");
+            }
+        }
         else printf("[Ctl] unknown request '%s' ignored.\n", buf);
     }
     return NULL;
@@ -1333,7 +1345,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
         s->postKeyEvent(ev.keycode, ev.down != 0);
         return;
     }
-    if (!g_inputToPhone) return;   // knob drives iDrive while it owns the screen
+    if (!g_inputToPhone || g_hmiPopup) return;   // knob drives iDrive while it owns the screen, or while its volume popup is up
     if (ev.kind == 1 && ev.keycode == nbt::AAK_HOME) {
         if (menuOpensIdrive()) {
             if (ev.down) {
@@ -1374,7 +1386,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.67-kombi-bt-ramlog"
+#define NBT_AAD_BUILD "v1.8.68-volpopup"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1691,6 +1703,7 @@ int main(int argc, char* argv[]) {
     printf("[Main] Screen ownership: reverse gear value %d (%s), exit-to-iDrive via the phone's car icon, "
            "back via the iDrive Android Auto entry.\n", gear_reverse, gear_action ? "on" : "off (NBT_GEAR_ACTION=0)");
     bool overlay_on = false;              // video.init() leaves the window hidden
+    bool under_hmi = false;               // picture is stacked under the car's volume popup
     bool was_active = false;
     bool was_reverse = false;
     bool was_dm_peek = false;
@@ -1817,6 +1830,7 @@ int main(int argc, char* argv[]) {
             g_showReq = 0;
             g_userExit = 0;
             g_carExit = 0;
+            g_hmiPopup = 0;                              // the entry asked for the picture, not the volume bar
             if (act) g_session.postVideoFocus(true);     // phone resumes projecting (it may have paused while native)
             printf("[Focus] iDrive entry selected: back to Android Auto%s\n", act ? "" : " (no phone session yet)");
             force_show = true;                           // re-assert even if we think it is up (HMI may have reordered layers)
@@ -1882,29 +1896,34 @@ int main(int argc, char* argv[]) {
             was_dm_peek = dm_peek;
         }
         bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !dm_peek;
+        if (!want) g_hmiPopup = 0;                       // picture is coming down anyway; don't revive a stale popup dip
         if (want && act && !overlay_on && video.decoderInCarPlayMode()) {
             printf("[Main] back to Android Auto after CarPlay: rebuilding the decoder context\n");
             video.prepareForSession();
             g_session.postVideoFocus(true);
         }
         g_inputToPhone = (want && act) ? 1 : 0;
-        nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen
+        // State file stays "overlay 1" during a volume popup so the iDrive app does not send the driver home.
+        // Touch goes to the HMI for that popup. The knob is released in onKnobEvent via g_hmiPopup.
+        nbt::setTouchOwned(g_inputToPhone != 0 && !g_hmiPopup);
         if (want != overlay_on || (force_show && want)) {
             video.setVisible(want);
             overlay_on = want;
+            under_hmi = false;                       // setVisible() puts the picture on top, or hides it
             reassert_ticks = want ? 0 : -1;
         }
         force_show = false;
         // Coming back mid-session (iDrive entry, end of park assist / reverse), the iDrive app puts iDrive on its blank
         // Android Auto state about a second later and the HMI can raise its own surface over ours on that state change:
         // car 2026-10-28 (nbt-aad-23) came back black after a BACK-hold minimize. Re-assert ~2 s and ~5 s later, the
-        // same thing the session start does.
+        // same thing the session start does. Skipped while a car popup is up: that re-assert would cover the volume bar.
         if (reassert_ticks >= 0) {
             ++reassert_ticks;
             if (!want || !overlay_on) reassert_ticks = -1;
-            else if (reassert_ticks == 8 || reassert_ticks == 20) {
+            else if (!g_hmiPopup && (reassert_ticks == 8 || reassert_ticks == 20)) {
                 printf("[Main] Re-asserting overlay (%d s after it came back).\n", reassert_ticks / 4);
                 video.setVisible(true);
+                under_hmi = false;
                 if (reassert_ticks == 20) reassert_ticks = -1;
             }
         }
@@ -1913,16 +1932,18 @@ int main(int argc, char* argv[]) {
                 // The HMI / LayerManager may have rearranged layers and window order since the daemon
                 // started (minutes ago, with iDrive in use): put our window back on top for the session.
                 active_ticks = 0;
-                if (want) {
+                if (want && !g_hmiPopup) {
                     printf("[Main] Session active: re-asserting overlay (window z-order + LayerManager).\n");
                     video.setVisible(true);
                     overlay_on = true;
+                    under_hmi = false;
                 }
             }
             ++active_ticks;
-            if (active_ticks == 20 && want) {   // ~5 s in: again, in case the HMI reacted to the new source
+            if (active_ticks == 20 && want && !g_hmiPopup) {   // ~5 s in: again, in case the HMI reacted to the new source
                 printf("[Main] Re-asserting overlay (5 s into the session).\n");
                 video.setVisible(true);
+                under_hmi = false;
             }
             // Window/LayerManager dump ~8 s in: opt-in now (NBT_DIAG=1). Its `cat /dev/screen/<pid>/*/*` pulled ~200
             // lines of screen/slog output into the log right where the Toyota-icon and reverse tests start.
@@ -1933,6 +1954,12 @@ int main(int argc, char* argv[]) {
             }
         } else {
             active_ticks = 0;
+        }
+        // After every setVisible(true): a car volume popup stacks the picture under HmiMain3D without
+        // telling the phone it lost the screen. The next tick with the popup gone puts z-order 2000 back.
+        {
+            bool popup = g_hmiPopup && want && overlay_on;
+            if (popup != under_hmi && video.setUnderHmi(popup)) under_hmi = popup;
         }
         was_active = act;
     }

@@ -59,7 +59,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-25-ramlog (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-26-volpopup (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -821,6 +821,7 @@ int  g_holdOn = -1;            // NBT_AA_HOLD, read once
 bool g_aaVisible = false;      // iDrive reports our state 13 visible / focused
 bool g_aaFocused = false;
 bool g_holding = false;        // we put iDrive on state 13 for the current Android Auto overlay
+bool g_popupUnder = false;     // picture dropped under the car's volume popup; daemon command "popup 1"
 bool g_hideSent = false;       // we asked the daemon to step aside (a hard key took iDrive elsewhere)
 int  g_prevOverlay = 0;
 time_t g_holdTime = 0;         // when event 52 was last fired
@@ -849,6 +850,18 @@ bool onAaFocus(void*, const bmw::Parcel& p) {
     if (!f && g_runApp && holdEnabled() && g_holding && !callActive()) {
         DaemonState d = readDaemonState();
         if (d.pid > 0 && d.overlay == 3) fireHold(g_runApp, "a hard key went to Android Auto (immediate)");
+        // Volume (and any other HMI popup) takes focus while state 13 stays visible. Event 52 closes that
+        // popup. Drop the picture under it instead, and put the picture back when focus returns.
+        else if (d.pid > 0 && d.overlay && g_aaVisible && !g_popupUnder) {
+            g_popupUnder = true;
+            sendToDaemon("popup 1");
+            alog("hold: state %u lost focus while visible: Android Auto picture under the car popup (volume)", kAaState);
+        }
+    }
+    if (f && g_popupUnder) {
+        g_popupUnder = false;
+        sendToDaemon("popup 0");
+        alog("hold: state %u focused: Android Auto picture back on top", kAaState);
     }
     return true;
 }
@@ -897,6 +910,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         return;
     }
     if (fell) {
+        if (g_popupUnder) { g_popupUnder = false; sendToDaemon("popup 0"); }
         // Android Auto stepped aside by itself (phone's exit icon, BACK hold, signal lost) while iDrive still shows our
         // blank state: give the driver the iDrive main menu. Not in reverse (the camera returns to us, then the
         // overlay comes back) and not when a hard key already took iDrive somewhere else.
@@ -925,16 +939,29 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         if (time(NULL) - s_logged > 10) { s_logged = time(NULL); alog("hold: BACK held on the knob: not re-holding until it is released"); }
         return;
     }
-    // OPTIONS (car 2026-10-28): iDrive opens its options panel over our blank state, under the Android Auto picture;
-    // state 13 may stay visible but lose focus, so the knob drives the hidden panel. Put the focus back on state 13
-    // (closes the panel, like BACK would). Seen on two polls in a row; popups (calls, volume) refuse focus events, and
-    // fireHold() gives up after 8 tries.
-    static int s_unfocused = 0;
+    // Volume, and the same focus loss for any other HMI popup (the old path called it an OPTIONS panel).
+    // Event 52 closes that popup: the F56 log showed seven "OPTIONS panel?" retries, then the volume bar
+    // gone. Leave the popup up. onAaFocus already asked the daemon to stack the picture under HmiMain3D.
+    // This poll repeats that if the focus callback was missed, and lifts the picture again for a call
+    // (Android Auto draws the call itself) or once state 13 has focus back.
+    if (g_popupUnder && callActive()) {
+        g_popupUnder = false;
+        sendToDaemon("popup 0");
+        alog("hold: call in progress: Android Auto picture back on top");
+    }
     if (overlay && g_holding && g_aaVisible && !g_aaFocused && !callActive()) {
-        if (++s_unfocused >= 2 && time(NULL) - g_holdTime >= 1) { s_unfocused = 0; fireHold(app, "state lost focus (OPTIONS panel?)"); }
+        if (!g_popupUnder) {
+            g_popupUnder = true;
+            sendToDaemon("popup 1");
+            alog("hold: state %u lost focus while visible: Android Auto picture under the car popup (volume)", kAaState);
+        }
         return;
     }
-    s_unfocused = 0;
+    if (g_popupUnder && g_aaFocused) {
+        g_popupUnder = false;
+        sendToDaemon("popup 0");
+        alog("hold: state %u focused: Android Auto picture back on top", kAaState);
+    }
     if (!overlay || !g_holding || g_aaVisible) return;
     if (time(NULL) - g_holdTime < 1) return;            // iDrive needs a moment to show the state
     if (g_aaSeen && g_menuFocused) {

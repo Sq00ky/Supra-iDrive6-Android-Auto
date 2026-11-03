@@ -27,6 +27,8 @@ extern "C" {
 /* Top Z-order to cleanly overlay the native iDrive 6 HMI (HmiMain3D is order 999) */
 #define NBT_SCREEN_ZORDER_ACTIVE        2000
 #define NBT_SCREEN_ZORDER_BACKGROUND    -1000
+/* Below HmiMain3D so the car's volume bar (and any other HMI popup) paints over the picture. */
+#define NBT_SCREEN_ZORDER_UNDER_HMI     100
 
 /* QNX Screen Types & Property IDs verified via Ghidra MCP */
 typedef void* screen_context_t;

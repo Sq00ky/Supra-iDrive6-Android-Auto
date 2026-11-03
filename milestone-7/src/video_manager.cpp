@@ -900,6 +900,40 @@ void VideoManager::setVisible(bool visible) {
     else restoreFactoryGeometry();   // the factory CarPlay shares surface 1280: give it its own regions back
 }
 
+bool VideoManager::setUnderHmi(bool under) {
+    if (!window_ready_ || !sink_.is_visible) return false;
+    int32_t z_order = under ? NBT_SCREEN_ZORDER_UNDER_HMI : NBT_SCREEN_ZORDER_ACTIVE;
+    int vis = 1;
+    if (sink_.win) {
+        screen_set_window_property_iv(sink_.win, SCREEN_PROPERTY_ZORDER, &z_order);
+        screen_set_window_property_iv(sink_.win, SCREEN_PROPERTY_VISIBLE, &vis);
+    }
+    // Same one-shell LayerManager switch as setVisible(). The surface stays visible and surface 256 stays
+    // hidden: this only moves the picture under HmiMain3D (z-order 999) or back over it.
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    const char* const L = "/opt/sys/bin/LayerManagerControl";
+    char cmd[512];
+    if (under) {
+        snprintf(cmd, sizeof(cmd),
+                 "%s set surface 1280 zorder %d 2>/dev/null; "
+                 "%s set layer 0x80000000 render order 0x100 2>/dev/null",
+                 L, (int)NBT_SCREEN_ZORDER_UNDER_HMI, L);
+    } else {
+        snprintf(cmd, sizeof(cmd),
+                 "%s set surface 1280 zorder %d 2>/dev/null; "
+                 "%s set layer 0x80000000 render order 0x500 2>/dev/null; "
+                 "%s set surface 1280 visibility 1 2>/dev/null",
+                 L, (int)NBT_SCREEN_ZORDER_ACTIVE, L, L);
+    }
+    system(cmd);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+    printf("[VideoManager] Android Auto picture %s the car popup (Z-Order: %d, %ld ms)\n",
+           under ? "under" : "over", z_order, ms);
+    return true;
+}
+
 int VideoManager::surface1280Visible() {
     FILE* p = popen("/opt/sys/bin/LayerManagerControl get surface 1280 2>&1", "r");
     if (!p) return -1;

@@ -7,6 +7,8 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.8.68-volpopup / rhmiapp-26-volpopup (not car-verified):** while Android Auto is showing, the car's volume bar is left up. A focus loss on state 13 while that state stays visible used to send event 52, which closes the bar (the same path as an OPTIONS panel). The iDrive app now sends `popup 1` instead. The daemon stacks surface 1280 under HmiMain3D (screen z-order 100, layer `0x80000000` render order `0x100`) and gives touch and the knob to the car for the popup. The phone session stays focused, and the state file still says the picture is up, so the driver is not sent home. `popup 0` puts the picture back at z-order 2000 when state 13 is focused again. A phone call still keeps Android Auto on top. Both binaries have to be installed together. To be tested later on an F54 Mini with the 8.8 inch display.
+
 > **v1.8.42-stability / rhmiapp-20 (not car-verified):** after a tester's head unit reset 5 times in a row
 > (phone ending every session right after setup, `audioconn` requests piling up until memory ran out; fixed in
 > v1.8.41-routeguard): the phone's `ByeByeRequest` is answered with `ByeByeResponse` and ends the session at once

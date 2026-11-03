@@ -25,6 +25,10 @@ public:
 
     // Toggle overlay visibility (bring forward or hide back to native iDrive 6)
     void setVisible(bool visible);
+    // Picture stays up and the phone stays focused. under=true stacks surface 1280 below HmiMain3D so the
+    // car's own volume bar is visible. under=false puts it back at z-order 2000. Not a hide: no factory
+    // CarPlay geometry restore, no video-focus change.
+    bool setUnderHmi(bool under);
     bool isVisible() const;
 
     // Call from the AASession end-of-session callback: drops queued frames and the cached SPS/PPS of
