@@ -61,6 +61,51 @@ int main() {
     CHECK(!resolveAudioStart(NULL, 0, g, &sess, &idx, &c));
     CHECK(idx == 0xFFFFFFFFu && sess == 0xFFFFFFFFu);
 
+    // 4. Browser mode offers guidance at one rate only (NBT_GUIDANCE_RATE, default 48000).
+    {
+        setenv("NBT_AUDIO_MODE", "browser", 1);
+        unsetenv("NBT_GUIDANCE_RATE");
+        std::vector<uint8_t> b = sdr;
+        CHECK(limitGuidanceOffers(b) == 1);
+        std::vector<AaAudioConfig> g1 = sdrAudioConfigs(&b[0], b.size(), 8);
+        CHECK(g1.size() == 1 && is(g1[0], 48000, 16, 1));
+        // everything else untouched: the other sinks, and the rest of the SDR byte for byte
+        std::vector<AaAudioConfig> m1 = sdrAudioConfigs(&b[0], b.size(), 9);
+        CHECK(m1.size() == 1 && is(m1[0], 48000, 16, 2));
+        std::vector<AaAudioConfig> s1 = sdrAudioConfigs(&b[0], b.size(), 16);
+        CHECK(s1.size() == 1 && is(s1[0], 16000, 16, 1));
+        CHECK(b.size() + 9 == sdr.size() || b.size() + 10 == sdr.size() || b.size() + 11 == sdr.size());
+        // the phone's only choice is index 0 = 48 kHz
+        const uint8_t start0[] = { 0x08, 0x04, 0x10, 0x00 };
+        CHECK(resolveAudioStart(start0, sizeof(start0), g1, &sess, &idx, &c) && is(c, 48000, 16, 1));
+        // idempotent
+        std::vector<uint8_t> b2 = b;
+        CHECK(limitGuidanceOffers(b2) == 0 && b2 == b);
+
+        // NBT_GUIDANCE_RATE=16000 keeps the other offer; 0 keeps both; a rate not offered changes nothing
+        setenv("NBT_GUIDANCE_RATE", "16000", 1);
+        b = sdr;
+        CHECK(limitGuidanceOffers(b) == 1);
+        g1 = sdrAudioConfigs(&b[0], b.size(), 8);
+        CHECK(g1.size() == 1 && is(g1[0], 16000, 16, 1));
+        setenv("NBT_GUIDANCE_RATE", "0", 1);
+        b = sdr;
+        CHECK(limitGuidanceOffers(b) == 0 && b == sdr);
+        setenv("NBT_GUIDANCE_RATE", "44100", 1);
+        b = sdr;
+        CHECK(limitGuidanceOffers(b) == 0 && b == sdr);
+        unsetenv("NBT_GUIDANCE_RATE");
+
+        // a sink with one offer is never emptied; other channels and other modes are left alone
+        b = sdr;
+        CHECK(keepAudioSinkRate(b, 9, 44100) == 0 && b == sdr);
+        CHECK(keepAudioSinkRate(b, 9, 48000) == 0 && b == sdr);
+        CHECK(keepAudioSinkRate(b, 99, 48000) == 0 && b == sdr);
+        setenv("NBT_AUDIO_MODE", "bt", 1);
+        CHECK(limitGuidanceOffers(b) == 0 && b == sdr);
+        unsetenv("NBT_AUDIO_MODE");
+    }
+
     printf(fails ? "test_audio_format: %d FAILED\n" : "test_audio_format: all passed\n", fails);
     return fails ? 1 : 0;
 }

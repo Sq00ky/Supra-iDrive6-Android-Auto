@@ -81,6 +81,18 @@ public:
     static int streamForChannel(uint8_t channel);
     static const char* streamName(int s);
 
+    // Every byte of AA PCM this object takes from a stream, oldest first: read by the mixer, dropped by a full ring,
+    // or discarded (media paused, no grant, no device). AASession acks a frame once all of its bytes are reported
+    // (deferred acks, media_ack.hpp). Called from the mixer and session threads. Set before the first session.
+    typedef void (*ConsumedFn)(uint8_t channel, size_t bytes, void* user);
+    void setConsumedCallback(ConsumedFn fn, void* user) { consumed_fn_ = fn; consumed_user_ = user; }
+
+    // A started stream that had already sent audio ran dry: a mixer block got less than a whole block and was padded.
+    // Called once per dry spell (again only after a whole block was available), from the mixer thread. AASession
+    // reports it to the phone (AudioUnderflowNotification). Set before the first session.
+    typedef void (*UnderflowFn)(uint8_t channel, void* user);
+    void setUnderflowCallback(UnderflowFn fn, void* user) { underflow_fn_ = fn; underflow_user_ = user; }
+
     // Mixer thread (internal).
     void mixerLoop();
     void routeGranted();
@@ -106,6 +118,22 @@ private:
     void releaseRoute(const char* why);
     bool routedForPlayback();
     void logStats(bool force);
+    void consumed(int s, size_t bytes);   // reports to consumed_fn_
+    void discard(int s);                  // clears stream s's ring, reporting the bytes
+
+    ConsumedFn consumed_fn_;
+    void* consumed_user_;
+
+    // Underflow reports (mixer thread, except frames_since_start_).
+    void checkUnderflow(int s, size_t got, size_t need, uint64_t now);
+    void logUnderflowFollowUp(uint64_t now);
+    UnderflowFn underflow_fn_;
+    void* underflow_user_;
+    volatile uint32_t frames_since_start_[NSTREAMS];   // session thread counts, resets at each start
+    bool dry_[NSTREAMS];                 // in a dry spell that was already reported
+    uint64_t report_ms_[NSTREAMS];       // last report (0 = no follow-up pending)
+    uint64_t report_written_[NSTREAMS];  // ring bytes written at that report
+    uint32_t reports_[NSTREAMS];         // this session
 
     // config
     uint32_t conn_;

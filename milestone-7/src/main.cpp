@@ -1338,6 +1338,16 @@ static void onAudioFrame(uint8_t channel, const uint8_t* pcm, size_t pcm_len, ui
     else if (channel == 8) speechFrame(pcm, pcm_len);
 }
 
+static void onAudioConsumed(uint8_t channel, size_t bytes, void* user_data) {
+    (void)user_data;
+    g_session.postAudioConsumed(channel, bytes);
+}
+
+static void onAudioUnderflow(uint8_t channel, void* user_data) {
+    (void)user_data;
+    g_session.postAudioUnderflow(channel);
+}
+
 static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data) {
     (void)user_data;
     if (g_browser) g_browser->onAaStreamState(channel, started, rate, channels);
@@ -1776,6 +1786,17 @@ int main(int argc, char* argv[]) {
         // mic runs standalone like in Bluetooth mode.
         if (!browser.init()) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
         g_browser = &browser;
+        // Deferred acks (NBT_AA_DEFER_ACKS, default on): an AA audio frame is acked once the mixer has taken it, so
+        // the phone is paced by the car's clock instead of running ahead on its own.
+        const bool defer = nbt::envFlag("NBT_AA_DEFER_ACKS") != 0;
+        if (defer) browser.setConsumedCallback(&onAudioConsumed, NULL);
+        g_session.setDeferredAudioAcks(defer);
+        printf("[Browser] audio acks: %s (NBT_AA_DEFER_ACKS)\n", defer ? "once played (deferred)" : "on arrival");
+        // Underflow reports (NBT_AA_UNDERFLOW_REPORT, default on): tell the phone when a stream ran dry (0x800b).
+        const bool underflow = nbt::envFlag("NBT_AA_UNDERFLOW_REPORT") != 0;
+        if (underflow) browser.setUnderflowCallback(&onAudioUnderflow, NULL);
+        g_session.setUnderflowReports(underflow);
+        printf("[Browser] underflow reports to the phone: %s (NBT_AA_UNDERFLOW_REPORT)\n", underflow ? "on" : "off");
         g_audio = NULL;
     } else if (g_btAudio) {
         g_btSrc = (uint32_t)nbt::envHex("NBT_BT_SRC", 0x3a);

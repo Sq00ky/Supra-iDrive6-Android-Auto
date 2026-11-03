@@ -14,7 +14,8 @@ PcmRing::PcmRing(size_t capacity)
       capacity_(capacity ? capacity : 1),
       head_(0),
       used_(0),
-      dropped_(0) {
+      dropped_(0),
+      written_(0) {
     pthread_mutex_init(&mutex_, NULL);
 }
 
@@ -25,6 +26,7 @@ PcmRing::~PcmRing() {
 size_t PcmRing::write(const uint8_t* data, size_t len) {
     if (!data || len == 0) return 0;
     pthread_mutex_lock(&mutex_);
+    written_ += len;
 
     size_t dropped = 0;
 
@@ -79,11 +81,13 @@ size_t PcmRing::size() const {
     return n;
 }
 
-void PcmRing::clear() {
+size_t PcmRing::clear() {
     pthread_mutex_lock(&mutex_);
+    const size_t n = used_;
     head_ = 0;
     used_ = 0;
     pthread_mutex_unlock(&mutex_);
+    return n;
 }
 
 uint64_t PcmRing::droppedBytes() const {
@@ -91,6 +95,13 @@ uint64_t PcmRing::droppedBytes() const {
     uint64_t d = dropped_;
     pthread_mutex_unlock(&mutex_);
     return d;
+}
+
+uint64_t PcmRing::writtenBytes() const {
+    pthread_mutex_lock(&mutex_);
+    uint64_t w = written_;
+    pthread_mutex_unlock(&mutex_);
+    return w;
 }
 
 uint32_t pickDeviceRate(uint32_t want, uint32_t force, int min_rate, int max_rate) {

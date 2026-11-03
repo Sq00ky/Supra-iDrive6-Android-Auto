@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_media_msgs.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,6 +65,18 @@ AASession::AASession()
     mic_open_ = false;
     mic_sent_ = 0;
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
+    defer_audio_acks_ = false;
+    session_defer_acks_ = false;
+    audio_max_unacked_ = 10;
+    ack_force_ns_ = 1000000000ull;
+    ack_times_ = true;
+    aa_minor_ = 6;
+    ack_stats_s_ = 0;
+    forced_logged_ = 0;
+    underflow_reports_ = false;
+    session_underflow_ = false;
+    for (int i = 0; i < 3; ++i) underflow_pending_[i] = underflow_sent_[i] = 0;
+    pthread_mutex_init(&ack_mutex_, NULL);
     // Touch events are optional. The wake pipe is not: the knob, the microphone, and video
     // focus are delivered through it, including when NBT_TOUCH_FWD=0.
     touch_fwd_ = nbt::envFlag("NBT_TOUCH_FWD") != 0;
@@ -80,6 +93,7 @@ AASession::~AASession() {
     stop();
     pthread_mutex_destroy(&fd_mutex_);
     pthread_mutex_destroy(&touch_mutex_);
+    pthread_mutex_destroy(&ack_mutex_);
     if (wake_pipe_[0] >= 0) close(wake_pipe_[0]);
     if (wake_pipe_[1] >= 0) close(wake_pipe_[1]);
     pthread_mutex_destroy(&lifecycle_mutex_);
@@ -194,6 +208,154 @@ bool AASession::sendMicFrame(const std::vector<uint8_t>& pcm) {
     return sendFrame(14, 0x0B, &enc[0], enc.size());
 }
 
+// ---- Deferred audio acks (browser audio mode, media_ack.hpp) -----------------------------------------------------
+
+static const uint8_t kAudioAckCh[3] = { AA_CH_GUIDANCE_AUDIO, AA_CH_MEDIA_AUDIO, AA_CH_SYSTEM_AUDIO };
+static const char* const kAudioAckName[3] = { "guidance", "media", "system" };
+
+static uint64_t monoNs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+// Wall clock in ns, like the DHU's getCurrentNanos() (gettimeofday): the clock of Ack field 3.
+static uint64_t wallNs() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000000000ull + (uint64_t)tv.tv_usec * 1000ull;
+}
+
+int AASession::audioIndex(uint8_t channel) {
+    if (channel == AA_CH_GUIDANCE_AUDIO) return 0;
+    if (channel == AA_CH_MEDIA_AUDIO) return 1;
+    if (channel == AA_CH_SYSTEM_AUDIO) return 2;
+    return -1;
+}
+
+void AASession::setDeferredAudioAcks(bool on) { defer_audio_acks_ = on; }
+
+void AASession::postAudioConsumed(uint8_t channel, size_t bytes) {
+    const int i = audioIndex(channel);
+    if (i < 0 || bytes == 0) return;
+    pthread_mutex_lock(&ack_mutex_);
+    ack_ledger_[i].onConsumed(bytes);
+    const bool wake = ack_ledger_[i].ready();
+    pthread_mutex_unlock(&ack_mutex_);
+    if (wake && wake_pipe_[1] >= 0) {
+        char b = 1;
+        ssize_t w = write(wake_pipe_[1], &b, 1);
+        (void)w;
+    }
+}
+
+bool AASession::hasPendingAcks() {
+    if (!session_defer_acks_) return false;
+    pthread_mutex_lock(&ack_mutex_);
+    bool any = ack_ledger_[0].pending() || ack_ledger_[1].pending() || ack_ledger_[2].pending();
+    pthread_mutex_unlock(&ack_mutex_);
+    return any;
+}
+
+void AASession::drainAcks() {
+    if (!session_defer_acks_) return;
+    const uint64_t now = monoNs();
+    // Arrival times are kept on the monotonic clock (forcing); Ack field 3 is wall clock: one offset per drain.
+    const uint64_t to_wall = wallNs() - now;   // unsigned wrap-around is fine: added back below
+    uint32_t n[3], forced[3];
+    std::vector<uint64_t> times[3];
+    pthread_mutex_lock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t before = ack_ledger_[i].forced();
+        n[i] = ack_ledger_[i].take(now, ack_force_ns_, &times[i]);
+        forced[i] = ack_ledger_[i].forced() - before;
+    }
+    pthread_mutex_unlock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) {
+        for (uint32_t k = 0; k < n[i]; ++k) {
+            const uint64_t rx = (ack_times_ && k < times[i].size()) ? times[i][k] + to_wall : 0;
+            if (!sendAvMediaAck(kAudioAckCh[i], rx)) break;
+        }
+        if (forced[i] && forced_logged_ < 5) {
+            ++forced_logged_;
+            printf("[AASession] %s: %u audio ack(s) forced after %u ms unacked (the mixer is not taking this stream: "
+                   "no output device, or the car has not granted the source yet)%s\n", kAudioAckName[i], forced[i],
+                   (unsigned)(ack_force_ns_ / 1000000ull), forced_logged_ == 5 ? "; not logged again this session" : "");
+        }
+    }
+    logAckStats(false);
+}
+
+void AASession::logAckStats(bool final) {
+    if (!session_defer_acks_) {
+        if (final && (audio_frames_[0] || audio_frames_[1] || audio_frames_[2]))
+            printf("[Feature] deferred_acks=off (audio acked on arrival)\n");
+        return;
+    }
+    const double now = (double)monoNs() / 1e9;
+    if (!final && now - ack_stats_s_ < 30.0) return;
+    const double span = now - ack_stats_s_;
+    ack_stats_s_ = now;
+    char part[3][128];
+    bool any = false;
+    pthread_mutex_lock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) {
+        const MediaAckLedger& l = ack_ledger_[i];
+        const uint32_t acked = final ? l.acked() : l.ackedIv();
+        part[i][0] = 0;
+        if (!acked && !l.pending()) continue;
+        any = true;
+        snprintf(part[i], sizeof(part[i]), " %s: acked=%u forced=%u window_full=%u max_unacked=%u/%u;", kAudioAckName[i],
+                 acked, final ? l.forced() : l.forcedIv(), final ? l.windowFull() : l.windowFullIv(),
+                 final ? l.maxPending() : l.maxPendingIv(), l.window());
+    }
+    for (int i = 0; i < 3; ++i) ack_ledger_[i].resetInterval();
+    pthread_mutex_unlock(&ack_mutex_);
+    if (final)
+        printf("[Feature] deferred_acks=on force_ms=%u%s%s%s%s\n", (unsigned)(ack_force_ns_ / 1000000ull), part[0],
+               part[1], part[2], any ? "" : " no audio");
+    else if (any)
+        printf("[AASession] deferred audio acks, last %.0f s:%s%s%s\n", span, part[0], part[1], part[2]);
+}
+
+// ---- Underflow reports (browser audio mode) ------------------------------------------------------------------------
+
+void AASession::setUnderflowReports(bool on) { underflow_reports_ = on; }
+
+void AASession::postAudioUnderflow(uint8_t channel) {
+    const int i = audioIndex(channel);
+    if (i < 0) return;
+    pthread_mutex_lock(&ack_mutex_);
+    const bool on = session_underflow_;
+    if (on) ++underflow_pending_[i];
+    pthread_mutex_unlock(&ack_mutex_);
+    if (on && wake_pipe_[1] >= 0) {
+        char b = 1;
+        ssize_t w = write(wake_pipe_[1], &b, 1);
+        (void)w;
+    }
+}
+
+void AASession::drainUnderflows() {
+    if (!session_underflow_) return;
+    uint32_t n[3];
+    pthread_mutex_lock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) { n[i] = underflow_pending_[i]; underflow_pending_[i] = 0; }
+    pthread_mutex_unlock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) {
+        if (!n[i]) continue;
+        // One report stands for all posted since the last drain: the phone learns the stream ran dry, not how often.
+        const uint8_t ch = kAudioAckCh[i];
+        const std::vector<uint8_t> plain = aaUnderflowNotification(av_session_[ch & 31]);
+        std::vector<uint8_t> enc;
+        const bool ok = cryptor_.encrypt(&plain[0], plain.size(), enc) && sendFrame(ch, 0x0B, &enc[0], enc.size());
+        const uint32_t k = ++underflow_sent_[i];
+        if (k <= 5 || (k % 50) == 0)
+            printf("[AASession] %s ran dry: AudioUnderflowNotification (0x800b) #%u to the phone %s\n", kAudioAckName[i],
+                   k, ok ? "sent" : "SEND FAILED");
+    }
+}
+
 // QNX 6.5 / GCC 4.4 ARM libgcc has no atomic builtins, so the running flag is guarded by
 // fd_mutex_ (never held across any other lock or blocking call).
 bool AASession::isRunning() const {
@@ -281,6 +443,22 @@ bool AASession::start(int client_fd) {
     memset(av_session_, 0, sizeof(av_session_));
     for (int c = 0; c < 32; ++c) offered_audio_[c].clear();   // filled again when this session sends its SDR
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
+    session_defer_acks_ = defer_audio_acks_;
+    audio_max_unacked_ = (uint32_t)envRange("NBT_AA_MAX_UNACKED", 10, 1, 64);
+    ack_force_ns_ = (uint64_t)envRange("NBT_AA_ACK_FORCE_MS", 1000, 0, 60000) * 1000000ull;
+    ack_times_ = envFlag("NBT_AA_ACK_TIMES") != 0;
+    pthread_mutex_lock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) {
+        ack_ledger_[i].reset();
+        ack_ledger_[i].resetTotals();
+        ack_ledger_[i].setWindow(audio_max_unacked_);
+        underflow_pending_[i] = 0;
+        underflow_sent_[i] = 0;
+    }
+    session_underflow_ = underflow_reports_;
+    pthread_mutex_unlock(&ack_mutex_);
+    ack_stats_s_ = (double)monoNs() / 1e9;
+    forced_logged_ = 0;
     setRunning(true);
 
     if (pthread_create(&thread_, NULL, &AASession::sessionThreadStub, this) != 0) {
@@ -402,17 +580,20 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 FD_SET(wake_pipe_[0], &rf);
                 if (wake_pipe_[0] > maxfd) maxfd = wake_pipe_[0];
             }
+            // 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time.
+            const uint32_t tick_ms = hasPendingAcks() ? 250u : 1000u;
             struct timeval tv;
-            tv.tv_sec = 1;
-            tv.tv_usec = 0;
+            tv.tv_sec = tick_ms / 1000u;
+            tv.tv_usec = (tick_ms % 1000u) * 1000u;
             int r = select(maxfd + 1, &rf, NULL, NULL, &tv);
             if (r < 0) {
                 if (errno == EINTR) continue;
                 return false;
             }
             if (r == 0) {
+                drainAcks();
                 if (limit_ms) {
-                    idle_ms += 1000;
+                    idle_ms += tick_ms;
                     if (idle_ms >= limit_ms) {
                         printf("[AASession] No data from phone for %u s: treating session as dead.\n",
                                (unsigned)(idle_ms / 1000));
@@ -426,6 +607,8 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 char junk[64];
                 while (read(wake_pipe_[0], junk, sizeof(junk)) > 0) { }
                 drainTouch();
+                drainAcks();
+                drainUnderflows();
                 if (!FD_ISSET(fd, &rf)) continue;
             }
             idle_ms = 0;
@@ -680,6 +863,7 @@ bool AASession::sendServiceDiscoveryResponse() {
         dropSdrChannels(sdr);
         retypeGuidanceSink(sdr);
         addSystemAudioSink(sdr);
+        limitGuidanceOffers(sdr);
         plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
     } else {
         std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
@@ -688,6 +872,7 @@ bool AASession::sendServiceDiscoveryResponse() {
         dropSdrChannels(sdr);
         retypeGuidanceSink(sdr);
         addSystemAudioSink(sdr);
+        limitGuidanceOffers(sdr);
         plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
     }
 
@@ -723,11 +908,14 @@ bool AASession::sendChannelOpenRequest(uint8_t channel_id) {
 }
 
 bool AASession::sendAvSetupResponse(uint8_t channel) {
-    // AVChannelSetupResponse: media_status=OK(2), max_unacked=10, configs[0]=0
-    uint8_t plain[8] = { 0x80, 0x03, 0x08, 0x02, 0x10, 0x0A, 0x18, 0x00 };
+    // AVChannelSetupResponse: media_status=OK(2), max_unacked=10, configs[0]=0. Audio sinks get NBT_AA_MAX_UNACKED
+    // (default 10, at most 64: a one-byte varint): with deferred acks it is how far the phone may run ahead.
+    const uint8_t window = isAaAudioSinkChannel(channel) ? (uint8_t)audio_max_unacked_ : 10;
+    uint8_t plain[8] = { 0x80, 0x03, 0x08, 0x02, 0x10, window, 0x18, 0x00 };
     std::vector<uint8_t> enc;
     if (cryptor_.encrypt(plain, sizeof(plain), enc)) {
-        printf("[AASession] >>> Sent AV SETUP_RESPONSE on Channel %u (max_unacked=10)!\n", channel);
+        printf("[AASession] >>> Sent AV SETUP_RESPONSE on Channel %u (max_unacked=%u%s)!\n", channel, window,
+               isAaAudioSinkChannel(channel) && session_defer_acks_ ? ", acked once played" : "");
         return sendFrame(channel, 0x0B, &enc[0], enc.size());
     }
     return false;
@@ -745,20 +933,15 @@ bool AASession::sendVideoFocusIndication(uint8_t channel, bool focused, bool unr
     return false;
 }
 
-bool AASession::sendAvMediaAck(uint8_t channel, uint32_t count) {
-    (void)count;
-    // AVMediaAckIndication {session=1, value=2 (frames acked)}: the session must be the one the phone gave in this
-    // channel's START_INDICATION. It is 0 for the first start (video, media) but a stream that is stopped and
-    // restarted (navigation guidance, assistant) gets a new id; acking with 0 then leaves the phone's
+bool AASession::sendAvMediaAck(uint8_t channel, uint64_t rx_wall_ns) {
+    // AVMediaAckIndication {session=1, value=2 (frames acked), receive_time=3}: the session must be the one the phone
+    // gave in this channel's START_INDICATION. It is 0 for the first start (video, media) but a stream that is stopped
+    // and restarted (navigation guidance, assistant) gets a new id; acking with 0 then leaves the phone's
     // "max unacked" window full and the stream stalls.
-    uint32_t sess = av_session_[channel & 31];
-    uint8_t plain[12];
-    size_t n = 0;
-    plain[n++] = 0x80; plain[n++] = 0x04; plain[n++] = 0x08;
-    do { uint8_t b = sess & 0x7F; sess >>= 7; plain[n++] = b | (sess ? 0x80 : 0); } while (sess);
-    plain[n++] = 0x10; plain[n++] = 0x01;
+    const std::vector<uint8_t> plain = aaMediaAck(av_session_[channel & 31], 1, rx_wall_ns ? &rx_wall_ns : NULL,
+                                                  rx_wall_ns ? 1 : 0);
     std::vector<uint8_t> enc;
-    if (cryptor_.encrypt(plain, n, enc)) {
+    if (cryptor_.encrypt(&plain[0], plain.size(), enc)) {
         return sendFrame(channel, 0x0B, &enc[0], enc.size());
     }
     return false;
@@ -842,16 +1025,21 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
 void AASession::sessionLoop() {
     printf("[AASession] Protocol thread active on fd %d.\n", client_fd_);
 
-    // Step 1: Send Android Auto VersionRequest (Major 1, Minor 6, Status 0)
+    // Step 1: Send Android Auto VersionRequest (Major 1, Minor NBT_AA_MINOR = 6 by default)
     // Frame: Channel 0 (Control), Flags 0x03 (First | Last, Unencrypted)
+    // Every car session so far: the phone answers 1.7, status 0. Google's DHU (r2.1) asks for 1.7 and sends 6 bytes
+    // plus an empty VersionRequestOptions; the two trailing zero bytes here have always been accepted and are kept,
+    // so NBT_AA_MINOR=7 changes nothing but the number.
+    const uint16_t req_minor = (uint16_t)envRange("NBT_AA_MINOR", 6, 0, 0xFFFF);
     uint8_t version_req[8] = {
         0x00, 0x01, // Message ID: 1 (VersionRequest)
         0x00, 0x01, // Major version: 1
-        0x00, 0x06, // Minor version: 6
-        0x00, 0x00  // Status: 0
+        (uint8_t)(req_minor >> 8), (uint8_t)(req_minor & 0xFF),   // Minor version
+        0x00, 0x00  // trailing zeros (see above)
     };
+    aa_minor_ = req_minor;
 
-    printf("[AASession] Sending VersionRequest (v1.6)...\n");
+    printf("[AASession] Sending VersionRequest (v1.%u%s)...\n", req_minor, req_minor == 6 ? "" : ", NBT_AA_MINOR");
     if (!sendFrame(0x00, 0x03, version_req, sizeof(version_req))) {
         printf("[AASession] Error: Failed to send VersionRequest.\n");
         finishSession();
@@ -860,6 +1048,9 @@ void AASession::sessionLoop() {
 
     // Step 2: Read incoming frames from the phone
     while (isRunning()) {
+        // Forced acks are due on time even while video keeps select() from ever timing out.
+        drainAcks();
+        drainUnderflows();
         uint8_t header[4];
         if (!readExact(header, 4)) {
             if (isRunning()) {
@@ -1073,6 +1264,19 @@ void AASession::sessionLoop() {
                 }
             } else if (msg_id == 0x8001) { // AV START_INDICATION
                 uint32_t sess = pbFirstVarint(frame_data, 2, 1);
+                const int ai = session_defer_acks_ ? audioIndex(channel) : -1;
+                if (ai >= 0) {
+                    // A new stream: ack what the old one still has pending (under its session id), start counting
+                    // afresh. A tail of the old stream still in the ring then counts towards the new frames (acks a
+                    // little early, never late).
+                    std::vector<uint64_t> times;
+                    pthread_mutex_lock(&ack_mutex_);
+                    const uint32_t left = ack_ledger_[ai].releaseAll(&times);
+                    pthread_mutex_unlock(&ack_mutex_);
+                    const uint64_t to_wall = wallNs() - monoNs();
+                    for (uint32_t k = 0; k < left; ++k)
+                        sendAvMediaAck(channel, (ack_times_ && k < times.size()) ? times[k] + to_wall : 0);
+                }
                 if (sess != 0xFFFFFFFFu) av_session_[channel & 31] = sess;
                 printf("[AASession] >>> Received AV START_INDICATION on Channel %u (session %u)! Projection ACTIVE!\n", channel,
                        sess == 0xFFFFFFFFu ? 0u : sess);
@@ -1134,6 +1338,7 @@ void AASession::sessionLoop() {
                     printf("[AASession] >>> Streaming Media Frame %u on Channel %u (%u bytes)\n",
                            media_frames_, channel, static_cast<unsigned int>(frame_data.size()));
                 }
+                bool deferred = false;   // ack once the consumer has taken it (drainAcks), not now
                 if (isAaAudioSinkChannel(channel) && msg_id == 0x0000) {
                     // Audio PCM: 2-byte ID + 8-byte PTS + interleaved s16le (ch 9 48 kHz stereo, ch 8 guidance and
                     // ch 16 system audio 16 kHz mono).
@@ -1150,6 +1355,13 @@ void AASession::sessionLoop() {
                                    (unsigned long long)pts, audio_cb_ ? "" : " (no consumer)");
                         }
                         if (audio_cb_) {
+                            const int ai = session_defer_acks_ ? audioIndex(channel) : -1;
+                            if (ai >= 0) {   // recorded before the consumer can take its bytes
+                                pthread_mutex_lock(&ack_mutex_);
+                                ack_ledger_[ai].onFrame(pcm_len, monoNs());
+                                pthread_mutex_unlock(&ack_mutex_);
+                                deferred = true;
+                            }
                             g_crumb_stage = 5;
                             audio_cb_(channel, &frame_data[10], pcm_len, pts, audio_user_data_);
                             g_crumb_stage = 3;
@@ -1200,15 +1412,26 @@ void AASession::sessionLoop() {
                         }
                     }
                 }
-                sendAvMediaAck(channel, media_frames_);
+                if (deferred) drainAcks();   // the consumer may already have taken it
+                else if (isAaAudioSinkChannel(channel) && msg_id == 0x0000 && ack_times_)
+                    sendAvMediaAck(channel, wallNs());   // acked on arrival: received now
+                else sendAvMediaAck(channel);
             } else if (channel == 0) {
                 if (msg_id == 2) { // VersionResponse
                     if (frame_data.size() >= 8) {
                         uint16_t major  = (frame_data[2] << 8) | frame_data[3];
                         uint16_t minor  = (frame_data[4] << 8) | frame_data[5];
                         uint16_t status = (frame_data[6] << 8) | frame_data[7];
-                        printf("[AASession] >>> VersionResponse: Major=%u, Minor=%u, Status=%u (SUCCESS)\n",
-                               major, minor, status);
+                        // Status 0 = the phone accepts our version; anything else is a refusal (aasdk: 0xFFFF
+                        // MISMATCH). It used to print "(SUCCESS)" whatever the status. The handshake carries on either
+                        // way, as before: a refusal shows up here first, then as the phone closing the session.
+                        printf("[AASession] >>> VersionResponse: Major=%u, Minor=%u, Status=%u (%s; we asked for "
+                               "1.%u)\n", major, minor, status, status == 0 ? "SUCCESS" : "REFUSED", aa_minor_);
+                        if (status != 0)
+                            printf("[AASession] WARNING: the phone refused protocol 1.%u (status 0x%04x); "
+                                   "NBT_AA_MINOR changes what we ask for\n", aa_minor_, status);
+                        printf("[Feature] aa_version: asked 1.%u, phone %u.%u, status %u\n", aa_minor_, major, minor,
+                               status);
 
                         // Step 2: Initialize Cryptor with mTLS cert and send TLS ClientHello
                         if (cryptor_.init()) {
@@ -1307,6 +1530,10 @@ void AASession::sessionLoop() {
     }
 
     printf("[AASession] Session loop terminated.\n");
+    logAckStats(true);
+    if (session_underflow_)
+        printf("[Feature] underflow_reports=on guidance=%u media=%u system=%u (0x800b sent this session)\n",
+               underflow_sent_[0], underflow_sent_[1], underflow_sent_[2]);
     g_crumb_stage = 0;
     finishSession();
 }
