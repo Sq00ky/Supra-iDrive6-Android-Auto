@@ -13,7 +13,7 @@ INCLUDES = -I./include -I./src
 # Remove -fPIC and -Bdynamic to produce a true QNX executable (ET_EXEC), not a shared lib (ET_DYN)
 CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 # Set RPATH so QNX's dynamic linker automatically finds liba2i_client.so in /opt/mm/lib without copying
-LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
+LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -lm -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 SRCS = src/main.cpp \
        src/audio_manager.cpp \
@@ -40,7 +40,11 @@ SRCS = src/main.cpp \
        src/kombi_client.cpp \
        src/kombi_nav.cpp
 
-OBJS = $(SRCS:.cpp=.o)
+# C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/nbt_speex.c.
+CSRCS = src/nbt_speex.c
+CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
+
+OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
 TARGET = nbt-aad
 
 .PHONY: all clean
@@ -100,6 +104,10 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 %.o: %.cpp
 	@echo [CXX] $<
 	$(CXX) $(CXXFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+
+%.o: %.c
+	@echo [CC] $<
+	$(CC) $(CFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
 
 -include $(OBJS:.o=.d)
 

@@ -235,7 +235,10 @@ int AASession::audioIndex(uint8_t channel) {
 
 void AASession::setDeferredAudioAcks(bool on) { defer_audio_acks_ = on; }
 
-uint32_t AASession::audioAckWindow() { return (uint32_t)envRange("NBT_AA_MAX_UNACKED", 10, 1, 64); }
+// At least 4: with deferred acks a frame is acked only once fully played, and a 42.7 ms media frame spans about two
+// 23 ms mixer blocks. With 1-2 frames the mixer waits for audio the phone can't send until it acks the very frame
+// being played, so every frame ends in a padded gap (and an underflow report). 4 frames = ~170 ms of slack.
+uint32_t AASession::audioAckWindow() { return (uint32_t)envRange("NBT_AA_MAX_UNACKED", 10, 4, 64); }
 
 void AASession::postAudioConsumed(uint8_t channel, size_t bytes) {
     const int i = audioIndex(channel);
@@ -911,7 +914,8 @@ bool AASession::sendChannelOpenRequest(uint8_t channel_id) {
 
 bool AASession::sendAvSetupResponse(uint8_t channel) {
     // AVChannelSetupResponse: media_status=OK(2), max_unacked=10, configs[0]=0. Audio sinks get NBT_AA_MAX_UNACKED
-    // (default 10, at most 64: a one-byte varint): with deferred acks it is how far the phone may run ahead.
+    // (default 10, 4..64; at most 64 keeps it a one-byte varint): with deferred acks it is how far the phone may run
+    // ahead.
     const uint8_t window = isAaAudioSinkChannel(channel) ? (uint8_t)audio_max_unacked_ : 10;
     uint8_t plain[8] = { 0x80, 0x03, 0x08, 0x02, 0x10, window, 0x18, 0x00 };
     std::vector<uint8_t> enc;

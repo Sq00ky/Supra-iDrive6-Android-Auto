@@ -39,6 +39,7 @@ set(SOURCES
     src/crash_handler.cpp
     src/kombi_client.cpp
     src/kombi_nav.cpp
+    src/nbt_speex.c
 )
 
 add_executable(nbt-aad ${SOURCES})

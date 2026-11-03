@@ -131,6 +131,18 @@ private:
     uint32_t ack_window_;                  // setAckWindow (0 = acks on arrival)
     volatile uint32_t media_frame_us_;     // length of the last AA media frame (session thread writes)
 
+    // Resampler engine (NBT_BROWSER_RESAMPLER, default speex; the switch file flips it at run time for an A/B by ear).
+    void setResampler(PcmResampler::Engine e, const char* why);   // mixer thread (or before it runs)
+    void checkResamplerSwitch(uint64_t now);                       // mixer thread, once a second
+    void checkResamplerHealth(uint64_t interval_ms);                // mixer thread, each stats line
+    PcmResampler::Engine rs_engine_;     // in use
+    PcmResampler::Engine rs_engine_cfg_; // NBT_BROWSER_RESAMPLER (what a missing switch file means)
+    int rs_quality_;                     // NBT_BROWSER_SPEEX_Q
+    const char* rs_switch_path_;         // NBT_BROWSER_RESAMPLER_FILE ("" = none)
+    uint64_t rs_switch_check_ms_;
+    uint64_t rs_us_;                     // stats interval: time spent converting (us)
+    bool rs_failed_;                     // speex fell back to linear this session
+
     // Mixer thread scheduling: NBT_BROWSER_PRIO (applied by the mixer thread itself) and how late its writes come.
     void raiseMixerPriority();
     int prio_want_;                      // NBT_BROWSER_PRIO (0 = leave the thread's priority alone)
