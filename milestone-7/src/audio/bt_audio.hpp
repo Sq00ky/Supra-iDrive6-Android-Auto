@@ -20,6 +20,7 @@
 #include "audio/audio_route.hpp"
 #include "audio/backend.hpp"
 #include "audio/bt_play.hpp"
+#include "audio/config.hpp"
 #include "audio/speech_out.hpp"
 #include <stddef.h>
 #include <stdint.h>
@@ -30,8 +31,8 @@ class BtAudio : public AudioBackend {
 public:
     BtAudio();
 
-    // Start-up: reads the environment, finds audioconn, starts NBT_BT_PLAY and NBT_SPEECH.
-    void init();
+    // Start-up: takes the settings (readBtConfig()), finds audioconn, starts NBT_BT_PLAY and NBT_SPEECH.
+    void init(const BtConfig& cfg);
 
     virtual void onSessionStarted();
     virtual void onFrame(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts);
@@ -47,8 +48,6 @@ private:
     BtAudio& operator=(const BtAudio&);
 
     static void grantedThunk(void* self);   // audioconn worker thread
-    static int routeDelayMs();
-    static bool refocusEnabled();
     bool requestSource();
     void releaseSource();
     void describe(char* out, size_t n);
@@ -58,6 +57,10 @@ private:
     uint32_t src_;     // eSRC_A2DP (audioconn -l: ConnId 0xc7 AuxInBTAudio)
     uint32_t sink_;    // eSNK_SPEAKERS
     uint32_t conn_;
+    int route_delay_ms_;   // NBT_BT_ROUTE_DELAY_MS
+    bool refocus_;         // NBT_BT_REFOCUS
+    bool release_;         // NBT_BT_RELEASE=1
+    const char* sdr_drop_; // NBT_SDR_DROP, for the start-up line
     BtPlay play_;
     SpeechOut speech_;
     int snaps_;        // Assistant snapshots taken (first 3 turns)

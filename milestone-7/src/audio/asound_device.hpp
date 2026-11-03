@@ -30,13 +30,15 @@ public:
     AsoundDevice();
     ~AsoundDevice();
 
-    // shim_path: the library to dlopen; want_rate / force_rate: see pickDeviceRate.
-    void configure(const char* shim_path, uint32_t want_rate, uint32_t force_rate);
+    // shim_path: the library to dlopen; want_rate / force_rate: see pickDeviceRate; pcm: "card:device" to open instead
+    // of the preferred device (NULL / empty = preferred); frag / frags: fragment size and count as configured (open()
+    // rounds and clamps them).
+    void configure(const char* shim_path, uint32_t want_rate, uint32_t force_rate, const char* pcm, int frag,
+                   int frags);
     bool load();     // dlopen the shim and look up its entry points (already loaded: true)
     void unload();   // dlclose (shutdown)
 
-    // Opens the device (NBT_BROWSER_PCM / NBT_BROWSER_FRAG / NBT_BROWSER_FRAGS): the configured fragment size first,
-    // then a deeper and a larger buffer. Already open: true.
+    // Opens the device: the configured fragment size first, then a deeper and a larger buffer. Already open: true.
     bool open();
     void close();
     bool isOpen() const { return pcm_ != NULL; }
@@ -72,6 +74,8 @@ private:
     const char* shim_path_;
     uint32_t want_rate_;
     uint32_t force_rate_;    // NBT_BROWSER_FORCE_RATE: ask the device for this rate whatever it reports (0 = off)
+    const char* pcm_sel_;    // NBT_BROWSER_PCM
+    int frag_cfg_, frags_cfg_;   // NBT_BROWSER_FRAG / NBT_BROWSER_FRAGS
 
     // libasound shim (dlopen'ed, function pointers held as void* to keep the asound types out of this header)
     void* lib_;

@@ -25,6 +25,7 @@ SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
 SRC_test_audio_acks        := src/audio/audio_acks.cpp
 SRC_test_audio_channels    :=
+SRC_test_audio_config      := src/audio/config.cpp
 SRC_test_audio_format      := src/sdr_builder.cpp
 SRC_test_audio_mixer       := src/audio/mixer.cpp src/audio/playout.cpp src/audio/drift.cpp src/audio/stream_rate.cpp
 SRC_test_audio_route       := src/audio/audio_route.cpp

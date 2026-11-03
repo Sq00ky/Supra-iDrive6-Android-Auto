@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "audio/speech_out.hpp"
-#include "nbt_env.hpp"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,13 +9,8 @@
 namespace nbt {
 
 SpeechOut::SpeechOut(AudioRoute& route)
-    : route_(route), speech_(NULL), ready_(false), src_(0), sink_(0x1), routed_(false), frames_(0), bytes_(0),
+    : route_(route), endpoint_(NULL), speech_(NULL), ready_(false), src_(0), sink_(0x1), routed_(false), frames_(0), bytes_(0),
       peak_(0), prompts_(0) {}
-
-bool SpeechOut::enabled() {
-    const char* e = getenv("NBT_SPEECH");
-    return e && strcmp(e, "1") == 0;
-}
 
 void* SpeechOut::openThreadThunk(void* self) {
     static_cast<SpeechOut*>(self)->openThread();
@@ -24,7 +18,7 @@ void* SpeechOut::openThreadThunk(void* self) {
 }
 
 void SpeechOut::openThread() {
-    const char* ep = getenv("NBT_SPEECH_EP");
+    const char* ep = endpoint_;
     if (!ep || !*ep) ep = A2I_ENDPOINT_NAV_ALT;
     // Ring holds ~12 s at 44.1 kHz stereo: the phone sends a prompt faster than real time (only max_unacked
     // limits it) and the ring drops the OLDEST bytes when full, which would cut the start of a long prompt.
@@ -61,13 +55,14 @@ void SpeechOut::openThread() {
            s->sampleRate(), s->channels(), src_ ? "audioconn" : "off", src_, sink_);
 }
 
-void SpeechOut::init() {
-    if (!enabled()) {
+void SpeechOut::init(const SpeechConfig& cfg) {
+    if (!cfg.enabled) {
         printf("[Speech] spoken nav prompts: off (NBT_SPEECH=1 enables)\n");
         return;
     }
-    src_ = (uint32_t)envHex("NBT_SPEECH_SRC", 0);
-    sink_ = (uint32_t)envHex("NBT_SPEECH_SINK", 0x1);
+    src_ = cfg.src;
+    sink_ = cfg.sink;
+    endpoint_ = cfg.endpoint;
     printf("[Speech] NBT_SPEECH=1: opening the speech endpoint in the background\n");
     pthread_t t;
     if (pthread_create(&t, NULL, &openThreadThunk, this) == 0) pthread_detach(t);

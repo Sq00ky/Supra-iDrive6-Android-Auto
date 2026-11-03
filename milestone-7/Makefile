@@ -17,6 +17,7 @@ LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c
 
 SRCS = src/main.cpp \
        src/audio/a2i_audio.cpp \
+       src/audio/config.cpp \
        src/audio/bt_audio.cpp \
        src/audio/speech_out.cpp \
        src/audio/mic_uplink.cpp \

@@ -51,6 +51,7 @@
 #include "audio/audio_route.hpp"
 #include "audio/backend.hpp"
 #include "audio/channels.hpp"
+#include "audio/config.hpp"
 #include "audio/drift.hpp"
 #include "audio/mixer.hpp"
 #include "audio/resampler.hpp"
@@ -71,8 +72,8 @@ public:
     BrowserAudio();
     ~BrowserAudio();
 
-    // Reads the environment, loads the libasound shim and finds audioconn. Plays nothing yet.
-    bool init();
+    // Takes the settings (readBrowserConfig()), loads the libasound shim and finds audioconn. Plays nothing yet.
+    bool init(const BrowserConfig& cfg);
 
     // Session thread. channel = AA channel (9 media, 8 guidance, 16 system audio); others are ignored. pts = the
     // frame's timestamp (us): measures the rate when the stream start declared none, else cross-checks it (0 = none).

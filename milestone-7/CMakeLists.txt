@@ -19,6 +19,7 @@ include_directories(
 set(SOURCES
     src/main.cpp
     src/audio/a2i_audio.cpp
+    src/audio/config.cpp
     src/audio/bt_audio.cpp
     src/audio/speech_out.cpp
     src/audio/mic_uplink.cpp

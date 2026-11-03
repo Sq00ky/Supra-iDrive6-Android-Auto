@@ -33,30 +33,27 @@ typedef ssize_t (*FnWrite)(snd_pcm_t*, const void*, size_t);
 typedef int (*FnFlush)(snd_pcm_t*, int);
 typedef const char* (*FnStrerror)(int);
 
-int envInt(const char* name, int def) {
-    const char* e = getenv(name);
-    if (!e || !*e) return def;
-    char* end = NULL;
-    long v = strtol(e, &end, 0);
-    return (end && end != e) ? (int)v : def;
-}
-
 } // namespace
 
 const uint32_t AsoundDevice::kChannels;
 
 AsoundDevice::AsoundDevice()
-    : shim_path_(NULL), want_rate_(48000), force_rate_(0), lib_(NULL), pcm_(NULL), rate_(0), frag_bytes_(0),
+    : shim_path_(NULL), want_rate_(48000), force_rate_(0), pcm_sel_(NULL), frag_cfg_(4096), frags_cfg_(5), lib_(NULL),
+      pcm_(NULL), rate_(0), frag_bytes_(0),
       write_errors_(0), prepares_(0), writes_(0), writes_blocked_(0), lead_min_(0), lead_max_(0), lead_seen_(false) {
     memset(fn_, 0, sizeof(fn_));
 }
 
 AsoundDevice::~AsoundDevice() {}
 
-void AsoundDevice::configure(const char* shim_path, uint32_t want_rate, uint32_t force_rate) {
+void AsoundDevice::configure(const char* shim_path, uint32_t want_rate, uint32_t force_rate, const char* pcm, int frag,
+                             int frags) {
     shim_path_ = shim_path;
     want_rate_ = want_rate;
     force_rate_ = force_rate;
+    pcm_sel_ = pcm;
+    frag_cfg_ = frag;
+    frags_cfg_ = frags;
 }
 
 bool AsoundDevice::load() {
@@ -90,8 +87,8 @@ void AsoundDevice::unload() {
 bool AsoundDevice::open() {
     if (pcm_) return true;
     if (!lib_ && !load()) return false;
-    int frag = envInt("NBT_BROWSER_FRAG", 4096);
-    int frags = envInt("NBT_BROWSER_FRAGS", 5);
+    int frag = frag_cfg_;     // NBT_BROWSER_FRAG
+    int frags = frags_cfg_;   // NBT_BROWSER_FRAGS
     if (frag < 32) frag = 32;
     if (frags < 1) frags = 1;
     if (frags > 256) frags = 256;
@@ -109,7 +106,7 @@ bool AsoundDevice::open() {
 bool AsoundDevice::openWith(int frag, int frags) {
     snd_pcm_t* h = NULL;
     int card = -1, dev = -1, rc;
-    const char* sel = getenv("NBT_BROWSER_PCM");
+    const char* sel = pcm_sel_;   // NBT_BROWSER_PCM
     if (sel && *sel && sscanf(sel, "%d:%d", &card, &dev) == 2) {
         rc = ((FnOpen)fn_[F_OPEN])(&h, card, dev, SND_PCM_OPEN_PLAYBACK);
     } else {

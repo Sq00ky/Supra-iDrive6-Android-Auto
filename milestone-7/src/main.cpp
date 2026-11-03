@@ -81,6 +81,7 @@
 // **Use** means anything you do with the software requiring one of your licenses.
 
 #include "nbt_env.hpp"
+#include "audio/config.hpp"
 #include "car_config.hpp"
 #include "screen_video.h"
 #include "audio/a2i_audio.hpp"
@@ -1532,10 +1533,11 @@ int main(int argc, char* argv[]) {
         // Media sink (ch 9) and GUIDANCE sink (ch 8) stay in the ServiceDiscovery and a SYSTEM_AUDIO sink (ch 16) is
         // added, so the phone sends all three streams here instead of to A2DP. The A2I pipeline is not opened; the
         // mic runs standalone like in Bluetooth mode.
-        if (!browser.init()) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
+        const nbt::BrowserConfig browser_cfg = nbt::readBrowserConfig();   // audio/config.hpp
+        if (!browser.init(browser_cfg)) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
         // Deferred acks (NBT_AA_DEFER_ACKS, default on): an AA audio frame is acked once the mixer has taken it, so
         // the phone is paced by the car's clock instead of running ahead on its own.
-        const bool defer = nbt::envFlag("NBT_AA_DEFER_ACKS") != 0;
+        const bool defer = browser_cfg.defer_acks;
         if (defer) {
             browser.setConsumedCallback(&onAudioConsumed, NULL);
             browser.setAckWindow(nbt::AudioAcks::window());   // the drift loop's target must cover it
@@ -1543,13 +1545,13 @@ int main(int argc, char* argv[]) {
         g_session.setDeferredAudioAcks(defer);
         printf("[Browser] audio acks: %s (NBT_AA_DEFER_ACKS)\n", defer ? "once played (deferred)" : "on arrival");
         // Underflow reports (NBT_AA_UNDERFLOW_REPORT, default on): tell the phone when a stream ran dry (0x800b).
-        const bool underflow = nbt::envFlag("NBT_AA_UNDERFLOW_REPORT") != 0;
+        const bool underflow = browser_cfg.underflow_reports;
         if (underflow) browser.setUnderflowCallback(&onAudioUnderflow, NULL);
         g_session.setUnderflowReports(underflow);
         printf("[Browser] underflow reports to the phone: %s (NBT_AA_UNDERFLOW_REPORT)\n", underflow ? "on" : "off");
         g_audioBackend = &browser;
     } else if (audio_mode == nbt::AUDIO_MODE_BT) {
-        bt.init();   // the car's Bluetooth source, NBT_BT_PLAY, NBT_SPEECH
+        bt.init(nbt::readBtConfig());   // the car's Bluetooth source, NBT_BT_PLAY, NBT_SPEECH
         g_audioBackend = &bt;
     } else {
         if (!a2i.init()) {

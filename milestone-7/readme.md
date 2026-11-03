@@ -908,6 +908,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates); drift loops P and PI in a one-hour closed loop at -300..+300 ppm |
 | `test_audio_acks` | The session's deferred acks and underflow reports: off / on, sent guidance-media-system, a failed send, leftovers at a new stream, ack times, forced acks, `NBT_AA_MAX_UNACKED` |
+| `test_audio_config` | The audio settings: defaults, ranges and parsing of each browser / Bluetooth setting, `NBT_AUDIO_MODE` / `NBT_AUDIO_BT` precedence |
 | `test_audio_channels` | The AA audio channel table: 8 / 9 / 16 <-> stream, other channels rejected, names, log order |
 | `test_media_ack` | Deferred audio acks: acked once consumed, forced acks and skipped bytes, window-full count, a phone held to its window |
 | `test_media_msgs` | AA media-channel messages byte for byte against Google's receiver library (media ack with arrival times, AudioUnderflowNotification) |
@@ -934,7 +935,8 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     (the libasound shim), `route_policy.hpp` (when the browser source is built and released), and its DSP: `mixer`
     (ducking, fades), `playout` (gap counters, late-input wait, pre-roll), `drift` (clock-drift loops),
     `stream_rate` (declared / measured rates), `resampler` (linear and speexdsp, through `speex.c` / `speex.h` and
-    the vendored `third_party/speexdsp/`), `pcm_ring`; `channels.hpp` (AA channel <-> stream table), `mic_uplink` (car mic),
+    the vendored `third_party/speexdsp/`), `pcm_ring`; `config` (`NBT_AUDIO_MODE` and the browser / Bluetooth
+    settings, read once at start-up), `channels.hpp` (AA channel <-> stream table), `mic_uplink` (car mic),
     `audio_route` (`audioconn` wrapper), `voice_scenario`, `audio_acks` (the session's deferred acks and underflow
     reports, over `media_ack.hpp`) + `aa_media_msgs.hpp` (media-channel messages);
   - cluster/HUD arrows: `kombi_nav` (+ `kombi_nav_msg.hpp`, `kombi_graph.hpp`, `kombi_graph_template.hpp`),

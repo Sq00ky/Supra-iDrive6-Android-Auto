@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "audio/browser_audio.hpp"
-#include "nbt_env.hpp"
 #include "sdr_builder.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,14 +42,6 @@ uint64_t nowUs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000u + (uint64_t)ts.tv_nsec / 1000u;
-}
-
-int envInt(const char* name, int def) {
-    const char* e = getenv(name);
-    if (!e || !*e) return def;
-    char* end = NULL;
-    long v = strtol(e, &end, 0);
-    return (end && end != e) ? (int)v : def;
 }
 
 void routeGrantedThunk(void* self) { static_cast<BrowserAudio*>(self)->routeGranted(); }
@@ -151,48 +142,30 @@ void BrowserAudio::discard(int s) {
     if (stream_[s].in.ring) consumed(s, stream_[s].in.ring->clear());
 }
 
-bool BrowserAudio::init() {
+bool BrowserAudio::init(const BrowserConfig& cfg) {
     for (int s = 0; s < NSTREAMS; ++s) if (!stream_[s].in.ring) stream_[s].in.ring = new PcmRing(kRingBytes[s]);
-    conn_ = (uint32_t)envHex("NBT_BROWSER_CONN", 0xb8);
-    const uint32_t want_rate = (uint32_t)envInt("NBT_BROWSER_RATE", 48000);
-    uint32_t force_rate = 0;
-    {
-        const int fr = envInt("NBT_BROWSER_FORCE_RATE", 0);
-        force_rate = fr > 0 ? (uint32_t)fr : 0u;
-    }
-    if (force_rate)
+    conn_ = cfg.conn;
+    if (cfg.force_rate)
         printf("[Browser] NBT_BROWSER_FORCE_RATE=%u (experiment): asking the device for %u Hz whatever it reports\n",
-               force_rate, force_rate);
+               cfg.force_rate, cfg.force_rate);
     RoutePolicy::Config route_cfg;
-    route_cfg.idle_s = envInt("NBT_BROWSER_IDLE_S", 10);
-    route_cfg.prompt_idle_ms = envInt("NBT_BROWSER_PROMPT_IDLE_MS", 1000);
+    route_cfg.idle_s = cfg.idle_s;
+    route_cfg.prompt_idle_ms = cfg.prompt_idle_ms;
     pthread_mutex_lock(&lock_);
     route_policy_.configure(route_cfg);
     pthread_mutex_unlock(&lock_);
-    {
-        // Above ~60 ms a wait could outlast what the device still holds when the mixer wakes (~92 ms).
-        int w = envInt("NBT_BROWSER_WAIT_MS", 30);
-        wait_ms_ = w < 0 ? 0u : (w > 60 ? 60u : (uint32_t)w);
-    }
+    wait_ms_ = cfg.wait_ms;
     for (int s = 0; s < NSTREAMS; ++s) stream_[s].mix.guard.setBudget(wait_ms_);
-    // Pre-roll: a started stream plays once this much is queued (or its first audio has waited this long). The phone
-    // sends in real time, so without it a stream has no cushion and every late frame is a hole.
-    preroll_ms_ = (uint32_t)envRange("NBT_BROWSER_PREROLL_MS", 60, 0, 200);
+    preroll_ms_ = cfg.preroll_ms;
     printf("[Browser] pre-roll %u ms per stream%s, late-input wait up to %u ms (NBT_BROWSER_PREROLL_MS / "
            "NBT_BROWSER_WAIT_MS)\n", preroll_ms_, preroll_ms_ ? "" : " (off)", wait_ms_);
-    drift_on_ = envFlag("NBT_BROWSER_DRIFT") != 0;   // unset (-1) or on (1): correct media clock drift
-    // Mixer thread priority: 15 by default, above the default 10 that the HMI and video threads compete at, below
-    // the 21 of the USB reader. 0 = leave it alone. The car's own audio threads should stay above it (check with pidin).
-    prio_want_ = (int)envRange("NBT_BROWSER_PRIO", 15, 0, 63);
-    // Resampler: speexdsp by default (flat to ~19.5 kHz, no aliasing, no treble wobble under the drift trim);
-    // NBT_BROWSER_RESAMPLER=linear goes back to linear interpolation.
+    drift_on_ = cfg.drift;
+    prio_want_ = cfg.prio;
     {
-        const char* e = getenv("NBT_BROWSER_RESAMPLER");
-        rs_engine_ = (e && strcmp(e, "linear") == 0) ? PcmResampler::LINEAR : PcmResampler::SPEEX;
+        rs_engine_ = cfg.resampler_linear ? PcmResampler::LINEAR : PcmResampler::SPEEX;
         rs_engine_cfg_ = rs_engine_;
-        rs_quality_ = (int)envRange("NBT_BROWSER_SPEEX_Q", 5, 0, 10);
-        rs_switch_path_ = getenv("NBT_BROWSER_RESAMPLER_FILE");
-        if (!rs_switch_path_) rs_switch_path_ = "/tmp/nbt_resampler";
+        rs_quality_ = cfg.speex_q;
+        rs_switch_path_ = cfg.resampler_file;
         for (int s = 0; s < NSTREAMS; ++s) stream_[s].mix.rs.setEngine(rs_engine_, rs_quality_);
         if (rs_engine_ == PcmResampler::SPEEX)
             printf("[Browser] resampler: speexdsp, quality %d (NBT_BROWSER_RESAMPLER / NBT_BROWSER_SPEEX_Q)\n",
@@ -205,28 +178,21 @@ bool BrowserAudio::init() {
     }
     drift_.configure(DriftConfig());
     drift_pi_.configure(DriftPiConfig());
-    {
-        // Which loop sets the trim: pi (default: holds the queue on target, its integral reads the phone's clock
-        // error) or p (the proportional trim alone, ~0.1 ms off target per ppm of drift).
-        const char* e = getenv("NBT_BROWSER_DRIFT_LOOP");
-        drift_pi_on_ = !(e && strcmp(e, "p") == 0);
-        if (drift_on_)
-            printf("[Browser] media drift loop: %s (NBT_BROWSER_DRIFT_LOOP)\n",
-                   drift_pi_on_ ? "proportional-integral" : "proportional");
-    }
-    refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
-    const char* shim_path = getenv("NBT_BROWSER_ASOUND");
-    if (!shim_path || !*shim_path) shim_path = "/opt/mm/lib/libasound/libasound.so";
-    dev_.configure(shim_path, want_rate, force_rate);
+    drift_pi_on_ = cfg.drift_pi;
+    if (drift_on_)
+        printf("[Browser] media drift loop: %s (NBT_BROWSER_DRIFT_LOOP)\n",
+               drift_pi_on_ ? "proportional-integral" : "proportional");
+    refocus_ = cfg.refocus;
+    dev_.configure(cfg.shim_path, cfg.want_rate, cfg.force_rate, cfg.pcm, cfg.frag, cfg.frags);
 
     duck_cfg_ = DuckConfig();
-    duck_cfg_.duck_gain = AudioMixer::dbToGain(envInt("NBT_DUCK_DB", -12));
-    duck_cfg_.attack_ms = (uint32_t)envInt("NBT_DUCK_ATTACK_MS", 80);
-    duck_cfg_.release_ms = (uint32_t)envInt("NBT_DUCK_RELEASE_MS", 500);
-    duck_cfg_.hold_ms = (uint32_t)envInt("NBT_DUCK_HOLD_MS", 600);
-    duck_cfg_.media_gain = AudioMixer::dbToGain(envInt("NBT_MEDIA_GAIN_DB", 0));
-    duck_cfg_.guidance_gain = AudioMixer::dbToGain(envInt("NBT_GUIDANCE_GAIN_DB", 0));
-    duck_cfg_.system_gain = AudioMixer::dbToGain(envInt("NBT_SYSTEM_GAIN_DB", 0));
+    duck_cfg_.duck_gain = AudioMixer::dbToGain(cfg.duck_db);
+    duck_cfg_.attack_ms = cfg.duck_attack_ms;
+    duck_cfg_.release_ms = cfg.duck_release_ms;
+    duck_cfg_.hold_ms = cfg.duck_hold_ms;
+    duck_cfg_.media_gain = AudioMixer::dbToGain(cfg.media_gain_db);
+    duck_cfg_.guidance_gain = AudioMixer::dbToGain(cfg.guidance_gain_db);
+    duck_cfg_.system_gain = AudioMixer::dbToGain(cfg.system_gain_db);
 
     printf("[Browser] audio mode browser (NBT_AUDIO_MODE=browser; Bluetooth is the default): AA media ch %d + guidance ch %d + system audio ch %d, "
            "mixed and played through the browser audio source\n",
@@ -234,7 +200,7 @@ bool BrowserAudio::init() {
     printf("[Browser] connection 0x%x%s, release after %d s without media / %d ms after a prompt or sound alone, "
            "ducking %d dB (attack %u / hold %u / release %u ms)\n",
            conn_, conn_ ? "" : " (NBT_BROWSER_CONN=0: not routed)", route_cfg.idle_s, route_cfg.prompt_idle_ms,
-           envInt("NBT_DUCK_DB", -12), duck_cfg_.attack_ms, duck_cfg_.hold_ms, duck_cfg_.release_ms);
+           cfg.duck_db, duck_cfg_.attack_ms, duck_cfg_.hold_ms, duck_cfg_.release_ms);
     bool ok = dev_.load();
     if (conn_ && !route_.configure()) printf("[Browser] audioconn not found: connection 0x%x cannot be built\n", conn_);
     return ok;

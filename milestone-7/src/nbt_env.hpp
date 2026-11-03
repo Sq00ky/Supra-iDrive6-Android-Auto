@@ -35,44 +35,7 @@ inline bool knobEnabled() {
     return envFlag("NBT_KNOB") != 0;
 }
 
-// Bluetooth audio mode (default ON since v1.7.5; car-verified 2026-10-23): leaves Android Auto media to the
-// phone's Bluetooth A2DP link. The ServiceDiscovery omits the AA media sink (channel 9) so the phone plays
-// media over A2DP, and the daemon asks the AudioManager for the car's Bluetooth audio
-// source (`audioconn -b 0x3a 0x1`, car-verified to work from outside the HMI). The A2I pipeline is not
-// opened in this mode. Overrides: NBT_BT_SRC (default 0x3a eSRC_A2DP), NBT_BT_SINK (default 0x1
-// eSNK_SPEAKERS), NBT_BT_RELEASE=1 (release the source when the phone disconnects), NBT_SDR_DROP.
-// Audio path for Android Auto sound. NBT_AUDIO_MODE picks it; when unset, the older NBT_AUDIO_BT switch decides
-// (on = bt, 0/off = a2i) and with neither set the default is bt again (v1.8.66; browser was the default in
-// v1.8.61..v1.8.65 and stays available with NBT_AUDIO_MODE=browser).
-//   bt       (default) media, nav prompts and Assistant speech stay on the phone's Bluetooth A2DP link
-//   browser  the AA media (ch 9), guidance (ch 8) and system-audio (ch 16) streams are mixed in the
-//            daemon, with media ducked under guidance/system sounds, and played through the car's browser audio
-//            source (dev-libasound -> A2I input_stereo_3, ConnectionMaster connection 0xb8). See browser_audio.hpp.
-//   a2i      the old staged A2I pipeline (audio_manager.cpp, NBT_AUDIO_STAGE); not audible on the car
-enum AudioMode { AUDIO_MODE_BT = 0, AUDIO_MODE_BROWSER = 1, AUDIO_MODE_A2I = 2 };
-
-inline AudioMode audioMode() {
-    const char* m = getenv("NBT_AUDIO_MODE");
-    if (m && *m) {
-        if (strcmp(m, "browser") == 0) return AUDIO_MODE_BROWSER;
-        if (strcmp(m, "a2i") == 0) return AUDIO_MODE_A2I;
-        if (strcmp(m, "bt") == 0) return AUDIO_MODE_BT;
-    }
-    int bt = envFlag("NBT_AUDIO_BT");
-    return bt == 0 ? AUDIO_MODE_A2I : AUDIO_MODE_BT;
-}
-
-inline const char* audioModeName(AudioMode m) {
-    return m == AUDIO_MODE_BROWSER ? "browser" : (m == AUDIO_MODE_A2I ? "a2i" : "bt");
-}
-
-inline bool btAudioEnabled() {
-    return audioMode() == AUDIO_MODE_BT;
-}
-
-inline bool browserAudioEnabled() {
-    return audioMode() == AUDIO_MODE_BROWSER;
-}
+// The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
 // Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified,
 // so off unless NBT_USB=1 / on / yes / true: it switches any Android phone plugged in while the daemon runs into

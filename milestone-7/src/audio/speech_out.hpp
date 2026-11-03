@@ -16,6 +16,7 @@
 
 #include "audio/a2i_stream.hpp"
 #include "audio/audio_route.hpp"
+#include "audio/config.hpp"
 #include "audio/resampler.hpp"
 #include <stddef.h>
 #include <stdint.h>
@@ -28,8 +29,8 @@ public:
     // route: the Bluetooth mode's audioconn wrapper, shared for the optional NBT_SPEECH_SRC focus request.
     explicit SpeechOut(AudioRoute& route);
 
-    // Start-up: with NBT_SPEECH=1, opens the endpoint on a background thread.
-    void init();
+    // Start-up: with NBT_SPEECH=1 (cfg.enabled), opens the endpoint on a background thread.
+    void init(const SpeechConfig& cfg);
     // Session thread: one ch 8 PCM frame (16 kHz mono s16le).
     void frame(const uint8_t* pcm, size_t len);
     // Session thread: ch 8 AV START / STOP indication.
@@ -43,11 +44,11 @@ private:
     SpeechOut(const SpeechOut&);
     SpeechOut& operator=(const SpeechOut&);
 
-    static bool enabled();
     static void* openThreadThunk(void* self);
     void openThread();
 
     AudioRoute& route_;
+    const char* endpoint_;        // NBT_SPEECH_EP (NULL / empty = the factory alternate nav endpoint)
     A2IPlaybackStream* speech_;   // set by the open thread, then never changes
     volatile bool ready_;
     PcmResampler rs_;             // used on the session thread only

@@ -3,6 +3,7 @@
 // Host test: NBT_SDR_DROP / NBT_AUDIO_BT channel removal on the real DHU template.
 #include "sdr_builder.hpp"
 #include "nbt_env.hpp"
+#include "audio/config.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,20 +123,8 @@ int main() {
     setenv("NBT_SYSTEM_SINK", "1", 1);
     CHECK(addSystemAudioSink(i2) == 1);
     unsetenv("NBT_SYSTEM_SINK");
-    // NBT_AUDIO_MODE wins over NBT_AUDIO_BT; unknown words fall back to NBT_AUDIO_BT
-    setenv("NBT_AUDIO_BT", "0", 1);
-    CHECK(audioMode() == AUDIO_MODE_BT);
-    setenv("NBT_AUDIO_MODE", "a2i", 1);
-    CHECK(audioMode() == AUDIO_MODE_A2I);
-    setenv("NBT_AUDIO_MODE", "nonsense", 1);
-    CHECK(audioMode() == AUDIO_MODE_A2I);
-    setenv("NBT_AUDIO_BT", "1", 1);
-    CHECK(audioMode() == AUDIO_MODE_BT);                     // explicit NBT_AUDIO_BT=1 keeps Bluetooth
+    // NBT_AUDIO_MODE / NBT_AUDIO_BT precedence: tests/test_audio_config.cpp
     unsetenv("NBT_AUDIO_MODE"); unsetenv("NBT_AUDIO_BT");
-    CHECK(audioMode() == AUDIO_MODE_BT);                     // default again since v1.8.66
-    setenv("NBT_AUDIO_MODE", "browser", 1);
-    CHECK(audioMode() == AUDIO_MODE_BROWSER);                // explicit browser still works
-    unsetenv("NBT_AUDIO_MODE");
 
     printf(fails ? "test_sdr_drop: %d FAILED\n" : "test_sdr_drop: all passed\n", fails);
     return fails ? 1 : 0;
