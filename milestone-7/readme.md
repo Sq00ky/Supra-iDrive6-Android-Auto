@@ -17,12 +17,13 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > instead of the CarPlay AP and nothing else; `CARPLAY` is the old behaviour (hotspot only); `BOTH` (**the default
 > since v1.8.78**) offers the CarPlay hotspot first - the path that is car-verified wherever it exists - and falls back
 > to the DIRECT group once the phone has taken the hotspot details twice without connecting. A car with no hotspot
-> config has none, so `BOTH` is DIRECT-only there, with no env line at all. The group's name is `"DIRECT-03-"` + Connectivity's WLAN device name without spaces; it is read from
-> `NBT_WFD_SSID` if set, else from `ifconfig wfd0`, else from `mwud` on 127.0.0.1:9096, else derived from
-> `/var/opt/sys/persistence/early/pers_ConnectivityWlanPersistencyPersMapper` ("Toyota51807 CarPlay" -> `Toyota51807`
-> -> `DIRECT-03-Toyota51807`). On a J29 the first three give nothing (`ifconfig` prints no `ssid` line, mwud does not
-> answer on 9096), so the derivation is the working source there: it relies on the CarPlay AP name sharing the device
-> name, so pin `NBT_WFD_SSID` if the group the phone sees differs. The decoded passphrase is printed in the log, once per value, so it can be typed into a phone's Wi-Fi settings
+> config has none, so `BOTH` is DIRECT-only there, with no env line at all. The group's name is `"DIRECT-03-"` +
+> the head unit's own accessory name without spaces. It is read from `NBT_WFD_SSID` if set, else `ifconfig wfd0`, else
+> `mwud` on 127.0.0.1:9096, else the car's iAP2 configs (`iap2.cfg [accessory] name=` - `Toyota51807` on a J29,
+> `BMW 34567` in the factory BMW config - and `iap2_Wifi.cfg` carries `SSID=<name> CarPlay`), else Connectivity's WLAN
+> persistency, which can hold the group SSID itself and otherwise the `<name> CarPlay` pair. On a J29 `ifconfig` prints
+> no `ssid` line and mwud does not answer on 9096, so the config/persistency rungs are what work there; pin
+> `NBT_WFD_SSID` if the phone shows a different group. The decoded passphrase is printed in the log, once per value, so it can be typed into a phone's Wi-Fi settings
 > to join the group by hand. Log: `[Wireless] Wi-Fi source: ...`, `[Wireless] Wi-Fi Direct AP: ssid=...`.
 >
 > **v1.8.42-stability / rhmiapp-20 (not car-verified):** after a tester's head unit reset 5 times in a row

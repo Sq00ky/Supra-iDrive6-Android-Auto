@@ -368,6 +368,82 @@ inline bool wfdDeviceNameFromCarplaySsid(const std::string& carplaySsid, std::st
     return true;
 }
 
+// Connectivity persists its own Wi-Fi Direct configuration (NetworkDeviceName *and* SSID, see CWlanWiFiDirectCfg's
+// startUp traces "mPersData.configuration ... SSID"), independently of CarPlay. Where that survives, the group name
+// is in the blob verbatim and nothing has to be derived.
+inline bool wfdDirectSsidFromBlob(const std::string& text, std::string& ssid) {
+    std::string run;
+    for (size_t i = 0; i <= text.size(); ++i) {
+        unsigned char c = i < text.size() ? (unsigned char)text[i] : 0;
+        if (c >= 0x20 && c < 0x7f) { run.push_back((char)c); continue; }
+        if (run.size() > 7 && run.compare(0, 7, "DIRECT-") == 0) {
+            ssid = run;
+            return true;
+        }
+        run.clear();
+    }
+    return false;
+}
+
+// The car's iAP2 configs name the head unit outright - the same string the CarPlay AP is built from:
+//   iap2.cfg      [accessory] name=Toyota51807     (factory BMW: "BMW 34567")
+//   iap2_Wifi.cfg SSID=Toyota51807 CarPlay
+// This is the best source when a CarPlay config exists at all (cars with the licence); the persistence below is
+// the fallback for cars that have none. `name=` elsewhere in these files belongs to a transport/interface, so the
+// value is only taken from the [accessory] section.
+inline bool wfdDeviceNameFromCarplayCfg(const std::string& text, std::string& out) {
+    std::string section;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t e = text.find('\n', pos);
+        if (e == std::string::npos) e = text.size();
+        std::string line = wfdTrim(text.substr(pos, e - pos));
+        pos = e + 1;
+        if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+        if (line[0] == '[') {
+            size_t r = line.find(']');
+            section = line.substr(1, r == std::string::npos ? std::string::npos : r - 1);
+            for (size_t i = 0; i < section.size(); ++i) section[i] = (char)tolower((unsigned char)section[i]);
+            continue;
+        }
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = line.substr(0, eq);
+        for (size_t i = 0; i < k.size(); ++i) k[i] = (char)tolower((unsigned char)k[i]);
+        k = wfdTrim(k);
+        std::string v = wfdTrim(line.substr(eq + 1));
+        if (v.empty()) continue;
+        // SSID=<name> CarPlay: the CarPlay AP name, i.e. exactly the device name plus the suffix
+        if (k == "ssid") {
+            std::string name;
+            if (wfdDeviceNameFromCarplaySsid(v, name)) {
+                out = name;
+                return true;
+            }
+            continue;
+        }
+        if (k == "name" && section == "accessory") {
+            std::string name = wfdNoSpaces(v);
+            if (!name.empty()) {
+                out = name;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+inline const char* const* wfdCarplayCfgPaths() {
+    static const char* const p[] = {
+        "/var/opt/conn/carplay/iap2_Wifi.cfg",   // carries SSID=<name> CarPlay
+        "/var/opt/conn/carplay/iap2.cfg",        // [accessory] name=
+        "/fs/sda1/opt/conn/carplay/iap2_Wifi.cfg",
+        "/fs/sda1/opt/conn/carplay/iap2.cfg",
+    };
+    return p;
+}
+inline size_t wfdCarplayCfgCount() { return 4; }
+
 // Connectivity's WLAN persistency (pers_ConnectivityWlanPersistencyPersMapper) is a small binary blob whose
 // printable runs are "<device name>" and "<device name> CarPlay" plus the encrypted passphrase. A J29 read:
 //   Toyota51807 | Toyota51807 CarPlay | 240B6170131A7370505E
@@ -545,11 +621,30 @@ inline bool resolveWfdSsid(const char* ifname, std::string& ssid) {
         printf("[Wireless] Wi-Fi Direct SSID: mwud %s reply carried no group name: '%s'\n", cmds[i],
                wfdTrim(flat).c_str());
     }
+    for (size_t i = 0; i < wfdCarplayCfgCount(); ++i) {
+        std::string text, name;
+        if (!readWholeFile(wfdCarplayCfgPaths()[i], text)) continue;
+        if (!wfdDeviceNameFromCarplayCfg(text, name)) continue;
+        ssid = wfdSsidFromDeviceName(name);
+        printf("[Wireless] Wi-Fi Direct SSID: '%s' (from %s: this car is named '%s')\n", ssid.c_str(),
+               wfdCarplayCfgPaths()[i], name.c_str());
+        cached = ssid;
+        return true;
+    }
     for (size_t i = 0; i < wfdPersistPathCount(); ++i) {
         std::string text, name;
         if (!readWholeFile(wfdPersistPaths()[i], text)) {
             printf("[Wireless] Wi-Fi Direct SSID: %s not readable\n", wfdPersistPaths()[i]);
             continue;
+        }
+        // the blob may carry the SSID itself, which beats deriving it from the name
+        std::string direct;
+        if (wfdDirectSsidFromBlob(text, direct)) {
+            ssid = direct;
+            printf("[Wireless] Wi-Fi Direct SSID: '%s' (stored by Connectivity in %s)\n", ssid.c_str(),
+                   wfdPersistPaths()[i]);
+            cached = ssid;
+            return true;
         }
         if (!wfdDeviceNameFromPersistency(text, name)) continue;
         ssid = wfdSsidFromDeviceName(name);

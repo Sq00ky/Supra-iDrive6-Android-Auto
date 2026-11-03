@@ -125,6 +125,28 @@ int main() {
     dev.clear();
     CHECK(nbt::wfdDeviceNameFromPersistency("BMW 51709 CarPlay\n", dev));
     CHECK(dev == "BMW51709");
+    // Connectivity persists the group configuration itself (SSID included), so a blob may name the group outright
+    std::string ssidx;
+    // (octal escapes: \x01D would be read as the single byte 0x1D)
+    CHECK(nbt::wfdDirectSsidFromBlob("garbage\001DIRECT-03-BMW51709\002more", ssidx));
+    CHECK(ssidx == "DIRECT-03-BMW51709");
+    ssidx.clear();
+    CHECK(!nbt::wfdDirectSsidFromBlob("garbage\001DIRECT\002Toyota51807 CarPlay", ssidx));
+    ssidx.clear();
+    CHECK(!nbt::wfdDirectSsidFromBlob("", ssidx));
+
+    // The car's own iAP2 configs carry the name directly (J29: name=Toyota51807, SSID=Toyota51807 CarPlay)
+    dev.clear();
+    CHECK(nbt::wfdDeviceNameFromCarplayCfg(
+        "[accessory]\nname=Toyota51807\nmanufacturer=Toyota\nserial=0N6076633\n\n[transport]\nname=Lightning Connector\n",
+        dev));
+    CHECK(dev == "Toyota51807");
+    dev.clear();
+    CHECK(nbt::wfdDeviceNameFromCarplayCfg("SSID=BMW 51709 CarPlay\nChannel=1\n", dev));
+    CHECK(dev == "BMW51709");
+    dev.clear();
+    CHECK(!nbt::wfdDeviceNameFromCarplayCfg("[transport]\nname=Lightning Connector\n", dev));
+
     // CarPlay AP SSID -> device name (the same rule, for cars that do have iap2.cfg)
     dev.clear();
     CHECK(nbt::wfdDeviceNameFromCarplaySsid("Toyota51807 CarPlay", dev) && dev == "Toyota51807");

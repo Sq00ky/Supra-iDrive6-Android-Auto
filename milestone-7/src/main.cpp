@@ -1587,7 +1587,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.78-bothdefault"
+#define NBT_AAD_BUILD "v1.8.79-wfdsrc"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
