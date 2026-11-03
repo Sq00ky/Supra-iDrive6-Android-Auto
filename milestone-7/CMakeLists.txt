@@ -34,6 +34,7 @@ set(SOURCES
     src/audio/resampler.cpp
     src/audio/asound_device.cpp
     src/video_manager.cpp
+    src/mmr_launch.cpp
     src/tcp_server.cpp
     src/aa_session.cpp
     src/audio/audio_acks.cpp
