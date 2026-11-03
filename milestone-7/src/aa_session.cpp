@@ -70,6 +70,7 @@ AASession::AASession()
     audio_max_unacked_ = 10;
     ack_force_ns_ = 1000000000ull;
     ack_times_ = true;
+    aa_minor_ = 6;
     ack_stats_s_ = 0;
     forced_logged_ = 0;
     underflow_reports_ = false;
@@ -1024,16 +1025,21 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
 void AASession::sessionLoop() {
     printf("[AASession] Protocol thread active on fd %d.\n", client_fd_);
 
-    // Step 1: Send Android Auto VersionRequest (Major 1, Minor 6, Status 0)
+    // Step 1: Send Android Auto VersionRequest (Major 1, Minor NBT_AA_MINOR = 6 by default)
     // Frame: Channel 0 (Control), Flags 0x03 (First | Last, Unencrypted)
+    // Every car session so far: the phone answers 1.7, status 0. Google's DHU (r2.1) asks for 1.7 and sends 6 bytes
+    // plus an empty VersionRequestOptions; the two trailing zero bytes here have always been accepted and are kept,
+    // so NBT_AA_MINOR=7 changes nothing but the number.
+    const uint16_t req_minor = (uint16_t)envRange("NBT_AA_MINOR", 6, 0, 0xFFFF);
     uint8_t version_req[8] = {
         0x00, 0x01, // Message ID: 1 (VersionRequest)
         0x00, 0x01, // Major version: 1
-        0x00, 0x06, // Minor version: 6
-        0x00, 0x00  // Status: 0
+        (uint8_t)(req_minor >> 8), (uint8_t)(req_minor & 0xFF),   // Minor version
+        0x00, 0x00  // trailing zeros (see above)
     };
+    aa_minor_ = req_minor;
 
-    printf("[AASession] Sending VersionRequest (v1.6)...\n");
+    printf("[AASession] Sending VersionRequest (v1.%u%s)...\n", req_minor, req_minor == 6 ? "" : ", NBT_AA_MINOR");
     if (!sendFrame(0x00, 0x03, version_req, sizeof(version_req))) {
         printf("[AASession] Error: Failed to send VersionRequest.\n");
         finishSession();
@@ -1416,8 +1422,16 @@ void AASession::sessionLoop() {
                         uint16_t major  = (frame_data[2] << 8) | frame_data[3];
                         uint16_t minor  = (frame_data[4] << 8) | frame_data[5];
                         uint16_t status = (frame_data[6] << 8) | frame_data[7];
-                        printf("[AASession] >>> VersionResponse: Major=%u, Minor=%u, Status=%u (SUCCESS)\n",
-                               major, minor, status);
+                        // Status 0 = the phone accepts our version; anything else is a refusal (aasdk: 0xFFFF
+                        // MISMATCH). It used to print "(SUCCESS)" whatever the status. The handshake carries on either
+                        // way, as before: a refusal shows up here first, then as the phone closing the session.
+                        printf("[AASession] >>> VersionResponse: Major=%u, Minor=%u, Status=%u (%s; we asked for "
+                               "1.%u)\n", major, minor, status, status == 0 ? "SUCCESS" : "REFUSED", aa_minor_);
+                        if (status != 0)
+                            printf("[AASession] WARNING: the phone refused protocol 1.%u (status 0x%04x); "
+                                   "NBT_AA_MINOR changes what we ask for\n", aa_minor_, status);
+                        printf("[Feature] aa_version: asked 1.%u, phone %u.%u, status %u\n", aa_minor_, major, minor,
+                               status);
 
                         // Step 2: Initialize Cryptor with mTLS cert and send TLS ClientHello
                         if (cryptor_.init()) {

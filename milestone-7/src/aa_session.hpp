@@ -164,6 +164,7 @@ private:
     uint32_t audio_max_unacked_;     // NBT_AA_MAX_UNACKED: window our AV setup response gives audio sinks (default 10)
     uint64_t ack_force_ns_;          // NBT_AA_ACK_FORCE_MS in ns (0 = never force)
     bool ack_times_;                 // NBT_AA_ACK_TIMES (default on): audio acks carry the frame's arrival time
+    uint16_t aa_minor_;              // protocol minor version this session asked for (NBT_AA_MINOR, default 6)
     MediaAckLedger ack_ledger_[3];
     pthread_mutex_t ack_mutex_;
     double ack_stats_s_;             // last periodic ack stats line (session thread)
