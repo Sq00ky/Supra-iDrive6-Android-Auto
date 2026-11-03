@@ -1,0 +1,28 @@
+name: Host build and tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Configure host tests
+        run: cmake -S milestone-7 -B milestone-7/tests/build -DNBT_HOST_TESTS=ON
+      - name: Build host tests
+        run: cmake --build milestone-7/tests/build --parallel "$(nproc)"
+      - name: Run host tests
+        working-directory: milestone-7/tests/build
+        run: ctest --output-on-failure --parallel "$(nproc)"

@@ -847,7 +847,12 @@ make rhmiapp    # only the iDrive app
 - The iDrive app needs `libAppFramework.A.so` and `libCoreFramework.A.so` from the firmware dump's
   `opt/hmi/ID5/lib`, copied into `rhmiapp/lib/`.
 
-Host tests in `tests/` build with a Linux g++ (WSL is fine):
+Host tests run on Linux/WSL with `bash milestone-7/tests/run_host_tests.sh` from the repository root
+(CMake 3.16+, g++, Make/Ninja, Python 3, GNU coreutils; no QNX SDK).
+CMake/CTest discovers `test_*.cpp` / `test_*.py` and builds incrementally with GNU C++98.
+Add `SRC_<test>` dependencies in `tests/CMakeLists.txt` for tests linking implementation files.
+ThreadSanitizer runs when supported; runtime errors fail the check. For `unexpected memory mapping`,
+consult the host administrator about ASLR settings, or explicitly opt out locally with `-DNBT_HOST_TSAN=OFF`.
 
 | Test | Covers |
 |---|---|

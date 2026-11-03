@@ -47,6 +47,22 @@ Installation instructions can be found in the [install.md file](https://github.c
 ## Building Yourself
 The code needs to be compatible with Armv7LE. I built it with [QNX Momentics](https://archive.org/details/qnxsdp-65.7z) because that's probably what the developers iDrive6 did. Be warned, this is from archive.org. Run it in a VM. I cannot guarntee the safety/security of the software. It is as simple as creating a new project in Momentics, adding all the files to the project folder, right clicking on your project folder, selecting "clean", and then "build". 
 
+### Pull request CI
+
+GitHub Actions builds and runs the Linux host tests on every pull request, including
+updates to existing PRs. It also compiles the iDrive app as a host shared library.
+Run the same checks locally on Linux or WSL with `bash milestone-7/tests/run_host_tests.sh`
+(requires CMake 3.16+, g++, Make or Ninja, Python 3, and GNU coreutils).
+The CMake/CTest runner discovers tests automatically, builds incrementally in
+`milestone-7/tests/build`, and runs tests in parallel on each invocation.
+ThreadSanitizer lifecycle coverage is added automatically when the compiler can
+build and link it; sanitizer runtime failures are reported, not silently skipped.
+See [Building and tests](milestone-7/readme.md#building-and-tests) for native commands
+and sanitizer troubleshooting. The legacy fake-framework RHMI integration
+test is excluded because it does not model the current ABI. These checks do not
+replace a licensed QNX SDP 6.5 ARM build or testing on the head unit. Touch replays
+cover whole and split datagrams, with car peer persistence/connected-UDP routing disabled.
+
 ### Feeling Generous?
 I don't charge for this project, I don't charge for deployments, if this has helped you and you're feeling generous, here's my paypal: https://paypal.me/banananaisu
 Please do not feel obligated to send me anything. I've had a couple people ask, if it makes you feel better, you can buy me a drink. I like Red Wine & Bourbon :) My goal in this was never to make any money. It is to provide a cheap/low cost solution so we don't have to deal with MMI products & don't have to deal with people selling native Android Auto integrations.
