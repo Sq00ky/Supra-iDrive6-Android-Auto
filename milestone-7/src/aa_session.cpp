@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_media_msgs.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,9 @@ AASession::AASession()
     ack_force_ns_ = 1000000000ull;
     ack_stats_s_ = 0;
     forced_logged_ = 0;
+    underflow_reports_ = false;
+    session_underflow_ = false;
+    for (int i = 0; i < 3; ++i) underflow_pending_[i] = underflow_sent_[i] = 0;
     pthread_mutex_init(&ack_mutex_, NULL);
     // Touch events are optional. The wake pipe is not: the knob, the microphone, and video
     // focus are delivered through it, including when NBT_TOUCH_FWD=0.
@@ -301,6 +305,44 @@ void AASession::logAckStats(bool final) {
         printf("[AASession] deferred audio acks, last %.0f s:%s%s%s\n", span, part[0], part[1], part[2]);
 }
 
+// ---- Underflow reports (browser audio mode) ------------------------------------------------------------------------
+
+void AASession::setUnderflowReports(bool on) { underflow_reports_ = on; }
+
+void AASession::postAudioUnderflow(uint8_t channel) {
+    const int i = audioIndex(channel);
+    if (i < 0) return;
+    pthread_mutex_lock(&ack_mutex_);
+    const bool on = session_underflow_;
+    if (on) ++underflow_pending_[i];
+    pthread_mutex_unlock(&ack_mutex_);
+    if (on && wake_pipe_[1] >= 0) {
+        char b = 1;
+        ssize_t w = write(wake_pipe_[1], &b, 1);
+        (void)w;
+    }
+}
+
+void AASession::drainUnderflows() {
+    if (!session_underflow_) return;
+    uint32_t n[3];
+    pthread_mutex_lock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) { n[i] = underflow_pending_[i]; underflow_pending_[i] = 0; }
+    pthread_mutex_unlock(&ack_mutex_);
+    for (int i = 0; i < 3; ++i) {
+        if (!n[i]) continue;
+        // One report stands for all posted since the last drain: the phone learns the stream ran dry, not how often.
+        const uint8_t ch = kAudioAckCh[i];
+        const std::vector<uint8_t> plain = aaUnderflowNotification(av_session_[ch & 31]);
+        std::vector<uint8_t> enc;
+        const bool ok = cryptor_.encrypt(&plain[0], plain.size(), enc) && sendFrame(ch, 0x0B, &enc[0], enc.size());
+        const uint32_t k = ++underflow_sent_[i];
+        if (k <= 5 || (k % 50) == 0)
+            printf("[AASession] %s ran dry: AudioUnderflowNotification (0x800b) #%u to the phone %s\n", kAudioAckName[i],
+                   k, ok ? "sent" : "SEND FAILED");
+    }
+}
+
 // QNX 6.5 / GCC 4.4 ARM libgcc has no atomic builtins, so the running flag is guarded by
 // fd_mutex_ (never held across any other lock or blocking call).
 bool AASession::isRunning() const {
@@ -396,7 +438,10 @@ bool AASession::start(int client_fd) {
         ack_ledger_[i].reset();
         ack_ledger_[i].resetTotals();
         ack_ledger_[i].setWindow(audio_max_unacked_);
+        underflow_pending_[i] = 0;
+        underflow_sent_[i] = 0;
     }
+    session_underflow_ = underflow_reports_;
     pthread_mutex_unlock(&ack_mutex_);
     ack_stats_s_ = (double)monoNs() / 1e9;
     forced_logged_ = 0;
@@ -549,6 +594,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 while (read(wake_pipe_[0], junk, sizeof(junk)) > 0) { }
                 drainTouch();
                 drainAcks();
+                drainUnderflows();
                 if (!FD_ISSET(fd, &rf)) continue;
             }
             idle_ms = 0;
@@ -987,6 +1033,7 @@ void AASession::sessionLoop() {
     while (isRunning()) {
         // Forced acks are due on time even while video keeps select() from ever timing out.
         drainAcks();
+        drainUnderflows();
         uint8_t header[4];
         if (!readExact(header, 4)) {
             if (isRunning()) {
@@ -1454,6 +1501,9 @@ void AASession::sessionLoop() {
 
     printf("[AASession] Session loop terminated.\n");
     logAckStats(true);
+    if (session_underflow_)
+        printf("[Feature] underflow_reports=on guidance=%u media=%u system=%u (0x800b sent this session)\n",
+               underflow_sent_[0], underflow_sent_[1], underflow_sent_[2]);
     g_crumb_stage = 0;
     finishSession();
 }

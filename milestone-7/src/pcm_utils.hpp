@@ -27,6 +27,7 @@ public:
     size_t capacity() const { return capacity_; }
     size_t clear();   // returns the bytes discarded
     uint64_t droppedBytes() const;
+    uint64_t writtenBytes() const;   // every byte ever written (dropped ones too)
 
 private:
     PcmRing(const PcmRing&);
@@ -37,6 +38,7 @@ private:
     size_t head_;   // read index
     size_t used_;
     uint64_t dropped_;
+    uint64_t written_;
     mutable pthread_mutex_t mutex_;
 };
 

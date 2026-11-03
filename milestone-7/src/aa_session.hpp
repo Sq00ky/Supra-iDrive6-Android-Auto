@@ -75,6 +75,12 @@ public:
     // the acks go out from the session thread, woken through the wake pipe.
     void postAudioConsumed(uint8_t channel, size_t bytes);
 
+    // Underflow reports (browser audio mode): AudioUnderflowNotification (0x800b) to the phone when the consumer ran
+    // dry on a started stream, as Google's head unit does. Set before start(). postAudioUnderflow is thread-safe
+    // (mixer thread); the message goes out from the session thread.
+    void setUnderflowReports(bool on);
+    void postAudioUnderflow(uint8_t channel);
+
 private:
     static void* sessionThreadStub(void* arg);
     void sessionLoop();
@@ -162,6 +168,13 @@ private:
     bool hasPendingAcks();           // any unacked deferred frame (session thread)
     void drainAcks();                // session thread: send the acks the ledgers release
     void logAckStats(bool final);    // session thread: 30 s interval line, or the session summary
+
+    // Underflow reports, indexed like audio_frames_. underflow_pending_ is guarded by ack_mutex_.
+    bool underflow_reports_;         // setUnderflowReports(); copied to session_underflow_ at start()
+    bool session_underflow_;
+    uint32_t underflow_pending_[3];  // reports posted by the mixer, not sent yet
+    uint32_t underflow_sent_[3];     // this session (session thread)
+    void drainUnderflows();          // session thread
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
     // AudioConfigs our ServiceDiscoveryResponse offered per audio sink channel, in order (session thread).
     std::vector<AaAudioConfig> offered_audio_[32];

@@ -1221,6 +1221,11 @@ static void onAudioConsumed(uint8_t channel, size_t bytes, void* user_data) {
     g_session.postAudioConsumed(channel, bytes);
 }
 
+static void onAudioUnderflow(uint8_t channel, void* user_data) {
+    (void)user_data;
+    g_session.postAudioUnderflow(channel);
+}
+
 static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data) {
     (void)user_data;
     if (g_browser) g_browser->onAaStreamState(channel, started, rate, channels);
@@ -1665,6 +1670,11 @@ int main(int argc, char* argv[]) {
         if (defer) browser.setConsumedCallback(&onAudioConsumed, NULL);
         g_session.setDeferredAudioAcks(defer);
         printf("[Browser] audio acks: %s (NBT_AA_DEFER_ACKS)\n", defer ? "once played (deferred)" : "on arrival");
+        // Underflow reports (NBT_AA_UNDERFLOW_REPORT, default on): tell the phone when a stream ran dry (0x800b).
+        const bool underflow = nbt::envFlag("NBT_AA_UNDERFLOW_REPORT") != 0;
+        if (underflow) browser.setUnderflowCallback(&onAudioUnderflow, NULL);
+        g_session.setUnderflowReports(underflow);
+        printf("[Browser] underflow reports to the phone: %s (NBT_AA_UNDERFLOW_REPORT)\n", underflow ? "on" : "off");
         g_audio = NULL;
     } else if (g_btAudio) {
         g_btSrc = (uint32_t)nbt::envHex("NBT_BT_SRC", 0x3a);

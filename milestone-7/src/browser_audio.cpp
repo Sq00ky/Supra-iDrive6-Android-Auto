@@ -90,6 +90,15 @@ BrowserAudio::BrowserAudio()
     memset(fn_, 0, sizeof(fn_));
     consumed_fn_ = NULL;
     consumed_user_ = NULL;
+    underflow_fn_ = NULL;
+    underflow_user_ = NULL;
+    for (int s = 0; s < NSTREAMS; ++s) {
+        frames_since_start_[s] = 0;
+        dry_[s] = false;
+        report_ms_[s] = 0;
+        report_written_[s] = 0;
+        reports_[s] = 0;
+    }
     wait_ms_ = 30;
     waited_blocks_ = waited_ms_ = 0;
     drift_on_ = true;
@@ -130,9 +139,41 @@ const char* BrowserAudio::streamName(int s) {
     return s == MEDIA ? "media" : (s == GUIDANCE ? "guidance" : (s == SYSTEM ? "system" : "?"));
 }
 
+static const uint8_t kStreamChannel[BrowserAudio::NSTREAMS] = { AA_CH_MEDIA_AUDIO, AA_CH_GUIDANCE_AUDIO,
+                                                                AA_CH_SYSTEM_AUDIO };
+
 void BrowserAudio::consumed(int s, size_t bytes) {
-    static const uint8_t kChannel[NSTREAMS] = { AA_CH_MEDIA_AUDIO, AA_CH_GUIDANCE_AUDIO, AA_CH_SYSTEM_AUDIO };
-    if (bytes && consumed_fn_ && s >= 0 && s < NSTREAMS) consumed_fn_(kChannel[s], bytes, consumed_user_);
+    if (bytes && consumed_fn_ && s >= 0 && s < NSTREAMS) consumed_fn_(kStreamChannel[s], bytes, consumed_user_);
+}
+
+// After the mixer pulled a block of stream s: got / need = converted samples obtained / wanted.
+void BrowserAudio::checkUnderflow(int s, size_t got, size_t need, uint64_t now) {
+    if (!started_[s] || got >= need) { dry_[s] = false; return; }
+    if (dry_[s] || frames_since_start_[s] == 0) return;   // already reported, or no audio yet: not an underflow
+    dry_[s] = true;
+    const uint32_t k = ++reports_[s];
+    if (underflow_fn_) underflow_fn_(kStreamChannel[s], underflow_user_);
+    report_ms_[s] = now;
+    report_written_[s] = ring_[s]->writtenBytes();
+    if (k <= 5 || (k % 50) == 0)
+        printf("[Browser] %s ran dry: a block got %u of %u frames; underflow #%u reported to the phone\n",
+               streamName(s), (unsigned)(got / kOutCh), (unsigned)(need / kOutCh), k);
+}
+
+// 5 s after a report: did the phone react? It sent X ms of audio in those 5 s (more than 5000 = it sent extra to
+// rebuild its lead) and the queue holds Y ms now.
+void BrowserAudio::logUnderflowFollowUp(uint64_t now) {
+    for (int s = 0; s < NSTREAMS; ++s) {
+        if (!report_ms_[s] || now - report_ms_[s] < 5000) continue;
+        const uint32_t k = reports_[s];
+        const uint64_t bps = (uint64_t)src_rate_[s] * kSrcCh[s] * 2u;
+        const uint64_t sent = ring_[s]->writtenBytes() - report_written_[s];
+        if (bps && (k <= 5 || (k % 50) == 0))
+            printf("[Browser] 5 s after %s underflow #%u: the phone sent %u ms of audio in %u ms, queue now %u ms\n",
+                   streamName(s), k, (unsigned)(sent * 1000u / bps), (unsigned)(now - report_ms_[s]),
+                   (unsigned)(ring_[s]->size() * 1000u / bps));
+        report_ms_[s] = 0;
+    }
 }
 
 void BrowserAudio::discard(int s) {
@@ -363,6 +404,7 @@ void BrowserAudio::onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, ui
     int s = streamForChannel(channel);
     if (s < 0 || !ring_[s] || !pcm || len == 0) return;
     ++frames_in_[s];
+    ++frames_since_start_[s];
     if (pcm_failed_) {   // no output device this session: nothing will play it, so it is taken at once
         consumed(s, len);
         return;
@@ -397,6 +439,7 @@ void BrowserAudio::onAaStreamState(uint8_t channel, bool started, uint32_t rate,
     if (started) {
         srate_[s].start(rate);
         src_rate_[s] = srate_[s].rate();   // the mixer reconfigures its resampler before the next block
+        frames_since_start_[s] = 0;        // no underflow before this stream's first frame
     }
     started_[s] = started;
     if (s == MEDIA) drift_reset_ = true;   // a new stream (or none): the mixer learns its level afresh
@@ -684,6 +727,7 @@ void BrowserAudio::mixerLoop() {
                 have[s] = pull(s, block, &in[s][0], &loud[s], &got);
                 watch_[s].onPull(started_[s], queued_before, got, block * kOutCh);
                 guard_[s].onPulled(started_[s], got / kOutCh, block);
+                checkUnderflow(s, got, block * kOutCh, now);
             }
         }
 
@@ -741,6 +785,7 @@ void BrowserAudio::mixerLoop() {
         if (played_ms > elapsed + kLeadMs) usleep((useconds_t)((played_ms - elapsed - kLeadMs) * 1000u));
         else if (elapsed > played_ms + 1000) { t0 = nowMs(); written_frames = 0; }   // fell behind: re-anchor
 
+        logUnderflowFollowUp(nowMs());
         logStats(false);
     }
     logStats(true);
@@ -762,6 +807,10 @@ void BrowserAudio::onSessionEnded() {
         gap_[s] = false;
         srate_[s].reset();            // the next phone declares (or is measured) afresh
         src_rate_[s] = srate_[s].rate();
+        frames_since_start_[s] = 0;
+        dry_[s] = false;
+        report_ms_[s] = 0;
+        reports_[s] = 0;
     }
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);
