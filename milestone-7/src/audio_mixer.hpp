@@ -193,6 +193,43 @@ private:
     double ema_, target_, ppm_;
 };
 
+// A proportional-integral version of the same loop (the default; NBT_BROWSER_DRIFT_LOOP=p keeps DriftControl's
+// proportional trim). DriftControl's P-only trim has to stay off target to produce any trim at all: 10 ppm per ms, so
+// a phone 100 ppm off holds the queue ~10 ms away from where it should be, 300 ppm ~30 ms. The integral term removes
+// that offset and, once settled, equals the phone's clock error in ppm, which the stats log.
+//
+// The queue moves by (phone - trim) x 1e-3 ms per second, so with trim = kp*e + ki*integral(e) the error obeys
+// e'' + 1e-3*kp*e' + 1e-3*ki*e = 0: natural frequency wn = 1 / natural_s, damping zeta, kp = 2*zeta*wn*1000,
+// ki = wn^2*1000. Defaults: natural_s 100 (DriftControl's 100 s time constant), zeta 0.707: kp 14.1 ppm/ms,
+// ki 0.1 ppm/(ms*s), settles in ~10 minutes with ~4 % overshoot. The input is DriftControl's smoothed queue minus its
+// learned target, so learning, smoothing and the target bounds are shared. Output capped at +/-max_ppm and slewed
+// like DriftControl; the integral stops growing while the output is held at a cap or by the slew (no wind-up).
+struct DriftPiConfig {
+    double natural_s, damping, slew_ppm_per_s;
+    int32_t max_ppm;
+    DriftPiConfig();
+};
+
+class DriftPi {
+public:
+    DriftPi();
+    void configure(const DriftPiConfig& cfg);
+    void reset();
+    // err_ms = smoothed queue - target (positive: too much queued, play faster). Returns the trim in ppm.
+    int32_t update(double err_ms, uint64_t now_ms);
+    int32_t ppm() const;
+    double integral() const { return integ_; }   // ppm: the phone's clock error once settled
+    double kp() const { return kp_; }
+    double ki() const { return ki_; }
+
+private:
+    DriftPiConfig cfg_;
+    double kp_, ki_;
+    bool started_;
+    uint64_t t_last_;
+    double integ_, ppm_;
+};
+
 // The input rate of one AA audio stream. Each stream start may carry the phone's declared format (START_INDICATION
 // configuration_index -> the offered AudioConfig): that is used from the first frame, and the timestamps are then
 // only a cross-check (a disagreement is reported once, never acted on). Without a declaration the rate is measured

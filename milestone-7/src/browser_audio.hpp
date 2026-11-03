@@ -190,6 +190,8 @@ private:
     bool gap_[NSTREAMS];                       // the last block of this stream was padded: fade the next one in
     uint32_t wait_ms_;                         // NBT_BROWSER_WAIT_MS (0 = pad at once)
     DriftControl drift_;                       // media clock-drift trim (mixer thread)
+    DriftPi drift_pi_;                         // its proportional-integral version, fed drift_'s error (mixer thread)
+    bool drift_pi_on_;                         // NBT_BROWSER_DRIFT_LOOP: pi (default) applies drift_pi_, p drift_
     bool drift_on_;                            // NBT_BROWSER_DRIFT (default on)
     volatile bool drift_reset_;                // set by the session thread at a media start
     int32_t drift_applied_;                    // trim currently set on rs_[MEDIA] (mixer thread)

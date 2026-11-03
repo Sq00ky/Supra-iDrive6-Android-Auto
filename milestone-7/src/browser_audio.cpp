@@ -121,6 +121,7 @@ BrowserAudio::BrowserAudio()
     wait_ms_ = 30;
     waited_blocks_ = waited_ms_ = 0;
     drift_on_ = true;
+    drift_pi_on_ = true;
     drift_reset_ = false;
     drift_applied_ = 0;
     for (int s = 0; s < NSTREAMS; ++s) {
@@ -262,6 +263,16 @@ bool BrowserAudio::init() {
                    rs_switch_path_, rs_switch_path_);
     }
     drift_.configure(DriftConfig());
+    drift_pi_.configure(DriftPiConfig());
+    {
+        // Which loop sets the trim: pi (default: holds the queue on target, its integral reads the phone's clock
+        // error) or p (the proportional trim alone, ~0.1 ms off target per ppm of drift).
+        const char* e = getenv("NBT_BROWSER_DRIFT_LOOP");
+        drift_pi_on_ = !(e && strcmp(e, "p") == 0);
+        if (drift_on_)
+            printf("[Browser] media drift loop: %s (NBT_BROWSER_DRIFT_LOOP)\n",
+                   drift_pi_on_ ? "proportional-integral" : "proportional");
+    }
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
     shim_path_ = getenv("NBT_BROWSER_ASOUND");
     if (!shim_path_ || !*shim_path_) shim_path_ = "/opt/mm/lib/libasound/libasound.so";
@@ -681,9 +692,22 @@ void BrowserAudio::logStats(bool force) {
         printf("[Browser] media drift correction off (NBT_BROWSER_DRIFT=0)\n");
     else if (started_[MEDIA] && drift_.learning())
         printf("[Browser] media drift: learning the queue level (%.0f ms so far)\n", drift_.smoothed());
+    else if (started_[MEDIA] && drift_pi_on_)
+        // The integral settles on the phone's clock error: how far its media clock is from the car's.
+        printf("[Browser] media drift (PI): trim %+d ppm, queue %.0f ms, target %.0f ms, off by %+.1f ms, phone clock "
+               "%+.0f ppm\n", drift_applied_, drift_.smoothed(), drift_.target(), drift_.smoothed() - drift_.target(),
+               drift_pi_.integral());
     else if (started_[MEDIA])
-        printf("[Browser] media drift: trim %+d ppm, queue %.0f ms, target %.0f ms\n", drift_applied_,
-               drift_.smoothed(), drift_.target());
+        printf("[Browser] media drift (P): trim %+d ppm, queue %.0f ms, target %.0f ms, off by %+.1f ms\n",
+               drift_applied_, drift_.smoothed(), drift_.target(), drift_.smoothed() - drift_.target());
+    if (force && drift_on_ && !drift_.learning()) {
+        if (drift_pi_on_)
+            printf("[Feature] drift_loop=pi trim=%+d ppm off_target=%+.1f ms phone_clock=%+.0f ppm\n", drift_applied_,
+                   drift_.smoothed() - drift_.target(), drift_pi_.integral());
+        else
+            printf("[Feature] drift_loop=p trim=%+d ppm off_target=%+.1f ms\n", drift_applied_,
+                   drift_.smoothed() - drift_.target());
+    }
 }
 
 // Mixer thread: it must write a device fragment every ~23 ms with ~92 ms of headroom, and with deferred acks its
@@ -875,13 +899,15 @@ void BrowserAudio::mixerLoop() {
         if (drift_reset_) {
             drift_reset_ = false;
             drift_.reset();
+            drift_pi_.reset();
             if (drift_applied_) { rs_[MEDIA].setTrimPpm(0); drift_applied_ = 0; }
         }
         if (drift_on_ && play && started_[MEDIA]) {
             const uint64_t in_bps = (uint64_t)src_rate_[MEDIA] * kSrcCh[MEDIA] * 2u;
             const double fill_ms = (in_bps ? (double)ring_[MEDIA]->size() * 1000.0 / (double)in_bps : 0.0) +
                                    (double)(pending_[MEDIA].size() / kOutCh) * 1000.0 / (double)rate_;
-            const int32_t ppm = drift_.update(fill_ms, now);
+            int32_t ppm = drift_.update(fill_ms, now);   // learns the target and smooths the queue for both loops
+            if (drift_pi_on_) ppm = drift_.learning() ? 0 : drift_pi_.update(drift_.smoothed() - drift_.target(), now);
             if (ppm != drift_applied_) { rs_[MEDIA].setTrimPpm(ppm); drift_applied_ = ppm; }
         }
         const bool duck = loud[GUIDANCE] || loud[SYSTEM];
@@ -973,6 +999,7 @@ void BrowserAudio::onSessionEnded() {
     last_media_ms_ = 0;
     waited_ms_ = waited_blocks_ = 0;
     drift_.reset();   // the mixer thread is stopped: safe to touch its state
+    drift_pi_.reset();
     drift_reset_ = false;
     rs_[MEDIA].setTrimPpm(0);
     drift_applied_ = 0;

@@ -68,14 +68,21 @@ static SimResult simulateMixer(uint32_t budget_ms, int jitter_ms, int lead_ms, i
 // Media drift, closed loop at 1 ms resolution in ms of audio: the phone delivers 42.667 ms frames at its own speed
 // (phone_ppm > 0 = fast), each late by 0..jitter ms, starting with lead_ms queued; the mixer takes a 23.2 ms block
 // per block period, scaled by the trim DriftControl returns (or no trim when correct = false).
-struct DriftSim { double final_ema, target, final_ppm, max_fill; int gaps_after_learn, max_abs_ppm; bool quiet_learning; };
-static DriftSim simulateDrift(double phone_ppm, int jitter_ms, double lead_ms, int seconds, bool correct) {
+// pi = true: the trim comes from DriftPi (fed DriftControl's smoothed queue minus its target) instead of DriftControl.
+// late_err = the mean |smoothed queue - target| over the last quarter of the run (the steady offset).
+struct DriftSim { double final_ema, target, final_ppm, max_fill, late_err, integral; int gaps_after_learn, max_abs_ppm;
+                  bool quiet_learning; };
+static DriftSim simulateDrift(double phone_ppm, int jitter_ms, double lead_ms, int seconds, bool correct,
+                              bool pi = false) {
     DriftControl dc;
+    DriftPi dp;
+    double err_sum = 0;
+    long err_n = 0;
     const double frame_ms = 2048.0 / 48.0, block_ms = 1024.0 / 44.1;
     double fill = lead_ms, nominal = 0, next_arrival = 0, next_block = block_ms;
     uint32_t seed = 777u;
     int32_t ppm = 0;
-    DriftSim r = { 0, 0, 0, 0, 0, 0, true };
+    DriftSim r = { 0, 0, 0, 0, 0, 0, 0, 0, true };
     for (int t = 0; t < seconds * 1000; ++t) {
         while (t >= next_arrival) {
             fill += frame_ms;
@@ -93,8 +100,10 @@ static DriftSim simulateDrift(double phone_ppm, int jitter_ms, double lead_ms, i
             }
             if (correct) {
                 ppm = dc.update(fill, (uint64_t)t);
+                if (pi) ppm = dc.learning() ? 0 : dp.update(dc.smoothed() - dc.target(), (uint64_t)t);
                 if (dc.learning() && ppm != 0) r.quiet_learning = false;
             }
+            if (t > seconds * 750 && !dc.learning()) { err_sum += fabs(dc.smoothed() - dc.target()); ++err_n; }
             if (abs(ppm) > r.max_abs_ppm) r.max_abs_ppm = abs(ppm);
             if (t > 20000 && fill > r.max_fill) r.max_fill = fill;
             next_block += block_ms;
@@ -103,6 +112,8 @@ static DriftSim simulateDrift(double phone_ppm, int jitter_ms, double lead_ms, i
     r.final_ema = dc.smoothed();
     r.target = dc.target();
     r.final_ppm = ppm;
+    r.late_err = err_n ? err_sum / err_n : 0;
+    r.integral = dp.integral();
     return r;
 }
 
@@ -427,6 +438,40 @@ int main() {
         // No lead at all: the 60 ms floor builds one up by playing slightly slower.
         DriftSim none = simulateDrift(0, 5, 0, 900, true);
         CHECK(none.target == 60 && none.final_ema >= 40);
+    }
+
+    // 15. DriftPi: the same loop with an integral term. It holds the queue on target where the P loop stays off by
+    //     ~0.1 ms per ppm, and its integral settles on the phone's clock error.
+    {
+        DriftPi p;
+        CHECK(near((float)p.kp(), 14.14f, 0.01f) && near((float)p.ki(), 0.1f, 0.0001f));
+        CHECK(p.update(10, 0) == 0);                       // first call: starts the clock only
+        int32_t v = 0;
+        for (uint64_t t = 23; t <= 1000; t += 23) v = p.update(10, t);
+        CHECK(v > 0 && v <= 21);                           // slewed like DriftControl (<= 20 ppm/s)
+        // A held error at the cap does not wind the integral up beyond the cap.
+        for (uint64_t t = 1000; t < 400000; t += 23) v = p.update(1000, t);
+        CHECK(v == 500 && p.integral() <= 500.0);
+        for (uint64_t t = 400000; t < 900000; t += 23) v = p.update(-1000, t);
+        CHECK(v == -500 && p.integral() >= -500.0);
+        p.reset();
+        CHECK(p.ppm() == 0 && p.integral() == 0);
+
+        const double cases[] = { -100, 100, -300, 300, 0 };
+        for (int i = 0; i < 5; ++i) {
+            DriftSim pi = simulateDrift(cases[i], 15, 130, 3600, true, true);
+            DriftSim pp = simulateDrift(cases[i], 15, 130, 3600, true, false);
+            printf("drift %+5.0f ppm, 1 h: PI queue off target %.1f ms (integral %+.0f ppm, trim %+.0f), "
+                   "P %.1f ms (trim %+.0f); PI max %.0f ms, gaps %d\n", cases[i], pi.late_err, pi.integral,
+                   pi.final_ppm, pp.late_err, pp.final_ppm, pi.max_fill, pi.gaps_after_learn);
+            CHECK(pi.quiet_learning);
+            CHECK(pi.gaps_after_learn == 0);
+            CHECK(pi.max_abs_ppm <= 500);
+            CHECK(fabs(pi.final_ppm - cases[i]) <= 20);           // trim = the drift
+            CHECK(fabs(pi.integral - cases[i]) <= 20);            // and the integral reads it
+            CHECK(pi.late_err <= 4.0);                            // on target, within the jitter
+            if (cases[i] != 0) CHECK(pi.late_err < pp.late_err);  // closer than the P loop
+        }
     }
 
     printf(fails ? "test_audio_mixer: %d FAILED\n" : "test_audio_mixer: all passed\n", fails);
