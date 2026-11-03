@@ -410,7 +410,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 |---|---|---|
 | `NBT_LOG_FILE` | (none) | Append the daemon log to this file; it survives a head-unit reset. Same name = appended |
 | `NBT_MENU_RETURN` | home | Where iDrive goes once connected: `media` = Media/Radio list, `off` = stay in our menu |
-| `NBT_RX_TIMEOUT_S` | 2 | Seconds without data from the phone before iDrive gets the screen back; `0` = off |
+| `NBT_RX_TIMEOUT_S` | 5 | Seconds without data from the phone before iDrive gets the screen back; `0` = off |
 | `NBT_VID_FPS` | 60 | `30` or `60` fps. Sets the rate requested from the phone and the decoder's rate |
 | `NBT_BACK_HOLD_MS` | 2500 | BACK hold time to minimize; `0` = off (BACK forwarded at once) |
 | `NBT_KNOB_INVERT` | off | `1` reverses the rotary direction |
