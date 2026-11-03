@@ -67,19 +67,27 @@ public:
     // Byte-oriented convenience wrapper (len is truncated to whole frames).
     void processBytes(const uint8_t* in, size_t len, std::vector<uint8_t>& out);
 
+    // Clock-drift trim: consume `ppm` parts per million more input per output frame (negative = less), i.e. play
+    // the stream that much faster. Clamped to +/-20000; kept across configure() / reset(). Non-zero takes a
+    // same-rate, same-channel stream out of passthrough.
+    void setTrimPpm(int32_t ppm);
+    int32_t trimPpm() const { return trim_ppm_; }
+
     bool passthrough() const { return passthrough_; }
     uint32_t srcRate() const { return src_rate_; }
     uint32_t dstRate() const { return dst_rate_; }
 
 private:
     void emit(const int32_t* frame, std::vector<int16_t>& out) const;
+    void updateStep();
 
     uint32_t src_rate_;
     uint32_t src_ch_;
     uint32_t dst_rate_;
     uint32_t dst_ch_;
-    uint32_t step_q16_;      // source frames advanced per output frame (Q16.16)
-    uint32_t phase_q16_;     // position between prev_ and the next input frame
+    uint64_t step_q32_;      // source frames advanced per output frame (Q32.32: sub-ppm resolution for the trim)
+    uint64_t phase_q32_;     // position between prev_ and the next input frame (Q32.32, < 1.0 between frames)
+    int32_t  trim_ppm_;
     bool     have_prev_;
     bool     passthrough_;
     int32_t  prev_[8];

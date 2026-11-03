@@ -2,7 +2,9 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: three-input mixer and media ducking (browser audio mode).
 #include "audio_mixer.hpp"
+#include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <vector>
 
@@ -60,6 +62,47 @@ static SimResult simulateMixer(uint32_t budget_ms, int jitter_ms, int lead_ms, i
         if (dev / fpm < r.min_dev_ms) r.min_dev_ms = dev / fpm;
         if (dev < 0) { ++r.underruns; dev = 0; }
     }
+    return r;
+}
+
+// Media drift, closed loop at 1 ms resolution in ms of audio: the phone delivers 42.667 ms frames at its own speed
+// (phone_ppm > 0 = fast), each late by 0..jitter ms, starting with lead_ms queued; the mixer takes a 23.2 ms block
+// per block period, scaled by the trim DriftControl returns (or no trim when correct = false).
+struct DriftSim { double final_ema, target, final_ppm, max_fill; int gaps_after_learn, max_abs_ppm; bool quiet_learning; };
+static DriftSim simulateDrift(double phone_ppm, int jitter_ms, double lead_ms, int seconds, bool correct) {
+    DriftControl dc;
+    const double frame_ms = 2048.0 / 48.0, block_ms = 1024.0 / 44.1;
+    double fill = lead_ms, nominal = 0, next_arrival = 0, next_block = block_ms;
+    uint32_t seed = 777u;
+    int32_t ppm = 0;
+    DriftSim r = { 0, 0, 0, 0, 0, 0, true };
+    for (int t = 0; t < seconds * 1000; ++t) {
+        while (t >= next_arrival) {
+            fill += frame_ms;
+            nominal += frame_ms / (1.0 + phone_ppm * 1e-6);
+            seed = seed * 1103515245u + 12345u;
+            next_arrival = nominal + (jitter_ms ? (double)((seed >> 16) % (uint32_t)(jitter_ms + 1)) : 0.0);
+        }
+        while (t >= next_block) {
+            const double need = block_ms * (1.0 + ppm * 1e-6);
+            if (fill < need) {
+                if (!dc.learning() || !correct) { if (t > 10000) ++r.gaps_after_learn; }
+                fill = 0;
+            } else {
+                fill -= need;
+            }
+            if (correct) {
+                ppm = dc.update(fill, (uint64_t)t);
+                if (dc.learning() && ppm != 0) r.quiet_learning = false;
+            }
+            if (abs(ppm) > r.max_abs_ppm) r.max_abs_ppm = abs(ppm);
+            if (t > 20000 && fill > r.max_fill) r.max_fill = fill;
+            next_block += block_ms;
+        }
+    }
+    r.final_ema = dc.smoothed();
+    r.target = dc.target();
+    r.final_ppm = ppm;
     return r;
 }
 
@@ -336,6 +379,54 @@ int main() {
         printf("simulated 120 s, phone 1 %% slow: gaps %d, underruns %d, device never below %.0f ms\n", slow.gaps,
                slow.underruns, slow.min_dev_ms);
         CHECK(slow.underruns == 0 && slow.min_dev_ms >= 55);
+    }
+
+    // 14. DriftControl: learn the natural level, then a slow bounded trim that holds it against clock drift.
+    {
+        DriftControl d;
+        CHECK(d.learning() && d.update(130, 0) == 0);
+        for (uint64_t t = 23; t < 10000; t += 23) CHECK(d.update(130, t) == 0);   // learning: no trim
+        d.update(130, 10010);
+        CHECK(!d.learning() && near((float)d.target(), 130.0f, 0.5f));
+        // queue 20 ms above target for a while: positive trim (play faster), slewed (<= 20 ppm/s), capped by kp
+        int32_t p = 0;
+        for (uint64_t t = 10033; t < 11033; t += 23) p = d.update(150, t);
+        CHECK(p > 0 && p <= 21);                        // 1 s of slew at most
+        for (uint64_t t = 11033; t < 60000; t += 23) p = d.update(150, t);
+        CHECK(p >= 190 && p <= 200);                    // ~10 ppm per ms of (smoothed) error
+        for (uint64_t t = 60000; t < 200000; t += 23) p = d.update(1000, t);
+        CHECK(p == 500);                                // capped at +/-500 ppm
+        for (uint64_t t = 200000; t < 400000; t += 23) p = d.update(0, t);
+        CHECK(p == -500);
+        d.reset();
+        CHECK(d.learning() && d.ppm() == 0);
+        // target bounds: too little lead is raised to 60 ms, a backlog is lowered to 300 ms
+        DriftControl lo, hi;
+        for (uint64_t t = 0; t <= 10100; t += 23) { lo.update(5, t); hi.update(900, t); }
+        CHECK(near((float)lo.target(), 60.0f, 0.01f) && near((float)hi.target(), 300.0f, 0.01f));
+
+        // Closed loop, one hour, the 1 Nov lead (130 ms), arrivals up to 15 ms late.
+        const double cases[] = { -100, 100, -300, 300, 0 };
+        for (int i = 0; i < 5; ++i) {
+            DriftSim s = simulateDrift(cases[i], 15, 130, 3600, true);
+            printf("drift %+5.0f ppm, 1 h corrected: trim %+5.0f ppm, queue %.0f ms (target %.0f), max %.0f ms, "
+                   "gaps %d\n", cases[i], s.final_ppm, s.final_ema, s.target, s.max_fill, s.gaps_after_learn);
+            CHECK(s.quiet_learning);
+            CHECK(s.gaps_after_learn == 0);
+            CHECK(fabs(s.final_ppm - cases[i]) <= 20);              // the trim converges to the drift
+            CHECK(fabs(s.final_ema - s.target) <= 40);               // the queue stays near its natural level
+            CHECK(s.max_abs_ppm <= 500);
+        }
+        // Without correction a phone 100 ppm slow drains the 130 ms lead within the hour and then gaps.
+        DriftSim slow = simulateDrift(-100, 15, 130, 3600, false);
+        printf("drift  -100 ppm, 1 h uncorrected: gaps %d\n", slow.gaps_after_learn);
+        CHECK(slow.gaps_after_learn > 0);
+        // No drift: the trim stays tiny (jitter and the frame sawtooth are smoothed out).
+        DriftSim zero = simulateDrift(0, 15, 130, 600, true);
+        CHECK(zero.max_abs_ppm <= 25);
+        // No lead at all: the 60 ms floor builds one up by playing slightly slower.
+        DriftSim none = simulateDrift(0, 5, 0, 900, true);
+        CHECK(none.target == 60 && none.final_ema >= 40);
     }
 
     printf(fails ? "test_audio_mixer: %d FAILED\n" : "test_audio_mixer: all passed\n", fails);

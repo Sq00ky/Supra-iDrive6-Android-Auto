@@ -47,6 +47,34 @@ int main() {
     assert(go.size()==128);
     assert(go[0]==gm[0] && go[1]==gm[0]);
     for(int i=1;i<64;i++) assert(go[2*i]==gm[i-1] && go[2*i+1]==gm[i-1]);
+    // drift trim: +500 ppm consumes 0.05 % more input per output frame (plays faster), -500 ppm less
+    {
+        std::vector<int16_t> src(48000*2, 1000);
+        PcmResampler t0; t0.configure(48000,2,44100,2);
+        std::vector<int16_t> a; t0.process(&src[0],48000,a);
+        PcmResampler tp; tp.configure(48000,2,44100,2); tp.setTrimPpm(500); assert(tp.trimPpm()==500);
+        std::vector<int16_t> b2; tp.process(&src[0],48000,b2);
+        PcmResampler tn; tn.configure(48000,2,44100,2); tn.setTrimPpm(-500);
+        std::vector<int16_t> c2; tn.process(&src[0],48000,c2);
+        long na=(long)a.size()/2, nb=(long)b2.size()/2, nc=(long)c2.size()/2;
+        printf("48k->44.1k 1 s: %ld frames, +500 ppm %ld, -500 ppm %ld\n", na, nb, nc);
+        assert(na>=44099 && na<=44101);
+        assert(nb>=na-24 && nb<=na-20);              // 44100 / 1.0005 = 44078
+        assert(nc>=na+20 && nc<=na+24);
+        // the trim survives configure() / reset()
+        tp.configure(48000,2,44100,2); tp.reset(); assert(tp.trimPpm()==500);
+        // same rate and channels: a trim leaves passthrough, removing it goes back
+        PcmResampler q; q.configure(48000,2,48000,2); assert(q.passthrough());
+        q.setTrimPpm(300); assert(!q.passthrough());
+        std::vector<int16_t> d2; q.process(&src[0],48000,d2);
+        long nd=(long)d2.size()/2;
+        assert(nd>=48000-16 && nd<=48000-13);        // 48000 / 1.0003 = 47985.6
+        q.setTrimPpm(0); assert(q.passthrough());
+        q.setTrimPpm(50000); assert(q.trimPpm()==20000);   // clamped
+        q.setTrimPpm(-50000); assert(q.trimPpm()==-20000);
+        // a constant signal stays exactly constant through a trimmed resampler (no interpolation error)
+        for(size_t i=0;i<b2.size();i++) assert(b2[i]==1000);
+    }
     // read chunk for the mixer's fixed 1920-byte buffer (10 ms of 48 kHz stereo)
     const size_t cap = 48000/100*2*2;
     assert(pcmChunkBytes(48000,2,10,cap) == 1920);               // media: exactly the buffer

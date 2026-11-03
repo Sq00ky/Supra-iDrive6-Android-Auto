@@ -90,6 +90,9 @@ BrowserAudio::BrowserAudio()
     memset(fn_, 0, sizeof(fn_));
     wait_ms_ = 30;
     waited_blocks_ = waited_ms_ = 0;
+    drift_on_ = true;
+    drift_reset_ = false;
+    drift_applied_ = 0;
     for (int s = 0; s < NSTREAMS; ++s) {
         ring_[s] = NULL;   // allocated by init(): the object exists in every audio mode
         started_[s] = false;
@@ -164,6 +167,8 @@ bool BrowserAudio::init() {
         wait_ms_ = w < 0 ? 0u : (w > 60 ? 60u : (uint32_t)w);
     }
     for (int s = 0; s < NSTREAMS; ++s) guard_[s].setBudget(wait_ms_);
+    drift_on_ = envFlag("NBT_BROWSER_DRIFT") != 0;   // unset (-1) or on (1): correct media clock drift
+    drift_.configure(DriftConfig());
     refocus_ = envFlag("NBT_BROWSER_REFOCUS") != 0;
     shim_path_ = getenv("NBT_BROWSER_ASOUND");
     if (!shim_path_ || !*shim_path_) shim_path_ = "/opt/mm/lib/libasound/libasound.so";
@@ -379,6 +384,7 @@ void BrowserAudio::onAaStreamState(uint8_t channel, bool started, uint32_t rate,
         src_rate_[s] = srate_[s].rate();   // the mixer reconfigures its resampler before the next block
     }
     started_[s] = started;
+    if (s == MEDIA) drift_reset_ = true;   // a new stream (or none): the mixer learns its level afresh
     // Media paused: drop what is queued so the music stops now. Prompts and sounds play their tail out.
     if (!started && s == MEDIA) { ring_[s]->clear(); flush_[s] = true; }
     if (started) ensureMixer();
@@ -555,6 +561,14 @@ void BrowserAudio::logStats(bool force) {
            guard_[GUIDANCE].timeouts(), guard_[SYSTEM].timeouts());
     for (int s = 0; s < NSTREAMS; ++s) watch_[s].resetInterval();
     waited_ms_ = waited_blocks_ = 0;
+    // Media drift correction: the trim now applied, the smoothed media queue and the level it holds.
+    if (!drift_on_)
+        printf("[Browser] media drift correction off (NBT_BROWSER_DRIFT=0)\n");
+    else if (started_[MEDIA] && drift_.learning())
+        printf("[Browser] media drift: learning the queue level (%.0f ms so far)\n", drift_.smoothed());
+    else if (started_[MEDIA])
+        printf("[Browser] media drift: trim %+d ppm, queue %.0f ms, target %.0f ms\n", drift_applied_,
+               drift_.smoothed(), drift_.target());
 }
 
 void BrowserAudio::mixerLoop() {
@@ -654,6 +668,21 @@ void BrowserAudio::mixerLoop() {
                 guard_[s].onPulled(started_[s], got / kOutCh, block);
             }
         }
+
+        // Media clock drift: once per block while media plays, hold its queue at the level the phone keeps by
+        // trimming the media resampler (DriftControl). Reset at every media start / stop.
+        if (drift_reset_) {
+            drift_reset_ = false;
+            drift_.reset();
+            if (drift_applied_) { rs_[MEDIA].setTrimPpm(0); drift_applied_ = 0; }
+        }
+        if (drift_on_ && play && started_[MEDIA]) {
+            const uint64_t in_bps = (uint64_t)src_rate_[MEDIA] * kSrcCh[MEDIA] * 2u;
+            const double fill_ms = (in_bps ? (double)ring_[MEDIA]->size() * 1000.0 / (double)in_bps : 0.0) +
+                                   (double)(pending_[MEDIA].size() / kOutCh) * 1000.0 / (double)rate_;
+            const int32_t ppm = drift_.update(fill_ms, now);
+            if (ppm != drift_applied_) { rs_[MEDIA].setTrimPpm(ppm); drift_applied_ = ppm; }
+        }
         const bool duck = loud[GUIDANCE] || loud[SYSTEM];
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
                    have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck, &out[0]);
@@ -717,6 +746,10 @@ void BrowserAudio::onSessionEnded() {
     pthread_mutex_unlock(&lock_);
     last_media_ms_ = 0;
     waited_ms_ = waited_blocks_ = 0;
+    drift_.reset();   // the mixer thread is stopped: safe to touch its state
+    drift_reset_ = false;
+    rs_[MEDIA].setTrimPpm(0);
+    drift_applied_ = 0;
 }
 
 void BrowserAudio::stop() {

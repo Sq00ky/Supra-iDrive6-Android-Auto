@@ -157,6 +157,42 @@ private:
 void fadeOutTail(int16_t* buf, size_t frames, size_t channels, size_t fade_frames);
 void fadeInHead(int16_t* buf, size_t frames, size_t channels, size_t fade_frames);
 
+// Clock-drift correction for the AA media stream (browser mode). The phone produces audio on its own clock, the car
+// plays it on another, and nothing ties them: our media acks do not throttle the phone. A phone even 50 ppm slow
+// drains its ~130 ms lead in ~45 min and then gaps every few seconds; a fast one makes the latency creep up.
+// DriftControl watches how much media is queued (ring + converted, in ms of audio) once per mixer block:
+//   - for the first learn_ms of a stream it only learns the level the phone naturally keeps (smoothed), bounded to
+//     [min_target_ms, max_target_ms]: that becomes the target, so no latency is added;
+//   - then it returns a resampler trim in ppm proportional to the smoothed error (kp ppm per ms; 10 ppm/ms gives a
+//     ~100 s loop time constant and a ~10 ms steady offset at 100 ppm drift), at most +/-max_ppm, changing by at
+//     most slew ppm per second. Positive = the queue is above target = play faster.
+// +/-500 ppm is under 1 cent of pitch: inaudible. A queue that grows means the phone is fast, so we consume faster.
+struct DriftConfig {
+    uint32_t learn_ms, min_target_ms, max_target_ms;
+    int32_t max_ppm;
+    double kp_ppm_per_ms, smooth_ms, slew_ppm_per_s;
+    DriftConfig();
+};
+
+class DriftControl {
+public:
+    DriftControl();
+    void configure(const DriftConfig& cfg);
+    void reset();                                       // stream start / stop / session end
+    // One mixer block: fill_ms = queued media in ms of audio. Returns the trim to apply (0 while learning).
+    int32_t update(double fill_ms, uint64_t now_ms);
+    bool learning() const { return learning_; }
+    double target() const { return target_; }
+    double smoothed() const { return ema_; }
+    int32_t ppm() const;
+
+private:
+    DriftConfig cfg_;
+    bool started_, learning_;
+    uint64_t t_start_, t_last_;
+    double ema_, target_, ppm_;
+};
+
 // The input rate of one AA audio stream. Each stream start may carry the phone's declared format (START_INDICATION
 // configuration_index -> the offered AudioConfig): that is used from the first frame, and the timestamps are then
 // only a cross-check (a disagreement is reported once, never acted on). Without a declaration the rate is measured
