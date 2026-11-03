@@ -35,6 +35,7 @@ SRCS = src/main.cpp \
        src/usb_accessory.cpp \
        src/usb_direct.cpp \
        src/aa_session.cpp \
+       src/audio/audio_acks.cpp \
        src/aa_cryptor.cpp \
        src/bluetooth_manager.cpp \
        src/wireless_setup.cpp \

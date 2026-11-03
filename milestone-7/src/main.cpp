@@ -1538,7 +1538,7 @@ int main(int argc, char* argv[]) {
         const bool defer = nbt::envFlag("NBT_AA_DEFER_ACKS") != 0;
         if (defer) {
             browser.setConsumedCallback(&onAudioConsumed, NULL);
-            browser.setAckWindow(nbt::AASession::audioAckWindow());   // the drift loop's target must cover it
+            browser.setAckWindow(nbt::AudioAcks::window());   // the drift loop's target must cover it
         }
         g_session.setDeferredAudioAcks(defer);
         printf("[Browser] audio acks: %s (NBT_AA_DEFER_ACKS)\n", defer ? "once played (deferred)" : "on arrival");

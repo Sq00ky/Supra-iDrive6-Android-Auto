@@ -35,6 +35,7 @@ set(SOURCES
     src/video_manager.cpp
     src/tcp_server.cpp
     src/aa_session.cpp
+    src/audio/audio_acks.cpp
     src/aa_cryptor.cpp
     src/bluetooth_manager.cpp
     src/wireless_setup.cpp
