@@ -151,16 +151,48 @@ void PcmResampler::setEngine(Engine e, int quality) {
     reset();
 }
 
-// in/out ratio = src/dst * (1 + trim): reduced to 32-bit numerator / denominator (speex wants spx_uint32_t).
+// in/out ratio = src/dst * (1 + trim), as the closest fraction whose denominator is at most kSpeexMaxDen.
+//
+// Fixed-point speexdsp needs a small denominator: its interpolating filter computes the phase as
+// ((frac * oversample) % den) << 15 in 32 bits and rounds with den cast to 16 bits (resample.c:456 / :519), so a
+// denominator of 2^15 or more turns the output into noise. An exact trimmed ratio rarely reduces that far
+// (48000:44100 at +171 ppm is 1000171:918750), which made most trims distort on the car. Capped at 32767 the ratio
+// is within 1.3 ppm of the request for 48 -> 44.1 kHz and 2 ppm for 16 -> 44.1 kHz; a same-rate stream moves in
+// steps of ~30 ppm around 1:1. The drift loop's integral absorbs either.
+static const uint64_t kSpeexMaxDen = 32767;
+
 static uint64_t gcd64(uint64_t a, uint64_t b) { while (b) { const uint64_t t = a % b; a = b; b = t; } return a; }
 
+// Best rational approximation of n/d with denominator <= maxd (continued fractions, as Python's
+// Fraction.limit_denominator). n < 2^37 and maxd < 2^16 here, so every product below fits in 64 bits.
+static void closestRatio(uint64_t n, uint64_t d, uint64_t maxd, uint64_t* pn, uint64_t* pd) {
+    const uint64_t g = gcd64(n, d);
+    if (g > 1) { n /= g; d /= g; }
+    if (d <= maxd) { *pn = n; *pd = d; return; }
+    uint64_t p0 = 0, q0 = 1, p1 = 1, q1 = 0, nn = n, dd = d;
+    for (;;) {
+        const uint64_t a = nn / dd;
+        const uint64_t q2 = q0 + a * q1;
+        if (q2 > maxd) break;
+        const uint64_t p2 = p0 + a * p1;
+        p0 = p1; q0 = q1; p1 = p2; q1 = q2;
+        const uint64_t r = nn - a * dd;
+        nn = dd; dd = r;
+        if (!dd) break;
+    }
+    const uint64_t k = (maxd - q0) / q1;   // the best semiconvergent below the limit
+    const uint64_t sp = p0 + k * p1, sq = q0 + k * q1;
+    // pick whichever of p1/q1 and sp/sq is nearer n/d: compare |p*d - n*q| / q without division
+    const uint64_t e1 = (p1 * d > n * q1) ? p1 * d - n * q1 : n * q1 - p1 * d;
+    const uint64_t e2 = (sp * d > n * sq) ? sp * d - n * sq : n * sq - sp * d;
+    if (e2 * q1 < e1 * sq) { *pn = sp; *pd = sq; } else { *pn = p1; *pd = q1; }
+}
+
 bool PcmResampler::applySpeexRatio() {
-    uint64_t num = (uint64_t)src_rate_ * (uint64_t)(1000000 + trim_ppm_);
-    uint64_t den = (uint64_t)dst_rate_ * 1000000u;
-    const uint64_t g = gcd64(num, den);
-    if (g > 1) { num /= g; den /= g; }
-    while (num > 0xFFFFFFFFull || den > 0xFFFFFFFFull) { num >>= 1; den >>= 1; }   // < 1e-9 of ratio error
-    if (!num || !den) return false;
+    uint64_t num = 0, den = 0;
+    closestRatio((uint64_t)src_rate_ * (uint64_t)(1000000 + trim_ppm_), (uint64_t)dst_rate_ * 1000000u,
+                 kSpeexMaxDen, &num, &den);
+    if (!num || !den || num > 0xFFFFFFFFull) return false;
     const int err = nbt_speex_resampler_set_rate_frac(static_cast<SpeexResamplerState*>(spx_), (spx_uint32_t)num,
                                                       (spx_uint32_t)den, src_rate_, dst_rate_);
     spx_trim_ = trim_ppm_;

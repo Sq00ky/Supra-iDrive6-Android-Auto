@@ -186,6 +186,66 @@ int main() {
         CHECK(r.engine() == S && r.quality() == 3);
     }
 
+    // 9. Every trim stays clean, not just round ones. Fixed-point speex breaks once the ratio's denominator reaches
+    //    2^15, and an exact trimmed ratio rarely reduces that far (+171 ppm at 48 -> 44.1 kHz is 1000171:918750): on the
+    //    car the first trim, +171 ppm, turned music into noise. A 1 kHz tone must come out as a clean tone moved by the trim, and
+    //    the frame count must keep the trimmed ratio, for trims across +/-2 % and each rate pair browser mode uses.
+    {
+        const uint32_t pairs[4][2] = { { 48000, 44100 }, { 16000, 44100 }, { 48000, 48000 }, { 44100, 44100 } };
+        int32_t trims[64];
+        size_t nt = 0;
+        const int32_t car[6] = { 171, 372, 396, -495, 2274, -15 };
+        for (size_t i = 0; i < 6; ++i) trims[nt++] = car[i];
+        for (int32_t t = -20000; t <= 20000 && nt < 64; t += 701) trims[nt++] = t;   // 701: no round numbers
+        double worstRes = -200, worstRatio = 0;
+        for (size_t p = 0; p < 4; ++p) {
+            const uint32_t sr = pairs[p][0], dr = pairs[p][1];
+            const std::vector<int16_t> in = sine(1000, sr, 2, 2.0);
+            const size_t half = in.size() / 4;   // frames in 1 s
+            for (size_t i = 0; i < nt; ++i) {
+                PcmResampler r;
+                r.setEngine(S, 5);
+                r.configure(sr, 2, dr, 2);
+                r.setTrimPpm(trims[i]);
+                std::vector<int16_t> out;
+                r.process(&in[0], half, out);   // the first second carries the filter's start-up
+                r.resetCounters();
+                out.clear();
+                r.process(&in[half * 2], half, out);
+                // what is left after removing the best-fit sine, middle half, dB re signal. The tone sits at the
+                // trimmed frequency to within the ratio's rounding (a few ppm, checked through the frame count
+                // below): its exact frequency comes from the phase drift between the two quarters.
+                double w = 2.0 * kPi * 1000.0 * (1.0 + trims[i] / 1e6) / dr;
+                const size_t n = out.size() / 2, a = n / 4, b = 3 * n / 4, m = (a + b) / 2;
+                {
+                    double r1 = 0, i1 = 0, r2 = 0, i2 = 0;
+                    for (size_t k = a; k < m; ++k) { r1 += out[2 * k] * cos(w * k); i1 -= out[2 * k] * sin(w * k); }
+                    for (size_t k = m; k < b; ++k) { r2 += out[2 * k] * cos(w * k); i2 -= out[2 * k] * sin(w * k); }
+                    w += atan2(i2 * r1 - r2 * i1, r2 * r1 + i2 * i1) / (double)(m - a);
+                }
+                double s = 0, c = 0;
+                for (size_t k = a; k < b; ++k) { s += out[2 * k] * sin(w * k); c += out[2 * k] * cos(w * k); }
+                const double as = 2 * s / (double)(b - a), ac = 2 * c / (double)(b - a);
+                double err = 0, sig = 0;
+                for (size_t k = a; k < b; ++k) {
+                    const double fit = as * sin(w * k) + ac * cos(w * k);
+                    err += (out[2 * k] - fit) * (out[2 * k] - fit);
+                    sig += fit * fit;
+                }
+                const double res = 10.0 * log10(err / (sig + 1e-9) + 1e-12);
+                const double want = (double)dr / sr / (1.0 + trims[i] / 1e6);
+                const double ratioErr = fabs((double)r.outFrames() / (double)r.inFrames() / want - 1.0);
+                if (res > worstRes) worstRes = res;
+                if (ratioErr > worstRatio) worstRatio = ratioErr;
+                if (res > -60.0) printf("  %u -> %u Hz, trim %+d ppm: residual %.1f dB\n", sr, dr, trims[i], res);
+            }
+        }
+        printf("  trims: worst residual %.1f dB, worst frame ratio error %.0f ppm over %u trims x 4 rate pairs\n",
+               worstRes, worstRatio * 1e6, (unsigned)nt);
+        CHECK(worstRes < -60.0);
+        CHECK(worstRatio < 50e-6);   // one output frame in 1 s is 23 ppm
+    }
+
     printf("test_resampler: %s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
 }
