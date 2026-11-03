@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-#include "audio/audio_manager.hpp"
+#include "audio/a2i_audio.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,7 +29,7 @@ uint32_t envU32(const char* name, uint32_t def) {
 
 } // namespace
 
-AudioManager::AudioManager()
+A2iAudio::A2iAudio()
     : stage_(STAGE_OPEN_ONLY),
       media_rate_(kEndpointRate),
       route_media_(0xb9),
@@ -46,11 +46,11 @@ AudioManager::AudioManager()
       mic_user_data_(NULL) {
 }
 
-AudioManager::~AudioManager() {
+A2iAudio::~A2iAudio() {
     stop();
 }
 
-bool AudioManager::openPlayback(A2IPlaybackStream& stream, const char* endpoint, const char* fallback) {
+bool A2iAudio::openPlayback(A2IPlaybackStream& stream, const char* endpoint, const char* fallback) {
     // Preferred rate first, then the classic 44.1 kHz in case 48 kHz is rejected.
     uint32_t rates[2] = { media_rate_, A2I_SAMPLE_RATE_44K };
     for (int i = 0; i < 2; ++i) {
@@ -71,7 +71,7 @@ bool AudioManager::openPlayback(A2IPlaybackStream& stream, const char* endpoint,
     return false;
 }
 
-bool AudioManager::init() {
+bool A2iAudio::init() {
     stage_ = static_cast<int>(envU32("NBT_AUDIO_STAGE", STAGE_OPEN_ONLY));
     if (stage_ < STAGE_OPEN_ONLY) stage_ = STAGE_OPEN_ONLY;
     if (stage_ > STAGE_ROUTE) stage_ = STAGE_ROUTE;
@@ -111,7 +111,7 @@ bool AudioManager::init() {
     return ok;
 }
 
-void AudioManager::start() {
+void A2iAudio::start() {
     if (started_) return;
     started_ = true;
 
@@ -125,18 +125,19 @@ void AudioManager::start() {
     printf("[AudioManager] Playback workers started (%s).\n", feed ? "AA PCM" : "silence only");
 }
 
-void AudioManager::stop() {
+void A2iAudio::stop() {
     if (!started_ && !media_.isOpen() && !nav_.isOpen() && !mic_.isOpen()) return;
     started_ = false;
 
     onSessionEnded();
-    stopMic();
+    stopOwnMic();
     media_.stop();
     nav_.stop();
     printf("[AudioManager] Audio streams stopped.\n");
 }
 
-void AudioManager::onAaAudio(uint8_t aa_channel, const uint8_t* pcm, size_t len) {
+void A2iAudio::onFrame(uint8_t aa_channel, const uint8_t* pcm, size_t len, uint64_t pts) {
+    (void)pts;
     if (stage_ < STAGE_PLAYBACK || !pcm || len == 0) return;
 
     scratch_.clear();
@@ -151,7 +152,9 @@ void AudioManager::onAaAudio(uint8_t aa_channel, const uint8_t* pcm, size_t len)
     }
 }
 
-void AudioManager::onAaStreamState(uint8_t aa_channel, bool started) {
+void A2iAudio::onStreamState(uint8_t aa_channel, bool started, uint32_t rate, uint32_t channels) {
+    (void)rate;
+    (void)channels;
     if (aa_channel != AA_CH_AUDIO_MEDIA && aa_channel != AA_CH_AUDIO_SPEECH) return;
     const bool media = (aa_channel == AA_CH_AUDIO_MEDIA);
     printf("[AudioManager] AA %s stream %s.\n", media ? "media" : "speech", started ? "started" : "stopped");
@@ -173,7 +176,7 @@ void AudioManager::onAaStreamState(uint8_t aa_channel, bool started) {
     }
 }
 
-void AudioManager::onSessionEnded() {
+void A2iAudio::onSessionEnded() {
     media_.flush();
     nav_.flush();
     if (stage_ >= STAGE_ROUTE && route_.available()) {
@@ -186,20 +189,20 @@ void AudioManager::onSessionEnded() {
             nav_routed_ = false;
         }
     }
-    stopMic();
+    stopOwnMic();
 }
 
-void AudioManager::setMicCallback(MicDataCallback callback, void* user_data) {
+void A2iAudio::setMicCallback(MicDataCallback callback, void* user_data) {
     mic_callback_ = callback;
     mic_user_data_ = user_data;
 }
 
-void AudioManager::micThunk(const uint8_t* pcm, size_t size, void* self) {
-    AudioManager* am = reinterpret_cast<AudioManager*>(self);
+void A2iAudio::micThunk(const uint8_t* pcm, size_t size, void* self) {
+    A2iAudio* am = reinterpret_cast<A2iAudio*>(self);
     if (am->mic_callback_) am->mic_callback_(pcm, size, am->mic_user_data_);
 }
 
-bool AudioManager::startMic() {
+bool A2iAudio::startOwnMic() {
     if (stage_ < STAGE_PLAYBACK || !mic_callback_) return false;
     if (mic_.isRunning()) return true;
 
@@ -219,10 +222,10 @@ bool AudioManager::startMic() {
             return false;
         }
     }
-    return mic_.start(&AudioManager::micThunk, this);
+    return mic_.start(&A2iAudio::micThunk, this);
 }
 
-void AudioManager::stopMic() {
+void A2iAudio::stopOwnMic() {
     if (mic_.isOpen() || mic_.isRunning()) mic_.stop();
 }
 

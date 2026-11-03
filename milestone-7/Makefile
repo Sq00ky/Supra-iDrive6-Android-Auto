@@ -16,7 +16,10 @@ CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -
 LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -lm -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 SRCS = src/main.cpp \
-       src/audio/audio_manager.cpp \
+       src/audio/a2i_audio.cpp \
+       src/audio/bt_audio.cpp \
+       src/audio/speech_out.cpp \
+       src/audio/mic_uplink.cpp \
        src/audio/a2i_stream.cpp \
        src/audio/audio_route.cpp \
        src/audio/audio_mixer.cpp \

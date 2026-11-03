@@ -156,8 +156,7 @@ private:
     void* audio_user_data_;
     AudioStateCallback audio_state_cb_;
     void* audio_state_user_data_;
-    uint32_t audio_frames_[3];   // [0] = ch 8 speech, [1] = ch 9 media, [2] = ch 16 system (session thread only)
-    static int audioIndex(uint8_t channel);   // channel -> the [0..2] index above, -1 for other channels
+    uint32_t audio_frames_[3];   // per AudioStream (audio/channels.hpp: media, guidance, system); session thread only
 
     // Deferred audio acks, indexed like audio_frames_. The ledgers are guarded by ack_mutex_ (session thread records
     // arrivals and sends acks, the mixer thread reports consumption).

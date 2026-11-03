@@ -18,7 +18,10 @@ include_directories(
 # so a CMake configure does not drop sources or pass -fPIC, which the readme notes produces ET_DYN.
 set(SOURCES
     src/main.cpp
-    src/audio/audio_manager.cpp
+    src/audio/a2i_audio.cpp
+    src/audio/bt_audio.cpp
+    src/audio/speech_out.cpp
+    src/audio/mic_uplink.cpp
     src/audio/a2i_stream.cpp
     src/audio/audio_route.cpp
     src/audio/audio_mixer.cpp

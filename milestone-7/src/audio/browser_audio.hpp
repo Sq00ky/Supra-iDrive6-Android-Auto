@@ -49,6 +49,8 @@
 
 #include "audio/audio_mixer.hpp"
 #include "audio/audio_route.hpp"
+#include "audio/backend.hpp"
+#include "audio/channels.hpp"
 #include "audio/pcm_utils.hpp"
 #include <pthread.h>
 #include <stdint.h>
@@ -57,9 +59,10 @@
 
 namespace nbt {
 
-class BrowserAudio {
+class BrowserAudio : public AudioBackend {
 public:
-    enum Stream { MEDIA = 0, GUIDANCE = 1, SYSTEM = 2, NSTREAMS = 3 };
+    // Stream indices: the shared AudioStream table (audio/channels.hpp).
+    enum Stream { MEDIA = AUDIO_MEDIA, GUIDANCE = AUDIO_GUIDANCE, SYSTEM = AUDIO_SYSTEM, NSTREAMS = AUDIO_NSTREAMS };
 
     BrowserAudio();
     ~BrowserAudio();
@@ -69,19 +72,18 @@ public:
 
     // Session thread. channel = AA channel (9 media, 8 guidance, 16 system audio); others are ignored. pts = the
     // frame's timestamp (us): measures the rate when the stream start declared none, else cross-checks it (0 = none).
-    void onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts = 0);
+    virtual void onFrame(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts);
     // rate / channels: the format the phone declared for this stream in START_INDICATION (0 = it gave none: the rate
     // is then measured from the timestamps, among the rates offered for the stream).
-    void onAaStreamState(uint8_t channel, bool started, uint32_t rate = 0, uint32_t channels = 0);
+    virtual void onStreamState(uint8_t channel, bool started, uint32_t rate, uint32_t channels);
     // Session ended (session thread): stop the mixer, close the device, remove the connection.
-    void onSessionEnded();
-    // Phone closed the mic (Assistant): ask for the connection again in case the voice scenario moved the car off it.
+    virtual void onSessionEnded();
+    // Phone closed the mic (Assistant): refocus("mic closed").
+    virtual void onMicClosed();
+    // Ask for the connection again in case the voice scenario moved the car off it.
     void refocus(const char* why);
     // Daemon shutdown.
-    void stop();
-
-    static int streamForChannel(uint8_t channel);
-    static const char* streamName(int s);
+    virtual void stop();
 
     // Every byte of AA PCM this object takes from a stream, oldest first: read by the mixer, dropped by a full ring,
     // or discarded (media paused, no grant, no device). AASession acks a frame once all of its bytes are reported

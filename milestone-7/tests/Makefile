@@ -23,6 +23,7 @@ SPEEX := $(ROOT)/src/audio/nbt_speex.c
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
+SRC_test_audio_channels    :=
 SRC_test_audio_format      := src/sdr_builder.cpp
 SRC_test_audio_mixer       := src/audio/audio_mixer.cpp
 SRC_test_audio_route       := src/audio/audio_route.cpp

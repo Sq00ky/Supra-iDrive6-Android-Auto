@@ -907,6 +907,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates); drift loops P and PI in a one-hour closed loop at -300..+300 ppm |
+| `test_audio_channels` | The AA audio channel table: 8 / 9 / 16 <-> stream, other channels rejected, names, log order |
 | `test_media_ack` | Deferred audio acks: acked once consumed, forced acks and skipped bytes, window-full count, a phone held to its window |
 | `test_media_msgs` | AA media-channel messages byte for byte against Google's receiver library (media ack with arrival times, AudioUnderflowNotification) |
 | `test_audio_format` | Offered AudioConfigs read back from the SDR, the phone's choice in AV START_INDICATION, guidance offered at one rate in browser mode |
@@ -925,10 +926,12 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
-  - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `audio_route` (`audioconn` wrapper),
-    `voice_scenario`, `bt_play`, `browser_audio` + `audio_mixer` (browser mode), `nbt_speex.c` / `nbt_speex.h`
-    (the vendored speexdsp resampler, `third_party/speexdsp/`), `audio_manager`, `a2i_stream`, `pcm_utils`,
-    `media_ack.hpp` + `aa_media_msgs.hpp` (deferred acks, media-channel messages);
+  - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
+    drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` (+ `audio_mixer`) and
+    `a2i_audio` (+ `a2i_stream`); `channels.hpp` (AA channel <-> stream table), `mic_uplink` (car mic),
+    `audio_route` (`audioconn` wrapper), `voice_scenario`, `pcm_utils`, `nbt_speex.c` / `nbt_speex.h` (the
+    vendored speexdsp resampler, `third_party/speexdsp/`), `media_ack.hpp` + `aa_media_msgs.hpp` (deferred acks,
+    media-channel messages);
   - cluster/HUD arrows: `kombi_nav` (+ `kombi_nav_msg.hpp`, `kombi_graph.hpp`, `kombi_graph_template.hpp`),
     `kombi_client`;
   - other: `crash_handler`, `license_text.hpp`.

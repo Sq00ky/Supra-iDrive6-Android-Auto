@@ -3,6 +3,7 @@
 #ifndef SDR_BUILDER_HPP
 #define SDR_BUILDER_HPP
 
+#include "audio/channels.hpp"
 #include <stdint.h>
 #include <stddef.h>
 #include <string>
@@ -49,11 +50,7 @@ int dropSdrChannels(std::vector<uint8_t>& sdr);
 // ch 16 its SYSTEM_AUDIO sink): NBT_GUIDANCE_BT=1 is then ignored. Returns the number of fields patched (0 or 1).
 int retypeGuidanceSink(std::vector<uint8_t>& sdr);
 
-// Android Auto audio sink channels. 8 and 9 come from the DHU template; 16 is added by addSystemAudioSink.
-enum { AA_CH_GUIDANCE_AUDIO = 8, AA_CH_MEDIA_AUDIO = 9, AA_CH_SYSTEM_AUDIO = 16 };
-inline bool isAaAudioSinkChannel(unsigned ch) {
-    return ch == AA_CH_GUIDANCE_AUDIO || ch == AA_CH_MEDIA_AUDIO || ch == AA_CH_SYSTEM_AUDIO;
-}
+// The audio sink channels (AA_CH_*_AUDIO, isAaAudioSinkChannel) are in audio/channels.hpp.
 
 // Browser audio mode (or NBT_SYSTEM_SINK=1): appends a third audio sink, ChannelDescriptor{ id=16,
 // media_sink_service{ codec PCM, audio_type 2 SYSTEM_AUDIO, 16 kHz / 16 bit / mono } }, so the phone sends
