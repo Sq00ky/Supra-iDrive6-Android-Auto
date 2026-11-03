@@ -886,7 +886,9 @@ make rhmiapp    # only the iDrive app
 - The iDrive app needs `libAppFramework.A.so` and `libCoreFramework.A.so` from the firmware dump's
   `opt/hmi/ID5/lib`, copied into `rhmiapp/lib/`.
 
-Host tests in `tests/` build with a Linux g++ (WSL is fine):
+Host tests in `tests/` build with a Linux g++ (WSL is fine). `make check` builds and runs all of them, then
+`test_session_lifecycle` under ThreadSanitizer; `make -C tests run-test_pcm` runs one. Each test's sources are
+listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 
 | Test | Covers |
 |---|---|
