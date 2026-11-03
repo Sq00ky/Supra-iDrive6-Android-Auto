@@ -159,6 +159,61 @@ static PacedSim simulatePaced(uint32_t window, int jitter_ms, int seconds, bool 
     return r;
 }
 
+// A guidance prompt as the car plays it (logs 2026-11-03), at 1 ms resolution in output frames at 44.1 kHz. The shim's
+// writes never block: the mixer writes a block whenever it is no more than 150 ms ahead of real time, so it runs ~150 ms
+// ahead and the device is fed for that long. The phone starts the stream at 1 s and then sends one 42.667 ms frame
+// (1881.6 output frames) per frame period on its own clock, each late by 0..jitter ms, with no burst at the start.
+// preroll_ms = PrerollGate target and hold (0 = off); lead_rule = waits use waitIsSafe's lead (false = only after a
+// write that blocked, which never happens here: the old rule). gaps = short or empty blocks while playing.
+struct PromptSim { int gaps, holds, waited_blocks; double min_lead_ms, first_sound_ms; };
+static PromptSim simulatePrompt(uint32_t preroll_ms, uint32_t budget_ms, int jitter_ms, int seconds, bool lead_rule) {
+    const double fpm = 44.1, block = 1024.0, frame_out = 2048.0 * 44100.0 / 48000.0, frame_ms = 2048.0 / 48.0;
+    const int start_ms = 1000;
+    const uint32_t block_ms = 23;
+    PrerollGate gate;
+    gate.configure((size_t)(preroll_ms * 44100u / 1000u), preroll_ms);
+    UnderrunGuard guard(budget_ms);
+    PromptSim r = { 0, 0, 0, 1e9, -1 };
+    double ring = 0, written = 0, next_arrival = start_ms;
+    int k = 0;
+    uint32_t seed = 4242u, waited = 0;
+    for (int t = 0; t < (start_ms + seconds * 1000); ++t) {
+        while (t >= next_arrival) {
+            ring += frame_out;
+            ++k;
+            seed = seed * 1103515245u + 12345u;
+            const double nominal = start_ms + k * frame_ms;
+            const double late = jitter_ms ? (double)((seed >> 16) % (uint32_t)(jitter_ms + 1)) : 0.0;
+            next_arrival = nominal + late > next_arrival ? nominal + late : next_arrival;
+        }
+        const bool started = t >= start_ms;
+        while (written / fpm <= t + 150.0) {
+            const double lead = written / fpm - t;
+            if (started && lead < r.min_lead_ms) r.min_lead_ms = lead;
+            const bool mix = gate.ready(started, (size_t)ring, (uint64_t)t + 1);
+            const bool live = started && mix;
+            const bool can_wait = lead_rule ? waitIsSafe(false, (int64_t)lead, budget_ms, block_ms) : false;
+            if (guard.shouldWait(live, (size_t)ring, (size_t)block, waited, can_wait)) {
+                if (waited == 0) ++r.waited_blocks;
+                ++waited;
+                break;   // wait this ms
+            }
+            if (mix) {
+                const double got = ring < block ? (double)(size_t)ring : block;
+                if (live && r.first_sound_ms < 0 && got > 0) r.first_sound_ms = t - start_ms;
+                ring -= got;
+                if (live && got < block) ++r.gaps;
+                guard.onPulled(live, (size_t)got, (size_t)block);
+                gate.onPulled(live, (size_t)got);
+            }
+            written += block;
+            waited = 0;
+        }
+    }
+    r.holds = (int)gate.totalHolds();
+    return r;
+}
+
 int main() {
     // dB helper
     CHECK(near(AudioMixer::dbToGain(0), 1.0f, 1e-6f));
@@ -538,6 +593,70 @@ int main() {
             CHECK(fixed.max_abs_ppm <= 60);
             CHECK(fixed.gaps == 0);
             CHECK(fixed.target > 300);
+        }
+    }
+
+    // 17. waitIsSafe: a blocked write, or a lead over real time that covers the wait + a block + 20 ms.
+    {
+        CHECK(waitIsSafe(true, -500, 30, 23));     // the device was full: safe whatever the lead says
+        CHECK(waitIsSafe(false, 150, 30, 23));     // the car: writes never block, the mixer runs ~150 ms ahead
+        CHECK(waitIsSafe(false, 73, 30, 23));
+        CHECK(!waitIsSafe(false, 72, 30, 23));
+        CHECK(!waitIsSafe(false, 0, 30, 23));      // just re-anchored after falling behind
+        CHECK(!waitIsSafe(false, -40, 30, 23));
+    }
+
+    // 18. PrerollGate: hold a started stream until it has a cushion (or its first audio waited hold_ms).
+    {
+        PrerollGate off;
+        CHECK(off.ready(true, 0, 1000));            // never configured: plays at once
+        off.configure(0, 60);
+        CHECK(off.ready(true, 0, 1000) && !off.holding());
+
+        PrerollGate g;
+        g.configure(2646, 60);                       // 60 ms at 44.1 kHz
+        CHECK(!g.ready(true, 0, 1000));              // started, nothing queued
+        CHECK(!g.ready(true, 1881, 1001));           // one 42.7 ms frame: not enough yet
+        CHECK(!g.ready(true, 1881, 1050));
+        CHECK(g.ready(true, 3763, 1043) && g.holds() == 1);   // the second frame: plays, with ~85 ms queued
+        CHECK(g.ready(true, 500, 1100));             // open: stays open while short
+        g.onPulled(true, 500);                       // a short block: the cushion recovers by itself, no new hold
+        CHECK(g.ready(true, 0, 1123));
+        g.onPulled(true, 0);                         // a whole block with no audio: ran empty, hold again
+        CHECK(g.holding() && !g.ready(true, 0, 1146));
+        CHECK(!g.ready(true, 900, 1200));
+        CHECK(g.ready(true, 900, 1260) && g.holds() == 2);    // only 900 frames, but they waited 60 ms: play them
+
+        g.restart();                                 // a new START
+        CHECK(!g.ready(true, 1000, 2000));
+        CHECK(g.ready(false, 1000, 2001));           // STOP: the tail plays out at once
+        CHECK(!g.ready(true, 1000, 2002));           // and the next start is held again
+
+        g.resetInterval();
+        CHECK(g.holds() == 0 && g.totalHolds() == 2);
+        g.reset();
+        CHECK(g.totalHolds() == 0);
+    }
+
+    // 19. A prompt as the car plays it: the phone sends in real time with no burst and the shim never blocks. The old
+    //     rules (no pre-roll, waits only after a blocked write) leave the stream without a cushion, so late frames
+    //     become holes (the car's "857 of 1024"). Pre-roll alone removes most; with the lead rule the waits cover
+    //     the rest. A 60 ms pre-roll delays a prompt by about
+    //     one frame period (~43 ms, plus the wait for the next block), never more than 60 ms + one block.
+    {
+        for (int jitter = 0; jitter <= 60; jitter += (jitter < 20 ? 10 : 20)) {
+            PromptSim old_rules = simulatePrompt(0, 30, jitter, 30, false);
+            PromptSim preroll = simulatePrompt(60, 30, jitter, 30, false);
+            PromptSim both = simulatePrompt(60, 30, jitter, 30, true);
+            printf("prompt, jitter 0..%d ms, 30 s: old rules %d gaps; pre-roll %d gaps; pre-roll + lead rule %d gaps "
+                   "(%d waits, first sound at %.0f ms, %d holds, lowest lead %.0f ms)\n", jitter, old_rules.gaps,
+                   preroll.gaps, both.gaps, both.waited_blocks, both.first_sound_ms, both.holds, both.min_lead_ms);
+            if (jitter > 0) CHECK(old_rules.gaps > 0);    // the bug
+            CHECK(old_rules.waited_blocks == 0);          // the old rule never waits when writes don't block
+            CHECK(both.gaps == 0);
+            CHECK(both.holds == 1);
+            CHECK(both.first_sound_ms >= 0 && both.first_sound_ms <= 60 + 24);   // the hold, then the next block
+            CHECK(both.min_lead_ms >= 100);               // waits never ate into the device's feed
         }
     }
 

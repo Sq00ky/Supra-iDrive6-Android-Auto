@@ -153,7 +153,7 @@ private:
     uint32_t gap_late_total_;            // session
 
     // Underflow reports (mixer thread, except frames_since_start_).
-    void checkUnderflow(int s, size_t got, size_t need, uint64_t now);
+    void checkUnderflow(int s, bool playing, size_t got, size_t need, uint64_t now);   // playing = started, not held
     void logUnderflowFollowUp(uint64_t now);
     UnderflowFn underflow_fn_;
     void* underflow_user_;
@@ -201,6 +201,16 @@ private:
     volatile bool drift_reset_;                // set by the session thread at a media start
     int32_t drift_applied_;                    // trim currently set on rs_[MEDIA] (mixer thread)
     uint32_t waited_blocks_, waited_ms_;       // stats interval (mixer thread)
+    uint64_t waited_blocks_total_;             // session (mixer thread)
+    PrerollGate gate_[NSTREAMS];               // pre-roll: hold a started stream until it has a cushion (mixer thread)
+    uint32_t preroll_ms_;                      // NBT_BROWSER_PREROLL_MS (0 = off)
+    volatile uint32_t start_seq_[NSTREAMS];    // bumped by the session thread at every START
+    uint32_t seen_seq_[NSTREAMS];              // the last start_seq_ the mixer saw (mixer thread)
+    // Whether waiting for late input is safe (waitIsSafe), per stats interval (mixer thread): device writes, the ones
+    // that blocked, and the lowest / highest lead over real time seen before a block.
+    uint32_t writes_, writes_blocked_;
+    int64_t lead_min_, lead_max_;
+    bool lead_seen_;
 
     // mixer thread
     pthread_t thread_;

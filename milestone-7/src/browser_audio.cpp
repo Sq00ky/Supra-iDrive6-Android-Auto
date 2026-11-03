@@ -122,6 +122,12 @@ BrowserAudio::BrowserAudio()
     }
     wait_ms_ = 30;
     waited_blocks_ = waited_ms_ = 0;
+    waited_blocks_total_ = 0;
+    preroll_ms_ = 60;
+    for (int s = 0; s < NSTREAMS; ++s) { start_seq_[s] = 0; seen_seq_[s] = 0; }
+    writes_ = writes_blocked_ = 0;
+    lead_min_ = lead_max_ = 0;
+    lead_seen_ = false;
     drift_on_ = true;
     drift_pi_on_ = true;
     drift_reset_ = false;
@@ -169,8 +175,8 @@ void BrowserAudio::consumed(int s, size_t bytes) {
 }
 
 // After the mixer pulled a block of stream s: got / need = converted samples obtained / wanted.
-void BrowserAudio::checkUnderflow(int s, size_t got, size_t need, uint64_t now) {
-    if (!started_[s] || got >= need) { dry_[s] = false; return; }
+void BrowserAudio::checkUnderflow(int s, bool playing, size_t got, size_t need, uint64_t now) {
+    if (!playing || got >= need) { dry_[s] = false; return; }
     if (dry_[s] || frames_since_start_[s] == 0) return;   // already reported, or no audio yet: not an underflow
     dry_[s] = true;
     const uint32_t k = ++reports_[s];
@@ -241,6 +247,11 @@ bool BrowserAudio::init() {
         wait_ms_ = w < 0 ? 0u : (w > 60 ? 60u : (uint32_t)w);
     }
     for (int s = 0; s < NSTREAMS; ++s) guard_[s].setBudget(wait_ms_);
+    // Pre-roll: a started stream plays once this much is queued (or its first audio has waited this long). The phone
+    // sends in real time, so without it a stream has no cushion and every late frame is a hole.
+    preroll_ms_ = (uint32_t)envRange("NBT_BROWSER_PREROLL_MS", 60, 0, 200);
+    printf("[Browser] pre-roll %u ms per stream%s, late-input wait up to %u ms (NBT_BROWSER_PREROLL_MS / "
+           "NBT_BROWSER_WAIT_MS)\n", preroll_ms_, preroll_ms_ ? "" : " (off)", wait_ms_);
     drift_on_ = envFlag("NBT_BROWSER_DRIFT") != 0;   // unset (-1) or on (1): correct media clock drift
     // Mixer thread priority: 15 by default, above the default 10 that the HMI and video threads compete at, below
     // the 21 of the USB reader. 0 = leave it alone. The car's own audio threads should stay above it (check with pidin).
@@ -499,6 +510,7 @@ void BrowserAudio::onAaStreamState(uint8_t channel, bool started, uint32_t rate,
         srate_[s].start(rate);
         src_rate_[s] = srate_[s].rate();   // the mixer reconfigures its resampler before the next block
         frames_since_start_[s] = 0;        // no underflow before this stream's first frame
+        ++start_seq_[s];                   // the mixer holds it for pre-roll again, even after a quick STOP / START
     }
     started_[s] = started;
     if (s == MEDIA) drift_reset_ = true;   // a new stream (or none): the mixer learns its level afresh
@@ -691,7 +703,11 @@ void BrowserAudio::logStats(bool force) {
            fill[SYSTEM], (unsigned long long)watch_[MEDIA].totalGaps(), (unsigned long long)watch_[GUIDANCE].totalGaps(),
            (unsigned long long)watch_[SYSTEM].totalGaps(), waited_ms_, waited_blocks_, guard_[MEDIA].timeouts(),
            guard_[GUIDANCE].timeouts(), guard_[SYSTEM].timeouts());
-    for (int s = 0; s < NSTREAMS; ++s) watch_[s].resetInterval();
+    // Pre-roll: starts (and resumes after running empty) that were held until the stream had a cushion.
+    if (preroll_ms_)
+        printf("[Browser] pre-roll holds media/guidance/system: %u/%u/%u (%u ms each at most)\n", gate_[MEDIA].holds(),
+               gate_[GUIDANCE].holds(), gate_[SYSTEM].holds(), preroll_ms_);
+    for (int s = 0; s < NSTREAMS; ++s) { watch_[s].resetInterval(); gate_[s].resetInterval(); }
     waited_ms_ = waited_blocks_ = 0;
     // Mixer timing: the longest time between two device writes in the interval against the block period. Late gaps
     // (over twice the period) eat the device's ~4 fragments of headroom; if they show up, raise NBT_BROWSER_PRIO.
@@ -699,8 +715,22 @@ void BrowserAudio::logStats(bool force) {
         const uint32_t period = (uint32_t)(frag_bytes_ / (kOutCh * 2u) * 1000u / rate_);
         printf("[Browser] mixer timing: block %u ms, longest gap between writes %u ms, late gaps (> %u ms) %u, session "
                "%u, thread priority %d\n", period, gap_max_ms_, 2u * period, gap_late_, gap_late_total_, prio_now_);
+        // What decides whether a late-input wait is allowed (waitIsSafe): writes that blocked (device full), and how
+        // far ahead of real time the mixer was before a block (a wait needs NBT_BROWSER_WAIT_MS + a block + 20 ms).
+        if (lead_seen_)
+            printf("[Browser] wait room: writes that blocked %u of %u, lead over real time %lld..%lld ms (a wait needs "
+                   "%u ms)\n", writes_blocked_, writes_, (long long)lead_min_, (long long)lead_max_,
+                   wait_ms_ + period + 20u);
     }
     gap_max_ms_ = gap_late_ = 0;
+    writes_ = writes_blocked_ = 0;
+    lead_seen_ = false;
+    if (force)
+        printf("[Feature] preroll=%u ms holds media/guidance/system=%llu/%llu/%llu; late_input_wait=%u ms "
+               "waited_blocks=%llu timeouts=%u/%u/%u\n", preroll_ms_,
+               (unsigned long long)gate_[MEDIA].totalHolds(), (unsigned long long)gate_[GUIDANCE].totalHolds(),
+               (unsigned long long)gate_[SYSTEM].totalHolds(), wait_ms_, (unsigned long long)waited_blocks_total_,
+               guard_[MEDIA].timeouts(), guard_[GUIDANCE].timeouts(), guard_[SYSTEM].timeouts());
     // Media drift correction: the trim now applied, the smoothed media queue and the level it holds.
     if (!drift_on_)
         printf("[Browser] media drift correction off (NBT_BROWSER_DRIFT=0)\n");
@@ -815,6 +845,10 @@ void BrowserAudio::mixerLoop() {
         for (int s = 0; s < NSTREAMS; ++s) discard(s);   // nothing will play what is queued
         return;
     }
+    for (int s = 0; s < NSTREAMS; ++s) {
+        gate_[s].configure((size_t)preroll_ms_ * rate_ / 1000u, preroll_ms_);
+        seen_seq_[s] = start_seq_[s];
+    }
     // One mixer block = one device fragment: the shim puts every write into a buffer slot of its own (one fragment
     // at most), so a short write would hand A2I a part-filled package.
     size_t block = 0;
@@ -881,12 +915,30 @@ void BrowserAudio::mixerLoop() {
         bool have[NSTREAMS] = { false, false, false };
         bool loud[NSTREAMS] = { false, false, false };
         if (play) {
+            // Pre-roll: a stream that just started (or ran empty) is held until it has a cushion, so the phone's
+            // real-time frames don't each arrive just in time. A held stream is not pulled, counted or reported.
+            bool mix[NSTREAMS], live[NSTREAMS];
+            for (int s = 0; s < NSTREAMS; ++s) {
+                const uint32_t seq = start_seq_[s];
+                if (seq != seen_seq_[s]) { seen_seq_[s] = seq; gate_[s].restart(); }
+                const bool started = started_[s];
+                const size_t avail = estimateOutFrames(ring_[s]->size(), pending_[s].size(), src_rate_[s], kSrcCh[s],
+                                                       rate_, kOutCh);
+                mix[s] = gate_[s].ready(started, avail, now);
+                live[s] = started && mix[s];
+            }
             // A playing stream that is a few ms short of a whole block: wait for it rather than padding a hole into
-            // the music. Only right after a write that blocked (the device is full and still holds ~4 fragments,
-            // ~92 ms), at most NBT_BROWSER_WAIT_MS per block; a stream that really stopped sending is padded at once
-            // after the first timeout.
+            // the audio. Only while the device holds enough to cover the wait (waitIsSafe: the last write blocked,
+            // or the mixer is far enough ahead of real time), at most NBT_BROWSER_WAIT_MS per block; a stream that
+            // really stopped sending is padded at once after the first timeout.
             // The time waited is measured, not counted in steps: a usleep(2000) rounds up to the next clock tick and
             // may wake late, so counted steps would let a 60 ms budget really take ~90 ms, about all the device holds.
+            const uint32_t block_ms = (uint32_t)(block * 1000u / rate_);
+            const int64_t lead = (int64_t)(written_frames * 1000u / rate_) - (int64_t)(nowMs() - t0);
+            if (!lead_seen_ || lead < lead_min_) lead_min_ = lead;
+            if (!lead_seen_ || lead > lead_max_) lead_max_ = lead;
+            lead_seen_ = true;
+            const bool can_wait = waitIsSafe(last_write_blocked, lead, wait_ms_, block_ms);
             uint32_t waited = 0;
             const uint64_t wait_start = nowUs();
             for (;;) {
@@ -894,20 +946,22 @@ void BrowserAudio::mixerLoop() {
                 for (int s = 0; s < NSTREAMS; ++s) {
                     const size_t avail = estimateOutFrames(ring_[s]->size(), pending_[s].size(), src_rate_[s],
                                                            kSrcCh[s], rate_, kOutCh);
-                    if (guard_[s].shouldWait(started_[s], avail, block, waited, last_write_blocked)) wait = true;
+                    if (guard_[s].shouldWait(live[s], avail, block, waited, can_wait)) wait = true;
                 }
                 if (!wait || stop_) break;
                 usleep(kWaitStepMs * 1000u);
                 waited = (uint32_t)((nowUs() - wait_start) / 1000u);
             }
-            if (waited) { ++waited_blocks_; waited_ms_ += waited; }
+            if (waited) { ++waited_blocks_; ++waited_blocks_total_; waited_ms_ += waited; }
             for (int s = 0; s < NSTREAMS; ++s) {
+                if (!mix[s]) continue;   // held for pre-roll: its audio stays queued (and unacked)
                 const size_t queued_before = ring_[s]->size();
                 size_t got = 0;
                 have[s] = pull(s, block, &in[s][0], &loud[s], &got);
-                watch_[s].onPull(started_[s], queued_before, got, block * kOutCh);
-                guard_[s].onPulled(started_[s], got / kOutCh, block);
-                checkUnderflow(s, got, block * kOutCh, now);
+                watch_[s].onPull(live[s], queued_before, got, block * kOutCh);
+                guard_[s].onPulled(live[s], got / kOutCh, block);
+                checkUnderflow(s, live[s], got, block * kOutCh, now);
+                gate_[s].onPulled(live[s], got / kOutCh);
             }
         }
 
@@ -961,6 +1015,7 @@ void BrowserAudio::mixerLoop() {
         last_write_ms_ = write_start;
         const bool wrote = writePcm(&out[0], block);
         last_write_blocked = wrote && nowMs() - write_start >= (uint64_t)(block * 1000u / rate_) / 2u;
+        if (wrote) { ++writes_; if (last_write_blocked) ++writes_blocked_; }
         if (wrote) {
             fail_run = 0;
             ++blocks_;
@@ -1007,6 +1062,8 @@ void BrowserAudio::onSessionEnded() {
         frames_in_[s] = 0;
         watch_[s].resetAll();
         guard_[s].reset();
+        gate_[s].reset();
+        seen_seq_[s] = start_seq_[s];
         gap_[s] = false;
         srate_[s].reset();            // the next phone declares (or is measured) afresh
         src_rate_[s] = srate_[s].rate();
@@ -1026,6 +1083,9 @@ void BrowserAudio::onSessionEnded() {
     pthread_mutex_unlock(&lock_);
     last_media_ms_ = 0;
     waited_ms_ = waited_blocks_ = 0;
+    waited_blocks_total_ = 0;
+    writes_ = writes_blocked_ = 0;
+    lead_seen_ = false;
     drift_.reset();   // the mixer thread is stopped: safe to touch its state
     drift_pi_.reset();
     drift_reset_ = false;
