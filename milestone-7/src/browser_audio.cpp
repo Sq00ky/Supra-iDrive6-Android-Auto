@@ -98,6 +98,8 @@ BrowserAudio::BrowserAudio()
     memset(fn_, 0, sizeof(fn_));
     consumed_fn_ = NULL;
     consumed_user_ = NULL;
+    ack_window_ = 0;
+    media_frame_us_ = 0;
     underflow_fn_ = NULL;
     underflow_user_ = NULL;
     rs_engine_ = PcmResampler::SPEEX;
@@ -458,6 +460,10 @@ void BrowserAudio::onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, ui
     if (s < 0 || !ring_[s] || !pcm || len == 0) return;
     ++frames_in_[s];
     ++frames_since_start_[s];
+    if (s == MEDIA) {   // frame length, for the drift loop's target cap under deferred acks
+        const uint64_t bps = (uint64_t)src_rate_[MEDIA] * kSrcCh[MEDIA] * 2u;
+        if (bps) media_frame_us_ = (uint32_t)((uint64_t)len * 1000000u / bps);
+    }
     if (pcm_failed_) {   // no output device this session: nothing will play it, so it is taken at once
         consumed(s, len);
         return;
@@ -906,6 +912,17 @@ void BrowserAudio::mixerLoop() {
             const uint64_t in_bps = (uint64_t)src_rate_[MEDIA] * kSrcCh[MEDIA] * 2u;
             const double fill_ms = (in_bps ? (double)ring_[MEDIA]->size() * 1000.0 / (double)in_bps : 0.0) +
                                    (double)(pending_[MEDIA].size() / kOutCh) * 1000.0 / (double)rate_;
+            // Deferred acks: a phone held to the window keeps ~window x frame length queued, and no trim lowers that.
+            // The target cap must cover it (plus a block and some jitter), or the loop pins the trim at +500 ppm.
+            const uint32_t frame_us = media_frame_us_;
+            if (ack_window_ && frame_us) {
+                const uint32_t cap = (uint32_t)((uint64_t)ack_window_ * frame_us / 1000u) + 60u;
+                if (cap > drift_.maxTarget()) {
+                    drift_.raiseMaxTarget(cap);
+                    printf("[Browser] media drift: target cap raised to %u ms (deferred acks: window %u x %.1f ms "
+                           "frames)\n", cap, ack_window_, frame_us / 1000.0);
+                }
+            }
             int32_t ppm = drift_.update(fill_ms, now);   // learns the target and smooths the queue for both loops
             if (drift_pi_on_) ppm = drift_.learning() ? 0 : drift_pi_.update(drift_.smoothed() - drift_.target(), now);
             if (ppm != drift_applied_) { rs_[MEDIA].setTrimPpm(ppm); drift_applied_ = ppm; }

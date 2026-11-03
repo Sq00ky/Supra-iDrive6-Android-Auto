@@ -235,6 +235,8 @@ int AASession::audioIndex(uint8_t channel) {
 
 void AASession::setDeferredAudioAcks(bool on) { defer_audio_acks_ = on; }
 
+uint32_t AASession::audioAckWindow() { return (uint32_t)envRange("NBT_AA_MAX_UNACKED", 10, 1, 64); }
+
 void AASession::postAudioConsumed(uint8_t channel, size_t bytes) {
     const int i = audioIndex(channel);
     if (i < 0 || bytes == 0) return;
@@ -444,7 +446,7 @@ bool AASession::start(int client_fd) {
     for (int c = 0; c < 32; ++c) offered_audio_[c].clear();   // filled again when this session sends its SDR
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
     session_defer_acks_ = defer_audio_acks_;
-    audio_max_unacked_ = (uint32_t)envRange("NBT_AA_MAX_UNACKED", 10, 1, 64);
+    audio_max_unacked_ = audioAckWindow();
     ack_force_ns_ = (uint64_t)envRange("NBT_AA_ACK_FORCE_MS", 1000, 0, 60000) * 1000000ull;
     ack_times_ = envFlag("NBT_AA_ACK_TIMES") != 0;
     pthread_mutex_lock(&ack_mutex_);

@@ -1667,7 +1667,10 @@ int main(int argc, char* argv[]) {
         // Deferred acks (NBT_AA_DEFER_ACKS, default on): an AA audio frame is acked once the mixer has taken it, so
         // the phone is paced by the car's clock instead of running ahead on its own.
         const bool defer = nbt::envFlag("NBT_AA_DEFER_ACKS") != 0;
-        if (defer) browser.setConsumedCallback(&onAudioConsumed, NULL);
+        if (defer) {
+            browser.setConsumedCallback(&onAudioConsumed, NULL);
+            browser.setAckWindow(nbt::AASession::audioAckWindow());   // the drift loop's target must cover it
+        }
         g_session.setDeferredAudioAcks(defer);
         printf("[Browser] audio acks: %s (NBT_AA_DEFER_ACKS)\n", defer ? "once played (deferred)" : "on arrival");
         // Underflow reports (NBT_AA_UNDERFLOW_REPORT, default on): tell the phone when a stream ran dry (0x800b).

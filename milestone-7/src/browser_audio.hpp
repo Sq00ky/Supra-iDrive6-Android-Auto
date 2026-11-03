@@ -88,6 +88,9 @@ public:
     // (deferred acks, media_ack.hpp). Called from the mixer and session threads. Set before the first session.
     typedef void (*ConsumedFn)(uint8_t channel, size_t bytes, void* user);
     void setConsumedCallback(ConsumedFn fn, void* user) { consumed_fn_ = fn; consumed_user_ = user; }
+    // With deferred acks: the ack window in frames (0 = acks on arrival). A phone held to it keeps about window x
+    // frame length of media queued, so the drift loop's target cap is raised to cover that. Set before the first session.
+    void setAckWindow(uint32_t frames) { ack_window_ = frames; }
 
     // A started stream that had already sent audio ran dry: a mixer block got less than a whole block and was padded.
     // Called once per dry spell (again only after a whole block was available), from the mixer thread. AASession
@@ -125,6 +128,8 @@ private:
 
     ConsumedFn consumed_fn_;
     void* consumed_user_;
+    uint32_t ack_window_;                  // setAckWindow (0 = acks on arrival)
+    volatile uint32_t media_frame_us_;     // length of the last AA media frame (session thread writes)
 
     // Resampler engine (NBT_BROWSER_RESAMPLER, default speex; the switch file flips it at run time for an A/B by ear).
     void setResampler(PcmResampler::Engine e, const char* why);   // mixer thread (or before it runs)

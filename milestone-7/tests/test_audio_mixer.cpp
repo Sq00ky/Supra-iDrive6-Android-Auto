@@ -117,6 +117,48 @@ static DriftSim simulateDrift(double phone_ppm, int jitter_ms, double lead_ms, i
     return r;
 }
 
+// Deferred acks, closed loop at 1 ms: the phone is held to the ack window. It sends a frame (42.667 ms of audio,
+// arriving 2..2+jitter ms later) whenever fewer than `window` frames are unacked; a frame is acked once the mixer
+// has consumed all of it. Its own clock doesn't matter: our consumption paces it. raise_cap = what BrowserAudio does
+// under deferred acks (target cap = window x frame + 60 ms); pi = DriftPi sets the trim.
+struct PacedSim { int32_t final_ppm, max_abs_ppm; int gaps; double target, ema; };
+static PacedSim simulatePaced(uint32_t window, int jitter_ms, int seconds, bool raise_cap, bool pi) {
+    DriftControl dc;
+    DriftPi dp;
+    const double frame_ms = 2048.0 / 48.0, block_ms = 1024.0 / 44.1;
+    if (raise_cap) dc.raiseMaxTarget((uint32_t)(window * frame_ms) + 60u);
+    double fill = 0, consumed = 0, next_block = block_ms;
+    long sent = 0;
+    std::vector<double> in_flight;   // arrival times of sent frames not arrived yet
+    uint32_t seed = 4242u;
+    int32_t ppm = 0;
+    PacedSim r = { 0, 0, 0, 0, 0 };
+    for (int t = 0; t < seconds * 1000; ++t) {
+        const long acked = (long)(consumed / frame_ms);
+        while (sent - acked < (long)window) {      // the phone fills its window
+            seed = seed * 1103515245u + 12345u;
+            in_flight.push_back(t + 2.0 + (jitter_ms ? (double)((seed >> 16) % (uint32_t)(jitter_ms + 1)) : 0.0));
+            ++sent;
+        }
+        for (size_t i = 0; i < in_flight.size();) {
+            if (in_flight[i] <= t) { fill += frame_ms; in_flight.erase(in_flight.begin() + i); } else ++i;
+        }
+        while (t >= next_block) {
+            const double need = block_ms * (1.0 + ppm * 1e-6);
+            if (fill < need) { if (t > 20000) ++r.gaps; consumed += fill; fill = 0; }
+            else { fill -= need; consumed += need; }
+            ppm = dc.update(fill, (uint64_t)t);
+            if (pi) ppm = dc.learning() ? 0 : dp.update(dc.smoothed() - dc.target(), (uint64_t)t);
+            if (abs(ppm) > r.max_abs_ppm) r.max_abs_ppm = abs(ppm);
+            next_block += block_ms;
+        }
+    }
+    r.final_ppm = ppm;
+    r.target = dc.target();
+    r.ema = dc.smoothed();
+    return r;
+}
+
 int main() {
     // dB helper
     CHECK(near(AudioMixer::dbToGain(0), 1.0f, 1e-6f));
@@ -471,6 +513,31 @@ int main() {
             CHECK(fabs(pi.integral - cases[i]) <= 20);            // and the integral reads it
             CHECK(pi.late_err <= 4.0);                            // on target, within the jitter
             if (cases[i] != 0) CHECK(pi.late_err < pp.late_err);  // closer than the P loop
+        }
+    }
+
+    // 16. Deferred acks: a phone held to the 10-frame window keeps ~400 ms queued, whatever the trim. With the old
+    //     300 ms target cap both loops pin the trim at +500 ppm; with the cap raised to cover the window they settle
+    //     at the queue the window gives and leave the trim near 0.
+    {
+        CHECK(DriftControl().maxTarget() == 300);
+        DriftControl c;
+        c.raiseMaxTarget(200);
+        CHECK(c.maxTarget() == 300);   // never lowered
+        c.raiseMaxTarget(487);
+        c.reset();
+        CHECK(c.maxTarget() == 487);   // kept across reset
+        for (int pi = 0; pi < 2; ++pi) {
+            PacedSim stuck = simulatePaced(10, 5, 900, false, pi != 0);
+            PacedSim fixed = simulatePaced(10, 5, 900, true, pi != 0);
+            printf("paced by acks (%s): 300 ms cap: trim %+d ppm (target %.0f, queue %.0f ms); raised cap: trim %+d ppm, "
+                   "max %d (target %.0f, queue %.0f ms), gaps %d\n", pi ? "PI" : "P", stuck.final_ppm, stuck.target,
+                   stuck.ema, fixed.final_ppm, fixed.max_abs_ppm, fixed.target, fixed.ema, fixed.gaps);
+            CHECK(stuck.final_ppm == 500);                  // the bug the raised cap fixes
+            CHECK(abs(fixed.final_ppm) <= 30);
+            CHECK(fixed.max_abs_ppm <= 60);
+            CHECK(fixed.gaps == 0);
+            CHECK(fixed.target > 300);
         }
     }
 

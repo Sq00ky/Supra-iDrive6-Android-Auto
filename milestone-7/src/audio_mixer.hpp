@@ -158,8 +158,11 @@ void fadeOutTail(int16_t* buf, size_t frames, size_t channels, size_t fade_frame
 void fadeInHead(int16_t* buf, size_t frames, size_t channels, size_t fade_frames);
 
 // Clock-drift correction for the AA media stream (browser mode). The phone produces audio on its own clock, the car
-// plays it on another, and nothing ties them: our media acks do not throttle the phone. A phone even 50 ppm slow
-// drains its ~130 ms lead in ~45 min and then gaps every few seconds; a fast one makes the latency creep up.
+// plays it on another. With acks on arrival nothing ties them: a phone even 50 ppm slow drains its ~130 ms lead in
+// ~45 min and then gaps every few seconds; a fast one makes the latency creep up. With deferred acks (media_ack.hpp)
+// a phone may be held to the ack window instead: its queue then sits near window x frame length (~427 ms for 10
+// frames), which no trim can lower (faster playing only makes it send sooner). The target cap must then cover that
+// level (raiseMaxTarget), or the loop sees a permanent error above a 300 ms cap and pins the trim at +max_ppm.
 // DriftControl watches how much media is queued (ring + converted, in ms of audio) once per mixer block:
 //   - for the first learn_ms of a stream it only learns the level the phone naturally keeps (smoothed), bounded to
 //     [min_target_ms, max_target_ms]: that becomes the target, so no latency is added;
@@ -179,6 +182,9 @@ public:
     DriftControl();
     void configure(const DriftConfig& cfg);
     void reset();                                       // stream start / stop / session end
+    // Raises max_target_ms to at least ms (never lowers it); kept across reset(). Takes effect when learning ends.
+    void raiseMaxTarget(uint32_t ms) { if (ms > cfg_.max_target_ms) cfg_.max_target_ms = ms; }
+    uint32_t maxTarget() const { return cfg_.max_target_ms; }
     // One mixer block: fill_ms = queued media in ms of audio. Returns the trim to apply (0 while learning).
     int32_t update(double fill_ms, uint64_t now_ms);
     bool learning() const { return learning_; }
