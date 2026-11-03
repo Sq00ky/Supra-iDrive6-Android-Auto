@@ -9,6 +9,7 @@
 #include <map>
 #include <pthread.h>
 #include "aa_cryptor.hpp"
+#include "media_ack.hpp"
 #include "sdr_builder.hpp"
 #include "touch_types.hpp"
 
@@ -66,6 +67,14 @@ public:
     void postMicData(const uint8_t* pcm, size_t len);
     bool micOpen();
 
+    // Deferred audio acks (browser audio mode; see media_ack.hpp). On: a PCM frame on ch 8 / 9 / 16 is acked once the
+    // consumer reports its bytes taken (postAudioConsumed), or after NBT_AA_ACK_FORCE_MS (default 1000) unacked. Off:
+    // acked on arrival (the consumer cannot report). Set before start(); applies from the next session.
+    void setDeferredAudioAcks(bool on);
+    // The audio consumer took `bytes` of `channel`'s PCM, oldest first (played, or dropped). Thread-safe (mixer thread);
+    // the acks go out from the session thread, woken through the wake pipe.
+    void postAudioConsumed(uint8_t channel, size_t bytes);
+
 private:
     static void* sessionThreadStub(void* arg);
     void sessionLoop();
@@ -78,7 +87,7 @@ private:
     bool sendChannelOpenRequest(uint8_t channel_id);
     bool sendAvSetupResponse(uint8_t channel);
     bool sendVideoFocusIndication(uint8_t channel, bool focused = true, bool unrequested = false);
-    bool sendAvMediaAck(uint8_t channel, uint32_t count);
+    bool sendAvMediaAck(uint8_t channel);   // one frame acked
     bool sendAudioFocusResponse(uint8_t focus_state);
     bool readExact(uint8_t* buffer, size_t length);
     static uint32_t rxTimeoutMs();
@@ -138,6 +147,21 @@ private:
     AudioStateCallback audio_state_cb_;
     void* audio_state_user_data_;
     uint32_t audio_frames_[3];   // [0] = ch 8 speech, [1] = ch 9 media, [2] = ch 16 system (session thread only)
+    static int audioIndex(uint8_t channel);   // channel -> the [0..2] index above, -1 for other channels
+
+    // Deferred audio acks, indexed like audio_frames_. The ledgers are guarded by ack_mutex_ (session thread records
+    // arrivals and sends acks, the mixer thread reports consumption).
+    bool defer_audio_acks_;          // setDeferredAudioAcks(); copied to session_defer_acks_ at start()
+    bool session_defer_acks_;        // this session (session thread)
+    uint32_t audio_max_unacked_;     // NBT_AA_MAX_UNACKED: window our AV setup response gives audio sinks (default 10)
+    uint64_t ack_force_ns_;          // NBT_AA_ACK_FORCE_MS in ns (0 = never force)
+    MediaAckLedger ack_ledger_[3];
+    pthread_mutex_t ack_mutex_;
+    double ack_stats_s_;             // last periodic ack stats line (session thread)
+    uint32_t forced_logged_;         // forced acks printed individually this session (session thread)
+    bool hasPendingAcks();           // any unacked deferred frame (session thread)
+    void drainAcks();                // session thread: send the acks the ledgers release
+    void logAckStats(bool final);    // session thread: 30 s interval line, or the session summary
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
     // AudioConfigs our ServiceDiscoveryResponse offered per audio sink channel, in order (session thread).
     std::vector<AaAudioConfig> offered_audio_[32];

@@ -83,6 +83,12 @@ public:
     static int streamForChannel(uint8_t channel);
     static const char* streamName(int s);
 
+    // Every byte of AA PCM this object takes from a stream, oldest first: read by the mixer, dropped by a full ring,
+    // or discarded (media paused, no grant, no device). AASession acks a frame once all of its bytes are reported
+    // (deferred acks, media_ack.hpp). Called from the mixer and session threads. Set before the first session.
+    typedef void (*ConsumedFn)(uint8_t channel, size_t bytes, void* user);
+    void setConsumedCallback(ConsumedFn fn, void* user) { consumed_fn_ = fn; consumed_user_ = user; }
+
     // Mixer thread (internal).
     void mixerLoop();
     void routeGranted();
@@ -108,6 +114,11 @@ private:
     void releaseRoute(const char* why);
     bool routedForPlayback();
     void logStats(bool force);
+    void consumed(int s, size_t bytes);   // reports to consumed_fn_
+    void discard(int s);                  // clears stream s's ring, reporting the bytes
+
+    ConsumedFn consumed_fn_;
+    void* consumed_user_;
 
     // config
     uint32_t conn_;

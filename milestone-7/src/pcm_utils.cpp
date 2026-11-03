@@ -79,11 +79,13 @@ size_t PcmRing::size() const {
     return n;
 }
 
-void PcmRing::clear() {
+size_t PcmRing::clear() {
     pthread_mutex_lock(&mutex_);
+    const size_t n = used_;
     head_ = 0;
     used_ = 0;
     pthread_mutex_unlock(&mutex_);
+    return n;
 }
 
 uint64_t PcmRing::droppedBytes() const {

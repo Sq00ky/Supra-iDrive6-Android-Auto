@@ -88,6 +88,8 @@ BrowserAudio::BrowserAudio()
       route_state_(ROUTE_IDLE), route_since_ms_(0), route_backoff_until_ms_(0), last_sound_ms_(0), last_media_ms_(0), blocks_(0), write_errors_(0), prepares_(0),
       last_stats_ms_(0), was_ducking_(false) {
     memset(fn_, 0, sizeof(fn_));
+    consumed_fn_ = NULL;
+    consumed_user_ = NULL;
     wait_ms_ = 30;
     waited_blocks_ = waited_ms_ = 0;
     drift_on_ = true;
@@ -126,6 +128,15 @@ int BrowserAudio::streamForChannel(uint8_t channel) {
 
 const char* BrowserAudio::streamName(int s) {
     return s == MEDIA ? "media" : (s == GUIDANCE ? "guidance" : (s == SYSTEM ? "system" : "?"));
+}
+
+void BrowserAudio::consumed(int s, size_t bytes) {
+    static const uint8_t kChannel[NSTREAMS] = { AA_CH_MEDIA_AUDIO, AA_CH_GUIDANCE_AUDIO, AA_CH_SYSTEM_AUDIO };
+    if (bytes && consumed_fn_ && s >= 0 && s < NSTREAMS) consumed_fn_(kChannel[s], bytes, consumed_user_);
+}
+
+void BrowserAudio::discard(int s) {
+    if (ring_[s]) consumed(s, ring_[s]->clear());
 }
 
 bool BrowserAudio::loadShim() {
@@ -352,7 +363,11 @@ void BrowserAudio::onAaAudio(uint8_t channel, const uint8_t* pcm, size_t len, ui
     int s = streamForChannel(channel);
     if (s < 0 || !ring_[s] || !pcm || len == 0) return;
     ++frames_in_[s];
-    ring_[s]->write(pcm, len);
+    if (pcm_failed_) {   // no output device this session: nothing will play it, so it is taken at once
+        consumed(s, len);
+        return;
+    }
+    consumed(s, ring_[s]->write(pcm, len));   // a full ring drops its oldest bytes
     uint32_t mismatch = 0;
     if (srate_[s].frame(pts, len, &mismatch)) {
         printf("[Browser] AA %s stream is %u Hz (from its timestamps), not %u Hz: converting from %u Hz\n",
@@ -386,7 +401,7 @@ void BrowserAudio::onAaStreamState(uint8_t channel, bool started, uint32_t rate,
     started_[s] = started;
     if (s == MEDIA) drift_reset_ = true;   // a new stream (or none): the mixer learns its level afresh
     // Media paused: drop what is queued so the music stops now. Prompts and sounds play their tail out.
-    if (!started && s == MEDIA) { ring_[s]->clear(); flush_[s] = true; }
+    if (!started && s == MEDIA) { discard(s); flush_[s] = true; }
     if (started) ensureMixer();
 }
 
@@ -396,6 +411,7 @@ void BrowserAudio::ensureMixer() {
     if (pthread_create(&thread_, NULL, &mixerThunk, this) != 0) {
         printf("[Browser] could not start the mixer thread\n");
         pcm_failed_ = true;
+        for (int s = 0; s < NSTREAMS; ++s) discard(s);   // nothing will play what is queued
         return;
     }
     thread_valid_ = true;
@@ -427,6 +443,7 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
     while (q.size() < need) {
         size_t got = ring_[s]->read(raw, raw_block);
         if (got == 0) break;
+        consumed(s, got);
         std::vector<uint8_t> conv;
         rs_[s].processBytes(raw, got, conv);
         size_t old = q.size();
@@ -575,6 +592,7 @@ void BrowserAudio::mixerLoop() {
     if (!openPcm()) {
         printf("[Browser] no output device: AA audio is dropped for this session\n");
         pcm_failed_ = true;
+        for (int s = 0; s < NSTREAMS; ++s) discard(s);   // nothing will play what is queued
         return;
     }
     // One mixer block = one device fragment: the shim puts every write into a buffer slot of its own (one fragment
@@ -614,7 +632,7 @@ void BrowserAudio::mixerLoop() {
         if (rstate == ROUTE_BUILDING && now - since > kGrantTimeoutMs) {
             printf("[Browser] connection 0x%x was not granted within %u s: dropping queued audio\n", conn_,
                    kGrantTimeoutMs / 1000u);
-            for (int s = 0; s < NSTREAMS; ++s) { ring_[s]->clear(); flush_[s] = true; }
+            for (int s = 0; s < NSTREAMS; ++s) { discard(s); flush_[s] = true; }
             releaseRoute("not granted");
             pthread_mutex_lock(&lock_);
             route_backoff_until_ms_ = nowMs() + 60000u;   // don't hammer audioconn: next try in a minute
@@ -706,7 +724,12 @@ void BrowserAudio::mixerLoop() {
             printf("[Browser] 50 failed writes in a row: reopening the device\n");
             closePcm();
             usleep(500000);
-            if (!openPcm()) { printf("[Browser] reopen failed: AA audio is dropped for this session\n"); pcm_failed_ = true; break; }
+            if (!openPcm()) {
+                printf("[Browser] reopen failed: AA audio is dropped for this session\n");
+                pcm_failed_ = true;
+                for (int s = 0; s < NSTREAMS; ++s) discard(s);   // nothing will play what is queued
+                break;
+            }
             fail_run = 0;
             t0 = nowMs();
             written_frames = 0;

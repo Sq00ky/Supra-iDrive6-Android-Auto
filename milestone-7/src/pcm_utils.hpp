@@ -25,7 +25,7 @@ public:
     size_t read(uint8_t* out, size_t len);
     size_t size() const;
     size_t capacity() const { return capacity_; }
-    void clear();
+    size_t clear();   // returns the bytes discarded
     uint64_t droppedBytes() const;
 
 private:

@@ -107,6 +107,18 @@ inline unsigned long envHex(const char* name, unsigned long def) {
     return (end && end != e) ? v : def;
 }
 
+// A whole number setting clamped to [lo, hi]; unset or unparsable returns def.
+inline long envRange(const char* name, long def, long lo, long hi) {
+    const char* e = getenv(name);
+    long v = def;
+    if (e && *e) {
+        char* end = NULL;
+        long x = strtol(e, &end, 0);
+        if (end && end != e) v = x;
+    }
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
 } // namespace nbt
 
 #endif // NBT_ENV_HPP
