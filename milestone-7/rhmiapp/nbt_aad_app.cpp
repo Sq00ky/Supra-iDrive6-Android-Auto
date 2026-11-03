@@ -59,7 +59,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-25-ramlog (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-30-main (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
