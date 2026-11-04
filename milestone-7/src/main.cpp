@@ -1358,6 +1358,11 @@ static void onCarLocation(const nbt::LocationFix& fix, void* user) {
     static_cast<nbt::AASession*>(user)->postCarLocation(fix);
 }
 
+// The car's satellite count (DSI callback thread) -> AA GPS_SATELLITE sensor. The session sends it on its own timer.
+static void onCarSatellites(const nbt::SatelliteStatus& status, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarSatellites(status);
+}
+
 static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
@@ -1718,7 +1723,7 @@ int main(int argc, char* argv[]) {
         printf("[Main] car volume input failed to start.\n");
     if (!nbt::carGpsEnabled())
         printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
-    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyE3(), &onCarLocation, &g_session))
+    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyE3(), &onCarLocation, &onCarSatellites, &g_session))
         printf("[Main] car GPS failed to start.\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.

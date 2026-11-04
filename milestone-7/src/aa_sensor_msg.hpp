@@ -3,8 +3,8 @@
 #ifndef AA_SENSOR_MSG_HPP
 #define AA_SENSOR_MSG_HPP
 
-// Android Auto sensor channel: the LOCATION event, in Android Auto units. It knows nothing about where the position came
-// from. Pure: host-tested in tests/test_aa_sensor_msg.cpp.
+// Android Auto sensor channel: the LOCATION and GPS_SATELLITE events, in Android Auto units. It knows nothing about where
+// the data came from. Pure: host-tested in tests/test_aa_sensor_msg.cpp.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -27,6 +27,21 @@ inline bool locationFresh(const LocationFix& f, uint32_t now_ms) {
     return now_ms - f.rx_ms <= kLocationMaxAgeMs;
 }
 
+struct SatelliteStatus {
+    uint32_t used;              // satellites used in the fix
+    uint32_t rx_ms;             // CLOCK_MONOTONIC ms, truncated to 32 bits, when the status was received
+};
+
+// The integration guide asks for this sensor with or without a fix and with no silent periods, so it is sent on a timer:
+// about once a second, and an old status counts as no satellites.
+const uint32_t kSatelliteMaxAgeMs = 5000;
+const uint32_t kSatelliteSendEveryMs = 1000;
+
+// What to tell the phone now. now_ms must be read after the status was received. Holds across the 32-bit wrap.
+inline uint32_t satellitesUsedNow(bool have, const SatelliteStatus& s, uint32_t now_ms) {
+    return have && now_ms - s.rx_ms <= kSatelliteMaxAgeMs ? s.used : 0;
+}
+
 inline void sensorPutVar(std::vector<uint8_t>& v, uint64_t x) {
     while (x >= 0x80) { v.push_back((uint8_t)(x | 0x80)); x >>= 7; }
     v.push_back((uint8_t)x);
@@ -45,6 +60,20 @@ inline void buildLocationEvent(const LocationFix& f, std::vector<uint8_t>& out) 
     out.push_back(0x80); out.push_back(0x03);
     out.push_back(0x0A); sensorPutVar(out, loc.size());
     out.insert(out.end(), loc.begin(), loc.end());
+}
+
+// Plain SensorEventIndication (0x8003) with one GpsSatelliteData (SensorBatch field 21, tag 0xAA 0x01): {1: used}, the only
+// field the message requires. The guide says the required count is the number used, while the Open Android Auto notes, whose
+// names are inferred from an obfuscated APK, call field 1 the total and field 2 the number used. Field 2 stays out until that
+// is settled: this event says nothing contradictory either way, and 0 means the same under both readings. Per-satellite
+// entries need an in-use flag the car's list does not have.
+inline void buildSatelliteEvent(uint32_t used, std::vector<uint8_t>& out) {
+    std::vector<uint8_t> sat;
+    sat.push_back(0x08); sensorPutVar(sat, used);
+    out.clear();
+    out.push_back(0x80); out.push_back(0x03);
+    out.push_back(0xAA); out.push_back(0x01); sensorPutVar(out, sat.size());
+    out.insert(out.end(), sat.begin(), sat.end());
 }
 
 } // namespace nbt

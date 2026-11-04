@@ -284,18 +284,25 @@ inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t 
     return l;
 }
 
+// SatelliteStatus::used from a status: what the car says, except that no fix means none. A value the sender cannot produce
+// (it caps at 14; a negative count would come out as a large byte) counts as none too.
+inline uint32_t satellitesUsed(const CarGpsStatus& s) {
+    return s.receiver == kReceiverNoFix || s.satsUsed > 14 ? 0 : s.satsUsed;
+}
+
 typedef void (*LocationCb)(const LocationFix& fix, void* user);
+typedef void (*SatellitesCb)(const SatelliteStatus& status, void* user);
 
 // A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 and CD/01 fkt 0xC00 Status, logs them under [GPS] and
-// hands each new fix on. It adds no device-controller keys: the client's subscriptions switch delivery on, and GPS arrives
-// with no key.
-// The callback runs on the DSI callback thread: see the handler rules in most/client.hpp.
+// hands on each new fix and status. It adds no device-controller keys: the client's subscriptions switch delivery on, and
+// GPS arrives with no key.
+// The callbacks run on the DSI callback thread: see the handler rules in most/client.hpp.
 class CarGps {
 public:
     CarGps();
 
     // Before the client's start(). False: the client has no room for the route.
-    bool attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, void* user);
+    bool attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, SatellitesCb satCb, void* user);
 
 private:
     static void fixTramp(const most::View& m, void* self);
@@ -307,6 +314,7 @@ private:
     CarGpsStatusFilter statusFilter_;
     uint32_t accuracyE3_;
     LocationCb cb_;
+    SatellitesCb satCb_;
     void* user_;
 };
 

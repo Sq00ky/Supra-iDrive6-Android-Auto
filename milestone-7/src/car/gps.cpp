@@ -9,20 +9,24 @@
 namespace nbt {
 namespace car {
 
-CarGps::CarGps() : accuracyE3_(0), cb_(NULL), user_(NULL) {}
+CarGps::CarGps() : accuracyE3_(0), cb_(NULL), satCb_(NULL), user_(NULL) {}
 
-bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, void* user) {
+bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, SatellitesCb satCb, void* user) {
     accuracyE3_ = accuracyE3;
     cb_ = cb;
+    satCb_ = satCb;
     user_ = user;
     if (!client.addRoute(kCarGpsFBlock, kCarGpsInst, kCarGpsFkt, most::kOpStatus, &CarGps::fixTramp, this) ||
         !client.addRoute(kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, most::kOpStatus, &CarGps::statusTramp, this)) {
         printf("[GPS] no room on the MOST client: car GPS disabled\n");
         cb_ = NULL;     // one route may have fitted
+        satCb_ = NULL;
         return false;
     }
     printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto LOCATION, accuracy %u m\n", kCarGpsFBlock, kCarGpsInst,
            kCarGpsFkt, (unsigned)(accuracyE3 / 1000));
+    printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto GPS_SATELLITE\n", kCarStatusFBlock, kCarStatusInst,
+           kCarStatusFkt);
     return true;
 }
 
@@ -43,6 +47,12 @@ void CarGps::onStatus(const most::View& m) {
         printf("[GPS] status #%u used=%u receiver=%u quality=%u hdop=%u err=%u/%u speed=%u time=%u, longest gap %u ms%s\n",
                r.statusNo, s.satsUsed, s.receiver, s.quality, s.hdop, s.errLat, s.errLon, s.speed, s.timeOfDay,
                (unsigned)r.gapMs, r.receiverChanged ? " (receiver changed)" : "");
+    if (satCb_) {
+        SatelliteStatus st;
+        st.used = satellitesUsed(s);
+        st.rx_ms = m.rxMs;
+        satCb_(st, user_);
+    }
 }
 
 void CarGps::onFix(const most::View& m) {

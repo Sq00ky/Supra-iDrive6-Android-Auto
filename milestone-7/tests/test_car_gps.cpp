@@ -270,6 +270,12 @@ static void onFix(const LocationFix& f, void* user) {
     g_fixes.push_back(f);
 }
 
+static std::vector<SatelliteStatus> g_sats;
+static void onSats(const SatelliteStatus& s, void* user) {
+    assert(user == &g_fixes);
+    g_sats.push_back(s);
+}
+
 static uint32_t nowMs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -279,9 +285,10 @@ static uint32_t nowMs() {
 static void testConsumer() {
     fake_dsi::reset();
     g_fixes.clear();
+    g_sats.clear();
     Client c;
     CarGps gps;
-    assert(gps.attach(c, 25000, &onFix, &g_fixes));
+    assert(gps.attach(c, 25000, &onFix, &onSats, &g_fixes));
     assert(c.start("NBTAAD_MOST"));     // GPS alone is enough for the client to start (NBT_KNOB=0)
     assert(fake_dsi::opened());
     fake_dsi::attach();
@@ -325,6 +332,31 @@ static void testConsumer() {
     assert(c.stats().noInfo == 1 && c.stats().routedNonNormal == 1);
     sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, 0x20B, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x5000);
     assert(c.stats().routed == routed + 1);
+
+    // One count per new status, with a receive time on the clock of the session. A copy does not refresh it.
+    assert(g_sats.size() == 1 && g_sats[0].used == 7);
+    assert(nowMs() - g_sats[0].rx_ms <= kSatelliteMaxAgeMs);
+    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x2035);
+    assert(g_sats.size() == 1);
+    // No fix means none, whatever the byte says.
+    std::vector<uint8_t> lost = statusAt(0x058b, kReceiverNoFix, 3);
+    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, kOpStatus, &lost[0], lost.size(), 0x5000);
+    assert(g_sats.size() == 2 && g_sats[1].used == 0);
+}
+
+static void testSatellitesUsed() {
+    CarGpsStatus s;
+    assert(decodeCarGpsStatus(kStatusCapture, sizeof(kStatusCapture), s));
+    assert(satellitesUsed(s) == 7);
+    s.receiver = 0;             // time only or 2D: the count stands
+    assert(satellitesUsed(s) == 7);
+    s.receiver = kReceiverNoFix;
+    assert(satellitesUsed(s) == 0);
+    s.receiver = kReceiver3dFix;
+    s.satsUsed = 14;            // the sender's "over 12"
+    assert(satellitesUsed(s) == 14);
+    s.satsUsed = 255;           // a negative count, through the sender's byte
+    assert(satellitesUsed(s) == 0);
 }
 
 static void testAccuracy() {
@@ -346,7 +378,24 @@ static void testFull() {
     Client c;
     while (c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) {}
     CarGps gps;
-    assert(!gps.attach(c, 10000, &onFix, &g_fixes));
+    assert(!gps.attach(c, 10000, &onFix, &onSats, &g_fixes));
+}
+
+// Room for one route only: attach() fails, and what got through stays silent.
+static void testOneRouteFits() {
+    fake_dsi::reset();
+    g_fixes.clear();
+    Client c;
+    int added = 0;
+    while (added < Router::kMaxRoutes - 1 && c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) ++added;
+    assert(added == Router::kMaxRoutes - 1);
+    CarGps gps;
+    assert(!gps.attach(c, 10000, &onFix, &onSats, &g_fixes));
+    assert(c.start("NBTAAD_MOST"));
+    fake_dsi::attach();
+    respond();
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
+    assert(g_fixes.empty());
 }
 
 int main() {
@@ -355,8 +404,10 @@ int main() {
     testStatusDecode();
     testStatusFilter();
     testConsumer();
+    testSatellitesUsed();
     testAccuracy();
     testFull();
+    testOneRouteFits();
     printf("test_car_gps OK\n");
     return 0;
 }
