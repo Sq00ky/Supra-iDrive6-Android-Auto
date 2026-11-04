@@ -361,9 +361,10 @@ static void testConsumer() {
     assert(g_fixes[0].lon_e7 < -15262800 && g_fixes[0].lon_e7 > -15263000);
     assert(g_fixes[0].accuracy_e3 == 25000);    // attached with an override
     assert(locationFresh(g_fixes[0], nowMs()));
-    // Parked: a speed of 0 is sent, the held heading is not, and the height never is.
+    // Parked: a speed of 0 is sent, the held heading is not, and the height is, converted.
     assert(g_fixes[0].has_speed && g_fixes[0].speed_e3 == 0);
-    assert(!g_fixes[0].has_bearing && !g_fixes[0].has_altitude);
+    assert(!g_fixes[0].has_bearing);
+    assert(g_fixes[0].has_altitude && g_fixes[0].altitude_e2 == 23500 + geoidSeparationCm(g_fixes[0].lat_e7, g_fixes[0].lon_e7));
 
     // The next second's fix goes on. A no-fix payload does not, so the last fix ages out on the session's side.
     std::vector<uint8_t> next = tick(39);
@@ -531,7 +532,6 @@ static void testSpeedAndBearing() {
     LocationFix l = toLocationFix(fixWith(1409, 213), 3500, 7);
     assert(l.has_speed && l.speed_e3 == 14090);
     assert(l.has_bearing && l.bearing_e6 == 60468750);
-    assert(!l.has_altitude);
     assert(l.accuracy_e3 == 3500 && l.rx_ms == 7);
 
     // Bearing only from 2 m/s: below that the heading can be old. Speed is sent either way, including 0.
@@ -557,6 +557,78 @@ static void testSpeedAndBearing() {
     assert(decodeCarGps(kCapture, 8, shortFix) && !shortFix.ext);
     l = toLocationFix(shortFix, 10000, 7);
     assert(!l.has_speed && !l.has_bearing);
+}
+
+static void testGeoid() {
+    const int32_t E7 = 10000000;
+    // Grid points return the table's value: EGM2008 at the equator, both poles and the Indian Ocean low.
+    assert(geoidSeparationCm(0, 0) == 1723);
+    assert(geoidSeparationCm(-90 * E7, -180 * E7) == -3015);
+    assert(geoidSeparationCm(90 * E7, 180 * E7) == 1490);
+    assert(geoidSeparationCm(5 * E7, 80 * E7) == -10568);
+    // The middle of a cell is the mean of its corners: (5347 + 4506 + 5575 + 4642) / 4 = 5017.5.
+    assert(geoidSeparationCm(525 * (E7 / 10), -25 * (E7 / 10)) == 5018);
+    // Halfway along an edge, below zero: (-10568 + -10088) / 2 at latitude 5.
+    assert(geoidSeparationCm(5 * E7, 775 * (E7 / 10)) == -10328);
+    // The two sides of the date line are the same place, at every latitude.
+    for (int lat = -90; lat <= 90; lat += 15)
+        assert(geoidSeparationCm(lat * E7, 180 * E7) == geoidSeparationCm(lat * E7, -180 * E7));
+    // No jump crossing a grid line.
+    assert(abs(geoidSeparationCm(50 * E7 - 1, -3 * E7) - geoidSeparationCm(50 * E7 + 1, -3 * E7)) <= 1);
+    assert(abs(geoidSeparationCm(52 * E7, -5 * E7 - 1) - geoidSeparationCm(52 * E7, -5 * E7 + 1)) <= 1);
+    // The parked spot of the car capture. EGM2008's 5 minute grid says 50.19 m there; this table 48.71 m.
+    const int32_t parked = geoidSeparationCm(533558960, -15146760);
+    assert(parked >= 4870 && parked <= 4872);
+    // The Himalaya low, and the top of New Guinea: this is a signed table, in the range the model reaches.
+    assert(geoidSeparationCm(30 * E7, 80 * E7) < -3000);
+    assert(geoidSeparationCm(-5 * E7, 145 * E7) > 7000);
+    // Out of range input stays in the table.
+    assert(geoidSeparationCm(2147483647, 0) == geoidSeparationCm(90 * E7, 0));
+    assert(geoidSeparationCm(-2147483647 - 1, 0) == geoidSeparationCm(-90 * E7, 0));
+    assert(geoidSeparationCm(0, 2147483647) == geoidSeparationCm(0, 180 * E7));
+    assert(geoidSeparationCm(0, -2147483647 - 1) == geoidSeparationCm(0, -180 * E7));
+}
+
+static CarFix fixAtHeight(int16_t height) {
+    CarFix f;
+    assert(decodeCarGps(kCapture, sizeof(kCapture), f));
+    f.height = height;
+    return f;
+}
+
+static void testAltitude() {
+    const int32_t lat = 533558960, lon = -15146760;
+    const int32_t n = geoidSeparationCm(lat, lon);
+    // The middle of what the sender's truncation covers, in cm, plus the geoid. Raw 20 at the parked spot is about 253.7 m.
+    assert(heightToAltitudeE2(20, lat, lon) == 20500 + n);
+    assert(heightToAltitudeE2(20, lat, lon) == 25371);
+    assert(heightToAltitudeE2(1, lat, lon) == 1500 + n);        // 10 to 19 m
+    assert(heightToAltitudeE2(0, lat, lon) == n);               // -9 to 9 m
+    assert(heightToAltitudeE2(-1, lat, lon) == -1500 + n);      // -19 to -10 m
+    // A 30 m climb is 30 m, as the geoid hardly moves over a drive.
+    assert(heightToAltitudeE2(23, 533546180, -15251600) - heightToAltitudeE2(20, lat, lon) == 3000 + (geoidSeparationCm(533546180, -15251600) - n));
+
+    // In range, at both limits; past them the field is left out and the position still goes.
+    LocationFix l = toLocationFix(fixAtHeight(1000), 3500, 7);
+    assert(l.has_altitude && l.altitude_e2 > 1000000);
+    l = toLocationFix(fixAtHeight(-100), 3500, 7);
+    assert(l.has_altitude && l.altitude_e2 < -90000);
+    l = toLocationFix(fixAtHeight(1001), 3500, 7);
+    assert(!l.has_altitude && l.lat_e7 != 0 && l.has_speed);
+    l = toLocationFix(fixAtHeight(-101), 3500, 7);
+    assert(!l.has_altitude);
+    l = toLocationFix(fixAtHeight(32767), 3500, 7);
+    assert(!l.has_altitude);
+    // Everything sent stays inside what Maps accepts, whichever the position.
+    for (int h = kHeightMinRaw; h <= kHeightMaxRaw; h += 50) {
+        const int32_t a = heightToAltitudeE2((int16_t)h, 5 * 10000000, 80 * 10000000);
+        assert(a > -1000000 && a < 1800000);
+    }
+
+    // A short payload has no height, rather than a height of 0.
+    CarFix shortFix;
+    assert(decodeCarGps(kCapture, 8, shortFix) && !shortFix.ext);
+    assert(!toLocationFix(shortFix, 10000, 7).has_altitude);
 }
 
 // From DSI frame to LocationFix, with bytes in the places the car sends them.
@@ -620,6 +692,8 @@ int main() {
     testAccuracyFromHdop();
     testAccuracyOnEachFix();
     testSpeedAndBearing();
+    testGeoid();
+    testAltitude();
     testSpeedOnEachFix();
     testFull();
     testOneRouteFits();
