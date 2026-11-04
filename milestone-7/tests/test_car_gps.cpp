@@ -282,6 +282,10 @@ static uint32_t nowMs() {
     return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
 }
 
+static void sendCarStatus(const uint8_t* p, size_t n, uint16_t dst = 0x5000) {
+    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, kOpStatus, p, n, dst);
+}
+
 static void testConsumer() {
     fake_dsi::reset();
     g_fixes.clear();
@@ -298,16 +302,35 @@ static void testConsumer() {
     for (size_t i = 0; i < fake_dsi::calls.size(); ++i)
         assert(!(fake_dsi::calls[i].kind == fake_dsi::Call::kRequest && fake_dsi::calls[i].id == kReqRegisterDevCtrls));
 
+    // Before any status, a fix is held back.
+    std::vector<uint8_t> early = tick(37);
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &early[0], early.size(), 0x2022);
+    assert(c.stats().routed == 1);
+    assert(g_fixes.empty());
+
+    // CD/01 fkt C00 Status reaches it with the tag the car uses, in the noinfo class. Other functions there do not.
+    sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
+    assert(c.stats().routed == 2);
+    assert(c.stats().noInfo == 1 && c.stats().routedNonNormal == 1);
+    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, 0x20B, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x5000);
+    assert(c.stats().routed == 2);
+
+    // One count per new status, with a receive time on the clock of the session. A copy does not refresh it.
+    assert(g_sats.size() == 1 && g_sats[0].used == 7);
+    assert(nowMs() - g_sats[0].rx_ms <= kSatelliteMaxAgeMs);
+    sendCarStatus(kStatusCapture, sizeof(kStatusCapture), 0x2035);
+    assert(c.stats().routed == 3);
+    assert(g_sats.size() == 1);
+
     // 52/00 fkt 440 Status reaches it, each receiver's copy.
     sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
     sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x204D);
-    assert(c.stats().routed == 2);
+    assert(c.stats().routed == 5);
     // Other instance, function or op: not routed.
     sendStatus(0x52, 0x01, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
     sendStatus(0x52, 0x00, 0x243, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
     sendStatus(0x52, 0x00, 0x440, kOpGet, kCapture, 0, 0x2022);
-    assert(c.stats().routed == 2);
-    assert(c.stats().msgs == 5);
+    assert(c.stats().routed == 5);
 
     // Two copies of one fix: one LocationFix, in Android Auto units, with a receive time on the clock of the session.
     assert(g_fixes.size() == 1);
@@ -325,23 +348,49 @@ static void testConsumer() {
     sendStatus(0x52, 0x00, 0x440, kOpStatus, none, sizeof(none), 0x2022);
     assert(g_fixes.size() == 2);
 
-    // CD/01 fkt C00 Status reaches it with the tag the car uses, in the noinfo class. Other functions there do not.
-    const uint32_t routed = c.stats().routed;
-    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x5000);
-    assert(c.stats().routed == routed + 1);
-    assert(c.stats().noInfo == 1 && c.stats().routedNonNormal == 1);
-    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, 0x20B, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x5000);
-    assert(c.stats().routed == routed + 1);
-
-    // One count per new status, with a receive time on the clock of the session. A copy does not refresh it.
-    assert(g_sats.size() == 1 && g_sats[0].used == 7);
-    assert(nowMs() - g_sats[0].rx_ms <= kSatelliteMaxAgeMs);
-    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x2035);
-    assert(g_sats.size() == 1);
-    // No fix means none, whatever the byte says.
+    // The receiver loses the fix and fkt 440 keeps coming with its position: the count drops to 0 whatever the byte says,
+    // and the positions stop.
     std::vector<uint8_t> lost = statusAt(0x058b, kReceiverNoFix, 3);
-    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, kOpStatus, &lost[0], lost.size(), 0x5000);
+    sendCarStatus(&lost[0], lost.size());
     assert(g_sats.size() == 2 && g_sats[1].used == 0);
+    next = tick(40);
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &next[0], next.size(), 0x2022);
+    assert(g_fixes.size() == 2);
+
+    // Status 0 is time-only or 2D, so positions stay back, but the count stands.
+    std::vector<uint8_t> flat = statusAt(0x058c, 0, 3);
+    sendCarStatus(&flat[0], flat.size());
+    assert(g_sats.size() == 3 && g_sats[2].used == 3);
+    next = tick(41);
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &next[0], next.size(), 0x2022);
+    assert(g_fixes.size() == 2);
+
+    // Back to a 3D fix: positions go on.
+    std::vector<uint8_t> back = statusAt(0x058d);
+    sendCarStatus(&back[0], back.size());
+    next = tick(42);
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &next[0], next.size(), 0x2022);
+    assert(g_fixes.size() == 3);
+}
+
+static void testPositionUsable() {
+    CarGpsStatus s;
+    assert(decodeCarGpsStatus(kStatusCapture, sizeof(kStatusCapture), s));
+    assert(s.receiver == kReceiver3dFix);
+    assert(!positionUsable(false, s, 1000, 1000));
+    assert(positionUsable(true, s, 1000, 1000));
+    // At the age limit, past it, and across the 32-bit wrap.
+    assert(positionUsable(true, s, 1000, 1000 + kCarStatusMaxAgeMs));
+    assert(!positionUsable(true, s, 1000, 1000 + kCarStatusMaxAgeMs + 1));
+    assert(positionUsable(true, s, 0xFFFFFF00u, 100));
+    assert(!positionUsable(true, s, 0xFFFFFF00u, 10000));
+    // Only a 3D fix passes: no fix, time only or 2D, and anything the sender's table cannot produce do not.
+    s.receiver = kReceiverNoFix;
+    assert(!positionUsable(true, s, 1000, 1000));
+    s.receiver = 0;
+    assert(!positionUsable(true, s, 1000, 1000));
+    s.receiver = 2;
+    assert(!positionUsable(true, s, 1000, 1000));
 }
 
 static void testSatellitesUsed() {
@@ -404,6 +453,7 @@ int main() {
     testStatusDecode();
     testStatusFilter();
     testConsumer();
+    testPositionUsable();
     testSatellitesUsed();
     testAccuracy();
     testFull();

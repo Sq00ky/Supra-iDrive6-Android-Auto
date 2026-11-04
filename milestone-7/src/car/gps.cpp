@@ -9,7 +9,9 @@
 namespace nbt {
 namespace car {
 
-CarGps::CarGps() : accuracyE3_(0), cb_(NULL), satCb_(NULL), user_(NULL) {}
+CarGps::CarGps() : haveStatus_(false), statusMs_(0), usableLogged_(-1), accuracyE3_(0), cb_(NULL), satCb_(NULL), user_(NULL) {
+    memset(&status_, 0, sizeof(status_));
+}
 
 bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, SatellitesCb satCb, void* user) {
     accuracyE3_ = accuracyE3;
@@ -47,6 +49,9 @@ void CarGps::onStatus(const most::View& m) {
         printf("[GPS] status #%u used=%u receiver=%u quality=%u hdop=%u err=%u/%u speed=%u time=%u, longest gap %u ms%s\n",
                r.statusNo, s.satsUsed, s.receiver, s.quality, s.hdop, s.errLat, s.errLon, s.speed, s.timeOfDay,
                (unsigned)r.gapMs, r.receiverChanged ? " (receiver changed)" : "");
+    haveStatus_ = true;
+    status_ = s;
+    statusMs_ = m.rxMs;
     if (satCb_) {
         SatelliteStatus st;
         st.used = satellitesUsed(s);
@@ -79,7 +84,18 @@ void CarGps::onFix(const most::View& m) {
             printf("[GPS] fix #%u %.6f, %.6f (%u-byte payload, no extra fields)\n", r.fixNo, f.lat_e7 / 1e7, f.lon_e7 / 1e7,
                    (unsigned)m.len);
     }
-    if (cb_) cb_(toLocationFix(f, accuracyE3_, m.rxMs), user_);
+    const bool usable = positionUsable(haveStatus_, status_, statusMs_, m.rxMs);
+    if ((int)usable != usableLogged_) {
+        if (usable)
+            printf("[GPS] position goes to the phone: 3D fix, %u satellites\n", status_.satsUsed);
+        else if (!haveStatus_)
+            printf("[GPS] position held back: no status from %02X/%02X fkt %03X yet\n", kCarStatusFBlock, kCarStatusInst,
+                   kCarStatusFkt);
+        else
+            printf("[GPS] position held back: receiver=%u, status %u ms old\n", status_.receiver, (unsigned)(m.rxMs - statusMs_));
+        usableLogged_ = usable ? 1 : 0;
+    }
+    if (usable && cb_) cb_(toLocationFix(f, accuracyE3_, m.rxMs), user_);
 }
 
 } // namespace car
