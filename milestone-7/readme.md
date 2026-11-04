@@ -1081,7 +1081,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_volume_level`, `test_volume_input` | Car volume level against the car capture (AudioMaster 0x20/0x0C08), and from DSI frame to the overlay callback beside the controller |
 | `test_car_gps` | Car GPS decode (MOST 52/00 fkt 440 and CD/01 fkt C00, car captures), repeats and log cadence, the 3D fix check, from DSI frame to `LocationFix` and satellite count on the fake `DsiClient` |
-| `test_aa_sensor_msg` | LOCATION (incl. 10-byte negative varints) and GPS_SATELLITE event encodings, their age limits |
+| `test_aa_sensor_msg` | LOCATION (incl. 10-byte negative varints and the optional altitude, speed and bearing, which nothing sets yet) and GPS_SATELLITE event encodings, their age limits |
 | `test_session_sensors` | Sensor channel in `aa_session` over a socket with the stub cryptor: SensorStartRequest, the events it starts, the satellite timer, old data |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |

@@ -361,6 +361,8 @@ static void testConsumer() {
     assert(g_fixes[0].lon_e7 < -44999900 && g_fixes[0].lon_e7 > -45000100);
     assert(g_fixes[0].accuracy_e3 == 25000);
     assert(locationFresh(g_fixes[0], nowMs()));
+    // The units of speed, heading and height are not confirmed, so none of them reaches the phone.
+    assert(!g_fixes[0].has_altitude && !g_fixes[0].has_speed && !g_fixes[0].has_bearing);
 
     // The next second's fix goes on. A no-fix payload does not, so the last fix ages out on the session's side.
     std::vector<uint8_t> next = tick(39);

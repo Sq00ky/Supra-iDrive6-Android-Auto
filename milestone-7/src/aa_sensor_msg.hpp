@@ -16,6 +16,15 @@ struct LocationFix {
     int32_t lat_e7, lon_e7;     // degrees * 1e7
     uint32_t accuracy_e3;       // metres * 1000 (LocationData field 4, optional: only fields 2 and 3 are required)
     uint32_t rx_ms;             // CLOCK_MONOTONIC ms, truncated to 32 bits, when the fix was received
+    // Optional, and off until set: nothing sets them yet, because the units of the car's values are not confirmed.
+    bool has_altitude, has_speed, has_bearing;
+    int32_t altitude_e2;        // metres * 100 (field 5)
+    int32_t speed_e3;           // metres per second * 1000 (field 6)
+    int32_t bearing_e6;         // degrees * 1e6 (field 7)
+
+    LocationFix()
+        : lat_e7(0), lon_e7(0), accuracy_e3(0), rx_ms(0), has_altitude(false), has_speed(false), has_bearing(false),
+          altitude_e2(0), speed_e3(0), bearing_e6(0) {}
 };
 
 // An older fix counts as no fix: the phone stamps each event with its arrival time, so an old position would read as
@@ -48,14 +57,18 @@ inline void sensorPutVar(std::vector<uint8_t>& v, uint64_t x) {
 }
 
 // Plain SensorEventIndication (0x8003) with one LocationData (SensorBatch field 1):
-//   {2: latitude_e7, 3: longitude_e7, 4: accuracy_e3}. Negative int32 values go out as 10-byte varints
-//   (protobuf int32 sign-extends to 64 bits). There is no fix time: DHU r2.1 writes field 1 as 0, and the Open Android
-//   Auto trace of the phone's APK finds no such field.
+//   {2: latitude_e7, 3: longitude_e7, 4: accuracy_e3, 5: altitude_e2, 6: speed_e3, 7: bearing_e6}, with 5 to 7 only when set.
+//   Types and scales are the same in DHU r2.1 and Android Auto 17.9. Negative int32 values go out as 10-byte varints
+//   (protobuf int32 sign-extends to 64 bits). There is no fix time: DHU r2.1 writes field 1 as 0, and Android Auto 17.9 has no
+//   such field and stamps the arrival time.
 inline void buildLocationEvent(const LocationFix& f, std::vector<uint8_t>& out) {
     std::vector<uint8_t> loc;
     loc.push_back(0x10); sensorPutVar(loc, (uint64_t)(int64_t)f.lat_e7);
     loc.push_back(0x18); sensorPutVar(loc, (uint64_t)(int64_t)f.lon_e7);
     loc.push_back(0x20); sensorPutVar(loc, f.accuracy_e3);
+    if (f.has_altitude) { loc.push_back(0x28); sensorPutVar(loc, (uint64_t)(int64_t)f.altitude_e2); }
+    if (f.has_speed) { loc.push_back(0x30); sensorPutVar(loc, (uint64_t)(int64_t)f.speed_e3); }
+    if (f.has_bearing) { loc.push_back(0x38); sensorPutVar(loc, (uint64_t)(int64_t)f.bearing_e6); }
     out.clear();
     out.push_back(0x80); out.push_back(0x03);
     out.push_back(0x0A); sensorPutVar(out, loc.size());
