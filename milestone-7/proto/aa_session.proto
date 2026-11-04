@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+//
+// The session's protobuf messages apart from the manifest, as src/aa_session.cpp reads and writes them. Documentation
+// and a test only: nothing is generated from this. Each message starts with a 2-byte big-endian id, shown here.
+//
+// tests/test_schema.py checks MediaAck and AudioUnderflow. The others are built inline in aa_session.cpp, where no test
+// can reach them, so their entries are only as good as the reading of that code.
+//
+// Not protobuf: VersionRequest, VersionResponse, the TLS handshake and media frames.
+syntax = "proto2";
+package nbt.session;
+
+// ---- sent to the phone -------------------------------------------------------------------------------------------
+
+// 0x0004 AuthComplete, 0x0008 ChannelOpenResponse, 0x8002 SensorStartResponse, 0x8003 BindingResponse on an input channel
+message StatusResponse {
+  optional int32 status = 1;
+}
+
+// 0x0007
+message ChannelOpenRequest {
+  optional int32 channel = 2;
+}
+
+// 0x000C
+message PingResponse {
+  optional int64 timestamp = 1;
+}
+
+// 0x000E
+message NavigationFocusResponse {
+  optional int32 type = 1;
+}
+
+// 0x0010
+message ByeByeResponse {}
+
+// 0x0013
+message AudioFocusResponse {
+  optional int32 state = 1;
+}
+
+// 0x8003 on an AV channel
+message AvSetupResponse {
+  optional int32 media_status = 1;
+  optional uint32 max_unacked = 2;
+  repeated uint32 configs = 3;
+}
+
+// 0x8004
+message MediaAck {
+  optional uint32 session = 1;
+  optional uint32 ack = 2;
+  repeated uint64 receive_time = 3;
+}
+
+// 0x8006
+message MicOpenResponse {
+  optional int32 session = 1;
+  optional int32 value = 2;
+}
+
+// 0x8008
+message VideoFocusIndication {
+  optional int32 focus_mode = 1;
+  optional bool unrequested = 2;
+}
+
+// 0x800B
+message AudioUnderflow {
+  optional uint32 session = 1;
+}
+
+// 0x8003 on the sensor channel, with one of these at a time. Both are repeated on the phone's side.
+message NightMode {
+  optional bool is_night = 1;
+}
+message DrivingStatus {
+  optional int32 status = 1;
+}
+message SensorEvent {
+  repeated NightMode night_mode = 10;
+  repeated DrivingStatus driving_status = 13;
+}
+
+// 0x8001 on the input channel, with one of touch, buttons or relative.
+message Pointer {
+  optional uint32 x = 1;
+  optional uint32 y = 2;
+  optional uint32 pointer_id = 3;
+}
+message TouchEvent {
+  repeated Pointer pointer = 1;
+  optional uint32 action_index = 2;
+  optional uint32 action = 3;
+}
+message ButtonEvent {
+  optional uint32 scan_code = 1;
+  optional bool is_pressed = 2;
+  optional uint32 meta = 3;
+  optional bool long_press = 4;
+}
+message ButtonEvents {
+  repeated ButtonEvent event = 1;
+}
+message RelativeEvent {
+  optional uint32 scan_code = 1;
+  optional int32 delta = 2;
+}
+message RelativeEvents {
+  repeated RelativeEvent event = 1;
+}
+message InputEvent {
+  optional uint64 timestamp = 1;
+  optional TouchEvent touch = 3;
+  optional ButtonEvents buttons = 4;
+  optional RelativeEvents relative = 6;
+}
+
+// ---- read from the phone -----------------------------------------------------------------------------------------
+
+// 0x000B
+message PingRequest {
+  optional int64 timestamp = 1;
+}
+
+// 0x000D: 1 NATIVE, 2 PROJECTED
+message NavigationFocusRequest {
+  optional int32 type = 1;
+}
+
+// 0x000F
+message ByeByeRequest {
+  optional int32 reason = 1;
+}
+
+// 0x0011: 1 START, 2 STOP
+message VoiceSessionRequest {
+  optional int32 type = 1;
+}
+
+// 0x0012: 1 GAIN, 2 GAIN_TRANSIENT, 3 GAIN_NAVI, 4 RELEASE
+message AudioFocusRequest {
+  optional int32 type = 1;
+}
+
+// 0x8001 on the sensor channel
+message SensorStartRequest {
+  optional int32 sensor_type = 1;
+  optional int64 min_period = 2;
+}
+
+// 0x8001 on an AV channel
+message AvStartIndication {
+  optional int32 session = 1;
+  optional uint32 configuration_index = 2;
+}
+
+// 0x8001 on the media status channel. Only state is read.
+message MediaStatus {
+  optional int32 state = 1;
+}
+
+// 0x8005 on the microphone channel
+message MicOpenRequest {
+  optional bool open = 1;
+  optional bool anc = 2;
+  optional bool ec = 3;
+  optional int32 max_unacked = 4;
+}
+
+// 0x8007 on the video channel
+message VideoFocusRequest {
+  optional int32 disp_index = 1;
+  optional int32 focus_mode = 2;
+  optional int32 focus_reason = 3;
+}
