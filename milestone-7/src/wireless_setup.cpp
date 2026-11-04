@@ -16,20 +16,15 @@
 namespace nbt {
 namespace wpp {
 
-void putVarint(std::vector<uint8_t>& out, uint64_t v) {
-    while (v >= 0x80) { out.push_back((uint8_t)(v | 0x80)); v >>= 7; }
-    out.push_back((uint8_t)v);
-}
-
 void putString(std::vector<uint8_t>& out, int field, const std::string& s) {
-    putVarint(out, ((uint64_t)field << 3) | 2);
-    putVarint(out, s.size());
+    proto::putVarint(out, ((uint64_t)field << 3) | proto::WIRE_LENGTH);
+    proto::putVarint(out, s.size());
     out.insert(out.end(), s.begin(), s.end());
 }
 
 void putInt(std::vector<uint8_t>& out, int field, uint64_t v) {
-    putVarint(out, ((uint64_t)field << 3) | 0);
-    putVarint(out, v);
+    proto::putVarint(out, ((uint64_t)field << 3) | proto::WIRE_VARINT);
+    proto::putVarint(out, v);
 }
 
 bool findVarintField(const uint8_t* p, size_t n, int field, uint64_t& v) {
@@ -42,9 +37,9 @@ std::string describeFields(const uint8_t* p, size_t n) {
     proto::PbReader r(p, n);
     proto::PbField f;
     while (r.next(f)) {
-        if (f.wire == 0) {
+        if (f.wire == proto::WIRE_VARINT) {
             snprintf(buf, sizeof(buf), " f%u=%llu", f.num, (unsigned long long)f.value);
-        } else if (f.wire == 2) {
+        } else if (f.wire == proto::WIRE_LENGTH) {
             bool printable = true;
             for (size_t i = 0; i < f.len; ++i) if (f.data[i] < 32 || f.data[i] > 126) printable = false;
             if (printable) {
@@ -56,7 +51,7 @@ std::string describeFields(const uint8_t* p, size_t n) {
                 snprintf(buf, sizeof(buf), " f%u=<%u bytes>", f.num, (unsigned)f.len);
             }
         } else {
-            snprintf(buf, sizeof(buf), " f%u=<%s>", f.num, f.wire == 5 ? "fixed32" : "fixed64");
+            snprintf(buf, sizeof(buf), " f%u=<%s>", f.num, f.wire == proto::WIRE_FIXED32 ? "fixed32" : "fixed64");
         }
         out += buf;
     }
