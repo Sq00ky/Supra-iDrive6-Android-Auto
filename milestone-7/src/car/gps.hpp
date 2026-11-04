@@ -35,7 +35,7 @@
 //   [8..9]   Time        UINT16  (hh * 3600 + mm * 60 + ss) mod 4095: the car capture matches the UTC time of fkt 0x440
 //
 // The decode and the filters are pure: host-tested in tests/test_car_gps.cpp.
-//   NBT_GPS_ACCURACY_M=n   accuracy sent with each fix, in metres (default 10; the car's own figure is not decoded yet)
+//   NBT_GPS_ACCURACY_M=n   accuracy sent with each fix, in metres, 2..499 (default 10; the car's own figure is not decoded yet)
 
 #include "aa_sensor_msg.hpp"
 #include <stddef.h>
@@ -112,7 +112,7 @@ inline bool decodeCarGps(const uint8_t* p, size_t n, CarFix& out) {
 // it: the UTC seconds in it tick every second, so a new fix always differs.
 class CarGpsFilter {
 public:
-    enum { kLogEvery = 5 };     // log the fields every 5th fix, about 5 s
+    enum { kLogEvery = 5 };     // parked: log the fields every 5th fix, about 5 s. Moving: every fix, to calibrate the units.
     struct Result {
         bool repeat;            // a copy of the last payload: the other fields are not set, ignore the message
         bool ok;                // a fix: the CarFix is valid
@@ -150,7 +150,7 @@ public:
 
         r.fixChanged = out.ext && haveGpsFix_ && out.gpsFix != lastGpsFix_;
         if (out.ext) { haveGpsFix_ = true; lastGpsFix_ = out.gpsFix; }
-        r.logFields = fixes_ % kLogEvery == 0 || r.fixChanged;
+        r.logFields = fixes_ % kLogEvery == 0 || r.fixChanged || (out.ext && out.speed != 0);
         r.fixNo = ++fixes_;
         return r;
     }
@@ -267,10 +267,11 @@ private:
     bool badLogged_;
 };
 
-// LocationFix::accuracy_e3 from NBT_GPS_ACCURACY_M: 1..9999 m, anything else is the 10 m default.
+// LocationFix::accuracy_e3 from NBT_GPS_ACCURACY_M: 2..499 m, anything else is the 10 m default. Android Auto 17.9's location
+// code treats 1 m or less and 500 m or more as an integration error and stops using the accuracy for the session.
 inline uint32_t parseGpsAccuracyE3(const char* metres) {
     int m = metres ? atoi(metres) : 0;
-    return (m > 0 && m < 10000) ? (uint32_t)m * 1000u : 10000u;
+    return (m >= 2 && m <= 499) ? (uint32_t)m * 1000u : 10000u;
 }
 inline uint32_t readGpsAccuracyE3() { return parseGpsAccuracyE3(getenv("NBT_GPS_ACCURACY_M")); }
 
@@ -289,7 +290,9 @@ const uint32_t kCarStatusMaxAgeMs = kLocationMaxAgeMs;
 
 // Whether a position received at now_ms may go to the phone: the newest status must be recent and report a 3D fix. fkt 0x440
 // may keep coming with a held position when the signal is lost. Status 0 covers both time-only and 2D, and only 2D has a
-// position, so it does not pass. Without a recent status the phone uses its own GPS, which is the safe way to be wrong.
+// position, so it does not pass. Sending nothing does not hand over to the phone's GPS everywhere: Android Auto 17.9's own
+// features keep the last position they got while location is advertised. An old position that stops updating is still
+// better than one sent as new.
 inline bool positionUsable(bool haveStatus, const CarGpsStatus& s, uint32_t statusMs, uint32_t nowMs) {
     return haveStatus && nowMs - statusMs <= kCarStatusMaxAgeMs && s.receiver == kReceiver3dFix;
 }
