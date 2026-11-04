@@ -21,6 +21,7 @@ LDLIBS   := -lpthread -lssl -lcrypto -lm
 SPEEX := $(ROOT)/src/audio/speex.c
 
 # Each test and the daemon sources it links (beyond its own .cpp).
+SRC_test_aa_proto          := src/wireless_setup.cpp
 SRC_test_aa_sensor_msg     :=
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
@@ -85,10 +86,10 @@ ARGS_test_ccs_input   := tests/fixtures/controls_2026-10-23_push.txt
 
 TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 
-.PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload
+.PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_media_payload tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload tsan
 	@echo "[CHECK] all host tests passed"
 
 $(OUT):
@@ -122,6 +123,14 @@ $(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.h
 run-test_media_payload:
 	@cd $(ROOT) && python3 tests/test_media_payload.py > tests/$(OUT)/test_media_payload.log 2>&1 \
 	  && echo "[PASS] test_media_payload.py" || { echo "[FAIL] test_media_payload.py"; tail -20 tests/$(OUT)/test_media_payload.log; exit 1; }
+
+# The car's size_t is 32 bits, and some length bugs only show there. Skipped without a 32-bit toolchain.
+run-test_aa_proto32: | $(OUT)
+	@if echo 'int main(){std::string s;return (int)s.size();}' | $(HOST_CXX) -m32 -include string -x c++ -o /dev/null - 2>/dev/null; then \
+	  $(HOST_CXX) -m32 $(CXXFLAGS) -o $(OUT)/test_aa_proto32 test_aa_proto.cpp $(call srcs,test_aa_proto) -lpthread \
+	  && cd $(ROOT) && tests/$(OUT)/test_aa_proto32 > tests/$(OUT)/test_aa_proto32.log 2>&1 \
+	  && echo "[PASS] test_aa_proto (32-bit)" || { echo "[FAIL] test_aa_proto (32-bit) (tests/$(OUT)/test_aa_proto32.log)"; exit 1; }; \
+	else echo "[SKIP] test_aa_proto (32-bit): no -m32 toolchain"; fi
 
 # 400 session cycles under ThreadSanitizer.
 TSAN_SRCS := test_session_lifecycle.cpp $(call srcs,test_session_lifecycle)

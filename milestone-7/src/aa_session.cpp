@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -866,24 +867,7 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // DrivingStatus driving_status=13 {status=1}.
 // LocationData location_data=1 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
-static uint32_t pbFirstVarint(const std::vector<uint8_t>& d, size_t off, uint32_t field) {
-    size_t i = off;
-    while (i < d.size()) {
-        uint32_t tag = 0; int sh = 0;
-        while (i < d.size()) { uint8_t b = d[i++]; tag |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-        uint32_t f = tag >> 3, w = tag & 7;
-        if (w == 0) {
-            uint32_t v = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; v |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            if (f == field) return v;
-        } else if (w == 2) {
-            uint32_t len = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; len |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            i += len;
-        } else if (w == 1) { i += 8; } else if (w == 5) { i += 4; } else { break; }
-    }
-    return 0xFFFFFFFFu;
-}
+using proto::pbFirstVarint;
 
 // SensorStartRequest min_update_period (field 2, int64). DHU r2.1 treats -1 as "do not send", and otherwise sends each
 // report as it comes. Here it is only logged, to see what the phone asks for. False: the field is absent.
