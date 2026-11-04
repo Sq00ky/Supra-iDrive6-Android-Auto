@@ -448,6 +448,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_BT_REFOCUS` | `0` | Request the car's Bluetooth source again after the Assistant closes the mic, so the reply is heard |
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
+| `NBT_CAR_GPS` | `0` | Read the car's GPS position from MOST |
 | `NBT_TOUCH_FWD` | `0` | Touch to the phone |
 | `NBT_HIDE_IDLE` | `0` | iDrive gets the screen while no phone is connected. Off = overlay stays up for the whole run |
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |
@@ -784,6 +785,9 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    position re-bases. Messages are routed whatever the link state says. A second consumer, `VolumeInput`
    (`car/volume_input`, `car/volume_level.hpp`), follows the car's master volume on AudioMaster FBlock 0x20 fkt 0x0C08
    for the volume overlay; it adds no device-controller keys and runs with `NBT_KNOB=0` too.
+8. **Car GPS (`car/gps`).** `CarGps` is another consumer of the MOST client: it receives copies of the navigation's GNSS fix
+   (FBlock 0x52 inst 00, fkt 0x440, about once a second, one copy per HMI receiver), decodes it and logs it under `[GPS]`.
+   It adds no device-controller keys. With `NBT_KNOB=0` the client still starts, for the GPS alone.
 
 ### Cluster and HUD arrows (`kombi_nav`)
 
@@ -933,6 +937,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_volume_level`, `test_volume_input` | Car volume level against the car capture (AudioMaster 0x20/0x0C08), and from DSI frame to the overlay callback beside the controller |
+| `test_car_gps` | Car GPS decode (MOST 52/00 fkt 440, car capture), repeats and log cadence, the consumer on the fake `DsiClient` |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
@@ -964,8 +969,8 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `most/reassembler.hpp`), and the `NBT_MOST_LOG` logger
     `most/trace` (+ `most/registry.hpp`);
   - consumers of the MOST client, in `src/car/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`,
-    `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`, and `car/volume_input`
-    (+ `car/volume_level.hpp`) for the volume overlay;
+    `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`, `car/volume_input`
+    (+ `car/volume_level.hpp`) for the volume overlay, and `car/gps`;
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
     drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
     (+ `a2i_stream`); browser mode's parts: `stream_input.hpp` (one stream's state, by thread), `asound_device`

@@ -49,6 +49,7 @@ SRCS = src/main.cpp \
        src/most/trace.cpp \
        src/car/ccs_input.cpp \
        src/car/volume_input.cpp \
+       src/car/gps.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
