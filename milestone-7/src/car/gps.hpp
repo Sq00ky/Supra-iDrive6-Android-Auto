@@ -14,19 +14,22 @@
 //   [8]      GPSFix     UINT8   (parked with a fix: 4; firmware names FIX_NO/FIX_TIME/FIX_2D/FIX_3D, values unknown)
 //   [9]      HDOP       UINT8   capped at 80 by the sender: taken as 0.1 units (parked: 8 = 0.8)
 //   [10]     VDOP       UINT8   same
-//   [11..12] Speed      INT16   sent as the internal value; unit unknown (m/s based)
-//   [13]     Heading    UINT8   unit unknown (not whole degrees; 360/256 deg?)
-//   [14..15] Height     INT16   internal value / 10; unit unknown (maybe 10 m units)
+//   [11..12] Speed      INT16   0.01 m/s, checked against the distance between fixes; positive in reverse too
+//   [13]     Heading    UINT8   direction of travel, 360/256 deg per unit, ANTICLOCKWISE from north; keeps its last value
+//                               below about 1 m/s
+//   [14..15] Height     INT16   internal value / 10; unit and datum unknown (maybe 10 m units)
 //   [16..17] Year UINT16, [18] Month, [19] Day, [20] Hour, [21] Minute, [22] Second (UINT8, UTC fix time)
-// 0xFFFFFFFF in a coordinate means no fix. HDOP sets the accuracy sent to the phone (accuracyFromHdopE3). Speed, heading,
-// height and VDOP are decoded and logged but not sent until a drive log confirms their units.
-// The same FBlock also sends fkt 0x243 and FBlock 0xCD/01 fkt 0x20B with a second position about 5 m away (probably the
-// map-matched / dead-reckoned one). The service discovery says location_characterization RAW_GPS_ONLY (256), so the raw
-// GNSS fix (0x440) is the one to send.
+// 0xFFFFFFFF in a coordinate means no fix. HDOP, speed and heading set the accuracy, speed and bearing sent to the phone
+// (toLocationFix). Height and VDOP are decoded and logged but not sent. Speed and position arrive about 2 s behind the
+// vehicle speed on 05/00 fkt 621.
+// The same FBlock also sends fkt 0x243 and FBlock 0xCD/01 fkt 0x20B with a second position: 19 m away while parked in one
+// capture, within about 0.5 m of this track while moving, and not known to be map-matched. The service discovery says
+// location_characterization RAW_GPS_ONLY (256), so the raw GNSS fix (0x440) is the one to send. It is not snapped to the
+// road: on a road driven both ways, the two passes keep to their own side.
 //
 // Second source: MOST FBlock 0xCD inst 01, fkt 0xC00, OpType Status, NavigationInfo.GPS_RawDataCAN in the firmware (sender in
 // NavNBTEvoController, its setters in this order). Payload (10 bytes, big-endian):
-//   [0..1]   Speed       UINT16  the raw speed of fkt 0x440 * 7.2; unit unknown; 0xFFFE when over the limit
+//   [0..1]   Speed       UINT16  the raw speed of fkt 0x440 * 7.2; 0xFFFE when over the limit
 //   [2], [3] Error in latitude, longitude  UINT8  unit unknown (parked: 25)
 //   [4]      Receiver    UINT8   the engine's FIX_NO, FIX_TIME, FIX_2D, FIX_3D (0..3) as 3, 0, 0, 1
 //   [5]      Quality     UINT8   meaning unknown (parked: 2)
@@ -296,13 +299,31 @@ inline uint32_t fixAccuracyE3(const CarFix& f, uint32_t overrideE3) {
     return overrideE3 ? overrideE3 : accuracyFromHdopE3(f.hdop);
 }
 
-// The fix in Android Auto units, stamped with the time it was received.
+const int16_t kSpeedMaxRaw = 7000;          // 70 m/s: Android Auto 17.9's location code stops using speed from here on
+const int16_t kBearingMinSpeedRaw = 200;    // 2 m/s: below this the heading can be seconds old
+const int32_t kBearingE6PerRaw = 1406250;   // 360e6 / 256
+
+// The heading byte as a clockwise bearing, in LocationFix units: 0 stays 0, not 360.
+inline int32_t headingToBearingE6(uint8_t rawHeading) {
+    return ((256 - (int32_t)rawHeading) % 256) * kBearingE6PerRaw;
+}
+
+// The fix in Android Auto units, stamped with the time it was received. A speed out of range is left out rather than sent,
+// as one bad value could cost the speed for the session. A fix without the extra fields has neither.
 inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t rxMs) {
     LocationFix l;
     l.lat_e7 = f.lat_e7;
     l.lon_e7 = f.lon_e7;
     l.accuracy_e3 = accuracyE3;
     l.rx_ms = rxMs;
+    if (f.ext && f.speed >= 0 && f.speed < kSpeedMaxRaw) {
+        l.has_speed = true;
+        l.speed_e3 = (int32_t)f.speed * 10;
+        if (f.speed >= kBearingMinSpeedRaw) {
+            l.has_bearing = true;
+            l.bearing_e6 = headingToBearingE6(f.heading);
+        }
+    }
     return l;
 }
 

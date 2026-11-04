@@ -48,8 +48,8 @@ void CarGps::onStatus(const most::View& m) {
     if (r.logBad)
         printf("[GPS] status: %u-byte payload on %02X/%02X fkt %03X, expected 10\n", (unsigned)m.len, m.fblock, m.inst, m.fkt);
     if (!r.ok) return;
-    // Speed and the error bytes are raw values with units still to confirm (the layout above). The longest gap shows how
-    // often this message really changes.
+    // Raw values (the layout above); the unit of the error bytes is unknown. The longest gap shows how often this message
+    // really changes.
     if (r.logFields)
         printf("[GPS] status #%u used=%u receiver=%u quality=%u hdop=%u err=%u/%u speed=%u time=%u, longest gap %u ms%s\n",
                r.statusNo, s.satsUsed, s.receiver, s.quality, s.hdop, s.errLat, s.errLon, s.speed, s.timeOfDay,
@@ -78,8 +78,8 @@ void CarGps::onFix(const most::View& m) {
             printf("[GPS] car GPS: no fix (%02X/%02X fkt %03X, %u bytes)\n", m.fblock, m.inst, m.fkt, (unsigned)m.len);
     }
     if (!r.ok) return;
-    // Speed, heading, height and the DOPs are raw values with units still to confirm (car/gps.hpp). Position and UTC
-    // time on the same line let a drive log be checked against the distance and direction travelled between lines.
+    // Raw values (car/gps.hpp). Position and UTC time on the same line let a drive log be checked against the distance and
+    // direction travelled between lines.
     if (r.logFields) {
         if (f.ext)
             printf("[GPS] fix #%u %02u:%02u:%02u %.6f, %.6f fix=%u hdop=%u vdop=%u speed=%d heading=%u height=%d%s\n",

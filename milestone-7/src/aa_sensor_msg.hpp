@@ -16,7 +16,7 @@ struct LocationFix {
     int32_t lat_e7, lon_e7;     // degrees * 1e7
     uint32_t accuracy_e3;       // metres * 1000 (LocationData field 4, optional: only fields 2 and 3 are required)
     uint32_t rx_ms;             // CLOCK_MONOTONIC ms, truncated to 32 bits, when the fix was received
-    // Optional, and off until set: nothing sets them yet, because the units of the car's values are not confirmed.
+    // Optional, and off until set. Nothing sets altitude: the unit and datum of the car's height are not known.
     bool has_altitude, has_speed, has_bearing;
     int32_t altitude_e2;        // metres * 100 (field 5)
     int32_t speed_e3;           // metres per second * 1000 (field 6)

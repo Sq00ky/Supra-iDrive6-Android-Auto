@@ -320,7 +320,7 @@ no settings file.
 | "Hey Google" / Assistant using the car's microphone (`Carplay_Siri_1mic` speech scenario) | Car-verified |
 | Assistant replies audible (the car's Bluetooth source is requested again when the mic closes) | Car-verified |
 | Driving status, night mode | Works; night mode follows the car's day/night (like CarPlay) since v1.8.30 / rhmiapp-15 |
-| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP; speed, heading and altitude not yet |
+| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP, the GPS speed, and the direction of travel above 2 m/s; altitude not yet. This speed is always positive and is not the Mechanical Speed sensor, which is not sent |
 | Car GPS satellites | Sent as the GPS_SATELLITE sensor (satellites used, about once a second, 0 with no fix) |
 | iDrive menu entry with its own icon and a "Connecting..." text | Car-verified |
 | Menu: **Start** | Car-verified |
