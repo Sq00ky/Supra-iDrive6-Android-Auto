@@ -49,7 +49,8 @@ SRCS = src/main.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
-       src/kombi_nav.cpp
+       src/kombi_nav.cpp \
+       src/volume_osd.cpp
 
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
 CSRCS = src/audio/speex.c
@@ -133,6 +134,25 @@ wfd_probe: tools/wfd_probe.cpp src/alt_wifi.hpp src/wireless_setup.hpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/wfd_probe.cpp -lsocket -lang-c++
 	@echo [DONE] Built $@
 
+# Standalone volume-key capture/prompter: prints "press volume up 5x", waits, prints "press volume down 5x", waits, while
+# logging every MOST control message it can see to stdout and /mnt/umass01200t7/volcap.log. No daemon, no env needed.
+volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most_msg.hpp
+	@echo [CXX] tools/volcap.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/volcap.cpp src/dsi_client.cpp -lang-c++
+	@echo [DONE] Built $@
+
 clean:
 	@echo [CLEAN] Removing object files and binaries
 	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe
+
+# osdprobe: standalone check that this unit lets us own an LM surface for our own window.
+osdprobe: tools/osdprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/osdprobe.cpp -L./lib -lscreen -lang-c++
+
+# lmrestore: put screen 0's layer render order back after an experiment cleared it.
+lmrestore: tools/lmrestore.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/lmrestore.cpp -lang-c++
+
+# kdprobe: the supported overlay path -- KD window + EGL/GLES surface (see tools/kdprobe.cpp).
+kdprobe: tools/kdprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/kdprobe.cpp -L./lib -lscreen -lKD -lEGL -lGLESv2 -lang-c++ -lm

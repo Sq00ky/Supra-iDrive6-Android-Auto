@@ -87,6 +87,8 @@ public:
     virtual void onMicClosed();
     // Ask for the connection again in case the voice scenario moved the car off it.
     void refocus(const char* why);
+    // Live media gain 0..1 (the volume slider). Ramped inside the mixer, safe from any thread; 0 = silent.
+    void setMediaGain(float g);
     // Daemon shutdown.
     virtual void stop();
 

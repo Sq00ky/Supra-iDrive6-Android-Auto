@@ -118,6 +118,29 @@ int main(int argc, char** argv) {
         assert(cw == 2 && events == 2);                                       // baseline, then two clockwise detents
         printf("test_ccs_decoder CCS G30 capture OK\n");
     }
+    {   // Car capture 2026-11-03 (volcap.log on the car): AudioMaster FBlock 0x20 fkt 0x0C08, 5 bytes
+        // 01 00 LEVEL 00 MAX. Up presses walked 8,9,11,12,13,15; down presses 13,12,11,9,8,7; MAX is 0x64.
+        nbt::CcsDecoder v;
+        nbt::CcsEvent ev[8];
+        const int up[]   = { 8, 9, 11, 12, 13, 15 };
+        const int down[] = { 13, 12, 11, 9, 8, 7 };
+        for (int i = 0; i < 6; ++i) {
+            uint8_t m[5] = { 0x01, 0x00, (uint8_t)up[i], 0x00, 0x64 };
+            assert(v.feed(0x20, 0x00, 0xC08, 0xC, m, 5, ev, 8) == 1);
+            assert(ev[0].kind == 3 && ev[0].keycode == 100 && ev[0].delta == up[i]);
+        }
+        uint8_t dup[5] = { 0x01, 0x00, 0x0F, 0x00, 0x64 };                    // same level again at once: dropped
+        assert(v.feed(0x20, 0x00, 0xC08, 0xC, dup, 5, ev, 8) == 0);
+        for (int i = 0; i < 6; ++i) {
+            uint8_t m[5] = { 0x01, 0x00, (uint8_t)down[i], 0x00, 0x64 };
+            assert(v.feed(0x20, 0x00, 0xC08, 0xC, m, 5, ev, 8) == 1);
+            assert(ev[0].kind == 3 && ev[0].keycode == 100 && ev[0].delta == down[i]);
+        }
+        uint8_t bad[5] = { 0x01, 0x00, 0x05, 0x00, 0x00 };                    // MAX 0: rejected, not a level message
+        assert(v.feed(0x20, 0x00, 0xC08, 0xC, bad, 5, ev, 8) == 0);
+        assert(v.feed(0x20, 0x00, 0xC08, 0xC, bad, 4, ev, 8) == 0);           // short payload
+        printf("test_ccs_decoder volume (AudioMaster 0x0C08) OK\n");
+    }
     printf("test_ccs_decoder OK\n");
     return 0;
 }

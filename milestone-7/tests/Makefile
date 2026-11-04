@@ -58,6 +58,7 @@ SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
 SRC_test_usb_log           :=
 SRC_test_voice_scenario    := src/audio/voice_scenario.cpp
+SRC_test_volume            := src/audio/mixer.cpp src/audio/playout.cpp src/audio/drift.cpp src/audio/stream_rate.cpp
 SRC_test_wpp               := src/wireless_setup.cpp
 
 # Arguments some tests take (paths relative to milestone-7).
