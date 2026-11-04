@@ -53,6 +53,61 @@ int main() {
         assert(lat == f.lat_e7 && lon == f.lon_e7 && acc == 1);
         assert(len == 1 + 10 + 1 + 10 + 1 + 1);
     }
+    // A fix with nothing optional set: exactly the fields it always had, so the bytes on the wire do not change.
+    {
+        LocationFix f;
+        assert(!f.has_altitude && !f.has_speed && !f.has_bearing);
+        f.lat_e7 = 1; f.lon_e7 = 2; f.accuracy_e3 = 3;
+        f.altitude_e2 = 99; f.speed_e3 = 99; f.bearing_e6 = 99;     // values alone do not put a field on the wire
+        std::vector<uint8_t> ev;
+        buildLocationEvent(f, ev);
+        const uint8_t want[] = { 0x80, 0x03, 0x0A, 0x06, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03 };
+        assert(ev.size() == sizeof(want));
+        for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+    }
+    // Each optional field on its own, with its tag, in field order, and written even when 0.
+    {
+        LocationFix f;
+        f.lat_e7 = 1; f.lon_e7 = 2; f.accuracy_e3 = 3;
+        f.has_speed = true;
+        f.speed_e3 = 0;
+        std::vector<uint8_t> ev;
+        buildLocationEvent(f, ev);
+        const uint8_t speed0[] = { 0x80, 0x03, 0x0A, 0x08, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03, 0x30, 0x00 };
+        assert(ev.size() == sizeof(speed0));
+        for (size_t i = 0; i < sizeof(speed0); ++i) assert(ev[i] == speed0[i]);
+
+        f.has_altitude = true; f.altitude_e2 = 5;
+        f.speed_e3 = 6;
+        f.has_bearing = true; f.bearing_e6 = 7;
+        buildLocationEvent(f, ev);
+        const uint8_t all[] = { 0x80, 0x03, 0x0A, 0x0C, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03, 0x28, 0x05, 0x30, 0x06, 0x38, 0x07 };
+        assert(ev.size() == sizeof(all));
+        for (size_t i = 0; i < sizeof(all); ++i) assert(ev[i] == all[i]);
+    }
+    // Real values round-trip: below sea level is a 10-byte varint, and a bearing near 360 degrees needs 5 bytes.
+    {
+        LocationFix f;
+        f.lat_e7 = 533553700; f.lon_e7 = -15262930; f.accuracy_e3 = 10000;
+        f.has_altitude = true; f.altitude_e2 = -2300;
+        f.has_speed = true; f.speed_e3 = 13889;         // 50 km/h
+        f.has_bearing = true; f.bearing_e6 = 359999999;
+        std::vector<uint8_t> ev;
+        buildLocationEvent(f, ev);
+        assert(ev[0] == 0x80 && ev[1] == 0x03 && ev[2] == 0x0A);
+        size_t i = 3;
+        const size_t len = (size_t)var(ev, i);
+        assert(i + len == ev.size());
+        int seen = 0;
+        while (i < ev.size()) {
+            const uint64_t tag = var(ev, i);
+            const uint64_t v = var(ev, i);
+            if (tag == 0x28) { assert((int32_t)(int64_t)v == -2300); ++seen; }
+            else if (tag == 0x30) { assert((int32_t)v == 13889); ++seen; }
+            else if (tag == 0x38) { assert((int32_t)v == 359999999); ++seen; }
+        }
+        assert(seen == 3);
+    }
     // The age limit, at its edge and across the 32-bit wrap of the clock.
     {
         LocationFix f;
