@@ -65,6 +65,7 @@
       <focusEvent id="50" targetModel="40"/>
       <focusEvent id="51" targetModel="41"/>
       <focusEvent id="52" target="13"/>
+      <focusEvent id="53" target="10"/>
     </events>
     <hmiStates>
       <hmiState id="10" text="Android Auto" textModel="3">
@@ -113,6 +114,44 @@
       <hmiState id="11" text="Android Auto" textModel="3">
         <components>
           <image id="70" model="12">
+            <properties>
+              <property id="3" value="true"/>
+              <property id="9" value="549"/>
+              <property id="10" value="484"/>
+              <property id="20" value="0"/>
+              <property id="21" value="0"/>
+            </properties>
+          </image>
+        </components>
+      </hmiState>
+    </hmiStates>
+  </pluginApp>
+  <!-- One-press entry "Open Android Auto" (raAction 2), right after the menu entry. Property 55 is its UUID: without
+       one, iDrive refuses to store a plugin entry on a favourite key. Keep the UUID fixed: a new one orphans keys
+       already stored. Connected: Android Auto comes to the front; otherwise our menu opens (focusEvent 53) with the
+       status, and nbt-aad is started if needed. -->
+  <pluginApp applicationType="Custom" applicationWeight="199" entryButtonFocusID="32753" insertAfterFocusID="32752" insertStateID="20" text="Open Android Auto">
+    <comment/>
+    <entryButton action="2" id="101" model="103" imageModel="104" previewModel="113">
+      <properties>
+        <property id="55" value="02773afe-a0dc-564a-95d8-a4768ea38a65"/>
+      </properties>
+    </entryButton>
+    <actions>
+      <raAction id="2"/>
+    </actions>
+    <models>
+      <textIdModel id="103" textId="14">
+        <synonyms/>
+      </textIdModel>
+      <imageIdModel id="104" imageId="55001"/>
+      <imageIdModel id="112" imageId="55002"/>
+      <raPreviewModel id="113" modelType="StatePreview" previewState="110"/>
+    </models>
+    <hmiStates>
+      <hmiState id="110" text="Open Android Auto" textModel="103">
+        <components>
+          <image id="111" model="112">
             <properties>
               <property id="3" value="true"/>
               <property id="9" value="549"/>

@@ -15,7 +15,8 @@ DuckConfig::DuckConfig()
 }
 
 AudioMixer::AudioMixer()
-    : rate_(48000), ch_(2), duck_(1.0f), attack_step_(1.0f), release_step_(1.0f), hold_frames_(0), hold_left_(0) {
+    : rate_(48000), ch_(2), duck_(1.0f), attack_step_(1.0f), release_step_(1.0f), hold_frames_(0), hold_left_(0),
+      media_gain_(1.0f), media_target_(1.0f), media_step_(0.0f) {
     configure(48000, 2, DuckConfig());
 }
 
@@ -44,6 +45,17 @@ void AudioMixer::configure(uint32_t rate, uint32_t channels, const DuckConfig& c
     hold_frames_ = (uint32_t)((uint64_t)rate_ * cfg_.hold_ms / 1000u);
     duck_ = 1.0f;
     hold_left_ = 0;
+    // 50 ms ramp for the volume slider: step is 1.0 over that many frames, i.e. a full-scale jump takes 50 ms.
+    const uint32_t vf = (uint32_t)((uint64_t)rate_ * 50u / 1000u);
+    media_step_ = vf ? (1.0f / (float)vf) : 1.0f;
+    media_target_ = cfg_.media_gain;
+    media_gain_ = cfg_.media_gain;
+}
+
+void AudioMixer::setMediaGain(float g) {
+    if (g < 0.0f) g = 0.0f;
+    if (g > 1.0f) g = 1.0f;
+    media_target_ = g;
 }
 
 static inline int16_t sat16(float v) {
@@ -65,7 +77,16 @@ void AudioMixer::mix(const int16_t* media, const int16_t* guidance, const int16_
             duck_ += release_step_;
             if (duck_ > 1.0f) duck_ = 1.0f;
         }
-        const float mg = cfg_.media_gain * duck_;
+        // Volume ramp, one step per frame towards the target set by setMediaGain().
+        const float target = media_target_;
+        if (media_gain_ < target) {
+            media_gain_ += media_step_;
+            if (media_gain_ > target) media_gain_ = target;
+        } else if (media_gain_ > target) {
+            media_gain_ -= media_step_;
+            if (media_gain_ < target) media_gain_ = target;
+        }
+        const float mg = media_gain_ * duck_;
         for (uint32_t c = 0; c < ch_; ++c) {
             const size_t i = f * ch_ + c;
             float v = 0.0f;

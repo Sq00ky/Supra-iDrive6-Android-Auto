@@ -337,6 +337,24 @@ Bluetooth reconnect.
 | Start automatically (checkbox; "Start with the car" before rhmiapp-19) | When ticked, the iDrive app starts the daemon 15 s after the head unit boots (not on every ignition-on: the head unit stays up ~10 min after ignition off, and the daemon keeps running), so a phone that connects on its own gets Android Auto without opening this menu. Stored as `/var/opt/aa/autostart` on the car's persistence partition, which is writable at runtime (`/opt/aa` usually isn't); a hand-made `/opt/aa/autostart` also counts (needs the status polling, i.e. no `status.disable`) |
 | About | One wrapping text block (a Richtext list, like BMW's own ActiveSeating intro text, English only): "NBT-AAD: native wireless Android Auto", "Developed by nanaisu", the GitHub address, and the free-of-charge notice |
 
+### Favourite key
+
+The second Media/Radio entry, **Open Android Auto**, can be stored on a favourite button (the numbered keys on the centre console): highlight it and hold
+the key. One press then does what fits the moment:
+
+| Android Auto | Press |
+|---|---|
+| Not running | Starts it and opens the Android Auto menu, so "Connecting..." shows (and Force Stop / Restart are at hand if the phone never connects). Once connected, Android Auto comes to the front if that menu is still on screen |
+| Starting, or waiting for the phone | Opens the menu only (no second start) |
+| Connected, iDrive on screen | Brings Android Auto to the front |
+| On screen | Nothing |
+| Force Stop / Restart in progress | Opens the menu only |
+
+The entry carries a fixed UUID (RHMI property 55): iDrive only stores plugin entries that have one, and the
+Start row inside the menu can't be stored at all (even with a UUID: "unable to save"), hence the separate entry.
+Keep the UUID as it is: a new one orphans keys people already stored. Car-tested on a Supra (storing, start + menu
+jump, show on connect, connected, on screen, during a stop).
+
 While Android Auto is on screen, Force Stop and Restart are ignored. Knob presses can leak to the iDrive menu
 underneath the overlay, so this stops a stray press from killing the session.
 
@@ -488,11 +506,12 @@ Leave these unset unless you are testing.
 | `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Decoder / renderer heights (default 720) |
 | `NBT_VIDEO_DUMP=1` | Raw H.264 to `/tmp/aa_video.h264` (4 MB cap) |
 | `NBT_MMR_WAIT_S` | Wait for the MM-Renderer at start (default 90) |
+| `NBT_MMR_SPAWN` | Start the MM-Renderer ourselves when none is running (default 1, 0 = never): only on a car without CarPlay coded (no `/var/opt/conn/carplay/carplay.ini`), where the head unit never starts it; with CarPlay coded the head unit's is used. One we start is stopped when nbt-aad exits; its pid is kept in `/dev/shmem/nbt-aad-mmr.pid` so a restarted nbt-aad can stop it too |
 | `NBT_PURGE_ALL=1` | Destroy every MM-Renderer context, not only `aadvideoctx*`/`cpvideoctx*` |
 | `NBT_TOUCH_SX/SY/OX/OY`, `NBT_TOUCH_W/H`, `NBT_TOUCH_IDLE_MS`, `NBT_TOUCH_CFG_H`, `NBT_TOUCH_PORT` | Touch scale/offset, clamp (1280x720), stuck-finger release (400 ms), declared height (720), UDP port (30567) |
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |
 | `NBT_KNOB_RAW=1` | Log every raw controller message |
-| `NBT_MOST_LOG=1` | Log what the MOST client sees, tagged `[MOSTLOG]`: the registry, then for each message type the first 3 and then payload changes, at most 200 lines per type. For working out the car's signals from a drive. With `NBT_KNOB=0` too, the client still starts, for the log alone |
+| `NBT_MOST_LOG=1` | Log what the MOST client sees, tagged `[MOSTLOG]`: the registry, then for each message type the first 3 and then payload changes, at most 200 lines per type. For working out the car's signals from a drive. With `NBT_KNOB=0` too, the client still starts, for the log alone. The old `NBT_CCS_DEBUG=1` / `NBT_CCS_ALL=1` switch this on |
 | `NBT_GEAR_REVERSE` | Gear value for R (default 2; car codes 3 P, 1 N, 2 R, 5 D) |
 | `NBT_NEUTRAL_RESUME_S`, `NBT_GEAR_NEUTRAL` | Manual gearbox: seconds in neutral straight after reverse before Android Auto comes back over the park-assist view (default `5`; `0` = off). Leaving neutral or going back into reverse cancels it; not after you exited Android Auto. Gear value for N (default 1). Log: `[Gear] ... reverse -> neutral`. Not car-verified |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
@@ -762,7 +781,9 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    status messages. Handlers get whole messages: the client joins segments and leaves out transmit status, and counts
    both. It logs one `[MOST]` line a minute with its message counts by class and its link state, so
    a silent client still shows. When the link stops being up, keys still held are released on the phone and the knob
-   position re-bases. Messages are routed whatever the link state says.
+   position re-bases. Messages are routed whatever the link state says. A second consumer, `VolumeInput`
+   (`car/volume_input`, `car/volume_level.hpp`), follows the car's master volume on AudioMaster FBlock 0x20 fkt 0x0C08
+   for the volume overlay; it adds no device-controller keys and runs with `NBT_KNOB=0` too.
 
 ### Cluster and HUD arrows (`kombi_nav`)
 
@@ -837,7 +858,7 @@ Nothing in HmiMain3D is patched.
 |---|---|
 | `libNbtAad.so` | App code (`pluginAppInfo` entry point) |
 | `NbtAad.manifest` | Tells CAppManager what to load |
-| `NbtAad.xml` | Entry in Media/Radio (native state 20 = ST_Ent_Selection) after the Bluetooth audio row (focus 2270), opening the Start / Force Stop / Restart menu (raActions 21/22/23) |
+| `NbtAad.xml` | Entry in Media/Radio (native state 20 = ST_Ent_Selection) after the Bluetooth audio row (focus 2270), opening the Start / Force Stop / Restart menu (raActions 21/22/23), plus the one-press entry **Open Android Auto** right after it (raAction 2, see [Favourite key](#favourite-key)) |
 | `NbtAad_Direct.xml` | Alternative: one-press entry that starts the daemon directly (raAction 2). Rename it to `NbtAad.xml` |
 | `NbtAad_Multimedia.xml` | Alternative: iDrive's own Multimedia placement rule |
 | `NbtAad_ALL_Texts.zip`, `NbtAad_ALL_Images.zip` | Text (6 languages) and icon DBs, regenerated by `python3 rhmiapp/make_db.py`. 55001 = 63x54 row icon, 55002 = 549x484 preview, 55010..55017 = connecting animation frames |
@@ -911,6 +932,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_most_trace` | `NBT_MOST_LOG` filter and the client's taps |
 | `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
+| `test_volume_level`, `test_volume_input` | Car volume level against the car capture (AudioMaster 0x20/0x0C08), and from DSI frame to the overlay callback beside the controller |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
@@ -925,6 +947,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_route_policy` | Browser source build / release: grant timeout and 60 s backoff, release after `NBT_BROWSER_IDLE_S` with media and `NBT_BROWSER_PROMPT_IDLE_MS` without, no build while releasing, release timeout |
 | `test_resampler` | speexdsp vs linear: passband 1-18 kHz, the 23 kHz alias, output length at 48 / 16 / 44.1 kHz, drift trim, chunked = whole, no click on trim changes, passthrough, engine switch, every trim clean across ±2 % (fixed-point speex needs a ratio denominator below 2^15) (link `src/audio/speex.c` built as C) |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
+| `test_entry_key` | What one press of the Open Android Auto entry / favourite key does, per daemon state |
 | `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/kombi_nav.cpp src/kombi_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
 | `test_media_payload.py` | Media metadata payloads |
 
@@ -941,7 +964,8 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `most/reassembler.hpp`), and the `NBT_MOST_LOG` logger
     `most/trace` (+ `most/registry.hpp`);
   - consumers of the MOST client, in `src/car/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`,
-    `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`;
+    `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`, and `car/volume_input`
+    (+ `car/volume_level.hpp`) for the volume overlay;
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
     drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
     (+ `a2i_stream`); browser mode's parts: `stream_input.hpp` (one stream's state, by thread), `asound_device`

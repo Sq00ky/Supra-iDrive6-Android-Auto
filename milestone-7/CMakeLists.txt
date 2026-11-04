@@ -34,6 +34,7 @@ set(SOURCES
     src/audio/resampler.cpp
     src/audio/asound_device.cpp
     src/video_manager.cpp
+    src/mmr_launch.cpp
     src/tcp_server.cpp
     src/aa_session.cpp
     src/audio/audio_acks.cpp
@@ -47,6 +48,7 @@ set(SOURCES
     src/most/client.cpp
     src/most/trace.cpp
     src/car/ccs_input.cpp
+    src/car/volume_input.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
     src/kombi_client.cpp

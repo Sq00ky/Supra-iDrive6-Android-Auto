@@ -4,6 +4,7 @@
 #define VIDEO_MANAGER_HPP
 
 #include "screen_video.h"
+#include "mmr_launch.hpp"
 #include <stdint.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -42,6 +43,11 @@ public:
     // LayerManager visibility of surface 1280 (shared with the factory CarPlay window): 1 / 0, -1 = unknown.
     static int surface1280Visible();
     bool hasWindow() const { return window_ready_; }
+    // The Android Auto context and window, so the volume overlay can be a CHILD of the projection window: a window
+    // with its own id string never reaches this panel (no LayerManager surface), and one named "1280" *becomes* the
+    // projection surface and covers Android Auto (car 2026-11-03, nbt-aad-68).
+    screen_context_t screenContext() const { return sink_.ctx; }
+    screen_window_t  screenWindow()  const { return sink_.win; }
 
     // Push raw H.264 NAL units from aasdk
     bool postVideoFrame(const uint8_t* data, size_t length, uint64_t pts = 0);
@@ -83,6 +89,7 @@ private:
     void* mmr_ctxt_;
     int mmr_output_id_;
     int mmr_input_id_;
+    mmr::Launcher mmr_launch_;      // the mm-renderer we started (none on a car with CarPlay enabled)
 
     pthread_t worker_thread_;
     pthread_mutex_t queue_mutex_;
