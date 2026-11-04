@@ -106,6 +106,7 @@
 #include "car/ccs_input.hpp"
 #include "car/volume_input.hpp"
 #include "car/input_activity.hpp"
+#include "car/gps.hpp"
 #include "most/client.hpp"
 #include "most/trace.hpp"
 #include "crash_handler.hpp"
@@ -153,6 +154,7 @@ static nbt::most::Client g_most;             // the one MOST observe client, sta
 static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
 static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
 static nbt::car::InputActivity g_carInput;   // any car control the driver touched: a consumer of g_most
+static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
 static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
@@ -1794,6 +1796,10 @@ int main(int argc, char* argv[]) {
     // The car's volume is followed whether or not the knob is: it drives the overlay, not the phone.
     if (!g_carVolume.attach(g_most, &onCarVolume, NULL))
         printf("[Main] car volume input failed to start.\n");
+    if (!nbt::carGpsEnabled())
+        printf("[Main] car GPS off (NBT_CAR_GPS=0).\n");
+    else if (!g_gps.attach(g_most))
+        printf("[Main] car GPS failed to start.\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.
     const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;
@@ -1803,7 +1809,7 @@ int main(int argc, char* argv[]) {
         printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
     g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
     if (!g_most.start("NBTAAD_MOST"))
-        printf("[Main] MOST client failed to start: knob/keys disabled.\n");
+        printf("[Main] MOST client failed to start: knob/keys and car GPS disabled.\n");
 
     if (nbt::wirelessEnabled()) {
         pthread_t wt;
