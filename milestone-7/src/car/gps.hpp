@@ -18,15 +18,19 @@
 //   [13]     Heading    UINT8   unit unknown (not whole degrees; 360/256 deg?)
 //   [14..15] Height     INT16   internal value / 10; unit unknown (maybe 10 m units)
 //   [16..17] Year UINT16, [18] Month, [19] Day, [20] Hour, [21] Minute, [22] Second (UINT8, UTC fix time)
-// 0xFFFFFFFF in a coordinate means no fix. Speed, heading, height and the DOPs are decoded and logged until a drive log
-// confirms their units.
+// 0xFFFFFFFF in a coordinate means no fix. Speed, heading, height and the DOPs are decoded and logged but not sent to
+// the phone until a drive log confirms their units.
 // The same FBlock also sends fkt 0x243 and FBlock 0xCD/01 fkt 0x20B with a second position about 5 m away (probably the
-// map-matched / dead-reckoned one). This is the raw GNSS fix.
+// map-matched / dead-reckoned one). The service discovery says location_characterization RAW_GPS_ONLY (256), so the raw
+// GNSS fix (0x440) is the one to send.
 //
 // The decode and CarGpsFilter are pure: host-tested in tests/test_car_gps.cpp.
+//   NBT_GPS_ACCURACY_M=n   accuracy sent with each fix, in metres (default 10; the car's own figure is not decoded yet)
 
+#include "aa_sensor_msg.hpp"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 namespace nbt {
@@ -152,18 +156,43 @@ private:
     unsigned fixes_;
 };
 
-// A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 Status and logs the fix under [GPS]. It adds no
-// device-controller keys: the client's subscriptions switch delivery on, and GPS arrives with no key.
+// LocationFix::accuracy_e3 from NBT_GPS_ACCURACY_M: 1..9999 m, anything else is the 10 m default.
+inline uint32_t parseGpsAccuracyE3(const char* metres) {
+    int m = metres ? atoi(metres) : 0;
+    return (m > 0 && m < 10000) ? (uint32_t)m * 1000u : 10000u;
+}
+inline uint32_t readGpsAccuracyE3() { return parseGpsAccuracyE3(getenv("NBT_GPS_ACCURACY_M")); }
+
+// The fix in Android Auto units, stamped with the time it was received.
+inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t rxMs) {
+    LocationFix l;
+    l.lat_e7 = f.lat_e7;
+    l.lon_e7 = f.lon_e7;
+    l.accuracy_e3 = accuracyE3;
+    l.rx_ms = rxMs;
+    return l;
+}
+
+typedef void (*LocationCb)(const LocationFix& fix, void* user);
+
+// A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 Status, logs the fix under [GPS] and hands each new
+// one on. It adds no device-controller keys: the client's subscriptions switch delivery on, and GPS arrives with no key.
+// The callback runs on the DSI callback thread: see the handler rules in most/client.hpp.
 class CarGps {
 public:
+    CarGps();
+
     // Before the client's start(). False: the client has no room for the route.
-    bool attach(most::Client& client);
+    bool attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, void* user);
 
 private:
     static void statusTramp(const most::View& m, void* self);
     void onStatus(const most::View& m);
 
     CarGpsFilter filter_;
+    uint32_t accuracyE3_;
+    LocationCb cb_;
+    void* user_;
 };
 
 } // namespace car

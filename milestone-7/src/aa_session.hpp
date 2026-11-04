@@ -9,6 +9,7 @@
 #include <map>
 #include <pthread.h>
 #include "aa_cryptor.hpp"
+#include "aa_sensor_msg.hpp"
 #include "audio/audio_acks.hpp"
 #include "sdr_builder.hpp"
 #include "touch_types.hpp"
@@ -62,6 +63,9 @@ public:
     // sent to the phone as a NIGHT_MODE sensor event once it has started that sensor. NBT_NIGHT_MODE=0/1 overrides.
     // Thread-safe.
     void postNightMode(bool night);
+    // The newest position, about once a second: sent to the phone as a LOCATION (sensor 1) event once it has started that
+    // sensor, unless older than kLocationMaxAgeMs by then. Thread-safe.
+    void postCarLocation(const LocationFix& fix);
     // Car microphone PCM (16 kHz mono S16LE) for the phone. Thread-safe (capture thread); queued and sent on
     // ch 14 by the session thread while the phone has the mic open, dropped otherwise.
     void postMicData(const uint8_t* pcm, size_t len);
@@ -115,6 +119,11 @@ private:
     int night_state_;                              // guarded by touch_mutex_: -1 unknown, 0 day, 1 night (car)
     bool night_started_;                           // guarded by touch_mutex_: phone started sensor 10 this session
     bool pending_night_;                           // guarded by touch_mutex_: send a NIGHT_MODE event on next drain
+    LocationFix car_fix_;                          // guarded by touch_mutex_: latest position
+    bool have_fix_;                                // guarded by touch_mutex_: car_fix_ is set (kept across sessions, age-checked)
+    bool location_started_;                        // guarded by touch_mutex_: phone started sensor 1 this session
+    bool pending_location_;                        // guarded by touch_mutex_: send a LOCATION event on next drain
+    uint32_t location_sent_;                       // session thread: LOCATION events this session
     VideoFocusCallback focus_cb_;
     void* focus_user_data_;
     MicRequestCallback mic_cb_;
@@ -127,7 +136,7 @@ private:
     bool sendMicFrame(const std::vector<uint8_t>& pcm);   // session thread only
     bool sendMicOpenResponse(uint8_t channel);            // session thread only
     bool sendBindingResponse(uint8_t channel);
-    // Sensor channel (ch 1): answer SensorStartRequest and publish night mode / driving status.
+    // Sensor channel (ch 1): answer SensorStartRequest and publish night mode / driving status / location.
     bool sendSensorStartResponse(uint8_t channel, bool ok);
     bool sendSensorEvent(uint32_t sensor_type);
     std::vector<TouchEventOut> touch_queue_;

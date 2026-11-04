@@ -9,12 +9,18 @@
 namespace nbt {
 namespace car {
 
-bool CarGps::attach(most::Client& client) {
+CarGps::CarGps() : accuracyE3_(0), cb_(NULL), user_(NULL) {}
+
+bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, void* user) {
+    accuracyE3_ = accuracyE3;
+    cb_ = cb;
+    user_ = user;
     if (!client.addRoute(kCarGpsFBlock, kCarGpsInst, kCarGpsFkt, most::kOpStatus, &CarGps::statusTramp, this)) {
         printf("[GPS] no room on the MOST client: car GPS disabled\n");
         return false;
     }
-    printf("[GPS] car GPS: reading MOST %02X/%02X fkt %03X\n", kCarGpsFBlock, kCarGpsInst, kCarGpsFkt);
+    printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto LOCATION, accuracy %u m\n", kCarGpsFBlock, kCarGpsInst,
+           kCarGpsFkt, (unsigned)(accuracyE3 / 1000));
     return true;
 }
 
@@ -44,6 +50,7 @@ void CarGps::onStatus(const most::View& m) {
             printf("[GPS] fix #%u %.6f, %.6f (%u-byte payload, no extra fields)\n", r.fixNo, f.lat_e7 / 1e7, f.lon_e7 / 1e7,
                    (unsigned)m.len);
     }
+    if (cb_) cb_(toLocationFix(f, accuracyE3_, m.rxMs), user_);
 }
 
 } // namespace car
