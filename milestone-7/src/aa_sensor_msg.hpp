@@ -14,7 +14,7 @@ namespace nbt {
 
 struct LocationFix {
     int32_t lat_e7, lon_e7;     // degrees * 1e7
-    uint32_t accuracy_e3;       // metres * 1000 (LocationData field 4, required by the protocol)
+    uint32_t accuracy_e3;       // metres * 1000 (LocationData field 4, optional: only fields 2 and 3 are required)
     uint32_t rx_ms;             // CLOCK_MONOTONIC ms, truncated to 32 bits, when the fix was received
 };
 
@@ -49,8 +49,8 @@ inline void sensorPutVar(std::vector<uint8_t>& v, uint64_t x) {
 
 // Plain SensorEventIndication (0x8003) with one LocationData (SensorBatch field 1):
 //   {2: latitude_e7, 3: longitude_e7, 4: accuracy_e3}. Negative int32 values go out as 10-byte varints
-//   (protobuf int32 sign-extends to 64 bits). The fix time (field 1, deprecated) is left out: the phone stamps
-//   the arrival time.
+//   (protobuf int32 sign-extends to 64 bits). There is no fix time: DHU r2.1 writes field 1 as 0, and the Open Android
+//   Auto trace of the phone's APK finds no such field.
 inline void buildLocationEvent(const LocationFix& f, std::vector<uint8_t>& out) {
     std::vector<uint8_t> loc;
     loc.push_back(0x10); sensorPutVar(loc, (uint64_t)(int64_t)f.lat_e7);
