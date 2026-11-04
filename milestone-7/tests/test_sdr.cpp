@@ -28,9 +28,19 @@ static bool contains(const std::vector<uint8_t>& d, const char* s) {
     for (size_t i = 0; i + n <= d.size(); ++i) if (memcmp(&d[i], s, n) == 0) return true;
     return false;
 }
+static bool containsBytes(const std::vector<uint8_t>& d, const uint8_t* s, size_t n) {
+    for (size_t i = 0; i + n <= d.size(); ++i) if (memcmp(&d[i], s, n) == 0) return true;
+    return false;
+}
 int main() {
+    // The reference manifest is byte for byte what Google's Desktop Head Unit sends.
+    {
+        const std::vector<uint8_t> dhu(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
+        assert(serializeManifest(referenceManifest(dhuIdentity())) == dhu);
+        printf("reference manifest matches the DHU (%u bytes)\n", (unsigned)dhu.size());
+    }
     SdrIdentity id;
-    std::vector<uint8_t> a = buildServiceDiscovery(kDhuSdpProtobuf, kDhuSdpProtobufLen, id);
+    std::vector<uint8_t> a = serializeManifest(referenceManifest(id));
     bool bt; int na = countChannels(a, bt);
     std::vector<uint8_t> base(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
     bool bt0; int n0 = countChannels(base, bt0);
@@ -39,37 +49,34 @@ int main() {
     assert(contains(a, "Toyota") && contains(a, "GR Supra"));
     assert(!contains(a, "Desktop Head Unit") && !contains(a, "Google"));
     id.btAdapterAddress = "AA:BB:CC:DD:EE:FF";
-    std::vector<uint8_t> b = buildServiceDiscovery(kDhuSdpProtobuf, kDhuSdpProtobufLen, id);
+    std::vector<uint8_t> b = serializeManifest(referenceManifest(id));
     int nb = countChannels(b, bt);
     assert(nb == n0 + 1 && bt && contains(b, "AA:BB:CC:DD:EE:FF"));
     // main video override
     {
-        std::vector<uint8_t> v(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
+        ServiceDiscovery v = referenceManifest(dhuIdentity());
         setenv("NBT_VID_INSETS", "off", 1);
         setenv("NBT_VID_DPI", "0", 1);                               // DPI 140 is a default since v1.5.x
-        assert(!patchMainVideo(v));                                  // off + no other env: untouched
+        assert(!configureMainVideo(v));                                  // off + no other env: untouched
         setenv("NBT_VID_MH", "240", 1);
         setenv("NBT_VID_INSETS", "0,240,0,0", 1); setenv("NBT_VID_DPI", "140", 1);
-        int nb0 = countChannels(v, bt);
-        bool ch = patchMainVideo(v);
-        assert(ch && countChannels(v, bt) == nb0);
+        const size_t channelsBefore = v.channels.size();
+        bool ch = configureMainVideo(v);
+        assert(ch && v.channels.size() == channelsBefore);
+        const std::vector<uint8_t> bytes = serializeManifest(v);
         const uint8_t margin240[] = { 0x20, 0xf0, 0x01 };
         const uint8_t insets[] = { 0x5a, 0x11, 0x0a, 0x09, 0x08, 0x00, 0x10, 0xf0, 0x01, 0x18, 0x00, 0x20, 0x00, 0x12, 0x00, 0x1a, 0x00, 0x20, 0x00 };
-        bool m = false, ii = false;
-        for (size_t i = 0; i + sizeof(insets) <= v.size(); ++i) {
-            if (memcmp(&v[i], margin240, sizeof(margin240)) == 0) m = true;
-            if (memcmp(&v[i], insets, sizeof(insets)) == 0) ii = true;
-        }
-        assert(m && ii);
-        printf("video override OK (%u bytes)\n", (unsigned)v.size());
+        assert(containsBytes(bytes, margin240, sizeof(margin240)));
+        assert(containsBytes(bytes, insets, sizeof(insets)));
+        printf("video override OK (%u bytes)\n", (unsigned)bytes.size());
     }
     {
-        std::vector<uint8_t> v(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
-        assert(patchTouchConfig(v));
+        ServiceDiscovery v = referenceManifest(dhuIdentity());
+        assert(configureTouchScreen(v));
+        const std::vector<uint8_t> bytes = serializeManifest(v);
         const uint8_t t720[] = { 0x08, 0x80, 0x0a, 0x10, 0xd0, 0x05 };
-        bool f = false;
-        for (size_t i = 0; i + sizeof(t720) <= v.size(); ++i) if (memcmp(&v[i], t720, sizeof(t720)) == 0) f = true;
-        assert(f);
+        assert(containsBytes(bytes, t720, sizeof(t720)));
+        assert(!configureTouchScreen(v));                            // already 720
         printf("touch config 720 OK\n");
     }
     printf("test_sdr OK\n");

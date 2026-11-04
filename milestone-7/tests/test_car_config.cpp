@@ -3,7 +3,6 @@
 // Host test: car_config.hpp (NBT_SCREEN / NBT_VEHICLE / carplay.ini) and NBT_GUIDANCE_BT channel 8 retype.
 #include "car_config.hpp"
 #include "sdr_builder.hpp"
-#include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,6 +59,8 @@ static int audioType(const std::vector<uint8_t>& p, int ch) {
     }
     return -1;
 }
+
+static int audioType(const ServiceDiscovery& m, int ch) { return audioType(serializeManifest(m), ch); }
 
 int main() {
     const char* toyota = "#Version: 1.10\n#Coded is: def,1280_480,touch_screen\n[General]\r\nModel=J29-NBTEvo-0319\r\n"
@@ -140,31 +141,32 @@ int main() {
     CHECK(id.carMake == "BMW" && id.carModel == "F20" && id.huMake == "BMW");
 
     // NBT_GUIDANCE_BT=1: channel 8 GUIDANCE(1) -> SYSTEM_AUDIO(2), nothing else changes
-    std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
+    ServiceDiscovery sdr = referenceManifest(dhuIdentity());
     CHECK(audioType(sdr, 8) == 1);
     int before9 = audioType(sdr, 9);
     unsetenv("NBT_GUIDANCE_BT"); setenv("NBT_AUDIO_BT", "0", 1);
     CHECK(retypeGuidanceSink(sdr) == 0 && audioType(sdr, 8) == 1);   // A2I mode: GUIDANCE kept
     unsetenv("NBT_AUDIO_BT");
-    { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // unset = BT mode (default again, v1.8.66)
+    { ServiceDiscovery t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // unset = BT mode (default again, v1.8.66)
     setenv("NBT_AUDIO_MODE", "browser", 1);
-    { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 0 && audioType(t, 8) == 1); }   // browser mode: GUIDANCE kept
+    { ServiceDiscovery t = sdr; CHECK(retypeGuidanceSink(t) == 0 && audioType(t, 8) == 1); }   // browser mode: GUIDANCE kept
     unsetenv("NBT_AUDIO_MODE");
     setenv("NBT_AUDIO_BT", "1", 1);
-    { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // BT mode
+    { ServiceDiscovery t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // BT mode
     setenv("NBT_AUDIO_BT", "1", 1); setenv("NBT_GUIDANCE_BT", "0", 1);
     CHECK(retypeGuidanceSink(sdr) == 0 && audioType(sdr, 8) == 1);   // opt-out in BT mode
     unsetenv("NBT_GUIDANCE_BT");
-    { std::vector<uint8_t> t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // BT default on
+    { ServiceDiscovery t = sdr; CHECK(retypeGuidanceSink(t) == 1 && audioType(t, 8) == 2); }   // BT default on
     setenv("NBT_AUDIO_BT", "0", 1);
     setenv("NBT_GUIDANCE_BT", "1", 1);
-    std::vector<uint8_t> copy = sdr;
+    const std::vector<uint8_t> copy = serializeManifest(sdr);
     CHECK(retypeGuidanceSink(sdr) == 1);
     CHECK(audioType(sdr, 8) == 2);
     CHECK(audioType(sdr, 9) == before9);
-    CHECK(sdr.size() == copy.size());
+    const std::vector<uint8_t> retyped = serializeManifest(sdr);
+    CHECK(retyped.size() == copy.size());
     size_t diffs = 0;
-    for (size_t i = 0; i < sdr.size(); ++i) if (sdr[i] != copy[i]) ++diffs;
+    for (size_t i = 0; i < retyped.size(); ++i) if (retyped[i] != copy[i]) ++diffs;
     CHECK(diffs == 1);
 
     printf(fails ? "test_car_config FAILED (%d)\n" : "test_car_config OK\n", fails);

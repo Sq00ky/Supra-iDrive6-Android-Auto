@@ -979,7 +979,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
   - cluster/HUD arrows: `kombi_nav` (+ `kombi_nav_msg.hpp`, `kombi_graph.hpp`, `kombi_graph_template.hpp`),
     `kombi_client`;
   - other: `crash_handler`, `license_text.hpp`.
-- `include/`: `dhu_sdp.h` (canned service discovery), `a2i_client.h`, `dsi_controller.h`, `screen_video.h`.
+- `include/`: `a2i_client.h`, `dsi_controller.h`, `screen_video.h`.
 - `rhmiapp/`: the iDrive PluginApp. `plugin/`: the legacy HmiMain3D plugin.
 - `test_controls.cpp`: the controller monitor / wizard. `test_display.cpp`: a display test.
 
