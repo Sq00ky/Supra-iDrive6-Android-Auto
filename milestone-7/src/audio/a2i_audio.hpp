@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-#ifndef AUDIO_MANAGER_HPP
-#define AUDIO_MANAGER_HPP
+#ifndef AUDIO_A2I_AUDIO_HPP
+#define AUDIO_A2I_AUDIO_HPP
 
 #include "a2i_client.h"
-#include "a2i_stream.hpp"
-#include "audio_route.hpp"
-#include "pcm_utils.hpp"
+#include "audio/a2i_stream.hpp"
+#include "audio/audio_route.hpp"
+#include "audio/backend.hpp"
+#include "audio/resampler.hpp"
 #include <pthread.h>
 #include <stddef.h>
 #include <vector>
 
 namespace nbt {
 
-// C++03/GCC 4.4 compatible callback
-typedef void (*MicDataCallback)(const uint8_t* pcm_data, size_t size, void* user_data);
-
+// A2I audio mode (NBT_AUDIO_MODE=a2i, or NBT_AUDIO_BT=0; not audible on the car). Was AudioManager; its log lines keep
+// the [AudioManager] prefix. It captures the mic through its own pipeline, so the standalone MicUplink is not used.
+//
 // Audio pipeline between Android Auto and the NBT Evo A2I endpoints.
 //
 // Bring-up is staged so each risk can be validated on the car on its own.
@@ -29,7 +30,7 @@ typedef void (*MicDataCallback)(const uint8_t* pcm_data, size_t size, void* user
 // NBT_ROUTE_MEDIA (default 0xb9 src / 0x31d connId), NBT_ROUTE_NAV (default
 // 0xba src / 0x31e connId), NBT_ROUTE_SINK (default 0x1), NBT_AUDIOCONN,
 // NBT_AUDIOCONN_SUFFIX.
-class AudioManager {
+class A2iAudio : public AudioBackend {
 public:
     enum Stage {
         STAGE_OPEN_ONLY = 0,
@@ -38,33 +39,35 @@ public:
         STAGE_ROUTE     = 3
     };
 
-    AudioManager();
-    ~AudioManager();
+    A2iAudio();
+    ~A2iAudio();
 
     bool init();      // read env, open playback endpoints (does not start them)
-    void start();     // start playback workers according to the stage
-    void stop();
+    virtual void start();     // start playback workers according to the stage
+    virtual void stop();
 
     int stage() const { return stage_; }
 
     // Android Auto -> car. aa_channel 9 = media (48 kHz stereo),
-    // 8 = speech/guidance (16 kHz mono). Safe to call from the session thread.
-    void onAaAudio(uint8_t aa_channel, const uint8_t* pcm, size_t len);
-    // Phone started/stopped an AV audio stream (AV START/STOP indication).
-    void onAaStreamState(uint8_t aa_channel, bool started);
+    // 8 = speech/guidance (16 kHz mono). Safe to call from the session thread. pts is not used.
+    virtual void onFrame(uint8_t aa_channel, const uint8_t* pcm, size_t len, uint64_t pts);
+    // Phone started/stopped an AV audio stream (AV START/STOP indication). rate / channels are not used.
+    virtual void onStreamState(uint8_t aa_channel, bool started, uint32_t rate, uint32_t channels);
     // Phone session ended: flush queues, drop routes, stop the mic.
-    void onSessionEnded();
+    virtual void onSessionEnded();
 
-    // Car microphone (echo-cancelled uplink, 16 kHz mono) -> Android Auto.
-    void setMicCallback(MicDataCallback callback, void* user_data = NULL);
-    bool startMic();
-    void stopMic();
+    // Car microphone (echo-cancelled uplink, 16 kHz mono) -> Android Auto, through this pipeline's own capture.
+    virtual void setMicCallback(MicDataCallback callback, void* user_data);
+    virtual bool startMic(MicUplink&) { return startOwnMic(); }
+    virtual void stopMic(MicUplink&) { stopOwnMic(); }
 
 private:
-    AudioManager(const AudioManager&);
-    AudioManager& operator=(const AudioManager&);
+    A2iAudio(const A2iAudio&);
+    A2iAudio& operator=(const A2iAudio&);
 
     static void micThunk(const uint8_t* pcm, size_t size, void* self);
+    bool startOwnMic();
+    void stopOwnMic();
     bool openPlayback(A2IPlaybackStream& stream, const char* endpoint, const char* fallback);
 
     int stage_;
@@ -92,4 +95,4 @@ private:
 
 } // namespace nbt
 
-#endif // AUDIO_MANAGER_HPP
+#endif // AUDIO_A2I_AUDIO_HPP

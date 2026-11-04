@@ -13,39 +13,57 @@ INCLUDES = -I./include -I./src
 # Remove -fPIC and -Bdynamic to produce a true QNX executable (ET_EXEC), not a shared lib (ET_DYN)
 CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 # Set RPATH so QNX's dynamic linker automatically finds liba2i_client.so in /opt/mm/lib without copying
-LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
+LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -lm -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 SRCS = src/main.cpp \
-       src/audio_manager.cpp \
-       src/a2i_stream.cpp \
-       src/audio_route.cpp \
-       src/audio_mixer.cpp \
-       src/browser_audio.cpp \
-       src/pcm_utils.cpp \
+       src/audio/a2i_audio.cpp \
+       src/audio/config.cpp \
+       src/audio/bt_audio.cpp \
+       src/audio/speech_out.cpp \
+       src/audio/mic_uplink.cpp \
+       src/audio/a2i_stream.cpp \
+       src/audio/audio_route.cpp \
+       src/audio/mixer.cpp \
+       src/audio/playout.cpp \
+       src/audio/drift.cpp \
+       src/audio/stream_rate.cpp \
+       src/audio/browser_audio.cpp \
+       src/audio/pcm_ring.cpp \
+       src/audio/resampler.cpp \
+       src/audio/asound_device.cpp \
        src/video_manager.cpp \
        src/tcp_server.cpp \
        src/usb_accessory.cpp \
        src/usb_direct.cpp \
        src/aa_session.cpp \
+       src/audio/audio_acks.cpp \
        src/aa_cryptor.cpp \
        src/bluetooth_manager.cpp \
        src/wireless_setup.cpp \
        src/touch_probe.cpp \
        src/dsi_client.cpp \
-       src/voice_scenario.cpp \
-       src/bt_play.cpp \
+       src/audio/voice_scenario.cpp \
+       src/audio/bt_play.cpp \
        src/ccs_input.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
        src/kombi_nav.cpp
 
-OBJS = $(SRCS:.cpp=.o)
+# C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
+CSRCS = src/audio/speex.c
+CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
+
+OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
 TARGET = nbt-aad
 
-.PHONY: all clean
+.PHONY: all clean check
 
-all: $(TARGET) test_display test_controls plugin rhmiapp
+# Host tests with the Linux g++ (tests/Makefile), not qcc.
+check:
+	$(MAKE) -C tests check
+
+all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -101,8 +119,19 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 	@echo [CXX] $<
 	$(CXX) $(CXXFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
 
+%.o: %.c
+	@echo [CC] $<
+	$(CC) $(CFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+
 -include $(OBJS:.o=.d)
+
+# Standalone read-only probe for the car's Wi-Fi Direct group (NBT_ALT_WIFI=DIRECT): prints ifconfig wfd0, the
+# decoded WFDPass/WFDWps files, raw mwud replies and the Wi-Fi persistency strings. Not part of nbt-aad.
+wfd_probe: tools/wfd_probe.cpp src/alt_wifi.hpp src/wireless_setup.hpp
+	@echo [CXX] tools/wfd_probe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/wfd_probe.cpp -lsocket -lang-c++
+	@echo [DONE] Built $@
 
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe

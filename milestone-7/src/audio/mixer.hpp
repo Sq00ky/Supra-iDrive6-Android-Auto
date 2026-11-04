@@ -58,29 +58,10 @@ private:
     uint32_t hold_frames_;
     uint32_t hold_left_;    // frames left before the release ramp may start
 };
-
-// Works out the sample rate of an AA PCM stream from its frame timestamps (microseconds). The head unit offers the
-// phone a list of AudioConfigs per sink and the phone doesn't say which one it took: the DHU manifest offers ch 8
-// 16 kHz and 48 kHz mono, and the car showed the phone sending 48 kHz (2048 samples per 42.7 ms frame, 2026-11-01)
-// where 16 kHz was assumed, so prompts played 3x slow. The rate is bytes before the latest frame / its timestamp
-// distance from the first, snapped to a standard rate; it is known once the frames span 200 ms (at least 3 frames).
-class PtsRateMeter {
-public:
-    PtsRateMeter();
-    void reset();   // a new stream (AV start): measure again
-    // Feeds one frame. Returns the snapped rate once known (and on every later frame), 0 until then or when the
-    // timestamps don't match a standard rate within 8 %.
-    uint32_t add(uint64_t pts_us, size_t bytes, uint32_t channels);
-
-    static uint32_t snap(uint32_t measured);   // nearest standard rate within 8 %, else 0
-
-private:
-    uint64_t first_pts_;
-    uint64_t bytes_;       // bytes of the frames before the latest one
-    uint32_t frames_;
-    uint32_t rate_;        // result (0 = not known)
-    bool done_;
-};
+// Short linear fades so a real gap (padding that could not be avoided, or the end of a prompt) is not a click:
+// fadeOutTail ramps the last fade_frames of buf[0, frames) down to silence, fadeInHead the first fade_frames up.
+void fadeOutTail(int16_t* buf, size_t frames, size_t channels, size_t fade_frames);
+void fadeInHead(int16_t* buf, size_t frames, size_t channels, size_t fade_frames);
 
 } // namespace nbt
 

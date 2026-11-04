@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test for the NBT_BT_PLAY payloads and response decoding (g++ -DNBT_HOST_TEST).
-#include "bt_play.hpp"
+#include "audio/bt_play.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

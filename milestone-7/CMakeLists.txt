@@ -26,27 +26,38 @@ include_directories(
 # so a CMake configure does not drop sources or pass -fPIC, which the readme notes produces ET_DYN.
 set(SOURCES
     src/main.cpp
-    src/audio_manager.cpp
-    src/a2i_stream.cpp
-    src/audio_route.cpp
-    src/audio_mixer.cpp
-    src/browser_audio.cpp
-    src/pcm_utils.cpp
+    src/audio/a2i_audio.cpp
+    src/audio/config.cpp
+    src/audio/bt_audio.cpp
+    src/audio/speech_out.cpp
+    src/audio/mic_uplink.cpp
+    src/audio/a2i_stream.cpp
+    src/audio/audio_route.cpp
+    src/audio/mixer.cpp
+    src/audio/playout.cpp
+    src/audio/drift.cpp
+    src/audio/stream_rate.cpp
+    src/audio/browser_audio.cpp
+    src/audio/pcm_ring.cpp
+    src/audio/resampler.cpp
+    src/audio/asound_device.cpp
     src/video_manager.cpp
     src/tcp_server.cpp
     src/aa_session.cpp
+    src/audio/audio_acks.cpp
     src/aa_cryptor.cpp
     src/bluetooth_manager.cpp
     src/wireless_setup.cpp
     src/touch_probe.cpp
     src/dsi_client.cpp
-    src/voice_scenario.cpp
-    src/bt_play.cpp
+    src/audio/voice_scenario.cpp
+    src/audio/bt_play.cpp
     src/ccs_input.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
     src/kombi_client.cpp
     src/kombi_nav.cpp
+    src/audio/speex.c
 )
 
 add_executable(nbt-aad ${SOURCES})

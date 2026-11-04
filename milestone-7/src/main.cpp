@@ -81,10 +81,14 @@
 // **Use** means anything you do with the software requiring one of your licenses.
 
 #include "nbt_env.hpp"
+#include "audio/config.hpp"
 #include "car_config.hpp"
 #include "screen_video.h"
-#include "audio_manager.hpp"
-#include "browser_audio.hpp"
+#include "audio/a2i_audio.hpp"
+#include "audio/backend.hpp"
+#include "audio/browser_audio.hpp"
+#include "audio/bt_audio.hpp"
+#include "audio/mic_uplink.hpp"
 #include "video_manager.hpp"
 #include "license_text.hpp"
 #include "tcp_server.hpp"
@@ -93,13 +97,12 @@
 #include "aa_session.hpp"
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
+#include "alt_wifi.hpp"
 #include "touch_probe.hpp"
 #include "ccs_input.hpp"
 #include "crash_handler.hpp"
-#include "a2i_stream.hpp"
 #include "a2i_client.h"
-#include "voice_scenario.hpp"
-#include "bt_play.hpp"
+#include "audio/voice_scenario.hpp"
 #include "usb_log.hpp"
 #include "spp_rereg.hpp"
 #include "spp_link_policy.hpp"
@@ -452,165 +455,9 @@ static nbt::SessionOwner g_owner;               // which transport that session 
 static pthread_mutex_t g_connectMutex = PTHREAD_MUTEX_INITIALIZER;   // serializes startSession() (TCP and USB)
 static bool wirelessSessionActive() { return g_owner.get() == nbt::kTransportTcp; }
 static nbt::VideoManager* g_video = NULL;       // for the session callbacks (valid between init and teardown)
-static nbt::AudioManager* g_audio = NULL;       // same lifetime rule as g_video
-// NBT_AUDIO_MODE=browser: AA media + guidance + system audio mixed in the daemon and played through the car's browser
-// audio source (browser_audio.hpp). Same lifetime rule as g_video.
-static nbt::BrowserAudio* g_browser = NULL;
-static bool g_a2iAudio = false;                 // NBT_AUDIO_MODE=a2i (or NBT_AUDIO_BT=0): the staged AudioManager
-// Bluetooth audio mode (default again since v1.8.66; NBT_AUDIO_MODE=browser selects browser audio): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
-static bool g_btAudio = false;
-static nbt::AudioRoute g_btRoute;
-static uint32_t g_btSrc = 0x3a;                 // eSRC_A2DP (audioconn -l: ConnId 0xc7 AuxInBTAudio)
-static uint32_t g_btSink = 0x1;                 // eSNK_SPEAKERS
-// NBT_BT_CONN=<connId> (default 0xc7; 0 = old AudioManagement focus form `-b <src> <sink>`): request the car's
-// Bluetooth source through the ConnectionMaster (`audioconn -b <connId>`, BuildHighSyncConnection: the one call the
-// iDrive HMI makes when Bluetooth audio is picked, HmiMain3D RE 2026-10-29). CAR-VERIFIED (MINI F60, v1.8.35, 3 of 3
-// sessions): granted at once and music starts by itself, even from FM radio, where the focus form was refused for all
-// retries. `audioconn -l` lists eSRC_A2DP as ConnId 0xc7 (AuxInBTAudio srcNr 1) on the Supra and the MINI F60.
-static uint32_t g_btConn = 0xc7;
-static nbt::BtPlay g_btPlay;                    // NBT_BT_PLAY experiment: SourceActivity PLAY once the source is granted
-
-static void onBtGranted(void*) { g_btPlay.play("car granted the Bluetooth source"); }   // audioconn worker thread
-// NBT_BT_ROUTE_DELAY_MS (default 1500, 0 = at once): wait this long after the session starts before running
-// audioconn. A phone that says ByeBye right after the ServiceDiscovery and reconnects every ~3 s (tester bootloop log,
-// 2026-10-29) then never starts an audioconn at all: onSessionEnded() cancels the request while it waits.
-static int btRouteDelayMs() {
-    const char* e = getenv("NBT_BT_ROUTE_DELAY_MS");
-    if (!e || !*e) return 1500;
-    int v = atoi(e);
-    return v < 0 ? 0 : (v > 10000 ? 10000 : v);
-}
-static bool btRequestSource() {
-    if (g_btConn) return g_btRoute.build(g_btConn, &onBtGranted, NULL, btRouteDelayMs());
-    return g_btRoute.buildFocus(g_btSrc, g_btSink, &onBtGranted, NULL, btRouteDelayMs());
-}
-static void btReleaseSource() {
-    g_btPlay.stop("session ended");
-    if (g_btConn) g_btRoute.remove(g_btConn);
-    else g_btRoute.removeFocus(g_btSrc, g_btSink);
-}
-static void btDescribe(char* out, size_t n) {
-    if (g_btConn) snprintf(out, n, "connection 0x%x (ConnectionMaster)", g_btConn);
-    else snprintf(out, n, "source 0x%x -> sink 0x%x", g_btSrc, g_btSink);
-}
-
-// NBT_SPEECH=1 (Bluetooth audio mode only, OFF by default, test parked first): play Android Auto guidance / speech
-// (channel 8, 16 kHz mono) on an A2I playback endpoint. In BT mode ch 8 must stay in the ServiceDiscovery (the phone
-// needs >= 1 audio sink), so without this switch every spoken nav prompt is received, acked and dropped.
-//   NBT_SPEECH_EP     endpoint (default /input_stereo_AirPlayAlt, opened at start-up as in the stable Milestone 2)
-//   NBT_SPEECH_SRC    AM source requested with `audioconn -b <src> <sink>` while a prompt plays (default 0 = none
-//                     since v1.6.7: AM refuses 0xba anyway and each request touches AM while BT holds focus),
-//                     released with `-r` when the prompt ends
-//   NBT_SPEECH_SINK   AM sink (default 0x1, speakers)
-// Earlier A2I *write* experiments crashed the head unit; this uses only the factory prime/Start/GetBuffer/Out_Write
-// loop (car-verified for 20k+ writes), opens the endpoint once on its own thread and never closes it mid-run.
-static nbt::A2IPlaybackStream* g_speech = NULL;   // set by the open thread, then never changes
-static volatile bool g_speechReady = false;
-static nbt::PcmResampler g_speechRs;               // used on the session thread only
-static std::vector<uint8_t> g_speechBuf;
-static uint32_t g_speechSrc = 0;
-static uint32_t g_speechSink = 0x1;
-static bool g_speechRouted = false;
-static uint32_t g_speechFrames = 0;
-static uint32_t g_speechBytes = 0;
-static int g_speechPeak = 0;
-static uint32_t g_speechPrompts = 0;
-
-static bool speechEnabled() {
-    const char* e = getenv("NBT_SPEECH");
-    return e && strcmp(e, "1") == 0;
-}
-
-static void* speechOpenThread(void*) {
-    const char* ep = getenv("NBT_SPEECH_EP");
-    if (!ep || !*ep) ep = A2I_ENDPOINT_NAV_ALT;
-    // Ring holds ~12 s at 44.1 kHz stereo: the phone sends a prompt faster than real time (only max_unacked
-    // limits it) and the ring drops the OLDEST bytes when full, which would cut the start of a long prompt.
-    nbt::A2IPlaybackStream* s = new nbt::A2IPlaybackStream("Speech", 44100u * 4u * 12u);
-    uint32_t rates[2] = { A2I_SAMPLE_RATE_44K, A2I_SAMPLE_RATE_48K };
-    bool ok = false;
-    for (int i = 0; i < 2 && !ok; ++i) {
-        nbt::A2IStreamConfig cfg;
-        memset(&cfg, 0, sizeof(cfg));
-        cfg.endpoint          = ep;
-        cfg.fallback_endpoint = NULL;
-        cfg.sample_rate       = rates[i];
-        cfg.channels          = A2I_CHANNELS_STEREO;
-        cfg.buffer_size       = A2I_BUFFER_SIZE_STEREO;
-        cfg.cookie_primary    = A2I_COOKIE_LEGACY_PLAYBACK;
-        cfg.cookie_alternate  = A2I_COOKIE_FACTORY;
-        cfg.timeout_ms        = 2000;
-        ok = s->open(cfg);
-    }
-    if (!ok) {
-        printf("[Speech] could not open %s: spoken prompts stay off\n", ep);
-        delete s;
-        return NULL;
-    }
-    g_speechRs.configure(16000, 1, s->sampleRate(), s->channels());
-    if (!s->start(true)) {
-        printf("[Speech] playback worker did not start on %s: spoken prompts stay off\n", ep);
-        return NULL;   // keep the handle (no close mid-run), just never feed it
-    }
-    g_speech = s;
-    __sync_synchronize();   // resampler + pointer visible before the session thread sees ready
-    g_speechReady = true;
-    printf("[Speech] ready: %s %u Hz x%u, route %s 0x%x -> 0x%x\n", s->endpoint() ? s->endpoint() : ep,
-           s->sampleRate(), s->channels(), g_speechSrc ? "audioconn" : "off", g_speechSrc, g_speechSink);
-    return NULL;
-}
-
-static void speechInit() {
-    if (!g_btAudio || !speechEnabled()) {
-        printf("[Speech] spoken nav prompts: off%s\n", g_btAudio ? " (NBT_SPEECH=1 enables)" : "");
-        return;
-    }
-    g_speechSrc = (uint32_t)nbt::envHex("NBT_SPEECH_SRC", 0);
-    g_speechSink = (uint32_t)nbt::envHex("NBT_SPEECH_SINK", 0x1);
-    printf("[Speech] NBT_SPEECH=1: opening the speech endpoint in the background\n");
-    pthread_t t;
-    if (pthread_create(&t, NULL, &speechOpenThread, NULL) == 0) pthread_detach(t);
-    else printf("[Speech] could not start the open thread\n");
-}
-
-// Session thread: one ch 8 PCM frame (16 kHz mono s16le).
-static void speechFrame(const uint8_t* pcm, size_t len) {
-    if (!g_speechReady || !g_speech) return;
-    for (size_t i = 0; i + 1 < len; i += 2) {
-        int v = (int16_t)(pcm[i] | (pcm[i + 1] << 8));
-        if (v < 0) v = -v;
-        if (v > g_speechPeak) g_speechPeak = v;
-    }
-    ++g_speechFrames;
-    g_speechBytes += (uint32_t)len;
-    g_speechBuf.clear();
-    g_speechRs.processBytes(pcm, len, g_speechBuf);
-    if (!g_speechBuf.empty()) g_speech->write(&g_speechBuf[0], g_speechBuf.size());
-}
-
-// Session thread: ch 8 AV START / STOP indication.
-static void speechState(bool started) {
-    if (!g_speechReady || !g_speech) return;
-    if (started) {
-        ++g_speechPrompts;
-        g_speechFrames = 0;
-        g_speechBytes = 0;
-        g_speechPeak = 0;
-        g_speechRs.reset();
-        printf("[Speech] prompt #%u started\n", g_speechPrompts);
-        if (g_speechSrc && !g_speechRouted && g_btRoute.available())
-            g_speechRouted = g_btRoute.buildFocus(g_speechSrc, g_speechSink);
-    } else {
-        // No flush: the queued tail still plays out (the STOP arrives right after the last frame).
-        printf("[Speech] prompt #%u ended: %u frames, %u ms of audio, peak %d, endpoint writes %u underruns %u\n",
-               g_speechPrompts, g_speechFrames, g_speechBytes / 32u, g_speechPeak, g_speech->writes(),
-               g_speech->underruns());
-        if (g_speechRouted) {
-            g_btRoute.removeFocus(g_speechSrc, g_speechSink);
-            g_speechRouted = false;
-        }
-    }
-}
+// The audio mode (NBT_AUDIO_MODE=bt|browser|a2i, audio/backend.hpp): BtAudio, BrowserAudio or A2iAudio, picked once
+// at start-up. Same lifetime rule as g_video.
+static nbt::AudioBackend* g_audioBackend = NULL;
 
 // Prints the Wi-Fi clients the head unit currently knows on the AP subnet (ARP table), so a log
 // shows whether the phone actually joined the CarPlay network.
@@ -840,6 +687,15 @@ static void recoverWifiPath(const char* why) {
 static const int kApCfgRecheckSec = 10;
 
 static bool apConfigPresent(const char* cfg) {
+    // NBT_ALT_WIFI=DIRECT/BOTH: the Wi-Fi Direct group counts as a usable Wi-Fi even when the car has no CarPlay
+    // hotspot config at all (cars without the CarPlay licence). Quiet: this runs every kApCfgRecheckSec.
+    nbt::AltWifiMode m = nbt::altWifiMode();
+    if (m != nbt::ALT_WIFI_CARPLAY) {
+        nbt::ApInfo wfd;
+        std::string used;
+        if (nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true)) return true;
+        if (m == nbt::ALT_WIFI_DIRECT) return false;
+    }
     if (cfg) {
         nbt::ApInfo ap;
         return nbt::loadCarPlayApConfig(cfg, ap, true);
@@ -848,8 +704,35 @@ static bool apConfigPresent(const char* cfg) {
 }
 
 static void logNoApConfig(const char* cfg) {
-    printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are left "
-           "alone; checking again every %d s\n", cfg ? cfg : "iap2.cfg / iap2_Wifi.cfg", kApCfgRecheckSec);
+    if (nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT)
+        printf("[Wireless] no usable Wi-Fi Direct passphrase (/var/opt/conn/WFDPass.conf, then "
+               "/fs/sda1/opt/conn/WFDPass.conf): NBT_ALT_WIFI=DIRECT has no CarPlay fallback, so wireless Android "
+               "Auto is unavailable, Bluetooth links are left alone; checking again every %d s\n", kApCfgRecheckSec);
+    else
+        printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are "
+               "left alone; checking again every %d s\n", cfg ? cfg : "iap2.cfg / iap2_Wifi.cfg", kApCfgRecheckSec);
+}
+
+// One Wi-Fi the phone may be offered. File-scope (not inside wirelessThread) because GCC 4.4.2 rejects a local
+// type as a std::vector argument even under -std=gnu++0x.
+struct ApChoice {
+    nbt::ApInfo ap;
+    std::string path;
+    const char* ifn;
+    bool direct;
+};
+
+// The Wi-Fi Direct passphrase is printed once per value (not per link attempt): it is decoded from the car's own
+// WFDPass.conf, so it can be typed into a phone's Wi-Fi settings by hand - that is how a DIRECT join gets checked
+// without the daemon getting it right first.
+static void logWfdAp(const nbt::ApInfo& ap, const std::string& path, std::string& shown) {
+    char tag[512];
+    snprintf(tag, sizeof(tag), "%s|%s|%s", path.c_str(), ap.ssid.c_str(), ap.key.c_str());
+    if (shown == tag) return;
+    shown = tag;
+    printf("[Wireless] Wi-Fi Direct AP: ssid='%s', passphrase from %s: '%s' (%u chars, decoded; type it into the "
+           "phone's Wi-Fi settings to join the group by hand)\n",
+           ap.ssid.c_str(), path.c_str(), ap.key.c_str(), (unsigned)ap.key.size());
 }
 
 static void* wirelessThread(void*) {
@@ -866,6 +749,21 @@ static void* wirelessThread(void*) {
     std::string apShown;
     const char* ifn = getenv("NBT_AP_IF");
     if (!ifn || !*ifn) ifn = "uap0";
+    const char* wfdIfn = getenv("NBT_WFD_IF");
+    if (!wfdIfn || !*wfdIfn) wfdIfn = "wfd0";
+    // NBT_ALT_WIFI: which Wi-Fi the phone is offered (see alt_wifi.hpp). CARPLAY unset = the behaviour of every
+    // earlier build.
+    const nbt::AltWifiMode altMode = nbt::altWifiMode();
+    printf("[Wireless] Wi-Fi source: %s (NBT_ALT_WIFI=%s): %s\n", nbt::altWifiName(altMode),
+           getenv("NBT_ALT_WIFI") && *getenv("NBT_ALT_WIFI") ? getenv("NBT_ALT_WIFI") : "(unset)",
+           altMode == nbt::ALT_WIFI_DIRECT
+               ? "the car's Wi-Fi Direct group only, no CarPlay fallback"
+               : (altMode == nbt::ALT_WIFI_BOTH
+                      ? "the car's Wi-Fi Direct group first, the CarPlay hotspot after two tries without a connection"
+                      : "the CarPlay hotspot only"));
+    // Watch the interface of the source offered first (CARPLAY and BOTH: the hotspot; DIRECT: wfd0). The other one
+    // is covered by the "no IP on <if>, retry" path and by recoverWifiPath() when a BOTH try falls back.
+    const char* pollIfn = altMode == nbt::ALT_WIFI_DIRECT ? wfdIfn : ifn;
 
     int apState = -1;           // ifn: -1 unknown, 0 no IP (access point off), 1 has an IP
     int apPoll = 0;
@@ -892,9 +790,9 @@ static void* wirelessThread(void*) {
         // Watch the access point while idle (every ~2 s): when it comes back after being off, the car was switched
         // off and on again under us -> refresh the firewall and the listener before the phone tries again.
         if ((apPoll++ % 4) == 0) {
-            int st = ifaceHasIpv4(ifn);
+            int st = ifaceHasIpv4(pollIfn);
             if (st >= 0 && st != apState) {
-                if (st == 0) printf("[Wireless] %s has no IP address: the car's Wi-Fi access point is off\n", ifn);
+                if (st == 0) printf("[Wireless] %s has no IP address: the car's Wi-Fi access point is off\n", pollIfn);
                 else if (apState == 0) {
                     recoverWifiPath("the car's Wi-Fi access point came back");
                     idleWait = false;   // the car woke up: start the re-registration schedule from its first step
@@ -952,41 +850,111 @@ static void* wirelessThread(void*) {
             continue;
         }
         idleWait = false;
-        nbt::ApInfo ap;
-        std::string apPath;
-        size_t apCount = 1;
-        if (cfg) {
-            if (!nbt::loadCarPlayApConfig(cfg, ap)) {
-                close(fd);
-                logNoApConfig(cfg);
-                apCfgState = 0;
-                apCfgChecked = monoSecs();
-                continue;
+        // Which Wi-Fi this link is offered (NBT_ALT_WIFI, alt_wifi.hpp):
+        //   CARPLAY  the car's hotspot from iap2.cfg, unchanged
+        //   DIRECT   the car's Wi-Fi Direct group only, no fallback
+        //   BOTH     the hotspot first (the car-verified path), the DIRECT group after two tries without a
+        //            connection; cars that have no CarPlay config have no hotspot at all, so BOTH is DIRECT there
+        std::vector<ApChoice> directChoices;   // the Wi-Fi Direct group (wfd0)
+        std::vector<ApChoice> cpChoices;       // the CarPlay hotspot (iap2.cfg / iap2_Wifi.cfg)
+        if (altMode != nbt::ALT_WIFI_CARPLAY) {
+            nbt::ApInfo wfd;
+            std::string used;
+            // Quiet here: logWfdAp() prints the passphrase once per value, not on every link attempt.
+            bool havePass = nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true);
+            std::string wfdSsid;
+            if (havePass && nbt::resolveWfdSsid(wfdIfn, wfdSsid)) {
+                wfd.ssid = wfdSsid;
+                ApChoice c;
+                c.ap = wfd;
+                c.path = used;
+                c.ifn = wfdIfn;
+                c.direct = true;
+                directChoices.push_back(c);
+            } else if (havePass) {
+                printf("[Wireless] Wi-Fi Direct: no SSID for %s, skipping the DIRECT group on this link (NBT_WFD_SSID "
+                       "pins one)\n", wfdIfn);
+            } else {
+                printf("[Wireless] Wi-Fi Direct: no usable passphrase file (%s), skipping the DIRECT group on this "
+                       "link\n", nbt::wfdPassPaths()[0]);
             }
-            apPath = cfg;
+            if (altMode == nbt::ALT_WIFI_DIRECT) {
+                // Logged once, for the car log; a normal Wi-Fi join uses the passphrase above, not the PIN.
+                static bool wpsShown = false;
+                std::string pin, pinPath;
+                if (!wpsShown && nbt::loadWfdWpsPin(nbt::wfdWpsPaths(), nbt::wfdWpsPathCount(), pin, pinPath))
+                    wpsShown = true;
+            }
+        }
+        if (altMode != nbt::ALT_WIFI_DIRECT) {
+            if (cfg) {
+                nbt::ApInfo a;
+                if (!nbt::loadCarPlayApConfig(cfg, a)) {
+                    if (directChoices.empty()) {
+                        close(fd);
+                        logNoApConfig(cfg);
+                        apCfgState = 0;
+                        apCfgChecked = monoSecs();
+                        continue;
+                    }
+                } else {
+                    ApChoice c;
+                    c.ap = a;
+                    c.path = cfg;
+                    c.ifn = ifn;
+                    c.direct = false;
+                    cpChoices.push_back(c);
+                }
+            } else {
+                std::vector<nbt::ApCandidate> cands =
+                    nbt::collectApCandidates(nbt::kApCfgPaths, nbt::kApCfgPathCount);
+                for (size_t i = 0; i < cands.size(); ++i) {
+                    ApChoice c;
+                    c.ap = cands[i].ap;
+                    c.path = cands[i].path;
+                    c.ifn = ifn;
+                    c.direct = false;
+                    cpChoices.push_back(c);
+                }
+            }
+        }
+        // Order: CARPLAY and BOTH put the car's hotspot first, so a car that has CarPlay keeps the path that is
+        // verified there; the DIRECT group is only reached when there is no hotspot config, or BOTH falls back to
+        // it after two tries the phone took but never connected with (apNoJoin below).
+        const bool cpFirst = nbt::altWifiPrefersCarplay();
+        std::vector<ApChoice>& vFirst = cpFirst ? cpChoices : directChoices;
+        std::vector<ApChoice>& vSecond = cpFirst ? directChoices : cpChoices;
+        std::vector<ApChoice> choices = vFirst;
+        if (altMode == nbt::ALT_WIFI_BOTH) choices.insert(choices.end(), vSecond.begin(), vSecond.end());
+        if (choices.empty()) {
+            close(fd);
+            logNoApConfig(cfg);
+            apCfgState = 0;
+            apCfgChecked = monoSecs();
+            continue;
+        }
+        const size_t apCount = choices.size();
+        const ApChoice& chosen = choices[(size_t)apIdx % apCount];
+        nbt::ApInfo ap = chosen.ap;
+        const std::string apPath = chosen.path;
+        if (chosen.direct) {
+            logWfdAp(ap, apPath, apShown);
         } else {
-            std::vector<nbt::ApCandidate> cands = nbt::collectApCandidates(nbt::kApCfgPaths, nbt::kApCfgPathCount);
-            if (cands.empty()) {
-                close(fd);
-                logNoApConfig(cfg);
-                apCfgState = 0;
-                apCfgChecked = monoSecs();
-                continue;
-            }
-            apCount = cands.size();
-            const nbt::ApCandidate& c = cands[(size_t)apIdx % apCount];
-            ap = c.ap;
-            apPath = c.path;
             char tag[400];
-            snprintf(tag, sizeof(tag), "%s|%s|%u", c.path.c_str(), c.ap.ssid.c_str(), (unsigned)(apIdx % apCount));
+            snprintf(tag, sizeof(tag), "%s|%s|%u", apPath.c_str(), ap.ssid.c_str(), (unsigned)(apIdx % apCount));
             if (apShown != tag) {
                 apShown = tag;
                 printf("[Wireless] CarPlay AP: ssid='%s', passphrase from %s (%u of %u distinct)\n", ap.ssid.c_str(),
                        apPath.c_str(), (unsigned)(apIdx % apCount) + 1, (unsigned)apCount);
             }
         }
-        nbt::fillApNetworkInfo(ifn, ap);
-        if (ap.ip.empty()) { printf("[Wireless] no IP on %s, retry\n", ifn); close(fd); sleep(5); continue; }
+        nbt::fillApNetworkInfo(chosen.ifn, ap);
+        if (ap.ip.empty()) {
+            printf("[Wireless] no IP on %s, retry\n", chosen.ifn);
+            close(fd);
+            sleep(5);
+            continue;
+        }
         // Make the serial device a completely transparent 8-bit stream (no line editing, no signal
         // characters, no flow control, no CR/NL or parity/break mangling). Log what the driver says.
         struct termios tio;
@@ -1105,92 +1073,19 @@ static void signalHandler(int sig) {
     g_running = 0;   // session is stopped from main() (joining a thread in a signal handler can hang)
 }
 
-// ---- Car microphone -> phone (Assistant / voice search), AA channel 14 ------------------------------------
-// The phone opens the mic with AVInputOpenRequest; the main loop then starts the factory echo-cancelled uplink
-// (A2I /output_mono_AirPlayUL, 16 kHz mono, the CarPlay Siri path) and the session streams it back. In
-// Bluetooth-audio mode the A2I playback pipeline stays closed, so the capture runs standalone. NBT_MIC=0 or
-// /opt/aa/mic.disable keeps the mic closed (the open request is still answered).
+// ---- Car microphone -> phone (Assistant / voice search), AA channel 14 (audio/mic_uplink.hpp) -------------------
 static void onMicRequest(bool open, void* user) {
     (void)user;
     pushSlot(g_micQ, &g_micN, open ? 1 : 2);
 }
 
-// Level meter (once per ~1 s of audio) and optional raw dump, to tell real speech from a silent / unrouted uplink:
-// NBT_MIC_DUMP=1 writes the first ~30 s of each run to /dev/shmem/nbt-aad-mic.raw (S16LE 16 kHz mono).
+// Echo-cancelled mic chunk (capture thread): to the AA mic channel, then the level meter / dump while the phone has
+// the mic open.
 static void onMicData(const uint8_t* pcm_data, size_t size, void* user_data) {
     (void)user_data;
     g_session.postMicData(pcm_data, size);   // echo-cancelled chunk -> AA mic channel (dropped unless open)
     if (!g_session.micOpen()) return;         // capture keeps running between Assistant requests: meter/dump only while open
-
-    static uint32_t acc_n = 0, acc_peak = 0, zero_chunks = 0, chunks = 0;
-    static double acc_sq = 0;
-    static FILE* dump = NULL;
-    static int dump_state = -1;              // -1 unknown, 0 off, 1 on, 2 full
-    static uint32_t dumped = 0;
-    const int16_t* s = reinterpret_cast<const int16_t*>(pcm_data);
-    size_t n = size / 2;
-    bool all_zero = true;
-    for (size_t i = 0; i < n; ++i) {
-        int v = s[i];
-        if (v) all_zero = false;
-        uint32_t a = (uint32_t)(v < 0 ? -v : v);
-        if (a > acc_peak) acc_peak = a;
-        acc_sq += (double)v * v;
-    }
-    acc_n += (uint32_t)n;
-    ++chunks;
-    if (all_zero) ++zero_chunks;
-    if (acc_n >= 16000) {
-        double rms = 0;
-        { double m = acc_sq / acc_n; double r = m > 0 ? m : 0; /* sqrt without libm dependency issues */
-          double x = r > 1 ? r : 1; for (int k = 0; k < 20; ++k) x = 0.5 * (x + r / x); rms = r > 0 ? x : 0; }
-        printf("[Mic] level: peak %u rms %d (of 32767), %u/%u chunks all-zero, chunk %u bytes\n",
-               acc_peak, (int)rms, zero_chunks, chunks, (unsigned)size);
-        acc_n = acc_peak = zero_chunks = chunks = 0;
-        acc_sq = 0;
-    }
-    if (dump_state < 0) dump_state = getenv("NBT_MIC_DUMP") ? 1 : 0;
-    if (dump_state == 1) {
-        if (!dump) dump = fopen("/dev/shmem/nbt-aad-mic.raw", "wb");
-        if (dump) {
-            fwrite(pcm_data, 1, size, dump);
-            dumped += (uint32_t)size;
-            if (dumped >= 30u * 32000u) { fclose(dump); dump = NULL; dump_state = 2; printf("[Mic] dump complete (/dev/shmem/nbt-aad-mic.raw)\n"); }
-            else fflush(dump);
-        }
-    }
-}
-
-// Default ON since v1.7.7 (car-verified nbt-aad-22-2-2: with it the Assistant's reply is heard).
-// NBT_BT_REFOCUS=0 / off / no / false disables.
-static bool btRefocus() {
-    return nbt::envFlag("NBT_BT_REFOCUS") != 0;   // unset stays on
-}
-
-static bool micEnabled() {
-    if (nbt::envFlag("NBT_MIC") == 0) return false;
-    return access("/opt/aa/mic.disable", F_OK) != 0;
-}
-
-static bool micStart(nbt::A2ICaptureStream& mic) {
-    if (mic.isRunning()) return true;
-    if (!mic.isOpen()) {
-        nbt::A2IStreamConfig cfg;
-        memset(&cfg, 0, sizeof(cfg));
-        cfg.endpoint          = A2I_ENDPOINT_MIC_UL;
-        cfg.fallback_endpoint = NULL;
-        cfg.sample_rate       = 16000;
-        cfg.channels          = A2I_CHANNELS_MONO;
-        cfg.buffer_size       = A2I_BUFFER_SIZE_MONO;
-        cfg.cookie_primary    = A2I_COOKIE_LEGACY_CAPTURE;
-        cfg.cookie_alternate  = A2I_COOKIE_FACTORY;
-        cfg.timeout_ms        = 2000;
-        if (!mic.open(cfg)) {
-            printf("[Mic] could not open %s\n", A2I_ENDPOINT_MIC_UL);
-            return false;
-        }
-    }
-    return mic.start(&onMicData, NULL);
+    nbt::micLevelMeter(pcm_data, size);
 }
 
 static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data) {
@@ -1211,16 +1106,22 @@ static void onCodecConfig(const uint8_t* config_data, size_t config_len, void* u
 
 static void onAudioFrame(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data) {
     (void)user_data;
-    if (g_browser) g_browser->onAaAudio(channel, pcm, pcm_len, pts);
-    else if (g_audio) g_audio->onAaAudio(channel, pcm, pcm_len);
-    else if (channel == 8) speechFrame(pcm, pcm_len);
+    if (g_audioBackend) g_audioBackend->onFrame(channel, pcm, pcm_len, pts);
 }
 
-static void onAudioState(uint8_t channel, bool started, void* user_data) {
+static void onAudioConsumed(uint8_t channel, size_t bytes, void* user_data) {
     (void)user_data;
-    if (g_browser) g_browser->onAaStreamState(channel, started);
-    else if (g_audio) g_audio->onAaStreamState(channel, started);
-    else if (channel == 8) speechState(started);
+    g_session.postAudioConsumed(channel, bytes);
+}
+
+static void onAudioUnderflow(uint8_t channel, void* user_data) {
+    (void)user_data;
+    g_session.postAudioUnderflow(channel);
+}
+
+static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data) {
+    (void)user_data;
+    if (g_audioBackend) g_audioBackend->onStreamState(channel, started, rate, channels);
 }
 
 static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
@@ -1243,23 +1144,9 @@ static void onSessionEnded(void* user_data) {
     // Runs on the session thread (AASession::start() waits for it): drop stale frames and the
     // cached SPS/PPS. The overlay itself is handled by the main loop.
     if (g_video) g_video->endSession();
-    if (g_audio) g_audio->onSessionEnded();
-    if (g_browser) g_browser->onSessionEnded();   // mixer stopped, browser audio source released
+    // Browser: mixer stopped, source released. Bluetooth: queued audioconn requests dropped, NBT_BT_RELEASE.
+    if (g_audioBackend) g_audioBackend->onSessionEnded();
     g_kombiNav.onSessionEnded();   // the worker clears a cluster/HUD arrow
-    // Drop the Bluetooth-source request (and its retries) this session queued, so a phone that keeps reconnecting
-    // cannot stack audioconn processes until the head unit runs out of memory and resets (tester log 2026-10-29).
-    g_btRoute.cancelPending();
-    if (g_speechRouted) {   // session died mid-prompt: give the speech source back
-        g_btRoute.removeFocus(g_speechSrc, g_speechSink);
-        g_speechRouted = false;
-    }
-    if (g_speechReady && g_speech) g_speech->flush();
-    if (g_btAudio && getenv("NBT_BT_RELEASE") && strcmp(getenv("NBT_BT_RELEASE"), "1") == 0) {
-        char d[64];
-        btDescribe(d, sizeof(d));
-        printf("[BtAudio] session ended: releasing %s\n", d);
-        btReleaseSource();
-    }
 }
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
@@ -1298,12 +1185,7 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
         pthread_mutex_unlock(&g_connectMutex);
         return;
     }
-    if (g_btAudio) {
-        char d[64];
-        btDescribe(d, sizeof(d));
-        printf("[BtAudio] session started: requesting car Bluetooth audio %s\n", d);
-        if (!btRequestSource()) printf("[BtAudio] could not queue audioconn\n");
-    }
+    if (g_audioBackend) g_audioBackend->onSessionStarted();   // Bluetooth mode: request the car's BT source
     pthread_mutex_unlock(&g_connectMutex);
 }
 
@@ -1465,7 +1347,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.72-main-usb"
+#define NBT_AAD_BUILD "v1.8.80-wfdname"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1641,42 +1523,41 @@ int main(int argc, char* argv[]) {
     }
     g_video = &video;
 
-    // 2. Initialize Audio Pipeline (A2I Media + Nav + Echo-Cancelled Mic)
-    nbt::AudioManager audio;
+    // 2. Initialize the audio mode (audio/backend.hpp): the only place main depends on which one it is.
+    nbt::A2iAudio a2i;
     nbt::BrowserAudio browser;
+    nbt::BtAudio bt;
     const nbt::AudioMode audio_mode = nbt::audioMode();
     printf("[Main] audio mode: %s (NBT_AUDIO_MODE=bt|browser|a2i)\n", nbt::audioModeName(audio_mode));
-    g_btAudio = (audio_mode == nbt::AUDIO_MODE_BT);
-    g_a2iAudio = (audio_mode == nbt::AUDIO_MODE_A2I);
     if (audio_mode == nbt::AUDIO_MODE_BROWSER) {
         // Media sink (ch 9) and GUIDANCE sink (ch 8) stay in the ServiceDiscovery and a SYSTEM_AUDIO sink (ch 16) is
         // added, so the phone sends all three streams here instead of to A2DP. The A2I pipeline is not opened; the
         // mic runs standalone like in Bluetooth mode.
-        if (!browser.init()) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
-        g_browser = &browser;
-        g_audio = NULL;
-    } else if (g_btAudio) {
-        g_btSrc = (uint32_t)nbt::envHex("NBT_BT_SRC", 0x3a);
-        g_btSink = (uint32_t)nbt::envHex("NBT_BT_SINK", 0x1);
-        printf("[BtAudio] NBT_AUDIO_BT on: AA media sink left out of the ServiceDiscovery (NBT_SDR_DROP=%s),\n"
-               "[BtAudio] phone audio stays on Bluetooth A2DP; A2I pipeline not opened. Source 0x%x -> sink 0x%x.\n",
-               getenv("NBT_SDR_DROP") ? getenv("NBT_SDR_DROP") : "9", g_btSrc, g_btSink);
-        if (!g_btRoute.configure()) printf("[BtAudio] audioconn not found: select Bluetooth audio in iDrive manually.\n");
-        g_btConn = (uint32_t)nbt::envHex("NBT_BT_CONN", 0xc7);
-        if (g_btConn)
-            printf("[BtAudio] Bluetooth source via ConnectionMaster `audioconn -b 0x%x` (NBT_BT_CONN=0: focus form)\n",
-                   g_btConn);
-        else
-            printf("[BtAudio] NBT_BT_CONN=0: Bluetooth source via AudioManagement focus `audioconn -b 0x%x 0x%x`\n",
-                   g_btSrc, g_btSink);
-        g_btPlay.init();
-        g_audio = NULL;
-        speechInit();
+        const nbt::BrowserConfig browser_cfg = nbt::readBrowserConfig();   // audio/config.hpp
+        if (!browser.init(browser_cfg)) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
+        // Deferred acks (NBT_AA_DEFER_ACKS, default on): an AA audio frame is acked once the mixer has taken it, so
+        // the phone is paced by the car's clock instead of running ahead on its own.
+        const bool defer = browser_cfg.defer_acks;
+        if (defer) {
+            browser.setConsumedCallback(&onAudioConsumed, NULL);
+            browser.setAckWindow(nbt::AudioAcks::window());   // the drift loop's target must cover it
+        }
+        g_session.setDeferredAudioAcks(defer);
+        printf("[Browser] audio acks: %s (NBT_AA_DEFER_ACKS)\n", defer ? "once played (deferred)" : "on arrival");
+        // Underflow reports (NBT_AA_UNDERFLOW_REPORT, default on): tell the phone when a stream ran dry (0x800b).
+        const bool underflow = browser_cfg.underflow_reports;
+        if (underflow) browser.setUnderflowCallback(&onAudioUnderflow, NULL);
+        g_session.setUnderflowReports(underflow);
+        printf("[Browser] underflow reports to the phone: %s (NBT_AA_UNDERFLOW_REPORT)\n", underflow ? "on" : "off");
+        g_audioBackend = &browser;
+    } else if (audio_mode == nbt::AUDIO_MODE_BT) {
+        bt.init(nbt::readBtConfig());   // the car's Bluetooth source, NBT_BT_PLAY, NBT_SPEECH
+        g_audioBackend = &bt;
     } else {
-        if (!audio.init()) {
+        if (!a2i.init()) {
             printf("[Main] Warning: Audio initialization encountered an issue.\n");
         }
-        g_audio = &audio;
+        g_audioBackend = &a2i;
     }
 
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
@@ -1687,7 +1568,7 @@ int main(int argc, char* argv[]) {
 
     // Start all subsystems
     video.start();
-    if (g_a2iAudio) audio.start();
+    g_audioBackend->start();   // A2I mode: the playback workers
 
     // 4. Start Wireless TCP Server on the stock Android Auto port 5277 (override: NBT_AA_PORT)
     {
@@ -1797,12 +1678,12 @@ int main(int argc, char* argv[]) {
     int reassert_ticks = -1;     // >= 0: ticks since the overlay came back up from the iDrive entry / park / reverse
     int active_ticks = 0;
     bool diag_done = false;
-    const bool mic_on = micEnabled();
-    nbt::A2ICaptureStream mic("mic");
+    const bool mic_on = nbt::micEnabled();
+    nbt::MicUplink mic(&onMicData, NULL);   // the standalone uplink (every mode but A2I, which has its own)
     bool mic_live = false;
     unsigned log_sync_ticks = 0;
     printf("[Mic] car microphone for the Assistant: %s\n", mic_on ? "on" : "off (NBT_MIC=0 or /opt/aa/mic.disable)");
-    if (g_audio) g_audio->setMicCallback(&onMicData, NULL);
+    g_audioBackend->setMicCallback(&onMicData, NULL);
     nbt::VoiceScenario voice;   // default on (NBT_VOICE_SCENARIO=0 disables): AudioMatrix mic scenario while the phone has the mic open
     if (mic_on) voice.init();
     const char* ui_state = "";
@@ -1850,34 +1731,20 @@ int main(int argc, char* argv[]) {
         // Scenario first: the AudioMatrix routes the processed car mic into the AirPlay uplink our capture reads.
         if (mr == 1 && mic_on && act) voice.activate("phone opened the mic");
         else if (mr == 2) voice.deactivate("phone closed the mic");
-        // Default on (NBT_BT_REFOCUS=0 disables): the Assistant pauses the music before it listens, so its reply restarts a
-        // suspended A2DP stream. Re-request the car's BT audio source when the phone closes the mic, in case the
-        // car does not pick the restarted stream up on its own.
-        // Browser mode: the voice scenario may have moved the car off the browser source; ask for it again.
-        if (mr == 2 && act && g_browser) g_browser->refocus("mic closed");
-        if (mr == 2 && act && g_btAudio && btRefocus()) {
-            char d[64];
-            btDescribe(d, sizeof(d));
-            printf("[BtAudio] mic closed: re-requesting car Bluetooth audio %s for the reply\n", d);
-            btRequestSource();
-        }
-        // Assistant reply loudness (quiet next to music): snapshot the car's audio connections while it listens and
-        // while it replies, to see whether the car ducks the Bluetooth source during voice. Read-only, first 3 turns.
-        static int s_snaps = 0;
-        if ((mr == 1 || mr == 2) && act && g_btAudio && s_snaps < 6) {
-            ++s_snaps;
-            g_btRoute.listConnections(mr == 1 ? "Assistant listening" : "Assistant replying", mr == 1 ? 1000 : 2500);
-        }
+        // Bluetooth: re-request the car's BT source for the reply (NBT_BT_REFOCUS) and snapshot the car's audio
+        // connections. Browser: ask for the browser source again in case the voice scenario moved the car off it.
+        if (mr == 1 && act) g_audioBackend->onMicOpened();
+        if (mr == 2 && act) g_audioBackend->onMicClosed();
         if (!act && voice.active()) voice.deactivate("session ended");
         if (mr == 1 && mic_on && act && !mic_live) {
-            bool ok = g_audio ? g_audio->startMic() : micStart(mic);
+            bool ok = g_audioBackend->startMic(mic);
             printf("[Mic] phone opened the mic: capture %s (kept open until the session ends)\n", ok ? "started" : "FAILED");
             mic_live = ok;
         } else if (mic_ev) {
             printf("[Mic] phone %s the mic (capture %s)\n", mr == 1 ? "opened" : "closed", mic_live ? "running" : "not running");
         }
         if (mic_live && !act) {
-            if (g_audio) g_audio->stopMic(); else mic.stop();
+            g_audioBackend->stopMic(mic);
             printf("[Mic] capture stopped (session ended)\n");
             mic_live = false;
         }
@@ -2042,10 +1909,10 @@ int main(int argc, char* argv[]) {
     const double t0 = upSec();
     printf("[Main] [%9.3f] Shutdown requested, stopping subsystems...\n", t0);
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
-    g_btRoute.cancelPending(); // no queued audioconn starts while we tear down
+    g_audioBackend->cancelPending();   // no queued audioconn starts while we tear down
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
-    if (mic_live) { if (g_audio) g_audio->stopMic(); else mic.stop(); }
+    if (mic_live) g_audioBackend->stopMic(mic);
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
     g_kombiNav.stop();              // clears a cluster/HUD arrow (one quick attempt)
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
@@ -2057,11 +1924,9 @@ int main(int argc, char* argv[]) {
     g_session.stop();
     printf("[Main] [+%.2f s] session stopped\n", upSec() - t0);
     g_video = NULL;
-    g_audio = NULL;
-    g_browser = NULL;
-    if (g_a2iAudio) audio.stop();
-    browser.stop();
-    if (g_speechReady && g_speech) g_speech->stop();
+    nbt::AudioBackend* audio_backend = g_audioBackend;
+    g_audioBackend = NULL;
+    audio_backend->stop();
     video.stop();
     printf("[Main] [+%.2f s] video stopped\n", upSec() - t0);
 

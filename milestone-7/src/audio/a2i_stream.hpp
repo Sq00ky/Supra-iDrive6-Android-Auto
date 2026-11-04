@@ -16,7 +16,7 @@
 // foreign pointer is the suspected cause of the earlier _list_memalign crashes.
 
 #include "a2i_client.h"
-#include "pcm_utils.hpp"
+#include "audio/pcm_ring.hpp"
 #include <pthread.h>
 
 namespace nbt {
