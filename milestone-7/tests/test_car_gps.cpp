@@ -359,7 +359,7 @@ static void testConsumer() {
     assert(g_fixes.size() == 1);
     assert(g_fixes[0].lat_e7 > 524999900 && g_fixes[0].lat_e7 < 525000100);
     assert(g_fixes[0].lon_e7 < -44999900 && g_fixes[0].lon_e7 > -45000100);
-    assert(g_fixes[0].accuracy_e3 == 25000);
+    assert(g_fixes[0].accuracy_e3 == 25000);    // attached with an override
     assert(locationFresh(g_fixes[0], nowMs()));
     // The units of speed, heading and height are not confirmed, so none of them reaches the phone.
     assert(!g_fixes[0].has_altitude && !g_fixes[0].has_speed && !g_fixes[0].has_bearing);
@@ -433,19 +433,74 @@ static void testSatellitesUsed() {
     assert(satellitesUsed(s) == 0);
 }
 
-static void testAccuracy() {
-    assert(parseGpsAccuracyE3(NULL) == 10000);
-    assert(parseGpsAccuracyE3("") == 10000);
-    assert(parseGpsAccuracyE3("0") == 10000);
-    assert(parseGpsAccuracyE3("-5") == 10000);
-    assert(parseGpsAccuracyE3("10000") == 10000);
-    assert(parseGpsAccuracyE3("rubbish") == 10000);
+static void testAccuracyOverride() {
+    assert(parseGpsAccuracyOverrideE3(NULL) == 0);
+    assert(parseGpsAccuracyOverrideE3("") == 0);
+    assert(parseGpsAccuracyOverrideE3("0") == 0);
+    assert(parseGpsAccuracyOverrideE3("-5") == 0);
+    assert(parseGpsAccuracyOverrideE3("10000") == 0);
+    assert(parseGpsAccuracyOverrideE3("rubbish") == 0);
     // Inside the range Android Auto accepts, and at its edges: 1 m and 500 m would disable the accuracy on the phone.
-    assert(parseGpsAccuracyE3("1") == 10000);
-    assert(parseGpsAccuracyE3("2") == 2000);
-    assert(parseGpsAccuracyE3("25") == 25000);
-    assert(parseGpsAccuracyE3("499") == 499000);
-    assert(parseGpsAccuracyE3("500") == 10000);
+    assert(parseGpsAccuracyOverrideE3("1") == 0);
+    assert(parseGpsAccuracyOverrideE3("2") == 2000);
+    assert(parseGpsAccuracyOverrideE3("25") == 25000);
+    assert(parseGpsAccuracyOverrideE3("499") == 499000);
+    assert(parseGpsAccuracyOverrideE3("500") == 0);
+}
+
+static void testAccuracyFromHdop() {
+    assert(accuracyFromHdopE3(8) == 4000);          // the parked capture: HDOP 0.8
+    assert(accuracyFromHdopE3(5) == 2500);          // half a metre per step is kept
+    assert(accuracyFromHdopE3(4) == 2000);          // the floor, reached exactly
+    assert(accuracyFromHdopE3(1) == 2000);          // below it
+    assert(accuracyFromHdopE3(30) == 15000);
+    assert(accuracyFromHdopE3(80) == 40000);        // the sender's cap
+    // Not a reading: no HDOP, or more than the sender can send.
+    assert(accuracyFromHdopE3(0) == 10000);
+    assert(accuracyFromHdopE3(81) == 10000);
+    assert(accuracyFromHdopE3(255) == 10000);
+    // Whatever the byte, the phone keeps using the accuracy: above 1 m and below 500 m.
+    for (int raw = 0; raw <= 255; ++raw) {
+        const uint32_t a = accuracyFromHdopE3((uint8_t)raw);
+        assert(a > 1000 && a < 500000);
+    }
+
+    CarFix f;
+    assert(decodeCarGps(kCapture, sizeof(kCapture), f));
+    assert(fixAccuracyE3(f, 0) == 4000);
+    assert(fixAccuracyE3(f, 25000) == 25000);       // an override wins
+    assert(decodeCarGps(kCapture, 8, f) && !f.ext); // a fix with no extra fields has no HDOP
+    assert(fixAccuracyE3(f, 0) == 10000);
+}
+
+// From DSI frame to LocationFix with no override: each fix carries the accuracy of its own HDOP.
+static void testAccuracyOnEachFix() {
+    fake_dsi::reset();
+    g_fixes.clear();
+    g_sats.clear();
+    Client c;
+    CarGps gps;
+    assert(gps.attach(c, 0, &onFix, &onSats, &g_fixes));
+    assert(c.start("NBTAAD_MOST"));
+    fake_dsi::attach();
+    respond();
+    sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
+
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
+    assert(g_fixes.size() == 1 && g_fixes[0].accuracy_e3 == 4000);
+
+    std::vector<uint8_t> p = tick(39);
+    p[9] = 30;      // HDOP 3.0
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &p[0], p.size(), 0x2022);
+    assert(g_fixes.size() == 2 && g_fixes[1].accuracy_e3 == 15000);
+
+    p = tick(40);
+    p[9] = 0;       // no HDOP
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &p[0], p.size(), 0x2022);
+    assert(g_fixes.size() == 3 && g_fixes[2].accuracy_e3 == 10000);
+
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, 8, 0x2022);  // no extra fields
+    assert(g_fixes.size() == 4 && g_fixes[3].accuracy_e3 == 10000);
 }
 
 // Full client: attach() says so and the consumer stays out.
@@ -483,7 +538,9 @@ int main() {
     testConsumer();
     testPositionUsable();
     testSatellitesUsed();
-    testAccuracy();
+    testAccuracyOverride();
+    testAccuracyFromHdop();
+    testAccuracyOnEachFix();
     testFull();
     testOneRouteFits();
     printf("test_car_gps OK\n");

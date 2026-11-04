@@ -9,12 +9,13 @@
 namespace nbt {
 namespace car {
 
-CarGps::CarGps() : haveStatus_(false), statusMs_(0), usableLogged_(-1), accuracyE3_(0), cb_(NULL), satCb_(NULL), user_(NULL) {
+CarGps::CarGps()
+    : haveStatus_(false), statusMs_(0), usableLogged_(-1), accuracyOverrideE3_(0), cb_(NULL), satCb_(NULL), user_(NULL) {
     memset(&status_, 0, sizeof(status_));
 }
 
-bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, SatellitesCb satCb, void* user) {
-    accuracyE3_ = accuracyE3;
+bool CarGps::attach(most::Client& client, uint32_t accuracyOverrideE3, LocationCb cb, SatellitesCb satCb, void* user) {
+    accuracyOverrideE3_ = accuracyOverrideE3;
     cb_ = cb;
     satCb_ = satCb;
     user_ = user;
@@ -25,8 +26,12 @@ bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, Sa
         satCb_ = NULL;
         return false;
     }
-    printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto LOCATION, accuracy %u m\n", kCarGpsFBlock, kCarGpsInst,
-           kCarGpsFkt, (unsigned)(accuracyE3 / 1000));
+    if (accuracyOverrideE3)
+        printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto LOCATION, accuracy fixed at %u m\n", kCarGpsFBlock,
+               kCarGpsInst, kCarGpsFkt, (unsigned)(accuracyOverrideE3 / 1000));
+    else
+        printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto LOCATION, accuracy from HDOP\n", kCarGpsFBlock,
+               kCarGpsInst, kCarGpsFkt);
     printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto GPS_SATELLITE\n", kCarStatusFBlock, kCarStatusInst,
            kCarStatusFkt);
     return true;
@@ -95,7 +100,7 @@ void CarGps::onFix(const most::View& m) {
             printf("[GPS] position held back: receiver=%u, status %u ms old\n", status_.receiver, (unsigned)(m.rxMs - statusMs_));
         usableLogged_ = usable ? 1 : 0;
     }
-    if (usable && cb_) cb_(toLocationFix(f, accuracyE3_, m.rxMs), user_);
+    if (usable && cb_) cb_(toLocationFix(f, fixAccuracyE3(f, accuracyOverrideE3_), m.rxMs), user_);
 }
 
 } // namespace car
