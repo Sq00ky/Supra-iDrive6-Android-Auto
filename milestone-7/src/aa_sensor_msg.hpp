@@ -63,10 +63,9 @@ inline void buildLocationEvent(const LocationFix& f, std::vector<uint8_t>& out) 
 }
 
 // Plain SensorEventIndication (0x8003) with one GpsSatelliteData (SensorBatch field 21, tag 0xAA 0x01): {1: used}, the only
-// field the message requires. The guide says the required count is the number used, while the Open Android Auto notes, whose
-// names are inferred from an obfuscated APK, call field 1 the total and field 2 the number used. Field 2 stays out until that
-// is settled: this event says nothing contradictory either way, and 0 means the same under both readings. Per-satellite
-// entries need an in-use flag the car's list does not have.
+// field the message requires. Field 1 is the number used and field 2 the number in view: Android Auto 17.9 reads at most
+// field 2 per-satellite entries, and those include satellites not in use. Field 2 is optional and left out, as nothing in
+// that app reads this sensor. Per-satellite entries need an in-use flag the car's list does not have.
 inline void buildSatelliteEvent(uint32_t used, std::vector<uint8_t>& out) {
     std::vector<uint8_t> sat;
     sat.push_back(0x08); sensorPutVar(sat, used);
