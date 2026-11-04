@@ -15,8 +15,10 @@ bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, vo
     accuracyE3_ = accuracyE3;
     cb_ = cb;
     user_ = user;
-    if (!client.addRoute(kCarGpsFBlock, kCarGpsInst, kCarGpsFkt, most::kOpStatus, &CarGps::statusTramp, this)) {
+    if (!client.addRoute(kCarGpsFBlock, kCarGpsInst, kCarGpsFkt, most::kOpStatus, &CarGps::fixTramp, this) ||
+        !client.addRoute(kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, most::kOpStatus, &CarGps::statusTramp, this)) {
         printf("[GPS] no room on the MOST client: car GPS disabled\n");
+        cb_ = NULL;     // one route may have fitted
         return false;
     }
     printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto LOCATION, accuracy %u m\n", kCarGpsFBlock, kCarGpsInst,
@@ -24,9 +26,26 @@ bool CarGps::attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, vo
     return true;
 }
 
+void CarGps::fixTramp(const most::View& m, void* self) { static_cast<CarGps*>(self)->onFix(m); }
 void CarGps::statusTramp(const most::View& m, void* self) { static_cast<CarGps*>(self)->onStatus(m); }
 
 void CarGps::onStatus(const most::View& m) {
+    CarGpsStatus s;
+    memset(&s, 0, sizeof(s));
+    CarGpsStatusFilter::Result r = statusFilter_.feed(m.data, m.len, m.rxMs, s);
+    if (r.repeat) return;
+    if (r.logBad)
+        printf("[GPS] status: %u-byte payload on %02X/%02X fkt %03X, expected 10\n", (unsigned)m.len, m.fblock, m.inst, m.fkt);
+    if (!r.ok) return;
+    // Speed and the error bytes are raw values with units still to confirm (the layout above). The longest gap shows how
+    // often this message really changes.
+    if (r.logFields)
+        printf("[GPS] status #%u used=%u receiver=%u quality=%u hdop=%u err=%u/%u speed=%u time=%u, longest gap %u ms%s\n",
+               r.statusNo, s.satsUsed, s.receiver, s.quality, s.hdop, s.errLat, s.errLon, s.speed, s.timeOfDay,
+               (unsigned)r.gapMs, r.receiverChanged ? " (receiver changed)" : "");
+}
+
+void CarGps::onFix(const most::View& m) {
     CarFix f;
     memset(&f, 0, sizeof(f));
     CarGpsFilter::Result r = filter_.feed(m.data, m.len, f);

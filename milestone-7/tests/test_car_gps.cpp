@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for car/gps: MOST 52/00 fkt 440 decode (car capture), CarGpsFilter, and CarGps on most::Client with the fake
-// DsiClient, from DSI frame to LocationFix.
+// Host test for car/gps: MOST 52/00 fkt 440 and CD/01 fkt C00 decode (car captures), their filters, and CarGps on
+// most::Client with the fake DsiClient, from DSI frame to LocationFix.
 #include "car/gps.hpp"
 #include "fake_dsi_client.hpp"
 #include "most/client.hpp"
@@ -151,13 +151,110 @@ static void testFilter() {
     }
 }
 
-static void sendStatus(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, const uint8_t* p, size_t n, uint16_t dst) {
+// Car capture: 2021 -> 5000, FB CD/01 fkt C00 Status, in the same second as kCapture.
+static const uint8_t kStatusCapture[] = { 0x00, 0x00, 0x19, 0x19, 0x01, 0x02, 0x07, 0x08, 0x05, 0x8a };
+
+static void testStatusDecode() {
+    CarGpsStatus s;
+    assert(decodeCarGpsStatus(kStatusCapture, sizeof(kStatusCapture), s));
+    assert(s.speed == 0 && s.errLat == 25 && s.errLon == 25 && s.receiver == kReceiver3dFix && s.quality == 2);
+    assert(s.satsUsed == 7 && s.hdop == 8 && s.timeOfDay == 0x058a);
+
+    // The check on the layout: the time field against the UTC time of the fix, and HDOP against the same field there.
+    CarFix f;
+    assert(decodeCarGps(kCapture, sizeof(kCapture), f));
+    assert(((unsigned)f.hh * 3600 + (unsigned)f.mm * 60 + f.ss) % 4095 == s.timeOfDay);
+    assert(f.hdop == s.hdop);
+
+    // Big-endian, and each byte in its place.
+    const uint8_t p[] = { 0x12, 0x34, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0xab, 0xcd };
+    assert(decodeCarGpsStatus(p, sizeof(p), s));
+    assert(s.speed == 0x1234 && s.errLat == 1 && s.errLon == 2 && s.receiver == 3 && s.quality == 4 && s.satsUsed == 5);
+    assert(s.hdop == 6 && s.timeOfDay == 0xabcd);
+
+    assert(!decodeCarGpsStatus(kStatusCapture, 9, s));
+    assert(!decodeCarGpsStatus(NULL, 10, s));
+}
+
+static std::vector<uint8_t> statusAt(uint16_t time, uint8_t receiver = kReceiver3dFix, uint8_t used = 7) {
+    std::vector<uint8_t> p(kStatusCapture, kStatusCapture + sizeof(kStatusCapture));
+    p[4] = receiver;
+    p[6] = used;
+    p[8] = (uint8_t)(time >> 8);
+    p[9] = (uint8_t)time;
+    return p;
+}
+
+static void testStatusFilter() {
+    // Copies are repeats. The first status logs, the next four do not.
+    {
+        CarGpsStatusFilter flt;
+        CarGpsStatus s;
+        CarGpsStatusFilter::Result r = flt.feed(kStatusCapture, sizeof(kStatusCapture), 1000, s);
+        assert(!r.repeat && r.ok && r.receiverChanged && r.logFields && r.statusNo == 1 && r.gapMs == 0);
+        assert(flt.feed(kStatusCapture, sizeof(kStatusCapture), 1002, s).repeat);
+        for (int i = 1; i < CarGpsStatusFilter::kLogEvery; ++i) {
+            std::vector<uint8_t> p = statusAt((uint16_t)(1000 + i));
+            r = flt.feed(&p[0], p.size(), 1000 + i * 1000u, s);
+            assert(!r.repeat && r.ok && !r.logFields && !r.receiverChanged && r.statusNo == (unsigned)(i + 1));
+        }
+        // The longest gap since the last log comes out with the next log, then starts again.
+        std::vector<uint8_t> p = statusAt(2000);
+        r = flt.feed(&p[0], p.size(), 9000, s);
+        assert(r.logFields && r.gapMs == 4000);
+        p = statusAt(2001);
+        r = flt.feed(&p[0], p.size(), 10000, s);
+        assert(!r.logFields && r.gapMs == 0);
+    }
+    // A receiver change logs at once, off the cadence.
+    {
+        CarGpsStatusFilter flt;
+        CarGpsStatus s;
+        std::vector<uint8_t> p = statusAt(1);
+        flt.feed(&p[0], p.size(), 0, s);
+        p = statusAt(2);
+        assert(!flt.feed(&p[0], p.size(), 1000, s).logFields);
+        p = statusAt(3, kReceiverNoFix);
+        CarGpsStatusFilter::Result r = flt.feed(&p[0], p.size(), 2000, s);
+        assert(r.receiverChanged && r.logFields && s.receiver == kReceiverNoFix);
+    }
+    // A short payload says so once, however it varies, and does not count.
+    {
+        CarGpsStatusFilter flt;
+        CarGpsStatus s;
+        const uint8_t a[] = { 1, 2 }, b[] = { 3, 4 };
+        CarGpsStatusFilter::Result r = flt.feed(a, sizeof(a), 0, s);
+        assert(!r.repeat && !r.ok && r.logBad && r.statusNo == 0);
+        r = flt.feed(b, sizeof(b), 1, s);
+        assert(!r.repeat && !r.ok && !r.logBad);
+        r = flt.feed(kStatusCapture, sizeof(kStatusCapture), 2, s);
+        assert(r.ok && r.statusNo == 1 && r.gapMs == 0);
+    }
+    // The gap holds across the 32-bit wrap of the clock.
+    {
+        CarGpsStatusFilter flt;
+        CarGpsStatus s;
+        std::vector<uint8_t> p = statusAt(1);
+        flt.feed(&p[0], p.size(), 0xFFFFFF00u, s);
+        p = statusAt(2, kReceiverNoFix);
+        CarGpsStatusFilter::Result r = flt.feed(&p[0], p.size(), 100, s);
+        assert(r.logFields && r.gapMs == 356);
+    }
+}
+
+// The car sends fkt C00 with variant tag 1, and fkt 440 with tag 2.
+static void sendStatusTag(uint32_t varTag, uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, const uint8_t* p, size_t n,
+                          uint16_t dst) {
     Msg m;
-    m.txType = 0; m.varTag = 2; m.varVal = 0; m.dst = dst; m.src = 0x2021;
+    m.txType = 0; m.varTag = varTag; m.varVal = 0; m.dst = dst; m.src = 0x2021;
     m.fblock = fblock; m.inst = inst; m.fkt = fkt; m.opType = op; m.hdrTag = 0;
     m.data.assign(p, p + n);
     std::vector<uint8_t> f = buildMessage(m);
     fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
+}
+
+static void sendStatus(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, const uint8_t* p, size_t n, uint16_t dst) {
+    sendStatusTag(2, fblock, inst, fkt, op, p, n, dst);
 }
 
 static void respond() {
@@ -220,6 +317,14 @@ static void testConsumer() {
     memset(none, 0xFF, sizeof(none));
     sendStatus(0x52, 0x00, 0x440, kOpStatus, none, sizeof(none), 0x2022);
     assert(g_fixes.size() == 2);
+
+    // CD/01 fkt C00 Status reaches it with the tag the car uses, in the noinfo class. Other functions there do not.
+    const uint32_t routed = c.stats().routed;
+    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x5000);
+    assert(c.stats().routed == routed + 1);
+    assert(c.stats().noInfo == 1 && c.stats().routedNonNormal == 1);
+    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, 0x20B, kOpStatus, kStatusCapture, sizeof(kStatusCapture), 0x5000);
+    assert(c.stats().routed == routed + 1);
 }
 
 static void testAccuracy() {
@@ -247,6 +352,8 @@ static void testFull() {
 int main() {
     testDecode();
     testFilter();
+    testStatusDecode();
+    testStatusFilter();
     testConsumer();
     testAccuracy();
     testFull();
