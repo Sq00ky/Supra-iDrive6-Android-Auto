@@ -284,6 +284,16 @@ inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t 
     return l;
 }
 
+// The age limit on the status behind a position, the same as the one on a position.
+const uint32_t kCarStatusMaxAgeMs = kLocationMaxAgeMs;
+
+// Whether a position received at now_ms may go to the phone: the newest status must be recent and report a 3D fix. fkt 0x440
+// may keep coming with a held position when the signal is lost. Status 0 covers both time-only and 2D, and only 2D has a
+// position, so it does not pass. Without a recent status the phone uses its own GPS, which is the safe way to be wrong.
+inline bool positionUsable(bool haveStatus, const CarGpsStatus& s, uint32_t statusMs, uint32_t nowMs) {
+    return haveStatus && nowMs - statusMs <= kCarStatusMaxAgeMs && s.receiver == kReceiver3dFix;
+}
+
 // SatelliteStatus::used from a status: what the car says, except that no fix means none. A value the sender cannot produce
 // (it caps at 14; a negative count would come out as a large byte) counts as none too.
 inline uint32_t satellitesUsed(const CarGpsStatus& s) {
@@ -294,8 +304,8 @@ typedef void (*LocationCb)(const LocationFix& fix, void* user);
 typedef void (*SatellitesCb)(const SatelliteStatus& status, void* user);
 
 // A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 and CD/01 fkt 0xC00 Status, logs them under [GPS] and
-// hands on each new fix and status. It adds no device-controller keys: the client's subscriptions switch delivery on, and
-// GPS arrives with no key.
+// hands on each new status, and each new fix that positionUsable() lets through. It adds no device-controller keys: the
+// client's subscriptions switch delivery on, and GPS arrives with no key.
 // The callbacks run on the DSI callback thread: see the handler rules in most/client.hpp.
 class CarGps {
 public:
@@ -312,6 +322,11 @@ private:
 
     CarGpsFilter filter_;
     CarGpsStatusFilter statusFilter_;
+    // Both handlers run on the DSI callback thread, so these need no lock.
+    bool haveStatus_;
+    CarGpsStatus status_;
+    uint32_t statusMs_;         // when the newest status changed
+    int usableLogged_;          // -1 not yet, else the last positionUsable() result logged
     uint32_t accuracyE3_;
     LocationCb cb_;
     SatellitesCb satCb_;
