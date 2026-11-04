@@ -52,8 +52,9 @@ The code needs to be compatible with Armv7LE. I built it with [QNX Momentics](ht
 GitHub Actions builds and runs the Linux host tests on every pull request, including
 updates to existing PRs. It also compiles the iDrive app as a host shared library.
 Run the same checks locally on Linux or WSL with `bash milestone-7/tests/run_host_tests.sh`
-(requires CMake 3.16+, g++, Make or Ninja, Python 3, and GNU coreutils).
-The CMake/CTest runner discovers tests automatically, builds incrementally in
+(requires g++, gcc, Make, OpenSSL development libraries, Python 3, and GNU coreutils).
+The Makefile discovers C++ and Python tests, requires C++ source dependencies to be
+registered, builds incrementally in
 `milestone-7/tests/build`, and runs tests in parallel on each invocation.
 ThreadSanitizer lifecycle coverage is added automatically when the compiler can
 build and link it; sanitizer runtime failures are reported, not silently skipped.

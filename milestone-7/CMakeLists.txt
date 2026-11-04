@@ -3,14 +3,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(nbt_aad C CXX)
 
-option(NBT_HOST_TESTS "Build native Linux tests instead of the QNX application" OFF)
-if(NBT_HOST_TESTS)
-    cmake_minimum_required(VERSION 3.16)
-    enable_testing()
-    add_subdirectory(tests)
-    return()
-endif()
-
 # The QNX Makefile passes -Wc,-std=gnu++0x. C++11 matches that. -fPIC is omitted: it
 # produces a shared object the head unit will not exec.
 set(CMAKE_CXX_STANDARD 11)

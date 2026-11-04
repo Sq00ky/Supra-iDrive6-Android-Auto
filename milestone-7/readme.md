@@ -906,12 +906,12 @@ make rhmiapp    # only the iDrive app
   `opt/hmi/ID5/lib`, copied into `rhmiapp/lib/`.
 
 Host tests run on Linux/WSL with `bash milestone-7/tests/run_host_tests.sh` from the repository root
-(CMake 3.16+, g++, Make/Ninja, Python 3, GNU coreutils; no QNX SDK).
-CMake/CTest discovers `test_*.cpp` / `test_*.py` and builds incrementally with GNU C++98.
-Add `SRC_<test>` dependencies in `tests/CMakeLists.txt` for tests linking implementation files.
+(g++, gcc, Make, OpenSSL development libraries, Python 3, GNU coreutils; no QNX SDK).
+The Makefile discovers `test_*.cpp` and `test_*.py` and builds incrementally with GNU C++98.
+Add an `SRC_<test>` entry in `tests/Makefile` for each new C++ test, even when it needs no implementation files.
 ThreadSanitizer runs when supported; runtime errors fail the check. For `unexpected memory mapping`,
-consult the host administrator about ASLR settings, or explicitly opt out locally with `-DNBT_HOST_TSAN=OFF`.
-Alternatively, `make check` builds and runs the native tests, then
+consult the host administrator about ASLR settings, or explicitly opt out locally with `NBT_HOST_TSAN=0`.
+Alternatively, `make check` builds and runs the native tests and
 `test_session_lifecycle` under ThreadSanitizer; `make -C tests run-test_pcm` runs one. Each test's sources are
 listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 
