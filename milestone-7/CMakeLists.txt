@@ -49,6 +49,7 @@ set(SOURCES
     src/most/trace.cpp
     src/car/ccs_input.cpp
     src/car/volume_input.cpp
+    src/car/geoid.cpp
     src/car/gps.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
