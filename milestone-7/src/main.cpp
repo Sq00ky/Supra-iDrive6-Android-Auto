@@ -100,7 +100,9 @@
 #include "alt_wifi.hpp"
 #include "touch_probe.hpp"
 #include "aa_keys.hpp"
+#include "car/ccs_config.hpp"
 #include "car/ccs_input.hpp"
+#include "most/client.hpp"
 #include "crash_handler.hpp"
 #include "a2i_client.h"
 #include "audio/voice_scenario.hpp"
@@ -142,6 +144,8 @@ static double upSec() {
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
+static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
+static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -1348,7 +1352,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.80-wfdname"
+#define NBT_AAD_BUILD "v1.8.83-most"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1562,7 +1566,7 @@ int main(int argc, char* argv[]) {
     }
 
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
-    //    src/car/ccs_input.cpp (started below); iDrive keeps receiving every knob event itself.
+    //    g_most and g_ccs (started below); iDrive keeps receiving every knob event itself.
 
     // Microphone upload is not wired into AA yet; leave callback unset so the
     // A2I uplink reader does not flood slog while debugging video bring-up.
@@ -1622,11 +1626,14 @@ int main(int argc, char* argv[]) {
     }
 
     if (nbt::knobEnabled()) {
-        if (!nbt::car::startCcsInput(&onKnobEvent, &g_session))
+        if (!g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session))
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
     }
+    g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
+    if (!g_most.start("NBTAAD_MOST"))
+        printf("[Main] MOST client failed to start: knob/keys disabled.\n");
 
     if (nbt::wirelessEnabled()) {
         pthread_t wt;
@@ -1695,10 +1702,15 @@ int main(int argc, char* argv[]) {
     // context first (prepareForSession), so a quick reconnect is safe too. Only once the context exists.
     int cp_idle_ticks = 0;
     unsigned cp_live_ticks = 0;
+    uint32_t most_health_ms = monoMs();
     while (g_running) {
         for (int w = 0; w < 5 && !g_mainWake && g_running && !driveModePeekDue(); ++w)
             usleep(50000);   // 250 ms tick, cut short on a wake or when a driving-mode step-aside is due
         g_mainWake = 0;
+        if (monoMs() - most_health_ms >= 60000u) {
+            most_health_ms = monoMs();
+            g_most.logHealth();
+        }
         bool act = g_session.isActive();
         if (act || g_sessionActive) cp_idle_ticks = 0;
         else if (++cp_idle_ticks == 10 && nbt::VideoManager::cpHandoff()) video.retuneForCarPlay();

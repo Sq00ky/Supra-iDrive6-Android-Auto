@@ -12,7 +12,7 @@ int main() {
     PttTracker::Result r;
     assert(!p.held());
 
-    // Short press. Times are odd, so the bit that marks "held" does not change them.
+    // Short press.
     r = p.feed(1, 1001);
     assert(r.kind == PttTracker::kPressed && p.held());
     r = p.feed(0, 1101);
@@ -45,6 +45,14 @@ int main() {
     // A press at time 0 still counts as held.
     p.feed(1, 0);
     assert(p.held());
+
+    // Press and release in the same millisecond, at an even or an odd time: after a stall both are handled back to back.
+    p.feed(1, 12000);
+    r = p.feed(0, 12000);
+    assert(r.kind == PttTracker::kReleasedShort && r.heldMs == 0);
+    p.feed(1, 12001);
+    r = p.feed(0, 12001);
+    assert(r.kind == PttTracker::kReleasedShort && r.heldMs == 0);
 
     // reset forgets a press: the next release cannot be long.
     p.feed(1, 11001);

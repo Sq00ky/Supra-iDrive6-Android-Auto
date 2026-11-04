@@ -34,6 +34,7 @@ SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
 SRC_test_ccs_config        :=
 SRC_test_ccs_decoder       :=
+SRC_test_ccs_input         := src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
@@ -44,6 +45,7 @@ SRC_test_lm_geometry       :=
 SRC_test_media_ack         :=
 SRC_test_media_msgs        :=
 SRC_test_mmr_pps           :=
+SRC_test_most_client       := src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_most_msg          :=
 SRC_test_most_router       :=
 SRC_test_neutral_resume    :=
@@ -65,6 +67,7 @@ SRC_test_wpp               := src/wireless_setup.cpp
 # Arguments some tests take (paths relative to milestone-7).
 ARGS_test_ccs_decoder := tests/fixtures/controls_2026-10-22_e5.txt
 ARGS_test_ccs_push    := tests/fixtures/controls_2026-10-23_push.txt
+ARGS_test_ccs_input   := tests/fixtures/controls_2026-10-23_push.txt
 
 TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 

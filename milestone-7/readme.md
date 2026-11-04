@@ -756,8 +756,10 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    the daemon binds the port only while Android Auto is on screen (one socket gets each datagram). One 112-byte
    datagram per touch on the Supra, 2-4 shorter datagrams (24..64 bytes) on 1440x540 BMW units.
    They are forwarded to the phone as input events on channel 7; the touchscreen is declared as 1280x720.
-7. **Controller (`car/ccs_input`, `car/ccs_decoder.hpp`).** Observe-only MOST client on `DSYSMOSTServer` 4.5 that receives
-   copies of the controller's FBlock 0xE5 status messages.
+7. **Controller (`most/client`, `car/ccs_input`, `car/ccs_decoder.hpp`).** `most::Client` is the one observe-only MOST
+   client on `DSYSMOSTServer` 4.5. `CcsInput` is its consumer here: it receives copies of the controller's FBlock 0xE5
+   status messages. The client logs one `[MOST]` line a minute with its message counts by class and its link state, so
+   a silent client still shows.
 
 ### Cluster and HUD arrows (`kombi_nav`)
 
@@ -903,6 +905,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
 | `test_ccs_decoder`, `test_ccs_push` | Controller decode (CCS35up + old CCS) against car captures |
 | `test_most_msg`, `test_most_router` | MOST message parse and build, message classes, routing |
+| `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
@@ -930,7 +933,10 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     `session_owner.hpp` (wireless vs USB: who owns the session, used by `startSession()` in `main`);
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
-  - controller, in `src/car/` and `src/most/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`, `car/ptt.hpp`, `car/ctl_wizard.hpp`, `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `aa_keys.hpp`);
+  - MOST, in `src/most/` (the library: no Android Auto code, no environment reads, no consumer names): `most/client`
+    (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`);
+  - consumers of the MOST client, in `src/car/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`,
+    `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`;
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
     drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
     (+ `a2i_stream`); browser mode's parts: `stream_input.hpp` (one stream's state, by thread), `asound_device`

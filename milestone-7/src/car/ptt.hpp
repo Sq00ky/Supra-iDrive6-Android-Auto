@@ -22,13 +22,14 @@ public:
         uint32_t heldMs;    // for the two released kinds
     };
 
-    PttTracker() : downMs_(0) {}
+    PttTracker() : held_(false), downMs_(0) {}
 
     Result feed(uint8_t state, uint32_t rxMs) {
         Result r;
         r.heldMs = 0;
         if (state == 1) {
-            downMs_ = rxMs | 1u;    // | 1: 0 means not held
+            held_ = true;
+            downMs_ = rxMs;
             r.kind = kPressed;
             return r;
         }
@@ -36,18 +37,19 @@ public:
             r.kind = kIgnored;
             return r;
         }
-        bool wasDown = downMs_ != 0;
+        bool wasDown = held_;
         r.heldMs = wasDown ? rxMs - downMs_ : 0;
-        downMs_ = 0;
+        held_ = false;
         if (state == 3) r.kind = kCancelled;
         else r.kind = (wasDown && r.heldMs >= (uint32_t)kLongPressMs) ? kReleasedLong : kReleasedShort;
         return r;
     }
 
-    void reset() { downMs_ = 0; }
-    bool held() const { return downMs_ != 0; }
+    void reset() { held_ = false; }
+    bool held() const { return held_; }
 
 private:
+    bool held_;
     uint32_t downMs_;
 };
 
