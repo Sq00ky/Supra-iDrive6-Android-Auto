@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+// Host test for car/gps: MOST 52/00 fkt 440 decode (car capture), CarGpsFilter, and CarGps on most::Client with the fake
+// DsiClient.
+#include "car/gps.hpp"
+#include "fake_dsi_client.hpp"
+#include "most/client.hpp"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+#include <vector>
+
+using namespace nbt;
+using namespace nbt::car;
+using namespace nbt::most;
+
+// Car capture: 2021 -> 2022, FB 52/00 fkt 440 Status, parked at 53.355370,-1.526293, 2026-11-03 23:08:38 UTC.
+static const uint8_t kCapture[] = { 0xfe, 0xea, 0x25, 0x92, 0x25, 0xf1, 0x0c, 0x71, 0x04, 0x08, 0x08, 0x00, 0x00, 0xd7,
+                                    0x00, 0x17, 0x07, 0xea, 0x0b, 0x03, 0x17, 0x08, 0x26 };
+
+static void testDecode() {
+    {
+        CarFix f;
+        assert(decodeCarGps(kCapture, sizeof(kCapture), f));
+        assert(f.lat_e7 > 533553600 && f.lat_e7 < 533553800);     // 53.35537
+        assert(f.lon_e7 < -15262800 && f.lon_e7 > -15263000);     // -1.526293
+        assert(f.year == 2026 && f.mon == 11 && f.day == 3 && f.hh == 23 && f.mm == 8 && f.ss == 38);
+        // bytes 8..15: GPSFix, HDOP, VDOP, Speed (INT16), Heading, Height (INT16)
+        assert(f.ext && f.gpsFix == 4 && f.hdop == 8 && f.vdop == 8 && f.speed == 0 && f.heading == 215 && f.height == 23);
+    }
+    // No fix: 0xFFFFFFFF filler, zeros, short payload, no payload.
+    {
+        uint8_t p[23];
+        memset(p, 0xFF, sizeof(p));
+        CarFix f;
+        assert(!decodeCarGps(p, sizeof(p), f));
+        memset(p, 0, sizeof(p));
+        assert(!decodeCarGps(p, sizeof(p), f));
+        assert(!decodeCarGps(kCapture, 7, f));
+        assert(!decodeCarGps(NULL, 23, f));
+    }
+    // A latitude past the pole: 2^30 units is +90 deg, 0x40000002 is just over.
+    {
+        const uint8_t p[] = { 0x00, 0x00, 0x00, 0x01, 0x40, 0x00, 0x00, 0x02 };
+        CarFix f;
+        assert(!decodeCarGps(p, sizeof(p), f));
+    }
+    // 8-byte payload (no time): position only.
+    {
+        CarFix f;
+        assert(decodeCarGps(kCapture, 8, f) && f.year == 0 && !f.ext);
+    }
+    // Signed 16-bit fields: a negative height and a large speed.
+    {
+        const uint8_t p[] = { 0xfe, 0xea, 0x25, 0x92, 0x25, 0xf1, 0x0c, 0x71, 0x03, 0x0c, 0x11, 0x01, 0x2c, 0x80,
+                              0xff, 0xfe, 0x07, 0xea, 0x0b, 0x03, 0x17, 0x08, 0x26 };
+        CarFix f;
+        assert(decodeCarGps(p, sizeof(p), f));
+        assert(f.gpsFix == 3 && f.hdop == 12 && f.vdop == 17 && f.speed == 300 && f.heading == 128 && f.height == -2);
+    }
+    // A time that makes no sense is left out; the position is still good.
+    {
+        uint8_t p[sizeof(kCapture)];
+        memcpy(p, kCapture, sizeof(p));
+        p[18] = 13;
+        CarFix f;
+        assert(decodeCarGps(p, sizeof(p), f) && f.ext && f.year == 0 && f.mon == 0);
+    }
+}
+
+// kCapture with the UTC seconds changed: what the next fix looks like.
+static std::vector<uint8_t> tick(uint8_t ss, uint8_t gpsFix = 4) {
+    std::vector<uint8_t> p(kCapture, kCapture + sizeof(kCapture));
+    p[22] = ss;
+    p[8] = gpsFix;
+    return p;
+}
+
+static void testFilter() {
+    // Copies, one per receiver: only the first counts.
+    {
+        CarGpsFilter flt;
+        CarFix f;
+        CarGpsFilter::Result r = flt.feed(kCapture, sizeof(kCapture), f);
+        assert(!r.repeat && r.ok && r.stateChanged && !r.fixChanged && r.logFields && r.fixNo == 1);
+        for (int i = 0; i < 3; ++i) assert(flt.feed(kCapture, sizeof(kCapture), f).repeat);
+        std::vector<uint8_t> p = tick(39);
+        r = flt.feed(&p[0], p.size(), f);
+        assert(!r.repeat && r.ok && !r.stateChanged && r.fixNo == 2);
+        assert(f.ss == 39);
+    }
+    // The log cadence: every 5th fix, counting from the first.
+    {
+        CarGpsFilter flt;
+        CarFix f;
+        int logged = 0;
+        for (int i = 0; i < 10; ++i) {
+            std::vector<uint8_t> p = tick((uint8_t)i);
+            CarGpsFilter::Result r = flt.feed(&p[0], p.size(), f);
+            assert((unsigned)(i + 1) == r.fixNo);
+            assert(r.logFields == (i % 5 == 0));
+            if (r.logFields) ++logged;
+        }
+        assert(logged == 2);
+    }
+    // GPSFix changing logs at once, off the cadence. The first fix is not a change.
+    {
+        CarGpsFilter flt;
+        CarFix f;
+        std::vector<uint8_t> p = tick(1, 4);
+        assert(!flt.feed(&p[0], p.size(), f).fixChanged);
+        p = tick(2, 4);
+        CarGpsFilter::Result r = flt.feed(&p[0], p.size(), f);
+        assert(!r.fixChanged && !r.logFields);
+        p = tick(3, 3);
+        r = flt.feed(&p[0], p.size(), f);
+        assert(r.fixChanged && r.logFields && !r.stateChanged);
+    }
+    // Fix <-> no fix. The filler repeats without saying so again, and a fix after it counts as a change.
+    {
+        uint8_t none[23];
+        memset(none, 0xFF, sizeof(none));
+        CarGpsFilter flt;
+        CarFix f;
+        CarGpsFilter::Result r = flt.feed(none, sizeof(none), f);
+        assert(!r.repeat && !r.ok && r.stateChanged && r.fixNo == 0);
+        assert(flt.feed(none, sizeof(none), f).repeat);
+        r = flt.feed(kCapture, sizeof(kCapture), f);
+        assert(r.ok && r.stateChanged && r.fixNo == 1);
+        r = flt.feed(none, sizeof(none), f);
+        assert(!r.ok && r.stateChanged && r.fixNo == 1);
+    }
+    // An empty payload is a payload too: seen once, then a repeat.
+    {
+        CarGpsFilter flt;
+        CarFix f;
+        const uint8_t any = 0;
+        CarGpsFilter::Result r = flt.feed(&any, 0, f);
+        assert(!r.repeat && !r.ok && r.stateChanged);
+        assert(flt.feed(NULL, 0, f).repeat);
+    }
+    // Longer than the part it keeps: bounded, and the same message still reads as a repeat.
+    {
+        uint8_t big[64];
+        memset(big, 0x11, sizeof(big));
+        CarGpsFilter flt;
+        CarFix f;
+        assert(!flt.feed(big, sizeof(big), f).repeat);
+        assert(flt.feed(big, sizeof(big), f).repeat);
+    }
+}
+
+static void sendStatus(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, const uint8_t* p, size_t n, uint16_t dst) {
+    Msg m;
+    m.txType = 0; m.varTag = 2; m.varVal = 0; m.dst = dst; m.src = 0x2021;
+    m.fblock = fblock; m.inst = inst; m.fkt = fkt; m.opType = op; m.hdrTag = 0;
+    m.data.assign(p, p + n);
+    std::vector<uint8_t> f = buildMessage(m);
+    fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
+}
+
+static void respond() {
+    std::vector<uint8_t> resp;
+    putLe32(resp, 93);
+    putLe16(resp, 0x205D);
+    fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+}
+
+static void testConsumer() {
+    fake_dsi::reset();
+    Client c;
+    CarGps gps;
+    assert(gps.attach(c));
+    assert(c.start("NBTAAD_MOST"));     // GPS alone is enough for the client to start (NBT_KNOB=0)
+    assert(fake_dsi::opened());
+    fake_dsi::attach();
+    respond();
+
+    // It adds no keys, so request 1 is skipped: the server logs an error for an empty list.
+    for (size_t i = 0; i < fake_dsi::calls.size(); ++i)
+        assert(!(fake_dsi::calls[i].kind == fake_dsi::Call::kRequest && fake_dsi::calls[i].id == kReqRegisterDevCtrls));
+
+    // 52/00 fkt 440 Status reaches it, each receiver's copy.
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x204D);
+    assert(c.stats().routed == 2);
+    // Other instance, function or op: not routed.
+    sendStatus(0x52, 0x01, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
+    sendStatus(0x52, 0x00, 0x243, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
+    sendStatus(0x52, 0x00, 0x440, kOpGet, kCapture, 0, 0x2022);
+    assert(c.stats().routed == 2);
+    assert(c.stats().msgs == 5);
+}
+
+// Full client: attach() says so and the consumer stays out.
+static void noRoute(const View&, void*) {}
+static void testFull() {
+    fake_dsi::reset();
+    Client c;
+    while (c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) {}
+    CarGps gps;
+    assert(!gps.attach(c));
+}
+
+int main() {
+    testDecode();
+    testFilter();
+    testConsumer();
+    testFull();
+    printf("test_car_gps OK\n");
+    return 0;
+}
