@@ -25,8 +25,8 @@
 // still shows whether registration worked (client id) and every raw event the server sends.
 
 #include "dsi_client.hpp"
-#include "most_msg.hpp"
-#include "ctl_wizard.hpp"
+#include "most/msg.hpp"
+#include "car/ctl_wizard.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -10,7 +10,7 @@
 #ifndef NBT_CTL_WIZARD_HPP
 #define NBT_CTL_WIZARD_HPP
 
-#include "ccs_decoder.hpp"
+#include "car/ccs_decoder.hpp"
 
 #include <stdint.h>
 #include <stdio.h>

@@ -2,7 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: replays the E5 controller messages of the 2026-10-22 car run through CcsDecoder.
 // g++ -std=gnu++98 -Wall -Wextra -Iinclude -Isrc -o /tmp/test_ccs tests/test_ccs_decoder.cpp && /tmp/test_ccs tests/fixtures/controls_2026-10-22_e5.txt
-#include "ccs_decoder.hpp"
+#include "car/ccs_decoder.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

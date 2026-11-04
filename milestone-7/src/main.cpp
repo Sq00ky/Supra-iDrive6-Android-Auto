@@ -99,7 +99,7 @@
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
 #include "touch_probe.hpp"
-#include "ccs_input.hpp"
+#include "car/ccs_input.hpp"
 #include "crash_handler.hpp"
 #include "a2i_client.h"
 #include "audio/voice_scenario.hpp"
@@ -1561,7 +1561,7 @@ int main(int argc, char* argv[]) {
     }
 
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
-    //    src/ccs_input.cpp (started below); iDrive keeps receiving every knob event itself.
+    //    src/car/ccs_input.cpp (started below); iDrive keeps receiving every knob event itself.
 
     // Microphone upload is not wired into AA yet; leave callback unset so the
     // A2I uplink reader does not flood slog while debugging video bring-up.

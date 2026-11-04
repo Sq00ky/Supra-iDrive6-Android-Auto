@@ -44,7 +44,7 @@ SRCS = src/main.cpp \
        src/dsi_client.cpp \
        src/audio/voice_scenario.cpp \
        src/audio/bt_play.cpp \
-       src/ccs_input.cpp \
+       src/car/ccs_input.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
@@ -75,7 +75,7 @@ test_display: test_display.cpp
 	$(CXX) $(CXXFLAGS) -o test_display test_display.cpp -L./lib -lscreen -lang-c++
 	@echo [DONE] Built test_display for QNX armv7le
 
-test_controls: test_controls.cpp src/dsi_client.cpp src/dsi_client.hpp src/most_msg.hpp src/ctl_wizard.hpp src/ccs_decoder.hpp
+test_controls: test_controls.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/msg.hpp src/car/ctl_wizard.hpp src/car/ccs_decoder.hpp
 	@echo [CXX] test_controls.cpp
 	$(CXX) $(CXXFLAGS) -o test_controls test_controls.cpp src/dsi_client.cpp
 	@echo [DONE] Built test_controls for QNX armv7le
