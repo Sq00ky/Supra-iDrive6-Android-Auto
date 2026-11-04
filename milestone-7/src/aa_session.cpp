@@ -63,7 +63,6 @@ AASession::AASession()
     night_state_ = -1;
     night_started_ = false;
     pending_night_ = false;
-    memset(&car_fix_, 0, sizeof(car_fix_));
     have_fix_ = false;
     location_started_ = false;
     pending_location_ = false;
