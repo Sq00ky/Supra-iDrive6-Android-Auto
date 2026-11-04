@@ -491,6 +491,7 @@ ServiceDiscovery referenceManifest(const SdrIdentity& id) {
 
 ServiceDiscovery sessionManifest(const SdrIdentity& id) {
     ServiceDiscovery m = referenceManifest(id);
+    configureSensors(m);
     configureMainVideo(m);
     configureTouchScreen(m);
     dropSdrChannels(m);
@@ -644,6 +645,26 @@ bool envInt(const char* n, int& v) {
 }
 
 } // namespace
+
+bool configureSensors(ServiceDiscovery& m) {
+    static const int kSensors[] = {
+        SENSOR_LOCATION, SENSOR_CAR_SPEED, SENSOR_ODOMETER, SENSOR_FUEL_LEVEL, SENSOR_PARKING_BRAKE, SENSOR_GEAR,
+        SENSOR_NIGHT_MODE, SENSOR_DRIVING_STATUS, SENSOR_ACCELEROMETER, SENSOR_GPS_SATELLITE
+    };
+    static const int kFuelTypes[] = { FUEL_UNLEADED };
+    AaChannel* c = findChannel(m, AA_CH_SENSORS);
+    if (!c || c->service != AaChannel::SENSOR_SOURCE) return false;
+    const std::vector<int> sensors = listOf(kSensors), fuelTypes = listOf(kFuelTypes);
+    if (c->sensors.sensors == sensors && c->sensors.fuelTypes == fuelTypes && c->sensors.evConnectors.empty())
+        return false;
+    c->sensors.sensors = sensors;
+    c->sensors.fuelTypes = fuelTypes;
+    c->sensors.evConnectors.clear();
+    printf("[SDR] sensors advertised: ");
+    for (size_t i = 0; i < sensors.size(); ++i) printf("%s%d", i ? "," : "", sensors[i]);
+    printf("; fuel: unleaded; EV connectors: none\n");
+    return true;
+}
 
 bool configureMainVideo(ServiceDiscovery& m) {
     int vres = 0, vmw = 0, vmh = 0, vdpi;

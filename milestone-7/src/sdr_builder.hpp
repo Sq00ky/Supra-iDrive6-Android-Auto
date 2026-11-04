@@ -25,6 +25,11 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id);
 // The manifest as ServiceDiscoveryResponse protobuf, without the message id.
 std::vector<uint8_t> serializeManifest(const ServiceDiscovery& manifest);
 
+// Corrects the sensor channel for a real car: no compass, gyroscope or toll card, which have no source in the car, and
+// unleaded with no EV connector in place of the DHU's unleaded + electric and supercharger. Returns true if anything
+// was changed (prints the result).
+bool configureSensors(ServiceDiscovery& manifest);
+
 // The main display's VideoConfig. Environment (all optional):
 //   NBT_VID_RES  = VideoResolution enum (1 = 800x480, 2 = 1280x720, 3 = 1920x1080)
 //   NBT_VID_MW / NBT_VID_MH = margin width / height

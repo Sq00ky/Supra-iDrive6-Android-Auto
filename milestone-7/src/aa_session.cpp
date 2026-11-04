@@ -717,16 +717,12 @@ bool AASession::sendServiceDiscoveryResponse() {
     // Control Message ID 0x0006 (MESSAGE_SERVICE_DISCOVERY_RESPONSE)
     // Starts from the manifest Google's reference Desktop Head Unit (DHU) advertises, including all 9 mandatory
     // channels: Video, Media Audio, Speech, System Audio, Input (touch/rotary), Sensors, Mic, and Nav.
-    SdrIdentity ident = dhuIdentity();
-    if (nbt::wirelessEnabled() || getenv("NBT_SDR_IDENTITY")) {
-        // Wireless / real-car identity: same channels as the DHU manifest, but the
-        // head unit identifies as the Toyota (override with NBT_CAR_* / NBT_HU_* env).
-        ident = SdrIdentity();
-        ident.loadEnv();
-        printf("[AASession] ServiceDiscovery identity: %s %s %s (BT channel: %s)\n",
-               ident.carMake.c_str(), ident.carModel.c_str(), ident.carYear.c_str(),
-               ident.btAdapterAddress.empty() ? "none" : ident.btAdapterAddress.c_str());
-    }
+    // The head unit identifies as the car on every transport (override with NBT_CAR_* / NBT_HU_* env).
+    SdrIdentity ident;
+    ident.loadEnv();
+    printf("[AASession] ServiceDiscovery identity: %s %s %s (BT channel: %s)\n",
+           ident.carMake.c_str(), ident.carModel.c_str(), ident.carYear.c_str(),
+           ident.btAdapterAddress.empty() ? "none" : ident.btAdapterAddress.c_str());
     const ServiceDiscovery manifest = sessionManifest(ident);
     const std::vector<uint8_t> sdr = serializeManifest(manifest);
     std::vector<uint8_t> plain_sdr;

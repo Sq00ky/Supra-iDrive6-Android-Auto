@@ -79,6 +79,29 @@ int main() {
         assert(!configureTouchScreen(v));                            // already 720
         printf("touch config 720 OK\n");
     }
+    {
+        // Exact sensor channel: sensors 1,3,5,6,7,8,10,13,19,21, raw GPS location, unleaded, no connector.
+        const uint8_t sensors[] = {
+            0x0a, 0x31, 0x08, 0x01, 0x12, 0x2d,
+            0x0a, 0x02, 0x08, 0x01, 0x0a, 0x02, 0x08, 0x03, 0x0a, 0x02, 0x08, 0x05, 0x0a, 0x02, 0x08, 0x06,
+            0x0a, 0x02, 0x08, 0x07, 0x0a, 0x02, 0x08, 0x08, 0x0a, 0x02, 0x08, 0x0a, 0x0a, 0x02, 0x08, 0x0d,
+            0x0a, 0x02, 0x08, 0x13, 0x0a, 0x02, 0x08, 0x15,
+            0x10, 0x80, 0x02, 0x18, 0x01
+        };
+        const size_t dhuSensorChannelLen = 67;                       // 0a 41 + 65 bytes
+        ServiceDiscovery v = referenceManifest(dhuIdentity());
+        assert(configureSensors(v));
+        const std::vector<uint8_t> bytes = serializeManifest(v);
+        assert(bytes.size() == kDhuSdpProtobufLen - dhuSensorChannelLen + sizeof(sensors));
+        assert(memcmp(&bytes[0], sensors, sizeof(sensors)) == 0);
+        // Everything after the sensor channel is the DHU's, byte for byte.
+        assert(memcmp(&bytes[sizeof(sensors)], kDhuSdpProtobuf + dhuSensorChannelLen, kDhuSdpProtobufLen - dhuSensorChannelLen) == 0);
+        assert(!configureSensors(v));                                // a second run changes nothing
+        // A session gets the corrected channel too.
+        const std::vector<uint8_t> session = serializeManifest(sessionManifest(dhuIdentity()));
+        assert(memcmp(&session[0], sensors, sizeof(sensors)) == 0);
+        printf("sensor channel OK (%u bytes)\n", (unsigned)bytes.size());
+    }
     printf("test_sdr OK\n");
     return 0;
 }
