@@ -16,12 +16,7 @@ typedef void (*CcsEventCb)(const CcsEvent& ev, void* user);
 // Observe-only MOST client on MOSTSubSystem.DSYSMOSTServer 4.5 (same registration as test_controls):
 // it receives copies of the controller's status messages (FBlock 0xE5) and decodes them with CcsDecoder.
 // Nothing is ever sent to the controller. The HMI keeps receiving the same events.
-// Env: NBT_KNOB_INST=hex   controller instance (default 03)
-//      NBT_KNOB_INVERT=1   reverse the rotary direction
-//      NBT_KEY_<SLOT>=n    Android keycode for a hard key, 0 = ignore
-//                          (SLOT = MENU OPTIONS BACK COM MEDIA NAV MAP;
-//                           defaults 3 HOME, 0, 4 BACK, 5 CALL, 65537 MEDIA, 65538 NAV, 65538 NAV)
-//      NBT_KNOB_RAW=1      log every raw DSI event (very noisy)
+// Settings: car/ccs_config.hpp. NBT_KNOB_RAW=1 logs every raw DSI event (very noisy).
 bool startCcsInput(CcsEventCb cb, void* user);
 
 } // namespace car

@@ -901,7 +901,9 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_session_owner` | Which transport (wireless / USB) may take the session from which |
 | `test_usb_accessory` | USB accessory: devctl layout, frame lengths, bridge over a fake `/dev/oap` (pty), session limit, unplug, stop, a writer stuck on a phone that stopped reading, open / switch retries |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
-| `test_ccs_decoder`, `test_ccs_push`, `test_most_msg` | Controller decode (CCS35up + old CCS) against car captures |
+| `test_ccs_decoder`, `test_ccs_push` | Controller decode (CCS35up + old CCS) against car captures |
+| `test_most_msg`, `test_most_router` | MOST message parse and build, message classes, routing |
+| `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
@@ -928,7 +930,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     `session_owner.hpp` (wireless vs USB: who owns the session, used by `startSession()` in `main`);
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
-  - controller, in `src/car/` and `src/most/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `most/msg.hpp`, `car/ctl_wizard.hpp`, `aa_keys.hpp`);
+  - controller, in `src/car/` and `src/most/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`, `car/ptt.hpp`, `car/ctl_wizard.hpp`, `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `aa_keys.hpp`);
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
     drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
     (+ `a2i_stream`); browser mode's parts: `stream_input.hpp` (one stream's state, by thread), `asound_device`

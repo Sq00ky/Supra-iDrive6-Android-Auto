@@ -25,6 +25,7 @@
 // still shows whether registration worked (client id) and every raw event the server sends.
 
 #include "dsi_client.hpp"
+#include "most/ids.hpp"
 #include "most/msg.hpp"
 #include "car/ctl_wizard.hpp"
 
@@ -47,7 +48,7 @@ namespace {
 long g_t0 = 0;
 bool g_raw = false;
 std::vector<uint16_t> g_keys;
-uint32_t g_client = 0xffffffffu;
+uint32_t g_client = kClientRefused;
 volatile int g_stage = 0;           // 0 init, 1 name sent, 2 devctrls sent
 unsigned g_events = 0, g_msgs = 0;
 std::map<unsigned, unsigned> g_fktCount;
@@ -72,17 +73,6 @@ void hex(const char* tag, const uint8_t* p, size_t n, size_t max) {
     for (size_t i = 0; p && i < n && i < max; ++i) printf(" %02x", p[i]);
     if (n > max) printf(" ...(%u B)", (unsigned)n);
     printf("\n");
-}
-
-const char* opName(unsigned op) {
-    switch (op) {
-        case 0x0: return "Set"; case 0x1: return "Get"; case 0x2: return "SetGet";
-        case 0x3: return "Increment"; case 0x4: return "Decrement"; case 0x5: return "GetInterface";
-        case 0x6: return "StartResult"; case 0x7: return "Abort"; case 0x8: return "StartResultAck";
-        case 0x9: return "AbortAck"; case 0xA: return "StartAck"; case 0xC: return "Status";
-        case 0xD: return "Interface"; case 0xE: return "ProcessingAck"; case 0xF: return "Error";
-        default: return "?";
-    }
 }
 
 void decodeCcs(const Msg& m) {
@@ -159,14 +149,12 @@ void onAttached(DsiClient* c, void*) {
     std::vector<uint8_t> p;
     DsiClient::putString(p, "NBTAAD_CTL");
     g_stage = 1;
-    c->sendRequest(0xF, p);
+    c->sendRequest(kReqRegisterClient, p);
     // Same subscriptions the HMI's MOST client makes in CHBMOSTClientImpl::componentConnected:
     // notifyOn(0xC0000002), notifyOn(0xC0000003), notifyOn(0xC0000001 = registry), and listeners for the
     // information ids 0x80000001..7 (informationProcessMessage, ChangeInstID, Connect, ...).
     // Without these the server never sends us the MOST messages (first run: only the 0xC0000000 state arrived).
-    static const uint32_t kAttrs[] = { 0xC0000002u, 0xC0000003u, 0xC0000001u, 0x80000001u, 0x80000002u,
-                                       0x80000003u, 0x80000004u, 0x80000005u, 0x80000006u, 0x80000007u };
-    for (size_t i = 0; i < sizeof(kAttrs) / sizeof(kAttrs[0]); ++i) c->setNotification(kAttrs[i]);
+    for (size_t i = 0; i < (size_t)kClientSubscriptionCount; ++i) c->setNotification(kClientSubscriptions[i]);
 }
 
 void onData(DsiClient* c, uint32_t type, uint32_t id, uint32_t seq, const uint8_t* pl, uint32_t len, void*) {
@@ -176,21 +164,21 @@ void onData(DsiClient* c, uint32_t type, uint32_t id, uint32_t seq, const uint8_
         snprintf(tag, sizeof(tag), "[%6ld] DSI type=0x%x id=0x%x seq=%u len=%u raw:", nowMs() - g_t0, type, id, seq, len);
         hex(tag, pl, len, 256);
     }
-    if (id == 0x80000000u && len >= 6) {
+    if (id == kInfoClientResponse && len >= 6) {
         g_client = rdLe32(pl);
         unsigned dev = rdLe16(pl + 4);
         printf("[%6ld] registered: clientId=%u deviceId=0x%04X%s\n", nowMs() - g_t0, g_client, dev,
-               g_client == 0xffffffffu ? "  (REGISTRATION REFUSED)" : "");
-        if (g_client != 0xffffffffu && g_stage < 2) {
-            c->setNotification(0xC0000000u);
+               g_client == kClientRefused ? "  (REGISTRATION REFUSED)" : "");
+        if (g_client != kClientRefused && g_stage < 2) {
+            c->setNotification(kAttrCommState);
             std::vector<uint8_t> p = buildRegisterDevCtrls(g_client, g_keys);
             printf("[%6ld] registerDevCtrls with %u keys:", nowMs() - g_t0, (unsigned)g_keys.size());
             for (size_t i = 0; i < g_keys.size(); ++i) printf(" %04X", g_keys[i]);
             printf("\n");
             g_stage = 2;
-            c->sendRequest(1, p);
+            c->sendRequest(kReqRegisterDevCtrls, p);
         }
-    } else if (id == 0x80000001u) {
+    } else if (id == kInfoMessage) {
         onMessage(pl, len);
     } else if (!g_raw && !g_wizardMode) {
         char tag[96];
