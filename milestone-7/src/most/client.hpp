@@ -14,7 +14,7 @@
 // queues between its receiver thread and this one with no bound seen, so a slow handler costs late events and memory in
 // our own process. If the client's IPC buffer ever fills, the server's write fails at once and the message is lost with
 // no notice. So, in a handler:
-//   - never block: post to a queue, as AASession::postKeyEvent does
+//   - never block: post to a queue with a mutex and a wake pipe, and let the owner of the queue do the work
 //   - keep logging bounded: with USB logging on, each line is a write to the stick from this thread
 //   - accept copies: the head unit's messages arrive once per receiver, and the router does not dedupe
 //   - accept loss: full-state messages correct themselves with the next status, single-event messages do not
@@ -44,6 +44,11 @@ enum LinkState { kDetached, kRegistering, kRefused, kCommNotOk, kUp };
 const char* linkStateName(LinkState s);
 typedef void (*LinkCb)(LinkState s, void* user);    // on the DSI callback thread, for every change
 
+// On the DSI callback thread too, under the same handler rules. TapCb: every parsed message with its class, before routing,
+// so it also sees what routing leaves out. InfoTapCb: every other DSI event (registry, instance changes, ...), raw.
+typedef void (*TapCb)(const View& m, MsgClass c, void* user);
+typedef void (*InfoTapCb)(uint32_t id, const uint8_t* p, uint32_t len, void* user);
+
 // Totals since start().
 struct ClientStats {
     uint32_t msgs;            // parsed messages
@@ -66,6 +71,8 @@ public:
     bool addRoute(uint8_t fblock, int inst, int fkt, int op, Handler h, void* user);
     bool addDevCtrl(uint16_t key);            // a key added twice is sent once; request 1 is skipped with no keys
     bool addLinkListener(LinkCb cb, void* user);
+    bool setTap(TapCb cb, void* user);        // one of each tap; the message tap counts as a consumer for start()
+    bool setInfoTap(InfoTapCb cb, void* user);
     void setRawLog(bool on);                  // log every raw DSI event (very noisy)
 
     // Opens the DSI connection. With no consumer attached it does nothing and returns true. False: DSI open failed.
@@ -96,6 +103,10 @@ private:
     struct LinkListener { LinkCb cb; void* user; };
     LinkListener listeners_[kMaxLinkListeners];
     int nListeners_;
+    TapCb tap_;
+    void* tapUser_;
+    InfoTapCb infoTap_;
+    void* infoTapUser_;
     bool started_;
     bool rawLog_;
     char name_[32];

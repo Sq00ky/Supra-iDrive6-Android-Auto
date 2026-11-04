@@ -103,6 +103,7 @@
 #include "car/ccs_config.hpp"
 #include "car/ccs_input.hpp"
 #include "most/client.hpp"
+#include "most/trace.hpp"
 #include "crash_handler.hpp"
 #include "a2i_client.h"
 #include "audio/voice_scenario.hpp"
@@ -146,6 +147,7 @@ static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
 static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
 static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
+static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -1635,6 +1637,8 @@ int main(int argc, char* argv[]) {
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
     }
+    if (nbt::envFlag("NBT_MOST_LOG") == 1 && !g_mostTrace.attach(g_most))
+        printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
     g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
     if (!g_most.start("NBTAAD_MOST"))
         printf("[Main] MOST client failed to start: knob/keys disabled.\n");

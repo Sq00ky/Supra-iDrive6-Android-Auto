@@ -45,6 +45,7 @@ set(SOURCES
     src/audio/voice_scenario.cpp
     src/audio/bt_play.cpp
     src/most/client.cpp
+    src/most/trace.cpp
     src/car/ccs_input.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp

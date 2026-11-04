@@ -41,7 +41,7 @@ const char* linkStateName(LinkState s) {
 }
 
 Client::Client()
-    : nKeys_(0), nListeners_(0), started_(false), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
+    : nKeys_(0), nListeners_(0), tap_(NULL), tapUser_(NULL), infoTap_(NULL), infoTapUser_(NULL), started_(false), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
       attached_(false), answered_(false), clientId_(kClientRefused), deviceId_(0), haveComm_(false), comm_(0),
       commOkSeen_(false), longestWindowMs_(0), lastHealthMs_(0) {
     name_[0] = 0;
@@ -73,11 +73,25 @@ bool Client::addLinkListener(LinkCb cb, void* user) {
     return true;
 }
 
+bool Client::setTap(TapCb cb, void* user) {
+    if (started_ || !cb || tap_) return false;
+    tap_ = cb;
+    tapUser_ = user;
+    return true;
+}
+
+bool Client::setInfoTap(InfoTapCb cb, void* user) {
+    if (started_ || !cb || infoTap_) return false;
+    infoTap_ = cb;
+    infoTapUser_ = user;
+    return true;
+}
+
 void Client::setRawLog(bool on) { rawLog_ = on; }
 
 bool Client::start(const char* clientName) {
     if (started_) return false;
-    if (router_.size() == 0) {
+    if (router_.size() == 0 && !tap_) {
         printf("[MOST] no consumer attached: client not started\n");
         return true;
     }
@@ -165,6 +179,7 @@ void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
         onMessage(p, len);
         return;
     }
+    if (infoTap_) infoTap_(id, p, len, infoTapUser_);
     if (id == kInfoClientResponse && len >= 6) {
         uint32_t client = rdLe32(p);
         unsigned dev = rdLe16(p + 4);
@@ -225,6 +240,7 @@ void Client::onMessage(const uint8_t* p, uint32_t len) {
     MsgClass c = classify(m);
     bool wanted = router_.wants(m);
     noteFirst(m, c, wanted);
+    if (tap_) tap_(m, c, tapUser_);
 
     int ran = 0;
     bool joined = false, lost = false;

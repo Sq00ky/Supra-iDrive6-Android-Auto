@@ -492,6 +492,7 @@ Leave these unset unless you are testing.
 | `NBT_TOUCH_SX/SY/OX/OY`, `NBT_TOUCH_W/H`, `NBT_TOUCH_IDLE_MS`, `NBT_TOUCH_CFG_H`, `NBT_TOUCH_PORT` | Touch scale/offset, clamp (1280x720), stuck-finger release (400 ms), declared height (720), UDP port (30567) |
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |
 | `NBT_KNOB_RAW=1` | Log every raw controller message |
+| `NBT_MOST_LOG=1` | Log what the MOST client sees, tagged `[MOSTLOG]`: the registry, then for each message type the first 3 and then payload changes, at most 200 lines per type. For working out the car's signals from a drive. With `NBT_KNOB=0` too, the client still starts, for the log alone |
 | `NBT_GEAR_REVERSE` | Gear value for R (default 2; car codes 3 P, 1 N, 2 R, 5 D) |
 | `NBT_NEUTRAL_RESUME_S`, `NBT_GEAR_NEUTRAL` | Manual gearbox: seconds in neutral straight after reverse before Android Auto comes back over the park-assist view (default `5`; `0` = off). Leaving neutral or going back into reverse cancels it; not after you exited Android Auto. Gear value for N (default 1). Log: `[Gear] ... reverse -> neutral`. Not car-verified |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
@@ -906,7 +907,8 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_usb_accessory` | USB accessory: devctl layout, frame lengths, bridge over a fake `/dev/oap` (pty), session limit, unplug, stop, a writer stuck on a phone that stopped reading, open / switch retries |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
 | `test_ccs_decoder`, `test_ccs_push` | Controller decode (CCS35up + old CCS) against car captures |
-| `test_most_msg`, `test_most_router`, `test_most_reassembler` | MOST message parse and build, message classes, routing, joining segments |
+| `test_most_msg`, `test_most_router`, `test_most_reassembler`, `test_most_registry` | MOST message parse and build, message classes, routing, joining segments, the registry |
+| `test_most_trace` | `NBT_MOST_LOG` filter and the client's taps |
 | `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_ctl_wizard` | Wizard logic and env output |
@@ -936,7 +938,8 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - MOST, in `src/most/` (the library: no Android Auto code, no environment reads, no consumer names): `most/client`
-    (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `most/reassembler.hpp`);
+    (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `most/reassembler.hpp`), and the `NBT_MOST_LOG` logger
+    `most/trace` (+ `most/registry.hpp`);
   - consumers of the MOST client, in `src/car/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`,
     `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`;
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
