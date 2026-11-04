@@ -361,8 +361,9 @@ static void testConsumer() {
     assert(g_fixes[0].lon_e7 < -15262800 && g_fixes[0].lon_e7 > -15263000);
     assert(g_fixes[0].accuracy_e3 == 25000);    // attached with an override
     assert(locationFresh(g_fixes[0], nowMs()));
-    // The units of speed, heading and height are not confirmed, so none of them reaches the phone.
-    assert(!g_fixes[0].has_altitude && !g_fixes[0].has_speed && !g_fixes[0].has_bearing);
+    // Parked: a speed of 0 is sent, the held heading is not, and the height never is.
+    assert(g_fixes[0].has_speed && g_fixes[0].speed_e3 == 0);
+    assert(!g_fixes[0].has_bearing && !g_fixes[0].has_altitude);
 
     // The next second's fix goes on. A no-fix payload does not, so the last fix ages out on the session's side.
     std::vector<uint8_t> next = tick(39);
@@ -503,6 +504,83 @@ static void testAccuracyOnEachFix() {
     assert(g_fixes.size() == 4 && g_fixes[3].accuracy_e3 == 10000);
 }
 
+static CarFix fixWith(int16_t speed, uint8_t heading) {
+    CarFix f;
+    assert(decodeCarGps(kCapture, sizeof(kCapture), f));
+    f.speed = speed;
+    f.heading = heading;
+    return f;
+}
+
+static void testSpeedAndBearing() {
+    // Clockwise from anticlockwise raw values: the drive's own samples, with the course measured between the fixes.
+    assert(headingToBearingE6(0) == 0);                 // north is 0, not 360
+    assert(headingToBearingE6(255) == 1406250);         // just east of north
+    assert(headingToBearingE6(213) == 60468750);        // drive: course 60.5 deg
+    assert(headingToBearingE6(188) == 95625000);        // drive: course about 104 deg, pulling forward at 1.7 m/s
+    assert(headingToBearingE6(127) == 181406250);       // drive: course 181.8 deg
+    assert(headingToBearingE6(74) == 255937500);        // drive: reversing, course 270 deg, the way the car moves
+    assert(headingToBearingE6(1) == 358593750);         // just west of north, and inside an int32
+    // Every byte gives a bearing the phone's field can hold, in 0 to 360 degrees.
+    for (int raw = 0; raw <= 255; ++raw) {
+        const int32_t b = headingToBearingE6((uint8_t)raw);
+        assert(b >= 0 && b < 360000000);
+    }
+
+    // Speed: 0.01 m/s raw to mm/s. The fastest of the drive was 14.09 m/s.
+    LocationFix l = toLocationFix(fixWith(1409, 213), 3500, 7);
+    assert(l.has_speed && l.speed_e3 == 14090);
+    assert(l.has_bearing && l.bearing_e6 == 60468750);
+    assert(!l.has_altitude);
+    assert(l.accuracy_e3 == 3500 && l.rx_ms == 7);
+
+    // Bearing only from 2 m/s: below that the heading can be old. Speed is sent either way, including 0.
+    l = toLocationFix(fixWith(199, 74), 3500, 7);
+    assert(l.has_speed && l.speed_e3 == 1990 && !l.has_bearing);
+    l = toLocationFix(fixWith(200, 74), 3500, 7);
+    assert(l.has_speed && l.speed_e3 == 2000 && l.has_bearing && l.bearing_e6 == 255937500);
+    l = toLocationFix(fixWith(0, 74), 3500, 7);
+    assert(l.has_speed && l.speed_e3 == 0 && !l.has_bearing);
+
+    // Out of range: neither field goes, and the position still does. The sender has not been seen to go negative.
+    l = toLocationFix(fixWith(-1, 74), 3500, 7);
+    assert(!l.has_speed && !l.has_bearing && l.lat_e7 != 0);
+    l = toLocationFix(fixWith(6999, 74), 3500, 7);
+    assert(l.has_speed && l.speed_e3 == 69990 && l.has_bearing);
+    l = toLocationFix(fixWith(7000, 74), 3500, 7);
+    assert(!l.has_speed && !l.has_bearing);
+    l = toLocationFix(fixWith(32767, 74), 3500, 7);
+    assert(!l.has_speed && !l.has_bearing);
+
+    // A short payload has no speed or heading to send, rather than a speed of 0.
+    CarFix shortFix;
+    assert(decodeCarGps(kCapture, 8, shortFix) && !shortFix.ext);
+    l = toLocationFix(shortFix, 10000, 7);
+    assert(!l.has_speed && !l.has_bearing);
+}
+
+// From DSI frame to LocationFix, with bytes in the places the car sends them.
+static void testSpeedOnEachFix() {
+    fake_dsi::reset();
+    g_fixes.clear();
+    g_sats.clear();
+    Client c;
+    CarGps gps;
+    assert(gps.attach(c, 0, &onFix, &onSats, &g_fixes));
+    assert(c.start("NBTAAD_MOST"));
+    fake_dsi::attach();
+    respond();
+    sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
+
+    std::vector<uint8_t> p = tick(39);
+    p[11] = 0x05; p[12] = 0x81;     // 1409
+    p[13] = 213;
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &p[0], p.size(), 0x2022);
+    assert(g_fixes.size() == 1);
+    assert(g_fixes[0].has_speed && g_fixes[0].speed_e3 == 14090);
+    assert(g_fixes[0].has_bearing && g_fixes[0].bearing_e6 == 60468750);
+}
+
 // Full client: attach() says so and the consumer stays out.
 static void noRoute(const View&, void*) {}
 static void testFull() {
@@ -541,6 +619,8 @@ int main() {
     testAccuracyOverride();
     testAccuracyFromHdop();
     testAccuracyOnEachFix();
+    testSpeedAndBearing();
+    testSpeedOnEachFix();
     testFull();
     testOneRouteFits();
     printf("test_car_gps OK\n");
