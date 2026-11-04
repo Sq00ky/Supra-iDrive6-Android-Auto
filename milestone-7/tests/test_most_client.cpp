@@ -212,24 +212,43 @@ static void testMessages() {
     fake_dsi::data(kInfoMessage, &bad[0], 20);
     assert(g_handled == 1);
 
-    // This commit routes every class and only counts them.
+    // Segments reach a route only when joined, once, as a normal message.
     resetHandler();
     sendMsg(frame(1, 2, 19, 0xE5, 3, 0xC46, 0xC, "s1"));
     sendMsg(frame(1, 2, 20, 0xE5, 3, 0xC46, 0xC, "s2"));
+    assert(g_handled == 0);
     sendMsg(frame(1, 2, 21, 0xE5, 3, 0xC46, 0xC, "s3"));
+    assert(g_handled == 1 && g_lastData.size() == 6 && !memcmp(&g_lastData[0], "s1s2s3", 6));
+    assert(g_last.varVal == 0 && g_last.fkt == 0xC46 && g_last.rxMs != 0);
+
+    // Transmit status never reaches a route. The noinfo class does: it is real traffic on the car.
+    resetHandler();
     sendMsg(frame(0, 2, 5, 0xE5, 3, 0xC46, 0xC, "tx"));
+    assert(g_handled == 0);
     sendMsg(frame(0, 1, 0, 0xE5, 3, 0xC46, 0xC, "no"));
-    assert(g_handled == 5);
+    assert(g_handled == 1 && g_lastData.size() == 2 && !memcmp(&g_lastData[0], "no", 2));
+
+    // A segment no route wants is not buffered: its last segment joins nothing, and is not counted as lost.
+    resetHandler();
+    sendMsg(frame(1, 2, 19, 0x05, 0, 0x620, 0xC, "a"));
+    sendMsg(frame(1, 2, 21, 0x05, 0, 0x620, 0xC, "b"));
+    assert(g_handled == 0);
+
+    // A last segment with no first, on a route, is lost.
+    sendMsg(frame(1, 2, 21, 0xE5, 3, 0xC47, 0xC, "z"));
+    assert(g_handled == 0);
 
     ClientStats s = c.stats();
-    assert(s.msgs == 7 && s.normal == 2 && s.seg == 3 && s.txStatus == 1 && s.noInfo == 1 && s.bad == 1);
-    assert(s.routed == 6 && s.routedNonNormal == 5);
+    assert(s.msgs == 10 && s.normal == 2 && s.seg == 6 && s.txStatus == 1 && s.noInfo == 1 && s.bad == 1);
+    assert(s.routed == 3);                // the normal message, the joined one, the noinfo one
+    assert(s.routedNonNormal == 6);       // three segments, one status, one noinfo, the lost segment
+    assert(s.joined == 1 && s.segLost == 1);
 
     // The attributes do not count as messages, and comm state is logged only.
     comm(1);
     comm(1);
     comm(2);
-    assert(c.stats().msgs == 7 && c.state() == kUp);
+    assert(c.stats().msgs == 10 && c.state() == kUp);
 
     // Odd or short DSI events are ignored.
     fake_dsi::data(kAttrCommState, "x", 1);

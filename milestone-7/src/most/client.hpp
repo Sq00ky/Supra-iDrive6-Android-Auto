@@ -7,6 +7,9 @@
 // want, and nothing is ever sent to a function block. There is no public send; the private DsiClient only registers.
 // This folder is the library: no Android Auto code, no environment reads, no consumer names.
 //
+// What reaches a route depends on the message class (most/msg.hpp): normal and noinfo messages as they are, segments only
+// once joined, and transmit status not at all. All of them are counted.
+//
 // Handlers run on the DSI callback thread, one after the other, and everything behind them waits. The DSI library
 // queues between its receiver thread and this one with no bound seen, so a slow handler costs late events and memory in
 // our own process. If the client's IPC buffer ever fills, the server's write fails at once and the message is lost with
@@ -21,6 +24,7 @@
 #include "dsi_client.hpp"
 #include "most/ids.hpp"
 #include "most/msg.hpp"
+#include "most/reassembler.hpp"
 #include "most/router.hpp"
 #include <pthread.h>
 #include <stdint.h>
@@ -44,8 +48,10 @@ typedef void (*LinkCb)(LinkState s, void* user);    // on the DSI callback threa
 struct ClientStats {
     uint32_t msgs;            // parsed messages
     uint32_t normal, seg, txStatus, noInfo;
-    uint32_t routed;          // messages that reached at least one handler
-    uint32_t routedNonNormal; // the same, for any class other than normal
+    uint32_t routed;          // messages that reached at least one handler, a joined message counting once
+    uint32_t routedNonNormal; // messages a route wants, in any class other than normal
+    uint32_t joined;          // segmented messages joined and handed on
+    uint32_t segLost;         // segments a route wants that could not be joined: no first segment, or over the cap
     uint32_t bad;             // frames that did not parse
     uint32_t longestHandlerMs;
 };
@@ -96,6 +102,7 @@ private:
 
     // Callback thread only.
     int stage_;                       // 0 init, 1 name sent, 2 devctrls sent
+    Reassembler reassembler_;
     unsigned firstSeen_[kNoInfo + 1];
     unsigned routedNonNormalLogged_;
 

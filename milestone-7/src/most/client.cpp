@@ -206,8 +206,9 @@ void Client::noteFirst(const View& m, MsgClass c, bool wanted) {
     }
     if (wanted && c != kNormal && routedNonNormalLogged_ < (unsigned)kRoutedNonNormalHeaders) {
         ++routedNonNormalLogged_;
-        char what[48];
-        snprintf(what, sizeof(what), "routed function in class %s", className(c));
+        char what[64];
+        snprintf(what, sizeof(what), "routed function in class %s%s", className(c),
+                 c == kTxStatus ? " (not delivered)" : "");
         printHeader(what, m);
     }
 }
@@ -222,8 +223,22 @@ void Client::onMessage(const uint8_t* p, uint32_t len) {
     }
     m.rxMs = nowMs();
     MsgClass c = classify(m);
-    noteFirst(m, c, router_.wants(m));
-    int ran = router_.dispatch(m);
+    bool wanted = router_.wants(m);
+    noteFirst(m, c, wanted);
+
+    int ran = 0;
+    bool joined = false, lost = false;
+    if (c == kSegFirst || c == kSegMiddle || c == kSegLast) {
+        if (wanted) {
+            View whole;
+            Reassembler::Result r = reassembler_.feed(m, c, whole);
+            joined = r == Reassembler::kJoined;
+            lost = r == Reassembler::kLost;
+            if (joined) ran = router_.dispatch(whole);
+        }
+    } else if (c != kTxStatus) {
+        ran = router_.dispatch(m);
+    }
     uint32_t took = nowMs() - m.rxMs;
 
     pthread_mutex_lock(&lock_);
@@ -234,10 +249,10 @@ void Client::onMessage(const uint8_t* p, uint32_t len) {
         case kTxStatus: ++total_.txStatus; break;
         case kNoInfo: ++total_.noInfo; break;
     }
-    if (ran > 0) {
-        ++total_.routed;
-        if (c != kNormal) ++total_.routedNonNormal;
-    }
+    if (ran > 0) ++total_.routed;
+    if (wanted && c != kNormal) ++total_.routedNonNormal;
+    if (joined) ++total_.joined;
+    if (lost) ++total_.segLost;
     if (took > total_.longestHandlerMs) total_.longestHandlerMs = took;
     if (took > longestWindowMs_) longestWindowMs_ = took;
     pthread_mutex_unlock(&lock_);
@@ -262,11 +277,11 @@ void Client::logHealth() {
     char commText[16];
     if (haveComm) snprintf(commText, sizeof(commText), "%u", comm);
     else snprintf(commText, sizeof(commText), "?");
-    printf("[MOST] %u s: %u msgs (normal %u, seg %u, txstatus %u, noinfo %u), routed %u (non-normal %u), bad %u, "
-           "longest handler %u ms, link %s, comm %s, client %u dev 0x%04X\n",
+    printf("[MOST] %u s: %u msgs (normal %u, seg %u, txstatus %u, noinfo %u), routed %u, non-normal on routes %u, "
+           "joined %u, seg lost %u, bad %u, longest handler %u ms, link %s, comm %s, client %u dev 0x%04X\n",
            secs, t.msgs - l.msgs, t.normal - l.normal, t.seg - l.seg, t.txStatus - l.txStatus, t.noInfo - l.noInfo,
-           t.routed - l.routed, t.routedNonNormal - l.routedNonNormal, t.bad - l.bad, longest, linkStateName(st), commText,
-           client, dev);
+           t.routed - l.routed, t.routedNonNormal - l.routedNonNormal, t.joined - l.joined, t.segLost - l.segLost,
+           t.bad - l.bad, longest, linkStateName(st), commText, client, dev);
 }
 
 } // namespace most

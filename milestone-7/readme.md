@@ -758,7 +758,8 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    They are forwarded to the phone as input events on channel 7; the touchscreen is declared as 1280x720.
 7. **Controller (`most/client`, `car/ccs_input`, `car/ccs_decoder.hpp`).** `most::Client` is the one observe-only MOST
    client on `DSYSMOSTServer` 4.5. `CcsInput` is its consumer here: it receives copies of the controller's FBlock 0xE5
-   status messages. The client logs one `[MOST]` line a minute with its message counts by class and its link state, so
+   status messages. Handlers get whole messages: the client joins segments and leaves out transmit status, and counts
+   both. It logs one `[MOST]` line a minute with its message counts by class and its link state, so
    a silent client still shows. When the link stops being up, keys still held are released on the phone and the knob
    position re-bases. Messages are routed whatever the link state says.
 
@@ -905,7 +906,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_usb_accessory` | USB accessory: devctl layout, frame lengths, bridge over a fake `/dev/oap` (pty), session limit, unplug, stop, a writer stuck on a phone that stopped reading, open / switch retries |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
 | `test_ccs_decoder`, `test_ccs_push` | Controller decode (CCS35up + old CCS) against car captures |
-| `test_most_msg`, `test_most_router` | MOST message parse and build, message classes, routing |
+| `test_most_msg`, `test_most_router`, `test_most_reassembler` | MOST message parse and build, message classes, routing, joining segments |
 | `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_ctl_wizard` | Wizard logic and env output |
@@ -935,7 +936,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
   - MOST, in `src/most/` (the library: no Android Auto code, no environment reads, no consumer names): `most/client`
-    (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`);
+    (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `most/reassembler.hpp`);
   - consumers of the MOST client, in `src/car/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`,
     `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`;
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main

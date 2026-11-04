@@ -183,6 +183,31 @@ int main(int argc, char** argv) {
         assert(g_seq.empty());
     }
 
+    // The classes end to end: a joined status drives the decoder once, and a transmit status does not at all.
+    {
+        Client c;
+        CcsInput in;
+        start(c, in, CcsConfig());
+        const uint8_t first[3] = { 0, 1, 0 }, rest[4] = { 0, 0, 0, 0 };
+        Msg m;
+        m.txType = 1; m.varTag = 2; m.dst = 0x2022; m.src = 0x1001; m.fblock = 0xE5; m.inst = 3; m.fkt = 0xC47;
+        m.opType = kOpStatus; m.hdrTag = 0;
+        m.varVal = 19; m.data.assign(first, first + 3);
+        std::vector<uint8_t> f = buildMessage(m);
+        fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
+        assert(g_seq.empty());
+        m.varVal = 21; m.data.assign(rest, rest + 4);
+        f = buildMessage(m);
+        fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
+        assert(g_seq == "BACK+");
+
+        g_seq.clear();
+        m.txType = 0; m.varVal = 5; m.data.assign(7, 0);
+        f = buildMessage(m);
+        fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
+        assert(g_seq.empty());                     // BACK stays down: that was no release
+    }
+
     // No room on the client: attach reports it.
     {
         Client c;
