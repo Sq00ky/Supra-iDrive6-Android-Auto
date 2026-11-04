@@ -32,6 +32,7 @@ SRCS = src/main.cpp \
        src/audio/resampler.cpp \
        src/audio/asound_device.cpp \
        src/video_manager.cpp \
+       src/mmr_launch.cpp \
        src/tcp_server.cpp \
        src/usb_accessory.cpp \
        src/usb_direct.cpp \

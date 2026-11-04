@@ -488,6 +488,7 @@ Leave these unset unless you are testing.
 | `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Decoder / renderer heights (default 720) |
 | `NBT_VIDEO_DUMP=1` | Raw H.264 to `/tmp/aa_video.h264` (4 MB cap) |
 | `NBT_MMR_WAIT_S` | Wait for the MM-Renderer at start (default 90) |
+| `NBT_MMR_SPAWN` | Start the MM-Renderer ourselves when none is running (default 1, 0 = never): only on a car without CarPlay coded (no `/var/opt/conn/carplay/carplay.ini`), where the head unit never starts it; with CarPlay coded the head unit's is used. One we start is stopped when nbt-aad exits; its pid is kept in `/dev/shmem/nbt-aad-mmr.pid` so a restarted nbt-aad can stop it too |
 | `NBT_PURGE_ALL=1` | Destroy every MM-Renderer context, not only `aadvideoctx*`/`cpvideoctx*` |
 | `NBT_TOUCH_SX/SY/OX/OY`, `NBT_TOUCH_W/H`, `NBT_TOUCH_IDLE_MS`, `NBT_TOUCH_CFG_H`, `NBT_TOUCH_PORT` | Touch scale/offset, clamp (1280x720), stuck-finger release (400 ms), declared height (720), UDP port (30567) |
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |

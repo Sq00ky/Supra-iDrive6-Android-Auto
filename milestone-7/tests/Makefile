@@ -42,6 +42,7 @@ SRC_test_kombi_nav_msg     :=
 SRC_test_lm_geometry       :=
 SRC_test_media_ack         :=
 SRC_test_media_msgs        :=
+SRC_test_mmr_launch        :=
 SRC_test_mmr_pps           :=
 SRC_test_most_msg          :=
 SRC_test_neutral_resume    :=

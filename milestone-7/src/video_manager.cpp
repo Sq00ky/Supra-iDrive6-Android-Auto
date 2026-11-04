@@ -318,20 +318,40 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
         strm_lib_ = strm_h;
 
         if (fn_connect) {
+            mmr_launch_.adopt();   // a renderer an earlier nbt-aad started (crash / SIGKILL): ours to stop on exit
             mmr_cnx_ = fn_connect(NULL);
             if (!mmr_cnx_) {
                 // Started from the iDrive entry shortly after boot, mm-renderer may not be up yet: mmr_connect()
                 // then fails, no decoder context is created, /dev/name/local/mdev never appears and every frame
                 // is dropped (black screen for the whole session, car-seen 2026-10-24). Wait for it, with the
                 // overlay hidden so iDrive and the reverse camera stay usable. NBT_MMR_WAIT_S (default 90, 0 = no wait).
+                // HMood starts it only with CONN_CARPLAY (mmr_launch.hpp). On a car without CarPlay coded (no
+                // carplay.ini) nobody else ever will, so start it ourselves if no mm-renderer process exists
+                // (NBT_MMR_SPAWN=0: never). On a coded car it is HMood's: only wait for it.
+                int err0 = errno;
                 int wait_s = vidEnvInt("NBT_MMR_WAIT_S", 90);
+                bool coded = mmr::carPlayCoded();
                 printf("[VideoManager] mm-renderer not reachable yet (mmr_connect failed, errno=%d): waiting up to %d s, overlay hidden.\n",
-                       errno, wait_s);
+                       err0, wait_s);
+                if (coded) {
+                    printf("[VideoManager] CarPlay coded (carplay.ini): mm-renderer is the head unit's, not starting one.\n");
+                } else if (wait_s > 0 && vidEnvInt("NBT_MMR_SPAWN", 1) != 0) {
+                    int other = mmr::Launcher::findRunning();
+                    if (other > 0) {
+                        printf("[VideoManager] mm-renderer pid %d is running but not reachable yet: waiting for it.\n", other);
+                    } else {
+                        printf("[VideoManager] CarPlay not coded (no carplay.ini): the head unit never starts mm-renderer, "
+                               "starting it now.\n");
+                        if (!mmr_launch_.start()) printf("[VideoManager] Could not start mm-renderer.\n");
+                    }
+                }
                 fflush(stdout);
                 for (int t = 0; !mmr_cnx_ && t < wait_s * 2; ++t) {
+                    mmr_launch_.alive();   // reaps ours if it died (logged, marker removed)
                     usleep(500000);
                     mmr_cnx_ = fn_connect(NULL);
-                    if (mmr_cnx_) printf("[VideoManager] mm-renderer reachable after %d.%d s.\n", (t + 1) / 2, ((t + 1) % 2) * 5);
+                    if (mmr_cnx_)
+                        printf("[VideoManager] mm-renderer reachable after %d.%d s.\n", (t + 1) / 2, ((t + 1) % 2) * 5);
                 }
                 if (!mmr_cnx_) printf("[VideoManager] Error: mm-renderer still unreachable: no hardware decoder, video will stay black.\n");
             }
@@ -433,6 +453,9 @@ void VideoManager::stop() {
         sink_.ctx = NULL;
     }
     sink_.buf = NULL;
+    // Last: the renderer we (or an earlier nbt-aad) started, once nothing of ours uses it any more (context, mdev
+    // and the window group its screen_writer drew into are gone). The head unit's own is left alone.
+    mmr_launch_.stop();
     is_initialized_ = false;
     printf("[VideoManager] Video sink destroyed (iDrive restored).\n");
 }

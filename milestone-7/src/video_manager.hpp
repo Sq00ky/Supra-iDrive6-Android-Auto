@@ -4,6 +4,7 @@
 #define VIDEO_MANAGER_HPP
 
 #include "screen_video.h"
+#include "mmr_launch.hpp"
 #include <stdint.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -83,6 +84,7 @@ private:
     void* mmr_ctxt_;
     int mmr_output_id_;
     int mmr_input_id_;
+    mmr::Launcher mmr_launch_;      // the mm-renderer we started (none on a car with CarPlay enabled)
 
     pthread_t worker_thread_;
     pthread_mutex_t queue_mutex_;
