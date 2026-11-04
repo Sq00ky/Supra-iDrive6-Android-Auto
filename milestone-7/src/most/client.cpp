@@ -34,14 +34,16 @@ const char* linkStateName(LinkState s) {
         case kDetached: return "detached";
         case kRegistering: return "registering";
         case kRefused: return "refused";
+        case kCommNotOk: return "comm-not-ok";
         case kUp: return "up";
     }
     return "?";
 }
 
 Client::Client()
-    : nKeys_(0), started_(false), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
-      clientId_(kClientRefused), deviceId_(0), haveComm_(false), comm_(0), longestWindowMs_(0), lastHealthMs_(0) {
+    : nKeys_(0), nListeners_(0), started_(false), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
+      attached_(false), answered_(false), clientId_(kClientRefused), deviceId_(0), haveComm_(false), comm_(0),
+      commOkSeen_(false), longestWindowMs_(0), lastHealthMs_(0) {
     name_[0] = 0;
     memset(firstSeen_, 0, sizeof(firstSeen_));
     memset(&total_, 0, sizeof(total_));
@@ -63,6 +65,14 @@ bool Client::addDevCtrl(uint16_t key) {
     return true;
 }
 
+bool Client::addLinkListener(LinkCb cb, void* user) {
+    if (started_ || !cb || nListeners_ >= kMaxLinkListeners) return false;
+    listeners_[nListeners_].cb = cb;
+    listeners_[nListeners_].user = user;
+    ++nListeners_;
+    return true;
+}
+
 void Client::setRawLog(bool on) { rawLog_ = on; }
 
 bool Client::start(const char* clientName) {
@@ -76,6 +86,7 @@ bool Client::start(const char* clientName) {
     lastHealthMs_ = nowMs();
     dsi_.setQuiet(!rawLog_);
     dsi_.setCallbacks(&Client::attachedTramp, &Client::dataTramp, this);
+    dsi_.setDetachCallback(&Client::detachedTramp);
     if (!dsi_.open(kServerInterface, kServerRole, kInterfaceMajor, kInterfaceMinor)) {
         printf("[MOST] DSI open FAILED: no MOST messages for any consumer\n");
         return false;
@@ -84,15 +95,28 @@ bool Client::start(const char* clientName) {
 }
 
 void Client::attachedTramp(DsiClient* c, void* self) { static_cast<Client*>(self)->onAttached(c); }
+void Client::detachedTramp(DsiClient*, void* self) { static_cast<Client*>(self)->onDetached(); }
 
 void Client::dataTramp(DsiClient* c, uint32_t, uint32_t id, uint32_t, const uint8_t* p, uint32_t len, void* self) {
     static_cast<Client*>(self)->onData(c, id, p, len);
 }
 
-void Client::setState(LinkState s) {
-    pthread_mutex_lock(&lock_);
+LinkState Client::deriveStateLocked() const {
+    if (!attached_) return kDetached;
+    if (!answered_) return kRegistering;
+    if (clientId_ == kClientRefused) return kRefused;
+    if (commOkSeen_ && comm_ != kCommStateOk) return kCommNotOk;
+    return kUp;
+}
+
+void Client::updateStateLocked() {
+    LinkState s = deriveStateLocked();
+    bool changed = s != state_;
     state_ = s;
     pthread_mutex_unlock(&lock_);
+    if (!changed) return;
+    printf("[MOST] link %s\n", linkStateName(s));
+    for (int i = 0; i < nListeners_; ++i) listeners_[i].cb(s, listeners_[i].user);
 }
 
 LinkState Client::state() const {
@@ -111,12 +135,29 @@ ClientStats Client::stats() const {
 
 void Client::onAttached(DsiClient* c) {
     printf("[MOST] attached to %s.%s: registering client %s\n", kServerRole, kServerInterface, name_);
-    setState(kRegistering);
+    pthread_mutex_lock(&lock_);
+    attached_ = true;
+    answered_ = false;
+    haveComm_ = false;
+    commOkSeen_ = false;
+    updateStateLocked();
     std::vector<uint8_t> p;
     DsiClient::putString(p, name_);
     stage_ = 1;
     c->sendRequest(kReqRegisterClient, p);
     for (size_t i = 0; i < (size_t)kClientSubscriptionCount; ++i) c->setNotification(kClientSubscriptions[i]);
+}
+
+// Routes and keys persist: the next attach registers again and gets new ids.
+void Client::onDetached() {
+    printf("[MOST] detached from the server\n");
+    stage_ = 0;
+    pthread_mutex_lock(&lock_);
+    attached_ = false;
+    answered_ = false;
+    haveComm_ = false;
+    commOkSeen_ = false;
+    updateStateLocked();
 }
 
 void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
@@ -130,10 +171,10 @@ void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
         bool refused = client == kClientRefused;
         printf("[MOST] registered: clientId=%u deviceId=0x%04X%s\n", client, dev, refused ? "  (REGISTRATION REFUSED)" : "");
         pthread_mutex_lock(&lock_);
+        answered_ = true;
         clientId_ = client;
         deviceId_ = dev;
-        state_ = refused ? kRefused : kUp;
-        pthread_mutex_unlock(&lock_);
+        updateStateLocked();
         if (refused || stage_ >= 2) return;
         c->setNotification(kAttrCommState);
         stage_ = 2;
@@ -149,8 +190,11 @@ void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
         bool changed = !haveComm_ || comm_ != v;
         haveComm_ = true;
         comm_ = v;
+        if (v == kCommStateOk) commOkSeen_ = true;
         pthread_mutex_unlock(&lock_);
         if (changed) printf("[MOST] comm state %u\n", v);
+        pthread_mutex_lock(&lock_);
+        updateStateLocked();
     }
 }
 

@@ -34,6 +34,10 @@ void attach() {
     if (g_client) nbt::DsiClient::onAttachedTramp(g_client);
 }
 
+void detach() {
+    if (g_client) nbt::DsiClient::onDetachedTramp(g_client);
+}
+
 void data(uint32_t id, const void* payload, uint32_t len) {
     Frame f;
     f.id = id;
@@ -58,7 +62,7 @@ namespace nbt {
 
 DsiClient::DsiClient()
     : lib_(NULL), conn_(NULL), cli_(NULL), attached_(false), quiet_(false),
-      attachedCb_(NULL), dataCb_(NULL), user_(NULL) {}
+      attachedCb_(NULL), dataCb_(NULL), detachedCb_(NULL), user_(NULL) {}
 
 void DsiClient::setCallbacks(AttachedCb a, DataCb d, void* user) {
     attachedCb_ = a; dataCb_ = d; user_ = user;
@@ -96,6 +100,7 @@ void DsiClient::onAttachedTramp(void* self) {
 void DsiClient::onDetachedTramp(void* self) {
     DsiClient* c = static_cast<DsiClient*>(self);
     c->attached_ = false;
+    if (c->detachedCb_) c->detachedCb_(c, c->user_);
 }
 
 void DsiClient::onDataTramp(void* self, void* istream) {

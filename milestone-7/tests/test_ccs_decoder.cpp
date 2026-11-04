@@ -119,6 +119,57 @@ int main(int argc, char** argv) {
         assert(cw == 2 && events == 2);                                       // baseline, then two clockwise detents
         printf("test_ccs_decoder CCS G30 capture OK\n");
     }
+    // reset: the messages stopped. Held keys get a release with cancel set, and the rotary re-bases.
+    {
+        nbt::car::CcsDecoder r;
+        nbt::car::CcsEvent ev[nbt::car::CCS_MAX_RESET_EVENTS];
+        assert(r.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS) == 0);        // nothing held
+
+        const uint8_t pos1[8] = { 1, 0x80, 0x10, 0, 0, 0, 0, 0xff };
+        const uint8_t pos2[8] = { 2, 0x80, 0x20, 1, 4, 0, 0, 0xff };     // 16 detents on, push and tilt right held
+        const uint8_t keys[7] = { 0, 1, 1, 0, 0, 0, 0 };                 // BACK and the unmapped OPTIONS held
+        assert(r.feed(0xE5, 3, 0xC46, 0xC, pos1, 8, ev, 8) == 0);
+        int n = r.feed(0xE5, 3, 0xC46, 0xC, pos2, 8, ev, 8);
+        assert(n == 3 && ev[0].kind == 2 && ev[0].delta == 16 && ev[0].cancel == 0 && ev[1].cancel == 0 && ev[2].cancel == 0);
+        assert(r.feed(0xE5, 3, 0xC47, 0xC, keys, 7, ev, 8) == 2 && ev[0].cancel == 0);
+        const uint8_t ccsBack[7] = { 1, 0x1D, 1, 1, 0, 0x00, 0x02 };     // the older protocol's BACK too
+        assert(r.feed(0xE5, 1, 0xC20, 0xC, ccsBack, 7, ev, 8) == 1);
+
+        n = r.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS);
+        assert(n == 5);
+        std::string got;
+        for (int i = 0; i < n; ++i) {
+            assert(ev[i].kind == 1 && ev[i].down == 0 && ev[i].cancel == 1);
+            got += ev[i].what;
+            got += ' ';
+        }
+        assert(got == "TILT_RIGHT PUSH BACK BACK OPTIONS ");
+        assert(ev[4].keycode == 0);                                      // unmapped stays unmapped
+        assert(r.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS) == 0);        // and only once
+
+        // The next position is a new base, not a jump. The keys still held are seen as new presses, with no cancel.
+        const uint8_t pos3[8] = { 3, 0x90, 0x00, 0, 0, 0, 0, 0xff };
+        assert(r.feed(0xE5, 3, 0xC46, 0xC, pos3, 8, ev, 8) == 0);
+        const uint8_t pos4[8] = { 4, 0x90, 0x01, 0, 0, 0, 0, 0xff };
+        assert(r.feed(0xE5, 3, 0xC46, 0xC, pos4, 8, ev, 8) == 1 && ev[0].delta == 1);
+        n = r.feed(0xE5, 3, 0xC47, 0xC, keys, 7, ev, 8);
+        assert(n == 2 && ev[0].down == 1 && ev[0].cancel == 0);
+
+        // Every key held on both protocols fits.
+        nbt::car::CcsDecoder f;
+        const uint8_t all[7] = { 1, 1, 1, 1, 1, 1, 1 };
+        const uint8_t centre[8] = { 1, 0x80, 0x10, 1, 1, 0, 0, 0xff };
+        f.feed(0xE5, 3, 0xC47, 0xC, all, 7, ev, 8);
+        f.feed(0xE5, 3, 0xC46, 0xC, centre, 8, ev, 8);
+        const uint8_t ccsTilt[7] = { 1, 0x1D, 1, 1, 2, 0x1D, 0 }, ccsPush[7] = { 1, 0x1D, 1, 1, 0, 0x1E, 1 };
+        f.feed(0xE5, 1, 0xC20, 0xC, ccsTilt, 7, ev, 8);
+        f.feed(0xE5, 1, 0xC20, 0xC, ccsPush, 7, ev, 8);
+        for (int b = 0; b < nbt::car::CCS_SLOTS; ++b) {
+            const uint8_t k[7] = { 1, 0x1D, 1, 1, 0, 0x00, (uint8_t)(1u << b) };
+            f.feed(0xE5, 1, 0xC20, 0xC, k, 7, ev, 8);
+        }
+        assert(f.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS) == nbt::car::CCS_MAX_RESET_EVENTS);
+    }
     printf("test_ccs_decoder OK\n");
     return 0;
 }

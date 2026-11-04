@@ -48,9 +48,10 @@ struct CcsEvent {
     int down;
     int delta;
     const char* what;    // human readable source ("MEDIA", "ROTARY", "TILT_UP", ...)
+    int cancel;          // a release made up by CcsDecoder::reset, not a key the driver let go: never a key press
 };
 
-enum { CCS_SLOTS = 7 };
+enum { CCS_SLOTS = 7, CCS_MAX_RESET_EVENTS = 2 * CCS_SLOTS + 4 };    // both protocols: hard keys, tilt, push
 
 class CcsDecoder {
 public:
@@ -133,6 +134,31 @@ public:
         return k;
     }
 
+    // The messages stopped (MOST link lost). Forget the positions, so the next rotary message re-bases rather than jumping
+    // by whatever moved meanwhile, and write a release with cancel set for every held key. Returns how many were written;
+    // CCS_MAX_RESET_EVENTS is always enough.
+    int reset(CcsEvent* out, int max) {
+        int k = 0;
+        lastPos_ = -1;
+        ccsLastPos_ = -1;
+        if (tiltKey_) add(out, max, k, 1, tiltKey_, 0, 0, tiltName(tiltKey_));
+        tiltKey_ = 0;
+        if (pushDown_) add(out, max, k, 1, AAK_DPAD_CENTER, 0, 0, "PUSH");
+        pushDown_ = false;
+        if (ccsTilt_) add(out, max, k, 1, ccsTilt_, 0, 0, tiltName(ccsTilt_));
+        ccsTilt_ = 0;
+        if (ccsPush_) add(out, max, k, 1, AAK_DPAD_CENTER, 0, 0, "PUSH");
+        ccsPush_ = false;
+        for (int i = 0; i < CCS_SLOTS; ++i) {
+            if (slot_[i]) add(out, max, k, 1, slotKey_[i], 0, 0, slotName_[i]);
+            if (ccsSlot_[i]) add(out, max, k, 1, slotKey_[i], 0, 0, slotName_[i]);
+            slot_[i] = false;
+            ccsSlot_[i] = false;
+        }
+        for (int i = 0; i < k; ++i) out[i].cancel = 1;
+        return k;
+    }
+
     // CCS dpad direction bitmask -> AA key.
     static uint32_t ccsTiltKey(unsigned dir) {
         switch (dir) {
@@ -185,7 +211,7 @@ private:
 
     static void add(CcsEvent* out, int max, int& k, int kind, uint32_t key, int down, int delta, const char* what) {
         if (!out || k >= max) return;
-        out[k].kind = kind; out[k].keycode = key; out[k].down = down; out[k].delta = delta; out[k].what = what;
+        out[k].kind = kind; out[k].keycode = key; out[k].down = down; out[k].delta = delta; out[k].what = what; out[k].cancel = 0;
         ++k;
     }
 

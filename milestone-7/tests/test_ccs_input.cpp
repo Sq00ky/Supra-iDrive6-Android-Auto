@@ -22,7 +22,7 @@ static void onEvent(const CcsEvent& ev, void* user) {
     if (ev.kind == 2) { ++g_rot; return; }
     if (!g_seq.empty()) g_seq += ' ';
     g_seq += ev.what;
-    g_seq += ev.down ? "+" : "-";
+    g_seq += ev.cancel ? "!" : (ev.down ? "+" : "-");
 }
 
 static void sendFrame(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, const std::vector<uint8_t>& payload) {
@@ -135,6 +135,49 @@ int main(int argc, char** argv) {
         CcsInput in;
         start(c, in, CcsConfig());                // NBT_PTT_ASSISTANT off
         sendPtt(1);
+        usleep(800000);
+        sendPtt(0);
+        assert(g_seq.empty());
+    }
+
+    // Link loss with keys held: a cancel release for each, and the positions re-base. Copies of it change nothing.
+    {
+        Client c;
+        CcsInput in;
+        start(c, in, CcsConfig());
+        std::vector<uint8_t> keys(7, 0);
+        keys[1] = 1;                                // BACK down
+        const uint8_t a[8] = { 1, 0x80, 0x01, 0, 4, 0, 0, 0xff };    // tilt right down
+        sendFrame(0xE5, 3, 0xC47, kOpStatus, keys);
+        sendFrame(0xE5, 3, 0xC46, kOpStatus, std::vector<uint8_t>(a, a + 8));
+        assert(g_seq == "BACK+ TILT_RIGHT+");
+        g_seq.clear();
+        fake_dsi::detach();
+        assert(g_seq == "TILT_RIGHT! BACK!");
+        g_seq.clear();
+        fake_dsi::attach();                         // re-registering: nothing more to release
+        assert(g_seq.empty());
+        std::vector<uint8_t> resp;
+        putLe32(resp, 94);
+        putLe16(resp, 0x205E);
+        fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+        assert(g_seq.empty());
+        // The knob moved 256 detents while the link was down: no jump.
+        const uint8_t b[8] = { 2, 0x81, 0x01, 0, 0, 0, 0, 0xff };
+        g_rot = 0;
+        sendFrame(0xE5, 3, 0xC46, kOpStatus, std::vector<uint8_t>(b, b + 8));
+        assert(g_rot == 0);
+    }
+
+    // Link loss forgets a held voice button: the next release cannot start the Assistant.
+    {
+        Client c;
+        CcsInput in;
+        CcsConfig cfg;
+        cfg.pttAssistant = true;
+        start(c, in, cfg);
+        sendPtt(1);
+        fake_dsi::detach();
         usleep(800000);
         sendPtt(0);
         assert(g_seq.empty());

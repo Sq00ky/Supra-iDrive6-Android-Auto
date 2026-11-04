@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: most::Client against the fake DsiClient (tests/fake_dsi_client.cpp): start-up, the exact request order,
-// refusal, the empty key list, re-attach, message classes and counters.
+// refusal, the empty key list, detach, re-attach, link state, message classes and counters.
 #include "most/client.hpp"
 #include "fake_dsi_client.hpp"
 #include <assert.h>
@@ -22,6 +22,17 @@ static void handler(const View& m, void*) {
     ++g_handled;
 }
 static void resetHandler() { g_handled = 0; g_lastData.clear(); }
+
+static std::vector<LinkState> g_links;
+static void* g_linkUser = NULL;
+static void onLink(LinkState s, void* user) {
+    g_links.push_back(s);
+    g_linkUser = user;
+}
+static bool linksAre(LinkState a, int n = 1, LinkState b = kUp, LinkState c = kUp) {
+    if (g_links.size() != (size_t)n) return false;
+    return g_links[0] == a && (n < 2 || g_links[1] == b) && (n < 3 || g_links[2] == c);
+}
 
 static std::vector<uint8_t> frame(uint32_t tx, uint32_t varTag, uint32_t varVal, uint8_t fblock, uint8_t inst, uint16_t fkt,
                                   uint8_t op, const char* payload = "") {
@@ -156,6 +167,11 @@ static void testReattach() {
     respond(93, 0x205D);
     assert(countRequests(kReqRegisterClient) == 1 && countRequests(kReqRegisterDevCtrls) == 1);
 
+    // The link goes away. No send is attempted.
+    size_t before = fake_dsi::calls.size();
+    fake_dsi::detach();
+    assert(c.state() == kDetached && fake_dsi::calls.size() == before);
+
     // New registration, new ids; routes and keys persist.
     fake_dsi::attach();
     assert(c.state() == kRegistering);
@@ -225,6 +241,86 @@ static void testMessages() {
     c.logHealth();
 }
 
+static void testLinkState() {
+    fake_dsi::reset();
+    g_links.clear();
+    Client c;
+    int token = 0;
+    assert(c.addRoute(0xE5, kAny, kAny, kAny, &handler, NULL));
+    assert(c.addLinkListener(&onLink, &token));
+    assert(!c.addLinkListener(NULL, NULL));
+    assert(c.start("X"));
+    assert(!c.addLinkListener(&onLink, &token));       // before start() only
+    assert(c.state() == kDetached && g_links.empty());
+
+    fake_dsi::attach();
+    assert(linksAre(kRegistering) && g_linkUser == &token);
+    g_links.clear();
+    respond(93, 0x205D);
+    assert(linksAre(kUp));
+    g_links.clear();
+
+    // The car reports comm state 1 while messages flow: until OK has been seen, it says nothing against the link.
+    comm(1);
+    comm(0);
+    comm(1);
+    assert(c.state() == kUp && g_links.empty());
+
+    // OK seen, and now gone: tell the consumers, once. Messages keep routing all the same.
+    comm(2);
+    assert(c.state() == kUp && g_links.empty());
+    comm(1);
+    assert(c.state() == kCommNotOk && linksAre(kCommNotOk));
+    comm(0);
+    assert(linksAre(kCommNotOk));
+    resetHandler();
+    sendMsg(frame(0, 2, 0, 0xE5, 3, 0xC46, 0xC, "abc"));
+    assert(g_handled == 1);
+    c.logHealth();
+    g_links.clear();
+    comm(2);
+    assert(c.state() == kUp && linksAre(kUp));
+    g_links.clear();
+
+    // Detach from any state, then a fresh start: OK has to be seen again.
+    comm(1);
+    assert(linksAre(kCommNotOk));
+    g_links.clear();
+    fake_dsi::detach();
+    assert(c.state() == kDetached && linksAre(kDetached));
+    resetHandler();
+    sendMsg(frame(0, 2, 0, 0xE5, 3, 0xC46, 0xC, "abc"));   // routing does not depend on the link
+    assert(g_handled == 1);
+    c.logHealth();
+    g_links.clear();
+    fake_dsi::detach();                                     // a second detach changes nothing
+    assert(g_links.empty());
+
+    fake_dsi::attach();
+    respond(94, 0x205E);
+    assert(linksAre(kRegistering, 2, kUp));
+    g_links.clear();
+    comm(1);
+    assert(c.state() == kUp && g_links.empty());
+
+    // Attach again with no detach in between: the link is not up until the new answer.
+    fake_dsi::attach();
+    assert(linksAre(kRegistering));
+    g_links.clear();
+
+    // Refused, then detached.
+    respond(kClientRefused, 0);
+    assert(linksAre(kRefused));
+    g_links.clear();
+    fake_dsi::detach();
+    assert(linksAre(kDetached));
+
+    // The listener limit.
+    Client d;
+    for (int i = 0; i < Client::kMaxLinkListeners; ++i) assert(d.addLinkListener(&onLink, NULL));
+    assert(!d.addLinkListener(&onLink, NULL));
+}
+
 int main() {
     testNoConsumer();
     testOpenFails();
@@ -232,6 +328,7 @@ int main() {
     testRefused();
     testEmptyKeys();
     testReattach();
+    testLinkState();
     testMessages();
     printf("test_most_client OK\n");
     return 0;

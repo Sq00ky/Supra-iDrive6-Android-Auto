@@ -32,7 +32,8 @@ bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb,
     printf("\n");
 
     bool ok = client.addRoute(kFBlockController, most::kAny, most::kAny, most::kAny, &CcsInput::controllerTramp, this) &&
-              client.addRoute(kFBlockSteeringWheel, most::kAny, kFktPttButton1, most::kOpStatus, &CcsInput::pttTramp, this);
+              client.addRoute(kFBlockSteeringWheel, most::kAny, kFktPttButton1, most::kOpStatus, &CcsInput::pttTramp, this) &&
+              client.addLinkListener(&CcsInput::linkTramp, this);
     for (size_t i = 0; ok && i < sizeof(kDevCtrlKeys) / sizeof(kDevCtrlKeys[0]); ++i) ok = client.addDevCtrl(kDevCtrlKeys[i]);
     if (!ok) printf("[Knob] no room on the MOST client: knob/keys disabled\n");
     return ok;
@@ -40,6 +41,18 @@ bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb,
 
 void CcsInput::controllerTramp(const most::View& m, void* self) { static_cast<CcsInput*>(self)->onController(m); }
 void CcsInput::pttTramp(const most::View& m, void* self) { static_cast<CcsInput*>(self)->onPtt(m); }
+void CcsInput::linkTramp(most::LinkState s, void* self) { static_cast<CcsInput*>(self)->onLink(s); }
+
+void CcsInput::onLink(most::LinkState s) {
+    if (s == most::kUp) return;
+    ptt_.reset();
+    CcsEvent ev[CCS_MAX_RESET_EVENTS];
+    int n = dec_.reset(ev, CCS_MAX_RESET_EVENTS);
+    for (int i = 0; i < n; ++i) {
+        printf("[Knob] %s released: MOST link %s\n", ev[i].what, most::linkStateName(s));
+        if (cb_ && ev[i].keycode) cb_(ev[i], user_);
+    }
+}
 
 // The steering-wheel voice button: see car/ptt.hpp. Observe-only unless NBT_PTT_ASSISTANT=1, which sends the Assistant
 // key (AA keycode 84 SEARCH, advertised on input channel 7) after a long press.
@@ -58,7 +71,7 @@ void CcsInput::onPtt(const most::View& m) {
            lng ? (pttAssistant_ ? ": Google Assistant" : "; NBT_PTT_ASSISTANT=1 would start the Assistant") : ": iDrive voice");
     if (lng && pttAssistant_ && cb_) {
         CcsEvent ev;
-        ev.kind = 1; ev.keycode = AAK_SEARCH; ev.delta = 0; ev.what = "PTT";
+        ev.kind = 1; ev.keycode = AAK_SEARCH; ev.delta = 0; ev.what = "PTT"; ev.cancel = 0;
         ev.down = 1; cb_(ev, user_);
         ev.down = 0; cb_(ev, user_);
     }

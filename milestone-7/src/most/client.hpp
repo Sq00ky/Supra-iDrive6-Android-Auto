@@ -28,8 +28,17 @@
 namespace nbt {
 namespace most {
 
-enum LinkState { kDetached, kRegistering, kRefused, kUp };
+// Routing never depends on this: a wrong reading must not stop a consumer. Link state only tells consumers when the
+// messages they were following may have stopped.
+//   kDetached     no connection to the server, or it went away
+//   kRegistering  attached, no answer to the registration yet
+//   kRefused      the server refused the registration
+//   kCommNotOk    comm state was OK (kCommStateOk) and has changed to something else
+//   kUp           registered, and comm state has not gone bad. The car reports comm state 1 while messages flow, so a
+//                 value other than kCommStateOk does not count against the link until OK has been seen once.
+enum LinkState { kDetached, kRegistering, kRefused, kCommNotOk, kUp };
 const char* linkStateName(LinkState s);
+typedef void (*LinkCb)(LinkState s, void* user);    // on the DSI callback thread, for every change
 
 // Totals since start().
 struct ClientStats {
@@ -43,13 +52,14 @@ struct ClientStats {
 
 class Client {
 public:
-    enum { kMaxKeys = 16 };
+    enum { kMaxKeys = 16, kMaxLinkListeners = 4 };
 
     Client();
 
     // Before start() only. All return false when full or already started.
     bool addRoute(uint8_t fblock, int inst, int fkt, int op, Handler h, void* user);
     bool addDevCtrl(uint16_t key);            // a key added twice is sent once; request 1 is skipped with no keys
+    bool addLinkListener(LinkCb cb, void* user);
     void setRawLog(bool on);                  // log every raw DSI event (very noisy)
 
     // Opens the DSI connection. With no consumer attached it does nothing and returns true. False: DSI open failed.
@@ -63,17 +73,23 @@ public:
 
 private:
     static void attachedTramp(DsiClient* c, void* self);
+    static void detachedTramp(DsiClient* c, void* self);
     static void dataTramp(DsiClient* c, uint32_t type, uint32_t id, uint32_t seq, const uint8_t* p, uint32_t len, void* self);
     void onAttached(DsiClient* c);
+    void onDetached();
     void onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len);
     void onMessage(const uint8_t* p, uint32_t len);
     void noteFirst(const View& m, MsgClass c, bool wanted);
-    void setState(LinkState s);
+    LinkState deriveStateLocked() const;
+    void updateStateLocked();         // call with lock_ held: unlocks it, then tells the listeners about a change
 
     DsiClient dsi_;
     Router router_;
     uint16_t keys_[kMaxKeys];
     int nKeys_;
+    struct LinkListener { LinkCb cb; void* user; };
+    LinkListener listeners_[kMaxLinkListeners];
+    int nListeners_;
     bool started_;
     bool rawLog_;
     char name_[32];
@@ -86,10 +102,13 @@ private:
     // Under lock_: the callback thread writes, logHealth and the getters read.
     mutable pthread_mutex_t lock_;
     LinkState state_;
+    bool attached_;
+    bool answered_;                   // the registration has been answered
     uint32_t clientId_;
     unsigned deviceId_;
     bool haveComm_;
     uint32_t comm_;
+    bool commOkSeen_;
     ClientStats total_;
     ClientStats lastHealth_;
     uint32_t longestWindowMs_;

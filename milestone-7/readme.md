@@ -759,7 +759,8 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
 7. **Controller (`most/client`, `car/ccs_input`, `car/ccs_decoder.hpp`).** `most::Client` is the one observe-only MOST
    client on `DSYSMOSTServer` 4.5. `CcsInput` is its consumer here: it receives copies of the controller's FBlock 0xE5
    status messages. The client logs one `[MOST]` line a minute with its message counts by class and its link state, so
-   a silent client still shows.
+   a silent client still shows. When the link stops being up, keys still held are released on the phone and the knob
+   position re-bases. Messages are routed whatever the link state says.
 
 ### Cluster and HUD arrows (`kombi_nav`)
 

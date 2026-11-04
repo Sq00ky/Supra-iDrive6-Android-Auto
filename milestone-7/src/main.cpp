@@ -1297,6 +1297,10 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         int st = g_backState;
         g_backState = 0;
         if (st == 0) return;   // the press went to iDrive (it owned the screen): no hold timer ran, nothing to report
+        if (ev.cancel) {       // the MOST link went away with BACK held: not a short press, so the phone gets nothing
+            printf("[Knob] BACK hold cancelled: MOST link lost\n");
+            return;
+        }
         printf("[Knob] BACK released after %u ms (%s)\n", (unsigned)(monoMs() - g_backDownMs),
                st == 2 ? "hold already fired" : g_inputToPhone ? "short press -> phone" : "short press, iDrive owns the screen");
         if (st == 1 && g_inputToPhone) {        // short press: deliver it now

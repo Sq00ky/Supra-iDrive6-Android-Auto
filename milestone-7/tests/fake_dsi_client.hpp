@@ -27,6 +27,7 @@ void reset();
 
 // Fire events at the client that opened last. No-ops if no client has opened.
 void attach();
+void detach();
 void data(uint32_t id, const void* payload, uint32_t len);
 
 bool opened();

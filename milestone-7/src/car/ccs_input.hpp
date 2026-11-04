@@ -20,6 +20,8 @@ typedef void (*CcsEventCb)(const CcsEvent& ev, void* user);
 // instance: CcsDecoder picks its own) and of the steering-wheel voice button (FBlock 0x15, any instance), and decodes
 // them. Nothing is ever sent to the controller. The HMI keeps receiving the same events.
 // The event callback runs on the DSI callback thread: see the handler rules in most/client.hpp.
+// When the MOST link stops being up, held keys get a release with CcsEvent::cancel set, because the real release may never
+// arrive, and the voice button forgets its press.
 class CcsInput {
 public:
     CcsInput();
@@ -30,8 +32,10 @@ public:
 private:
     static void controllerTramp(const most::View& m, void* self);
     static void pttTramp(const most::View& m, void* self);
+    static void linkTramp(most::LinkState s, void* self);
     void onController(const most::View& m);
     void onPtt(const most::View& m);
+    void onLink(most::LinkState s);
 
     CcsDecoder dec_;
     PttTracker ptt_;
