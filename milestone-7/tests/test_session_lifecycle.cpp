@@ -39,6 +39,19 @@ struct Ctx { AASession* s; int fd; };
 static void* restarter(void* a) { Ctx* c = (Ctx*)a; c->s->start(c->fd); return NULL; }
 static void* stopper(void* a) { ((AASession*)a)->stop(); return NULL; }
 
+// The MOST callback thread, posting the car's position across every session start and stop.
+static volatile int g_stopPosting = 0;
+static void* poster(void* a) {
+    LocationFix f;
+    f.lat_e7 = 533553700; f.lon_e7 = -15262930; f.accuracy_e3 = 10000; f.rx_ms = 1;
+    while (!__sync_fetch_and_add(&g_stopPosting, 0)) {
+        ((AASession*)a)->postCarLocation(f);
+        ++f.rx_ms;
+        usleep(200);
+    }
+    return NULL;
+}
+
 int main() {
     signal(SIGPIPE, SIG_IGN);
     AASession s;
@@ -46,6 +59,8 @@ int main() {
     int fds_before = countFds();
     const int N = 400;
     int selfEnded = 0;
+    pthread_t post;
+    assert(pthread_create(&post, NULL, poster, &s) == 0);
     for (int i = 0; i < N; ++i) {
         int sv[2];
         assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
@@ -81,6 +96,8 @@ int main() {
         }
         s.stop();   // must be idempotent and never hang
     }
+    __sync_fetch_and_add(&g_stopPosting, 1);
+    pthread_join(post, NULL);
     // let detached callbacks settle
     usleep(100000);
     int fds_after = countFds();

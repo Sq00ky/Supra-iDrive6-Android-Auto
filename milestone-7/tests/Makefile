@@ -21,6 +21,7 @@ LDLIBS   := -lpthread -lssl -lcrypto -lm
 SPEEX := $(ROOT)/src/audio/speex.c
 
 # Each test and the daemon sources it links (beyond its own .cpp).
+SRC_test_aa_sensor_msg     :=
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
 SRC_test_audio_acks        := src/audio/audio_acks.cpp
