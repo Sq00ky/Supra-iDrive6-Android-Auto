@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test for car/gps: MOST 52/00 fkt 440 decode (car capture), CarGpsFilter, and CarGps on most::Client with the fake
-// DsiClient.
+// DsiClient, from DSI frame to LocationFix.
 #include "car/gps.hpp"
 #include "fake_dsi_client.hpp"
 #include "most/client.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <vector>
 
 using namespace nbt;
@@ -166,11 +167,24 @@ static void respond() {
     fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
 }
 
+static std::vector<LocationFix> g_fixes;
+static void onFix(const LocationFix& f, void* user) {
+    assert(user == &g_fixes);
+    g_fixes.push_back(f);
+}
+
+static uint32_t nowMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
+}
+
 static void testConsumer() {
     fake_dsi::reset();
+    g_fixes.clear();
     Client c;
     CarGps gps;
-    assert(gps.attach(c));
+    assert(gps.attach(c, 25000, &onFix, &g_fixes));
     assert(c.start("NBTAAD_MOST"));     // GPS alone is enough for the client to start (NBT_KNOB=0)
     assert(fake_dsi::opened());
     fake_dsi::attach();
@@ -190,6 +204,34 @@ static void testConsumer() {
     sendStatus(0x52, 0x00, 0x440, kOpGet, kCapture, 0, 0x2022);
     assert(c.stats().routed == 2);
     assert(c.stats().msgs == 5);
+
+    // Two copies of one fix: one LocationFix, in Android Auto units, with a receive time on the clock of the session.
+    assert(g_fixes.size() == 1);
+    assert(g_fixes[0].lat_e7 > 533553600 && g_fixes[0].lat_e7 < 533553800);
+    assert(g_fixes[0].lon_e7 < -15262800 && g_fixes[0].lon_e7 > -15263000);
+    assert(g_fixes[0].accuracy_e3 == 25000);
+    assert(locationFresh(g_fixes[0], nowMs()));
+
+    // The next second's fix goes on. A no-fix payload does not, so the last fix ages out on the session's side.
+    std::vector<uint8_t> next = tick(39);
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, &next[0], next.size(), 0x2022);
+    assert(g_fixes.size() == 2);
+    uint8_t none[23];
+    memset(none, 0xFF, sizeof(none));
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, none, sizeof(none), 0x2022);
+    assert(g_fixes.size() == 2);
+}
+
+static void testAccuracy() {
+    assert(parseGpsAccuracyE3(NULL) == 10000);
+    assert(parseGpsAccuracyE3("") == 10000);
+    assert(parseGpsAccuracyE3("0") == 10000);
+    assert(parseGpsAccuracyE3("-5") == 10000);
+    assert(parseGpsAccuracyE3("10000") == 10000);
+    assert(parseGpsAccuracyE3("rubbish") == 10000);
+    assert(parseGpsAccuracyE3("1") == 1000);
+    assert(parseGpsAccuracyE3("25") == 25000);
+    assert(parseGpsAccuracyE3("9999") == 9999000);
 }
 
 // Full client: attach() says so and the consumer stays out.
@@ -199,13 +241,14 @@ static void testFull() {
     Client c;
     while (c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) {}
     CarGps gps;
-    assert(!gps.attach(c));
+    assert(!gps.attach(c, 10000, &onFix, &g_fixes));
 }
 
 int main() {
     testDecode();
     testFilter();
     testConsumer();
+    testAccuracy();
     testFull();
     printf("test_car_gps OK\n");
     return 0;

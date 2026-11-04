@@ -27,6 +27,13 @@ static double monoS() {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+// The clock of LocationFix::rx_ms.
+static uint32_t monoMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
+}
+
 AASession::AASession()
     : client_fd_(-1),
       running_(0),
@@ -56,6 +63,11 @@ AASession::AASession()
     night_state_ = -1;
     night_started_ = false;
     pending_night_ = false;
+    memset(&car_fix_, 0, sizeof(car_fix_));
+    have_fix_ = false;
+    location_started_ = false;
+    pending_location_ = false;
+    location_sent_ = 0;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
@@ -134,6 +146,20 @@ void AASession::postNightMode(bool night) {
     night_state_ = v;
     if (changed && night_started_) pending_night_ = true;
     bool wake = pending_night_;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake && wake_pipe_[1] >= 0) {
+        char b = 1;
+        ssize_t w = write(wake_pipe_[1], &b, 1);
+        (void)w;
+    }
+}
+
+void AASession::postCarLocation(const LocationFix& fix) {
+    pthread_mutex_lock(&touch_mutex_);
+    car_fix_ = fix;
+    have_fix_ = true;
+    if (location_started_) pending_location_ = true;
+    bool wake = pending_location_;
     pthread_mutex_unlock(&touch_mutex_);
     if (wake && wake_pipe_[1] >= 0) {
         char b = 1;
@@ -318,10 +344,13 @@ bool AASession::start(int client_fd) {
     pending_focus_ = 0;
     night_started_ = false;
     pending_night_ = false;
+    location_started_ = false;
+    pending_location_ = false;
     mic_open_ = false;
     mic_queue_.clear();
     pthread_mutex_unlock(&touch_mutex_);
     mic_sent_ = 0;
+    location_sent_ = 0;
     media_frames_ = 0;
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
@@ -617,6 +646,8 @@ void AASession::drainTouch() {
     pending_focus_ = 0;
     bool night = pending_night_ && night_started_;
     pending_night_ = false;
+    bool location = pending_location_ && location_started_;
+    pending_location_ = false;
     std::vector<std::vector<uint8_t> > mic;
     mic.swap(mic_queue_);
     pthread_mutex_unlock(&touch_mutex_);
@@ -625,6 +656,7 @@ void AASession::drainTouch() {
         if ((mic_sent_++ % 250) == 0) printf("[AASession] mic -> phone: %u chunks sent (%u bytes each)\n", mic_sent_, (unsigned)mic[i].size());
     }
     if (night && !sendSensorEvent(10)) printf("[AASession] NIGHT_MODE event: SEND FAILED\n");
+    if (location && !sendSensorEvent(1)) printf("[AASession] LOCATION event: SEND FAILED\n");
     if (focus) {
         bool ok = sendVideoFocusIndication(6, focus == 1, true);
         printf("[AASession] video focus -> phone: %s (unrequested) %s\n", focus == 1 ? "FOCUSED/projected" : "UNFOCUSED/native", ok ? "sent" : "SEND FAILED");
@@ -813,7 +845,8 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // ---- Sensor channel (AA channel 1) -------------------------------------------
 // Wire layout (aasdk): SensorStartRequest 0x8001 {sensor_type=1 varint, min_period=2},
 // SensorStartResponse 0x8002 {status=1}, SensorEventIndication 0x8003 with repeated
-// NightMode night_mode=10 {is_night=1} and DrivingStatus driving_status=13 {status=1}.
+// LocationData location_data=1 (aa_sensor_msg.hpp), NightMode night_mode=10 {is_night=1} and
+// DrivingStatus driving_status=13 {status=1}.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
 using proto::pbFirstVarint;
 
@@ -848,6 +881,19 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         uint8_t st = e ? (uint8_t)atoi(e) : 0;
         plain.push_back(0x6A); plain.push_back(0x02); plain.push_back(0x08); plain.push_back(st);
         printf("[AASession] >>> Sensor DRIVING_STATUS event (status=%u)\n", st);
+    } else if (sensor_type == 1) { // LOCATION: the newest position (postCarLocation)
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = have_fix_;
+        LocationFix f = car_fix_;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have || !locationFresh(f, monoMs())) {
+            printf("[AASession] >>> Sensor LOCATION: no recent car GPS fix (sent when one arrives)\n");
+            return true;
+        }
+        buildLocationEvent(f, plain);
+        if (location_sent_++ % 60 == 0)
+            printf("[AASession] >>> Sensor LOCATION event #%u (%.6f, %.6f, accuracy %.0f m)\n", location_sent_,
+                   f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.accuracy_e3 / 1000.0);
     } else {
         return true; // no data source for other sensors: ack only
     }
@@ -1039,6 +1085,12 @@ void AASession::sessionLoop() {
                     pthread_mutex_lock(&touch_mutex_);
                     night_started_ = true;
                     pending_night_ = false;
+                    pthread_mutex_unlock(&touch_mutex_);
+                }
+                if (st == 1) {
+                    pthread_mutex_lock(&touch_mutex_);
+                    location_started_ = true;
+                    pending_location_ = false;
                     pthread_mutex_unlock(&touch_mutex_);
                 }
                 if (st != 0xFFFFFFFFu) sendSensorEvent(st);
