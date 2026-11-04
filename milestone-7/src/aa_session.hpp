@@ -66,6 +66,9 @@ public:
     // The newest position, about once a second: sent to the phone as a LOCATION (sensor 1) event once it has started that
     // sensor, unless older than kLocationMaxAgeMs by then. Thread-safe.
     void postCarLocation(const LocationFix& fix);
+    // The newest satellite count. The session sends it as a GPS_SATELLITE (sensor 21) event about once a second once the
+    // phone has started that sensor, whether or not anything was posted: with nothing recent the count is 0. Thread-safe.
+    void postCarSatellites(const SatelliteStatus& status);
     // Car microphone PCM (16 kHz mono S16LE) for the phone. Thread-safe (capture thread); queued and sent on
     // ch 14 by the session thread while the phone has the mic open, dropped otherwise.
     void postMicData(const uint8_t* pcm, size_t len);
@@ -124,6 +127,13 @@ private:
     bool location_started_;                        // guarded by touch_mutex_: phone started sensor 1 this session
     bool pending_location_;                        // guarded by touch_mutex_: send a LOCATION event on next drain
     uint32_t location_sent_;                       // session thread: LOCATION events this session
+    SatelliteStatus car_satellites_;               // guarded by touch_mutex_: latest count
+    bool have_satellites_;                         // guarded by touch_mutex_: car_satellites_ is set (kept across sessions, age-checked)
+    bool satellites_started_;                      // session thread: phone started sensor 21 this session
+    uint32_t satellites_sent_;                     // session thread: GPS_SATELLITE events this session
+    uint32_t satellites_last_ms_;                  // session thread: when the last one went out
+    uint32_t satellites_last_used_;                // session thread: the count it carried
+    void drainSatellites();                        // session thread: send GPS_SATELLITE when one is due
     VideoFocusCallback focus_cb_;
     void* focus_user_data_;
     MicRequestCallback mic_cb_;
@@ -136,7 +146,7 @@ private:
     bool sendMicFrame(const std::vector<uint8_t>& pcm);   // session thread only
     bool sendMicOpenResponse(uint8_t channel);            // session thread only
     bool sendBindingResponse(uint8_t channel);
-    // Sensor channel (ch 1): answer SensorStartRequest and publish night mode / driving status / location.
+    // Sensor channel (ch 1): answer SensorStartRequest and publish night mode / driving status / location / satellites.
     bool sendSensorStartResponse(uint8_t channel, bool ok);
     bool sendSensorEvent(uint32_t sensor_type);
     std::vector<TouchEventOut> touch_queue_;

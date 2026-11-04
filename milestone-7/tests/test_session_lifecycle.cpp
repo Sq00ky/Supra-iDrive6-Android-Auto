@@ -39,14 +39,18 @@ struct Ctx { AASession* s; int fd; };
 static void* restarter(void* a) { Ctx* c = (Ctx*)a; c->s->start(c->fd); return NULL; }
 static void* stopper(void* a) { ((AASession*)a)->stop(); return NULL; }
 
-// The MOST callback thread, posting the car's position across every session start and stop.
+// The MOST callback thread, posting the car's position and satellites across every session start and stop.
 static volatile int g_stopPosting = 0;
 static void* poster(void* a) {
     LocationFix f;
     f.lat_e7 = 533553700; f.lon_e7 = -15262930; f.accuracy_e3 = 10000; f.rx_ms = 1;
+    SatelliteStatus st;
+    st.used = 7; st.rx_ms = 1;
     while (!__sync_fetch_and_add(&g_stopPosting, 0)) {
         ((AASession*)a)->postCarLocation(f);
+        ((AASession*)a)->postCarSatellites(st);
         ++f.rx_ms;
+        ++st.rx_ms;
         usleep(200);
     }
     return NULL;

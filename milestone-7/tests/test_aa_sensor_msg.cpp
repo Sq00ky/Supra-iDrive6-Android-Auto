@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for src/aa_sensor_msg.hpp: the LOCATION event encoding and the age limit.
+// Host test for src/aa_sensor_msg.hpp: the LOCATION and GPS_SATELLITE event encodings and their age limits.
 #include "aa_sensor_msg.hpp"
 #include <assert.h>
 #include <stdio.h>
@@ -66,6 +66,33 @@ int main() {
         assert(locationFresh(f, 100));          // wrapped, 356 ms old
         assert(!locationFresh(f, 10000));       // wrapped, past the limit
         assert(!locationFresh(f, 0x7FFFFFFFu)); // 24 days old
+    }
+    // GPS_SATELLITE: field 21 of the batch, {1: used}. Exact bytes, and the buffer's old content goes.
+    {
+        std::vector<uint8_t> ev(100, 0xEE);
+        buildSatelliteEvent(7, ev);
+        const uint8_t want[] = { 0x80, 0x03, 0xAA, 0x01, 0x02, 0x08, 0x07 };
+        assert(ev.size() == sizeof(want));
+        for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+        // The tag is field 21, length-delimited.
+        size_t i = 2;
+        assert(var(ev, i) == ((21u << 3) | 2u));
+        // Zero is written, not left out: the field is required.
+        buildSatelliteEvent(0, ev);
+        assert(ev.size() == sizeof(want) && ev[5] == 0x08 && ev[6] == 0x00);
+    }
+    // The count to send: nothing posted, fresh, at the age limit, past it, and across the 32-bit wrap.
+    {
+        SatelliteStatus s;
+        s.used = 7;
+        s.rx_ms = 1000;
+        assert(satellitesUsedNow(false, s, 1000) == 0);
+        assert(satellitesUsedNow(true, s, 1000) == 7);
+        assert(satellitesUsedNow(true, s, 1000 + kSatelliteMaxAgeMs) == 7);
+        assert(satellitesUsedNow(true, s, 1000 + kSatelliteMaxAgeMs + 1) == 0);
+        s.rx_ms = 0xFFFFFF00u;
+        assert(satellitesUsedNow(true, s, 100) == 7);
+        assert(satellitesUsedNow(true, s, 10000) == 0);
     }
     printf("test_aa_sensor_msg OK\n");
     return 0;
