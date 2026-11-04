@@ -1,0 +1,176 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+//
+// The manifest (ServiceDiscoveryResponse, message 6) as src/sdr_builder.cpp writes it. Names follow its F_ constants.
+// Documentation and a test only: nothing is generated from this. tests/test_schema.py decodes real manifests with it.
+//
+// Nothing is `required`, and integers aren't enums, so a parser never rejects a message or drops a value it doesn't
+// list. The same goes for the other files here.
+syntax = "proto2";
+package nbt.manifest;
+
+message AudioConfig {
+  optional uint32 sample_rate = 1;
+  optional uint32 bit_depth = 2;
+  optional uint32 channel_count = 3;
+}
+
+message Sensor {
+  optional int32 type = 1;
+}
+
+message SensorSource {
+  repeated Sensor sensor = 1;
+  optional int32 location_characterization = 2;
+  repeated int32 fuel_type = 3;
+  repeated int32 ev_connector = 4;
+}
+
+message Insets {
+  optional int32 top = 1;
+  optional int32 bottom = 2;
+  optional int32 left = 3;
+  optional int32 right = 4;
+}
+
+message AdditionalVideoConfig {
+  optional Insets display_insets = 1;
+  optional Insets additional_insets_2 = 2;
+  optional Insets additional_insets_3 = 3;
+  optional int32 theme = 4;
+}
+
+message VideoConfig {
+  optional int32 resolution = 1;
+  optional int32 fps = 2;
+  optional int32 margin_width = 3;
+  optional int32 margin_height = 4;
+  optional int32 dpi = 5;
+  optional int32 decoder_additional_depth = 6;
+  optional int32 viewing_distance = 7;
+  optional int32 pixel_aspect_ratio = 8;
+  optional int32 real_density = 9;
+  optional int32 codec = 10;
+  optional AdditionalVideoConfig additional_config = 11;
+}
+
+// An audio sink uses 1 to 3, a video sink 4 to 8.
+message MediaSink {
+  optional int32 codec = 1;
+  optional int32 audio_type = 2;
+  repeated AudioConfig audio_config = 3;
+  repeated VideoConfig video_config = 4;
+  optional int32 display_id = 6;
+  optional int32 display_type = 7;
+  optional int32 unknown_8 = 8;
+}
+
+message TouchScreen {
+  optional int32 width = 1;
+  optional int32 height = 2;
+  optional int32 type = 3;
+  // Copied from the DHU. Android Auto 17.9's table for this message has no field 4.
+  optional int32 unknown_4 = 4;
+}
+
+message TouchPad {
+  optional int32 width = 1;
+  optional int32 height = 2;
+  optional int32 ui_navigation = 3;
+  optional int32 physical_width = 4;
+  optional int32 physical_height = 5;
+  optional int32 ui_absolute = 6;
+  optional int32 tap_as_select = 7;
+  optional int32 sensitivity = 8;
+}
+
+message InputSource {
+  repeated int32 keycodes = 1 [packed = true];
+  optional TouchScreen touch_screen = 2;
+  optional TouchPad touch_pad = 3;
+  optional int32 display_id = 5;
+}
+
+message Microphone {
+  optional int32 codec = 1;
+  optional AudioConfig audio_config = 2;
+}
+
+message Bluetooth {
+  optional string address = 1;
+}
+
+message NavImageOptions {
+  optional int32 width = 1;
+  optional int32 height = 2;
+  optional int32 colour_depth = 3;
+}
+
+message NavStatus {
+  optional int32 minimum_interval = 1;
+  optional int32 type = 2;
+  optional NavImageOptions image_options = 3;
+}
+
+message EmptyService {}
+
+message VendorExtension {
+  optional string name = 1;
+  optional string package = 2;
+}
+
+message Channel {
+  optional int32 id = 1;
+  optional SensorSource sensor_source = 2;
+  optional MediaSink media_sink = 3;
+  optional InputSource input_source = 4;
+  optional Microphone microphone = 5;
+  optional Bluetooth bluetooth = 6;
+  optional NavStatus nav_status = 8;
+  optional EmptyService media_playback = 9;
+  optional EmptyService phone_status = 10;
+  optional VendorExtension vendor_extension = 12;
+}
+
+message PingConfiguration {
+  optional int32 unknown_1 = 1;
+  optional int32 unknown_2 = 2;
+  optional int32 unknown_3 = 3;
+  optional int32 unknown_4 = 4;
+}
+
+message ConnectionConfiguration {
+  optional PingConfiguration ping_configuration = 1;
+}
+
+message HeadUnitInfo {
+  optional string car_make = 1;
+  optional string car_model = 2;
+  optional string car_year = 3;
+  optional string vehicle_id = 4;
+  optional string hu_make = 5;
+  optional string hu_model = 6;
+  optional string sw_build = 7;
+  optional string sw_version = 8;
+}
+
+message ServiceDiscoveryResponse {
+  // The Bluetooth and system audio channels (trailingChannels) go after field 17. A generated encoder would write every
+  // channel first.
+  repeated Channel channel = 1;
+  optional string car_make = 2;
+  optional string car_model = 3;
+  optional string car_year = 4;
+  optional string vehicle_id = 5;
+  optional int32 driver_position = 6;
+  optional string hu_make = 7;
+  optional string hu_model = 8;
+  optional string sw_build = 9;
+  optional string sw_version = 10;
+  optional int32 session_configuration = 13;
+  optional string display_name = 14;
+  optional int32 probe_for_support = 15;
+  // Copied from the DHU. Android Auto 17.9's table for this message has no field 16.
+  optional ConnectionConfiguration connection_configuration = 16;
+  optional HeadUnitInfo head_unit_info = 17;
+}

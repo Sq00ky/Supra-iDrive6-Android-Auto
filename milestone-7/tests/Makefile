@@ -87,10 +87,10 @@ ARGS_test_ccs_input   := tests/fixtures/controls_2026-10-23_push.txt
 
 TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 
-.PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32
+.PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema tsan
 	@echo "[CHECK] all host tests passed"
 
 $(OUT):
@@ -124,6 +124,16 @@ $(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.h
 run-test_media_payload:
 	@cd $(ROOT) && python3 tests/test_media_payload.py > tests/$(OUT)/test_media_payload.log 2>&1 \
 	  && echo "[PASS] test_media_payload.py" || { echo "[FAIL] test_media_payload.py"; tail -20 tests/$(OUT)/test_media_payload.log; exit 1; }
+
+# The messages our code builds, decoded by protoc against proto/. Host only: the daemon's build doesn't use protoc.
+DUMP_SRCS := dump_messages.cpp $(ROOT)/src/sdr_builder.cpp $(ROOT)/src/wireless_setup.cpp
+$(OUT)/dump_messages: $(DUMP_SRCS) | $(OUT)
+	$(HOST_CXX) $(CXXFLAGS) -MMD -MP -MF $@.d -o $@ $(DUMP_SRCS) $(LDLIBS)
+run-test_schema: $(OUT)/dump_messages
+	@if command -v protoc > /dev/null 2>&1; then \
+	  cd $(ROOT) && python3 tests/test_schema.py tests/$(OUT)/dump_messages > tests/$(OUT)/test_schema.log 2>&1 \
+	  && echo "[PASS] test_schema.py" || { echo "[FAIL] test_schema.py"; tail -20 tests/$(OUT)/test_schema.log; exit 1; }; \
+	else echo "[SKIP] test_schema.py: protoc not installed"; fi
 
 # The car's size_t is 32 bits, and some length bugs only show there. Skipped without a 32-bit toolchain.
 run-test_aa_proto32: | $(OUT)

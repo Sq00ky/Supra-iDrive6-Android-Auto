@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+//
+// Channel 10 navigation messages from the phone, as src/kombi_nav_msg.hpp reads them. Documentation and a test only:
+// nothing is generated from this. Each message starts with a 2-byte big-endian id, shown here.
+//
+// tests/test_schema.py decodes the messages tests/kombi_nav_test_util.hpp builds. test_kombi_nav_msg reads the same
+// messages with the real decoder, so together they tie this file to the decoder's field numbers, not to a phone capture.
+syntax = "proto2";
+package nbt.nav;
+
+// 0x8003: 1 ACTIVE, 2 INACTIVE, 3 REROUTING
+message NavigationStatus {
+  optional int32 status = 1;
+}
+
+message Maneuver {
+  optional int32 type = 1;
+  optional int32 exit_number = 2;
+  optional int32 exit_angle = 3;
+}
+
+message Road {
+  optional string name = 1;
+}
+
+message LaneDirection {
+  optional int32 shape = 1;
+  optional bool is_highlighted = 2;
+}
+
+message Lane {
+  repeated LaneDirection direction = 1;
+}
+
+message Cue {
+  repeated string text = 1;
+}
+
+message Step {
+  optional Maneuver maneuver = 1;
+  optional Road road = 2;
+  repeated Lane lanes = 3;
+  optional Cue cue = 4;
+}
+
+message Destination {
+  optional string address = 1;
+}
+
+// 0x8006
+message NavigationState {
+  repeated Step steps = 1;
+  repeated Destination destinations = 2;
+}
+
+message Distance {
+  optional int32 meters = 1;
+  optional string display_value = 2;
+  optional int32 display_units = 3;
+}
+
+message StepDistance {
+  optional Distance distance = 1;
+  optional int32 seconds = 2;
+}
+
+message DestinationDistance {
+  optional Distance distance = 1;
+  optional string eta = 2;
+  optional int32 seconds = 3;
+}
+
+// 0x8007
+message NavigationCurrentPosition {
+  optional StepDistance step_distance = 1;
+  repeated DestinationDistance destination_distances = 2;
+  optional Road current_road = 3;
+}
+
+// 0x8004, for phones that don't send 0x8006
+message NextTurnEvent {
+  optional string road = 1;
+  optional int32 turn_side = 2;
+  optional int32 event = 3;
+  optional int32 exit_number = 5;
+  optional int32 exit_angle = 6;
+}
+
+// 0x8005, for phones that don't send 0x8007
+message NextTurnDistanceEvent {
+  optional int32 distance_m = 1;
+  optional int32 time_s = 2;
+  optional int32 display_distance_e3 = 3;
+  optional int32 display_distance_unit = 4;
+}
