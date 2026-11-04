@@ -928,7 +928,7 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         }
         buildLocationEvent(f, plain);
         if (location_sent_++ % 60 == 0)
-            printf("[AASession] >>> Sensor LOCATION event #%u (%.6f, %.6f, accuracy %.0f m)\n", location_sent_,
+            printf("[AASession] >>> Sensor LOCATION event #%u (%.6f, %.6f, accuracy %.1f m)\n", location_sent_,
                    f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.accuracy_e3 / 1000.0);
     } else if (sensor_type == 21) { // GPS_SATELLITE: the newest count (postCarSatellites), 0 with nothing recent
         const uint32_t now = monoMs();

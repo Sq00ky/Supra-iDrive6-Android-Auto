@@ -12,14 +12,14 @@
 //   [0..3]   Longitude  INT32   360/2^32 deg per unit
 //   [4..7]   Latitude   INT32   same unit
 //   [8]      GPSFix     UINT8   (parked with a fix: 4; firmware names FIX_NO/FIX_TIME/FIX_2D/FIX_3D, values unknown)
-//   [9]      HDOP       UINT8   capped at 80 by the sender: probably 0.1 units (parked: 8 = 0.8)
+//   [9]      HDOP       UINT8   capped at 80 by the sender: taken as 0.1 units (parked: 8 = 0.8)
 //   [10]     VDOP       UINT8   same
 //   [11..12] Speed      INT16   sent as the internal value; unit unknown (m/s based)
 //   [13]     Heading    UINT8   unit unknown (not whole degrees; 360/256 deg?)
 //   [14..15] Height     INT16   internal value / 10; unit unknown (parked: 23, maybe 10 m units)
 //   [16..17] Year UINT16, [18] Month, [19] Day, [20] Hour, [21] Minute, [22] Second (UINT8, UTC fix time)
-// 0xFFFFFFFF in a coordinate means no fix. Speed, heading, height and the DOPs are decoded and logged but not sent to
-// the phone until a drive log confirms their units.
+// 0xFFFFFFFF in a coordinate means no fix. HDOP sets the accuracy sent to the phone (accuracyFromHdopE3). Speed, heading,
+// height and VDOP are decoded and logged but not sent until a drive log confirms their units.
 // The same FBlock also sends fkt 0x243 and FBlock 0xCD/01 fkt 0x20B with a second position about 5 m away (probably the
 // map-matched / dead-reckoned one). The service discovery says location_characterization RAW_GPS_ONLY (256), so the raw
 // GNSS fix (0x440) is the one to send.
@@ -35,7 +35,7 @@
 //   [8..9]   Time        UINT16  (hh * 3600 + mm * 60 + ss) mod 4095: the car capture matches the UTC time of fkt 0x440
 //
 // The decode and the filters are pure: host-tested in tests/test_car_gps.cpp.
-//   NBT_GPS_ACCURACY_M=n   accuracy sent with each fix, in metres, 2..499 (default 10; the car's own figure is not decoded yet)
+//   NBT_GPS_ACCURACY_M=n   a fixed accuracy for every fix, in metres, 2..499, instead of the one from HDOP
 
 #include "aa_sensor_msg.hpp"
 #include <stddef.h>
@@ -267,13 +267,34 @@ private:
     bool badLogged_;
 };
 
-// LocationFix::accuracy_e3 from NBT_GPS_ACCURACY_M: 2..499 m, anything else is the 10 m default. Android Auto 17.9's location
-// code treats 1 m or less and 500 m or more as an integration error and stops using the accuracy for the session.
-inline uint32_t parseGpsAccuracyE3(const char* metres) {
-    int m = metres ? atoi(metres) : 0;
-    return (m >= 2 && m <= 499) ? (uint32_t)m * 1000u : 10000u;
+// LocationFix::accuracy_e3 is a radius holding 68% of fixes, in mm. Android Auto 17.9's location code treats 1 m or less and
+// 500 m or more as an integration error and stops using the accuracy for the session, so everything here stays inside that.
+const uint32_t kUereE3 = 5000;              // the receiver's range error, 5 m
+const uint32_t kAccuracyMinE3 = 2000;       // a low HDOP does not make the fix better than this
+const uint32_t kAccuracyNoHdopE3 = 10000;   // no usable HDOP on this fix
+const uint8_t kHdopRawMax = 80;             // the sender's cap
+
+// HDOP * UERE, the usual estimate of horizontal error. UERE is a constant from published single-frequency error budgets, not
+// a measurement of this receiver: they come to about 5.25 m, or 5.6 m once scaled from the 63% radius the formula gives to
+// the 68% wanted, and about 4.7 m with better satellite clocks and orbits. HDOP does not see multipath, so the figure is
+// optimistic among buildings.
+inline uint32_t accuracyFromHdopE3(uint8_t rawHdop) {
+    if (rawHdop == 0 || rawHdop > kHdopRawMax) return kAccuracyNoHdopE3;
+    const uint32_t a = (uint32_t)rawHdop * kUereE3 / 10;
+    return a < kAccuracyMinE3 ? kAccuracyMinE3 : a;
 }
-inline uint32_t readGpsAccuracyE3() { return parseGpsAccuracyE3(getenv("NBT_GPS_ACCURACY_M")); }
+
+// The accuracy override from NBT_GPS_ACCURACY_M: 2..499 m. 0 means none: use HDOP.
+inline uint32_t parseGpsAccuracyOverrideE3(const char* metres) {
+    int m = metres ? atoi(metres) : 0;
+    return (m >= 2 && m <= 499) ? (uint32_t)m * 1000u : 0;
+}
+inline uint32_t readGpsAccuracyOverrideE3() { return parseGpsAccuracyOverrideE3(getenv("NBT_GPS_ACCURACY_M")); }
+
+// The accuracy to send with a fix. A fix without the extra fields has HDOP 0.
+inline uint32_t fixAccuracyE3(const CarFix& f, uint32_t overrideE3) {
+    return overrideE3 ? overrideE3 : accuracyFromHdopE3(f.hdop);
+}
 
 // The fix in Android Auto units, stamped with the time it was received.
 inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t rxMs) {
@@ -314,8 +335,9 @@ class CarGps {
 public:
     CarGps();
 
-    // Before the client's start(). False: the client has no room for the route.
-    bool attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, SatellitesCb satCb, void* user);
+    // Before the client's start(). accuracyOverrideE3 0: the accuracy comes from each fix's HDOP. False: the client has no
+    // room for the route.
+    bool attach(most::Client& client, uint32_t accuracyOverrideE3, LocationCb cb, SatellitesCb satCb, void* user);
 
 private:
     static void fixTramp(const most::View& m, void* self);
@@ -330,7 +352,7 @@ private:
     CarGpsStatus status_;
     uint32_t statusMs_;         // when the newest status changed
     int usableLogged_;          // -1 not yet, else the last positionUsable() result logged
-    uint32_t accuracyE3_;
+    uint32_t accuracyOverrideE3_;
     LocationCb cb_;
     SatellitesCb satCb_;
     void* user_;
