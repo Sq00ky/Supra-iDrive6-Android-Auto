@@ -24,7 +24,17 @@
 // map-matched / dead-reckoned one). The service discovery says location_characterization RAW_GPS_ONLY (256), so the raw
 // GNSS fix (0x440) is the one to send.
 //
-// The decode and CarGpsFilter are pure: host-tested in tests/test_car_gps.cpp.
+// Second source: MOST FBlock 0xCD inst 01, fkt 0xC00, OpType Status, NavigationInfo.GPS_RawDataCAN in the firmware (sender in
+// NavNBTEvoController, its setters in this order). Payload (10 bytes, big-endian):
+//   [0..1]   Speed       UINT16  the raw speed of fkt 0x440 * 7.2; unit unknown; 0xFFFE when over the limit
+//   [2], [3] Error in latitude, longitude  UINT8  unit unknown (parked: 25)
+//   [4]      Receiver    UINT8   the engine's FIX_NO, FIX_TIME, FIX_2D, FIX_3D (0..3) as 3, 0, 0, 1
+//   [5]      Quality     UINT8   meaning unknown (parked: 2)
+//   [6]      Satellites  UINT8   used in the fix; over 12 is sent as 14
+//   [7]      HDOP        UINT8   same source as fkt 0x440; over 25 is sent as 254
+//   [8..9]   Time        UINT16  (hh * 3600 + mm * 60 + ss) mod 4095: the car capture matches the UTC time of fkt 0x440
+//
+// The decode and the filters are pure: host-tested in tests/test_car_gps.cpp.
 //   NBT_GPS_ACCURACY_M=n   accuracy sent with each fix, in metres (default 10; the car's own figure is not decoded yet)
 
 #include "aa_sensor_msg.hpp"
@@ -156,6 +166,107 @@ private:
     unsigned fixes_;
 };
 
+struct CarGpsStatus {
+    uint16_t speed;             // raw
+    uint8_t errLat, errLon;     // raw
+    uint8_t receiver;           // kReceiver3dFix, kReceiverNoFix or 0 (time only or 2D)
+    uint8_t quality;            // raw
+    uint8_t satsUsed;
+    uint8_t hdop;               // raw
+    uint16_t timeOfDay;
+};
+
+const uint8_t kCarStatusFBlock = 0xCD, kCarStatusInst = 0x01;
+const uint16_t kCarStatusFkt = 0xC00;
+const uint8_t kReceiver3dFix = 1, kReceiverNoFix = 3;
+
+// Decode a fkt 0xC00 Status payload. False when it is too short.
+inline bool decodeCarGpsStatus(const uint8_t* p, size_t n, CarGpsStatus& out) {
+    if (!p || n < 10) return false;
+    out.speed = (uint16_t)((p[0] << 8) | p[1]);
+    out.errLat = p[2];
+    out.errLon = p[3];
+    out.receiver = p[4];
+    out.quality = p[5];
+    out.satsUsed = p[6];
+    out.hdop = p[7];
+    out.timeOfDay = (uint16_t)((p[8] << 8) | p[9]);
+    return true;
+}
+
+// Decides what one received fkt 0xC00 message means. Copies of a message count as nothing new. Its time field advances, so
+// a payload that repeats later is not news either: gapMs measures from the last payload that changed.
+class CarGpsStatusFilter {
+public:
+    enum { kLogEvery = 5 };     // log the fields every 5th status
+    struct Result {
+        bool repeat;            // the same payload as the last one: the other fields are not set, ignore the message
+        bool ok;                // the CarGpsStatus is valid
+        bool logBad;            // not ok, and not said yet
+        bool receiverChanged;   // differs from the last status; the first one counts
+        bool logFields;         // time to log this status
+        unsigned statusNo;      // statuses so far, this one included
+        uint32_t gapMs;         // longest time between two new payloads since the last log
+    };
+
+    CarGpsStatusFilter() : seen_(false), lastLen_(0), statuses_(0), lastMs_(0), maxGapMs_(0), haveReceiver_(false),
+                           lastReceiver_(0), badLogged_(false) {}
+
+    Result feed(const uint8_t* p, size_t n, uint32_t rxMs, CarGpsStatus& out) {
+        Result r;
+        r.repeat = false;
+        r.ok = false;
+        r.logBad = false;
+        r.receiverChanged = false;
+        r.logFields = false;
+        r.statusNo = statuses_;
+        r.gapMs = 0;
+        if (!p) n = 0;
+        size_t keep = n < (size_t)kKeep ? n : (size_t)kKeep;
+        if (seen_ && n == lastLen_ && (keep == 0 || memcmp(p, last_, keep) == 0)) {
+            r.repeat = true;
+            return r;
+        }
+        if (keep) memcpy(last_, p, keep);
+        lastLen_ = n;
+        r.ok = decodeCarGpsStatus(p, n, out);
+        if (!r.ok) {
+            r.logBad = !badLogged_;
+            badLogged_ = true;
+            seen_ = true;
+            return r;
+        }
+        if (seen_ && statuses_ > 0) {
+            uint32_t gap = rxMs - lastMs_;
+            if (gap > maxGapMs_) maxGapMs_ = gap;
+        }
+        seen_ = true;
+        lastMs_ = rxMs;
+        r.receiverChanged = !haveReceiver_ || out.receiver != lastReceiver_;
+        haveReceiver_ = true;
+        lastReceiver_ = out.receiver;
+        r.logFields = statuses_ % kLogEvery == 0 || r.receiverChanged;
+        r.statusNo = ++statuses_;
+        if (r.logFields) {
+            r.gapMs = maxGapMs_;
+            maxGapMs_ = 0;
+        }
+        return r;
+    }
+
+private:
+    enum { kKeep = 16 };
+    bool seen_;
+    uint8_t last_[kKeep];
+    size_t lastLen_;
+    unsigned statuses_;
+    uint32_t lastMs_;
+    uint32_t maxGapMs_;
+    bool haveReceiver_;
+    uint8_t lastReceiver_;
+    bool badLogged_;
+};
+
 // LocationFix::accuracy_e3 from NBT_GPS_ACCURACY_M: 1..9999 m, anything else is the 10 m default.
 inline uint32_t parseGpsAccuracyE3(const char* metres) {
     int m = metres ? atoi(metres) : 0;
@@ -175,8 +286,9 @@ inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t 
 
 typedef void (*LocationCb)(const LocationFix& fix, void* user);
 
-// A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 Status, logs the fix under [GPS] and hands each new
-// one on. It adds no device-controller keys: the client's subscriptions switch delivery on, and GPS arrives with no key.
+// A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 and CD/01 fkt 0xC00 Status, logs them under [GPS] and
+// hands each new fix on. It adds no device-controller keys: the client's subscriptions switch delivery on, and GPS arrives
+// with no key.
 // The callback runs on the DSI callback thread: see the handler rules in most/client.hpp.
 class CarGps {
 public:
@@ -186,10 +298,13 @@ public:
     bool attach(most::Client& client, uint32_t accuracyE3, LocationCb cb, void* user);
 
 private:
+    static void fixTramp(const most::View& m, void* self);
     static void statusTramp(const most::View& m, void* self);
+    void onFix(const most::View& m);
     void onStatus(const most::View& m);
 
     CarGpsFilter filter_;
+    CarGpsStatusFilter statusFilter_;
     uint32_t accuracyE3_;
     LocationCb cb_;
     void* user_;
