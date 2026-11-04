@@ -867,6 +867,26 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
 using proto::pbFirstVarint;
 
+// SensorStartRequest min_update_period (field 2, int64). DHU r2.1 treats -1 as "do not send", and otherwise sends each
+// report as it comes. Here it is only logged, to see what the phone asks for. False: the field is absent.
+static bool pbSensorPeriod(const std::vector<uint8_t>& d, size_t off, int64_t& out) {
+    size_t i = off;
+    while (i < d.size()) {
+        uint8_t tag = d[i++];
+        if ((tag & 7) != 0 || (tag & 0x80)) return false;   // this message is short varints: stop at anything else
+        uint64_t v = 0;
+        int sh = 0;
+        while (i < d.size() && sh < 70) {
+            uint8_t b = d[i++];
+            if (sh < 64) v |= (uint64_t)(b & 0x7F) << sh;
+            sh += 7;
+            if (!(b & 0x80)) break;
+        }
+        if ((tag >> 3) == 2) { out = (int64_t)v; return true; }
+    }
+    return false;
+}
+
 bool AASession::sendSensorStartResponse(uint8_t channel, bool ok) {
     uint8_t plain[4] = { 0x80, 0x02, 0x08, (uint8_t)(ok ? 0x00 : 0x01) };
     std::vector<uint8_t> enc;
@@ -1115,7 +1135,11 @@ void AASession::sessionLoop() {
 
             if (channel == 1 && msg_id == 0x8001) { // SensorStartRequest
                 uint32_t st = pbFirstVarint(frame_data, 2, 1);
-                printf("[AASession] >>> SensorStartRequest (type=%u)\n", st);
+                int64_t period = 0;
+                if (pbSensorPeriod(frame_data, 2, period))
+                    printf("[AASession] >>> SensorStartRequest (type=%u, period=%lld)\n", st, (long long)period);
+                else
+                    printf("[AASession] >>> SensorStartRequest (type=%u, no period)\n", st);
                 sendSensorStartResponse(channel, true);
                 if (st == 10) {
                     pthread_mutex_lock(&touch_mutex_);

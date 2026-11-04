@@ -204,7 +204,8 @@ no settings file.
 | "Hey Google" / Assistant using the car's microphone (`Carplay_Siri_1mic` speech scenario) | Car-verified |
 | Assistant replies audible (the car's Bluetooth source is requested again when the mic closes) | Car-verified |
 | Driving status, night mode | Works; night mode follows the car's day/night (like CarPlay) since v1.8.30 / rhmiapp-15 |
-| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST); speed, heading and altitude not yet |
+| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix); speed, heading, altitude and a measured accuracy not yet |
+| Car GPS satellites | Sent as the GPS_SATELLITE sensor (satellites used, about once a second, 0 with no fix) |
 | iDrive menu entry with its own icon and a "Connecting..." text | Car-verified |
 | Menu: **Start** | Car-verified |
 | Menu: **Force Stop**, **Restart** | Fixed in v1.8.3 (state file), not yet car-verified |
@@ -788,10 +789,13 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    (`car/volume_input`, `car/volume_level.hpp`), follows the car's master volume on AudioMaster FBlock 0x20 fkt 0x0C08
    for the volume overlay; it adds no device-controller keys and runs with `NBT_KNOB=0` too.
 8. **Car GPS (`car/gps`).** `CarGps` is another consumer of the MOST client: it receives copies of the navigation's GNSS fix
-   (FBlock 0x52 inst 00, fkt 0x440, about once a second, one copy per HMI receiver), decodes it and logs it under `[GPS]`.
-   It adds no device-controller keys. With `NBT_KNOB=0` the client still starts, for the GPS alone. Each new fix goes to
-   `aa_session` in Android Auto units (`aa_sensor_msg.hpp`), which sends it as sensor 1 once the phone has started that
-   sensor. A fix older than 5 s counts as no fix.
+   (FBlock 0x52 inst 00, fkt 0x440, about once a second, one copy per HMI receiver) and of its receiver status (FBlock 0xCD
+   inst 01, fkt 0xC00), decodes them and logs them under `[GPS]`. It adds no device-controller keys. With `NBT_KNOB=0` the
+   client still starts, for the GPS alone. A new fix goes to `aa_session` in Android Auto units (`aa_sensor_msg.hpp`) only if
+   the newest status changed within 5 s and reports a 3D fix; the session sends it as sensor 1 once the phone has started that
+   sensor, and a fix older than 5 s counts as no fix. The satellite count goes the same way. The session sends it as sensor 21
+   on its own timer, about once a second once the phone has started that sensor, with 0 when the status is older than 5 s or
+   the receiver has no fix.
 
 ### Cluster and HUD arrows (`kombi_nav`)
 
@@ -941,8 +945,9 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_volume_level`, `test_volume_input` | Car volume level against the car capture (AudioMaster 0x20/0x0C08), and from DSI frame to the overlay callback beside the controller |
-| `test_car_gps` | Car GPS decode (MOST 52/00 fkt 440, car capture), repeats and log cadence, from DSI frame to `LocationFix` on the fake `DsiClient` |
-| `test_aa_sensor_msg` | LOCATION event encoding (incl. 10-byte negative varints), the fix age limit |
+| `test_car_gps` | Car GPS decode (MOST 52/00 fkt 440 and CD/01 fkt C00, car captures), repeats and log cadence, the 3D fix check, from DSI frame to `LocationFix` and satellite count on the fake `DsiClient` |
+| `test_aa_sensor_msg` | LOCATION (incl. 10-byte negative varints) and GPS_SATELLITE event encodings, their age limits |
+| `test_session_sensors` | Sensor channel in `aa_session` over a socket with the stub cryptor: SensorStartRequest, the events it starts, the satellite timer, old data |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
