@@ -4,6 +4,7 @@ This document is going to contain a list of "What's missing", "What's left", and
 ## Roadmap
 Audio Improvements
 - Moving over to WiFi instead of Bluetooth
+- Volume Slider
 
 HUD/KOMBI Integration
 - Working towards this, proof of concept is working, navigation arrows are being shown on the HUD/KOMBI.
@@ -19,9 +20,10 @@ Carplay Parity Improvements
 
 Resolution Upscaling
 - Proposed solution to request higher resolution from the phone, and drop a few rows to improve res.
-
+    - This seems restricted to 5GHz networks, the cars only operate on 2.4GHz, leading only option to be USB.
+    - We may be able to raise to 60FPS though?
 USB Support
-- Currently everything relies on Carplay's WiFi network
+~~- Currently everything relies on Carplay's WiFi network~~
 - There's three possible solutions, a free FSC installer to enable Carplay (possibly WIP), Move to WiFi Direct hotspot,  USB
 
 Bug Fixes
@@ -31,12 +33,12 @@ Bug Fixes
 - Better MyBMW/Supra Connect/MINI App Support
 - Installation Failure
 
-
 One Click USB Update
 - More discussion needs to be done around this
 - Proposed solution is tar containing releases.tar & nbt-aad
 
 Lastly... Installer
 - Enable SSH
-- Transfer files via SSH/SCP
-- Close SSH when done for 
+~~- Transfer files via SSH/SCP~~
+~~- Close SSH when done for ~~~
+
