@@ -17,10 +17,11 @@
 //   [11..12] Speed      INT16   0.01 m/s, checked against the distance between fixes; positive in reverse too
 //   [13]     Heading    UINT8   direction of travel, 360/256 deg per unit, ANTICLOCKWISE from north; keeps its last value
 //                               below about 1 m/s
-//   [14..15] Height     INT16   internal value / 10; unit and datum unknown (maybe 10 m units)
+//   [14..15] Height     INT16   10 m units, above sea level, truncated by the sender: checked against a map at one place and
+//                               a 30 m climb (a raw 20 means 200 to 209 m)
 //   [16..17] Year UINT16, [18] Month, [19] Day, [20] Hour, [21] Minute, [22] Second (UINT8, UTC fix time)
-// 0xFFFFFFFF in a coordinate means no fix. HDOP, speed and heading set the accuracy, speed and bearing sent to the phone
-// (toLocationFix). Height and VDOP are decoded and logged but not sent. Speed and position arrive about 2 s behind the
+// 0xFFFFFFFF in a coordinate means no fix. HDOP, speed, heading and height set the accuracy, speed, bearing and altitude sent
+// to the phone (toLocationFix). VDOP is decoded and logged but not sent. Speed and position arrive about 2 s behind the
 // vehicle speed on 05/00 fkt 621.
 // The same FBlock also sends fkt 0x243 and FBlock 0xCD/01 fkt 0x20B with a second position: 19 m away while parked in one
 // capture, within about 0.5 m of this track while moving, and not known to be map-matched. The service discovery says
@@ -41,6 +42,7 @@
 //   NBT_GPS_ACCURACY_M=n   a fixed accuracy for every fix, in metres, 2..499, instead of the one from HDOP
 
 #include "aa_sensor_msg.hpp"
+#include "car/geoid.hpp"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -308,8 +310,20 @@ inline int32_t headingToBearingE6(uint8_t rawHeading) {
     return ((256 - (int32_t)rawHeading) % 256) * kBearingE6PerRaw;
 }
 
-// The fix in Android Auto units, stamped with the time it was received. A speed out of range is left out rather than sent,
-// as one bad value could cost the speed for the session. A fix without the extra fields has neither.
+// -1 km to +10 km: a value past this is not a height. Google Maps 26.44 drops the whole fix outside -10 km to +18 km.
+const int16_t kHeightMinRaw = -100;
+const int16_t kHeightMaxRaw = 1000;
+
+// The car's height as LocationFix altitude. Android Auto 17.9 and Maps 26.44 pass this field to Location.setAltitude unchanged,
+// and Android defines that as above the WGS84 ellipsoid, while the car's value is above sea level. The sender truncates towards
+// zero, so raw 20 is 200 to 209 m: the middle of that range is the best estimate.
+inline int32_t heightToAltitudeE2(int16_t rawHeight, int32_t latE7, int32_t lonE7) {
+    const int32_t middleCm = (int32_t)rawHeight * 1000 + (rawHeight > 0 ? 500 : rawHeight < 0 ? -500 : 0);
+    return middleCm + geoidSeparationCm(latE7, lonE7);
+}
+
+// The fix in Android Auto units, stamped with the time it was received. A value out of range is left out rather than sent, as
+// one bad value could cost that field for the session, or the fix. A fix without the extra fields has none of them.
 inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t rxMs) {
     LocationFix l;
     l.lat_e7 = f.lat_e7;
@@ -323,6 +337,10 @@ inline LocationFix toLocationFix(const CarFix& f, uint32_t accuracyE3, uint32_t 
             l.has_bearing = true;
             l.bearing_e6 = headingToBearingE6(f.heading);
         }
+    }
+    if (f.ext && f.height >= kHeightMinRaw && f.height <= kHeightMaxRaw) {
+        l.has_altitude = true;
+        l.altitude_e2 = heightToAltitudeE2(f.height, f.lat_e7, f.lon_e7);
     }
     return l;
 }

@@ -50,6 +50,7 @@ SRCS = src/main.cpp \
        src/car/ccs_input.cpp \
        src/car/volume_input.cpp \
        src/car/input_activity.cpp \
+       src/car/geoid.cpp \
        src/car/gps.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \

@@ -966,9 +966,11 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         }
         buildLocationEvent(f, plain);
         if (location_sent_++ % 60 == 0)
-            printf("[AASession] >>> Sensor LOCATION event #%u (%.6f, %.6f, accuracy %.1f m, speed %.2f m/s%s, bearing %.1f%s)\n",
+            printf("[AASession] >>> Sensor LOCATION event #%u (%.6f, %.6f, accuracy %.1f m, speed %.2f m/s%s, bearing %.1f%s, "
+                   "altitude %.1f m%s)\n",
                    location_sent_, f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.accuracy_e3 / 1000.0, f.speed_e3 / 1000.0,
-                   f.has_speed ? "" : " not sent", f.bearing_e6 / 1e6, f.has_bearing ? "" : " not sent");
+                   f.has_speed ? "" : " not sent", f.bearing_e6 / 1e6, f.has_bearing ? "" : " not sent",
+                   f.altitude_e2 / 100.0, f.has_altitude ? "" : " not sent");
     } else if (sensor_type == 21) { // GPS_SATELLITE: the newest count (postCarSatellites), 0 with nothing recent
         const uint32_t now = monoMs();
         pthread_mutex_lock(&touch_mutex_);
