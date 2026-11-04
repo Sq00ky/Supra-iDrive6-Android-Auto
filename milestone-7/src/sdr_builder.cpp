@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "sdr_builder.hpp"
 #include "nbt_env.hpp"
+#include "audio/config.hpp"
 #include "car_config.hpp"
 
 #include <stdio.h>
@@ -208,11 +209,143 @@ int addSystemAudioSink(std::vector<uint8_t>& sdr) {
     return 1;
 }
 
+namespace {
+
+// Skips one field's value at p[pos] (wire type wt). Returns false on a parse error.
+bool skipValue(const uint8_t* p, size_t n, size_t& pos, int wt) {
+    if (wt == 0) { uint64_t x; return getVarint(p, n, pos, x); }
+    if (wt == 2) { uint64_t l; if (!getVarint(p, n, pos, l) || pos + l > n) return false; pos += (size_t)l; return true; }
+    if (wt == 5) { pos += 4; return pos <= n; }
+    if (wt == 1) { pos += 8; return pos <= n; }
+    return false;
+}
+
+// The first varint field `field` of a message.
+bool firstVarintField(const uint8_t* p, size_t n, int field, uint64_t& v) {
+    size_t pos = 0;
+    while (pos < n) {
+        uint64_t key;
+        if (!getVarint(p, n, pos, key)) return false;
+        const int f = (int)(key >> 3), wt = (int)(key & 7);
+        if (wt == 0 && f == field) return getVarint(p, n, pos, v);
+        if (!skipValue(p, n, pos, wt)) return false;
+    }
+    return false;
+}
+
+// Copies a MediaSinkService, keeping only the audio_configs (field 3) whose sample_rate (field 1) is `rate`. Returns
+// false (out untouched) when nothing would be removed, nothing would be left, or on a parse error.
+bool keepSinkRate(const uint8_t* p, size_t n, uint32_t rate, std::vector<uint8_t>& out, int& removed) {
+    int keep = 0, drop = 0;
+    for (int pass = 0; pass < 2; ++pass) {
+        std::vector<uint8_t> o;
+        size_t pos = 0;
+        while (pos < n) {
+            const size_t start = pos;
+            uint64_t key;
+            if (!getVarint(p, n, pos, key)) return false;
+            const int f = (int)(key >> 3), wt = (int)(key & 7);
+            const size_t body = pos;
+            if (!skipValue(p, n, pos, wt)) return false;
+            bool keepIt = true;
+            if (f == 3 && wt == 2) {
+                size_t q = body;
+                uint64_t l, r = 0;
+                getVarint(p, n, q, l);
+                keepIt = firstVarintField(p + q, (size_t)l, 1, r) && r == rate;
+                if (pass == 0) { if (keepIt) ++keep; else ++drop; }
+            }
+            if (pass == 1 && keepIt) o.insert(o.end(), p + start, p + pos);
+        }
+        if (pass == 0 && (drop == 0 || keep == 0)) return false;
+        if (pass == 1) out.swap(o);
+    }
+    removed = drop;
+    return true;
+}
+
+} // namespace
+
+int keepAudioSinkRate(std::vector<uint8_t>& sdr, unsigned channel, uint32_t rate) {
+    if (sdr.empty() || rate == 0) return 0;
+    const uint8_t* p = &sdr[0];
+    const size_t n = sdr.size();
+    std::vector<uint8_t> out;
+    size_t pos = 0;
+    int removed = 0;
+    while (pos < n) {
+        const size_t start = pos;
+        uint64_t key;
+        if (!getVarint(p, n, pos, key)) return 0;
+        const int f = (int)(key >> 3), wt = (int)(key & 7);
+        const size_t valStart = pos;
+        if (!skipValue(p, n, pos, wt)) return 0;
+        uint64_t cid = 0;
+        if (f == 1 && wt == 2 && !removed) {
+            size_t q = valStart;
+            uint64_t l;
+            getVarint(p, n, q, l);
+            const uint8_t* cd = p + q;
+            if (firstVarintField(cd, (size_t)l, 1, cid) && cid == channel) {
+                // ChannelDescriptor: rewrite its media_sink_service (field 3), copy the rest.
+                std::vector<uint8_t> desc;
+                size_t r = 0;
+                bool ok = true;
+                while (r < (size_t)l) {
+                    const size_t s0 = r;
+                    uint64_t k2;
+                    if (!getVarint(cd, (size_t)l, r, k2)) { ok = false; break; }
+                    const int f2 = (int)(k2 >> 3), w2 = (int)(k2 & 7);
+                    const size_t v0 = r;
+                    if (!skipValue(cd, (size_t)l, r, w2)) { ok = false; break; }
+                    std::vector<uint8_t> sink;
+                    if (f2 == 3 && w2 == 2) {
+                        size_t b = v0;
+                        uint64_t sl;
+                        getVarint(cd, (size_t)l, b, sl);
+                        if (keepSinkRate(cd + b, (size_t)sl, rate, sink, removed)) {
+                            putLen(desc, 3, sink.empty() ? NULL : &sink[0], sink.size());
+                            continue;
+                        }
+                    }
+                    desc.insert(desc.end(), cd + s0, cd + r);
+                }
+                if (ok && removed) {
+                    putLen(out, 1, &desc[0], desc.size());
+                    continue;
+                }
+                removed = 0;
+            }
+        }
+        out.insert(out.end(), p + start, p + pos);
+    }
+    if (removed) sdr.swap(out);
+    return removed;
+}
+
+int limitGuidanceOffers(std::vector<uint8_t>& sdr) {
+    if (!nbt::browserAudioEnabled()) return 0;
+    const long rate = nbt::envRange("NBT_GUIDANCE_RATE", 48000, 0, 192000);
+    if (rate == 0) return 0;
+    const int removed = keepAudioSinkRate(sdr, AA_CH_GUIDANCE_AUDIO, (uint32_t)rate);
+    if (removed)
+        printf("[SDR] channel %d guidance sink: offering %ld Hz only (%d other offer%s removed; NBT_GUIDANCE_RATE=0 "
+               "keeps all)\n", AA_CH_GUIDANCE_AUDIO, rate, removed, removed == 1 ? "" : "s");
+    return removed;
+}
+
 int retypeGuidanceSink(std::vector<uint8_t>& sdr) {
     // Default ON in Bluetooth audio mode since v1.6.9 (car-verified nbt-aad-21: nav prompts play over BT A2DP).
     // NBT_GUIDANCE_BT=0 restores the GUIDANCE sink, =1 forces it on outside BT mode.
     // Unset follows Bluetooth-audio mode. 0/off/no/false keeps GUIDANCE. 1/on/yes/true forces SYSTEM_AUDIO.
     int g = nbt::envFlag("NBT_GUIDANCE_BT");
+    if (nbt::browserAudioEnabled()) {
+        // Browser mode plays ch 8 as the guidance stream (own ducking, own rate offers) and adds the SYSTEM_AUDIO sink
+        // on ch 16: retyping ch 8 would give the phone two SYSTEM_AUDIO sinks. A leftover NBT_GUIDANCE_BT=1 is ignored.
+        if (g == 1)
+            printf("[SDR] NBT_GUIDANCE_BT=1 ignored in browser audio mode: channel 8 stays GUIDANCE\n");
+        return 0;
+    }
     bool on = (g < 0) ? nbt::btAudioEnabled() : (g == 1);
     if (!on || sdr.empty()) return 0;
     // ChannelDescriptor(1){ id(1)=8, media_sink_service(3){ codec(1), audio_type(2)=1 GUIDANCE, ... } }:
@@ -639,6 +772,109 @@ bool patchTouchConfig(std::vector<uint8_t>& sdr) {
         sdr.swap(out);
     }
     return changed;
+}
+
+namespace {
+
+// Calls fn(field, wire_type, value, data, len) for each field of a message; false on malformed input.
+// value = varint value (wt 0); data/len = payload (wt 2).
+template <typename Fn>
+bool forEachField(const uint8_t* p, size_t n, Fn& fn) {   // by reference: readers collect into themselves
+    size_t pos = 0;
+    while (pos < n) {
+        uint64_t key, v = 0, l = 0;
+        if (!getVarint(p, n, pos, key)) return false;
+        const unsigned f = (unsigned)(key >> 3), wt = (unsigned)(key & 7);
+        if (wt == 0) {
+            if (!getVarint(p, n, pos, v)) return false;
+            fn(f, wt, v, (const uint8_t*)NULL, (size_t)0);
+        } else if (wt == 2) {
+            if (!getVarint(p, n, pos, l) || l > n - pos) return false;
+            fn(f, wt, (uint64_t)0, p + pos, (size_t)l);
+            pos += (size_t)l;
+        } else if (wt == 1) {
+            if (n - pos < 8) return false;
+            pos += 8;
+        } else if (wt == 5) {
+            if (n - pos < 4) return false;
+            pos += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct AudioCfgReader {   // AudioConfig { sample_rate = 1, bit_depth = 2, channels = 3 }
+    AaAudioConfig* c;
+    void operator()(unsigned f, unsigned wt, uint64_t v, const uint8_t*, size_t) const {
+        if (wt != 0) return;
+        if (f == 1) c->sample_rate = (uint32_t)v;
+        else if (f == 2) c->bits = (uint32_t)v;
+        else if (f == 3) c->channels = (uint32_t)v;
+    }
+};
+
+struct SinkReader {       // MediaSinkService: audio_configs = 3 (repeated)
+    std::vector<AaAudioConfig>* out;
+    void operator()(unsigned f, unsigned wt, uint64_t, const uint8_t* d, size_t l) const {
+        if (f != 3 || wt != 2) return;
+        AaAudioConfig c;
+        AudioCfgReader r = { &c };
+        if (forEachField(d, l, r) && c.sample_rate) out->push_back(c);
+    }
+};
+
+struct DescriptorReader { // ChannelDescriptor: id = 1, media_sink_service = 3
+    uint64_t id;
+    const uint8_t* sink;
+    size_t sink_len;
+    void operator()(unsigned f, unsigned wt, uint64_t v, const uint8_t* d, size_t l) {
+        if (f == 1 && wt == 0) id = v;
+        else if (f == 3 && wt == 2) { sink = d; sink_len = l; }
+    }
+};
+
+struct SdrReader {        // ServiceDiscoveryResponse: channels = 1 (repeated)
+    unsigned channel;
+    std::vector<AaAudioConfig>* out;
+    void operator()(unsigned f, unsigned wt, uint64_t, const uint8_t* d, size_t l) const {
+        if (f != 1 || wt != 2) return;
+        DescriptorReader dr = { (uint64_t)-1, NULL, 0 };
+        if (!forEachField(d, l, dr) || dr.id != channel || !dr.sink) return;
+        SinkReader sr = { out };
+        forEachField(dr.sink, dr.sink_len, sr);
+    }
+};
+
+struct StartReader {      // AV START_INDICATION: session = 1, configuration_index = 2
+    uint32_t session, index;
+    void operator()(unsigned f, unsigned wt, uint64_t v, const uint8_t*, size_t) {
+        if (wt != 0) return;
+        if (f == 1) session = (uint32_t)v;
+        else if (f == 2) index = (uint32_t)v;
+    }
+};
+
+} // namespace
+
+std::vector<AaAudioConfig> sdrAudioConfigs(const uint8_t* sdr, size_t n, unsigned channel) {
+    std::vector<AaAudioConfig> out;
+    if (!sdr || n == 0) return out;
+    SdrReader r = { channel, &out };
+    forEachField(sdr, n, r);
+    return out;
+}
+
+bool resolveAudioStart(const uint8_t* payload, size_t n, const std::vector<AaAudioConfig>& offered,
+                       uint32_t* session, uint32_t* index, AaAudioConfig* out) {
+    StartReader r = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+    if (payload && n) forEachField(payload, n, r);
+    if (session) *session = r.session;
+    if (index) *index = r.index;
+    if (r.index == 0xFFFFFFFFu || r.index >= offered.size()) return false;
+    if (out) *out = offered[r.index];
+    return true;
 }
 
 } // namespace nbt

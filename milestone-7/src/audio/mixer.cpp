@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-#include "audio_mixer.hpp"
+#include "audio/mixer.hpp"
 
 namespace nbt {
 
@@ -76,48 +76,31 @@ void AudioMixer::mix(const int16_t* media, const int16_t* guidance, const int16_
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-
-PtsRateMeter::PtsRateMeter() { reset(); }
-
-void PtsRateMeter::reset() {
-    first_pts_ = 0;
-    bytes_ = 0;
-    frames_ = 0;
-    rate_ = 0;
-    done_ = false;
+void fadeOutTail(int16_t* buf, size_t frames, size_t channels, size_t fade_frames) {
+    if (!buf || !channels || !frames) return;
+    if (fade_frames > frames) fade_frames = frames;
+    const size_t first = frames - fade_frames;
+    for (size_t f = 0; f < fade_frames; ++f) {
+        // gain (fade_frames - 1 - f) / fade_frames: the last frame reaches 0
+        const int32_t num = (int32_t)(fade_frames - 1 - f), den = (int32_t)fade_frames;
+        for (size_t c = 0; c < channels; ++c) {
+            int16_t& v = buf[(first + f) * channels + c];
+            v = (int16_t)((int32_t)v * num / den);
+        }
+    }
 }
 
-uint32_t PtsRateMeter::snap(uint32_t measured) {
-    static const uint32_t kRates[] = { 8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000 };
-    uint32_t best = 0, best_diff = 0xffffffffu;
-    for (size_t i = 0; i < sizeof(kRates) / sizeof(kRates[0]); ++i) {
-        uint32_t d = measured > kRates[i] ? measured - kRates[i] : kRates[i] - measured;
-        if (d < best_diff) { best_diff = d; best = kRates[i]; }
+void fadeInHead(int16_t* buf, size_t frames, size_t channels, size_t fade_frames) {
+    if (!buf || !channels || !frames) return;
+    if (fade_frames > frames) fade_frames = frames;
+    for (size_t f = 0; f < fade_frames; ++f) {
+        // gain (f + 1) / (fade_frames + 1): starts just above 0, never fully silent
+        const int32_t num = (int32_t)(f + 1), den = (int32_t)(fade_frames + 1);
+        for (size_t c = 0; c < channels; ++c) {
+            int16_t& v = buf[f * channels + c];
+            v = (int16_t)((int32_t)v * num / den);
+        }
     }
-    return (best && (uint64_t)best_diff * 100u <= (uint64_t)best * 8u) ? best : 0;
-}
-
-uint32_t PtsRateMeter::add(uint64_t pts_us, size_t bytes, uint32_t channels) {
-    if (done_) return rate_;
-    if (channels == 0) channels = 1;
-    if (frames_ == 0 || pts_us <= first_pts_) {   // first frame, or the clock went back: start over
-        first_pts_ = pts_us;
-        bytes_ = bytes;
-        frames_ = 1;
-        return 0;
-    }
-    const uint64_t span = pts_us - first_pts_;
-    if (frames_ >= 2 && span >= 200000u) {
-        const uint64_t samples = bytes_ / (2u * channels);
-        rate_ = snap((uint32_t)(samples * 1000000u / span));
-        done_ = true;
-        return rate_;
-    }
-    bytes_ += bytes;
-    ++frames_;
-    return 0;
 }
 
 } // namespace nbt

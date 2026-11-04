@@ -1,0 +1,256 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#include "audio/resampler.hpp"
+#include "audio/speex.h"
+#include <string.h>
+
+namespace nbt {
+
+size_t pcmChunkBytes(uint32_t rate, uint32_t channels, uint32_t ms, size_t cap) {
+    const size_t frame = (size_t)(channels ? channels : 1) * 2u;
+    if (cap < frame) return 0;
+    size_t frames = (size_t)((uint64_t)rate * ms / 1000u);
+    if (frames < 1) frames = 1;
+    const size_t max_frames = cap / frame;
+    if (frames > max_frames) frames = max_frames;
+    return frames * frame;
+}
+// ---------------------------------------------------------------------------
+// PcmResampler
+// ---------------------------------------------------------------------------
+
+PcmResampler::PcmResampler()
+    : engine_(LINEAR), quality_(5), spx_(NULL), spx_trim_(0), spx_since_(0), in_count_(0), out_count_(0),
+      src_rate_(48000), src_ch_(2), dst_rate_(48000), dst_ch_(2),
+      step_q32_(1ull << 32), phase_q32_(0), trim_ppm_(0), have_prev_(false), passthrough_(true) {
+    memset(prev_, 0, sizeof(prev_));
+}
+
+PcmResampler::~PcmResampler() { destroySpeex(); }
+
+void PcmResampler::destroySpeex() {
+    if (spx_) nbt_speex_resampler_destroy(static_cast<SpeexResamplerState*>(spx_));
+    spx_ = NULL;
+}
+
+void PcmResampler::setEngine(Engine e, int quality) {
+    if (quality < 0) quality = 0;
+    if (quality > 10) quality = 10;
+    if (e == engine_ && quality == quality_) return;
+    engine_ = e;
+    quality_ = quality;
+    destroySpeex();   // re-created on the next process() with the new settings
+    updateStep();
+    reset();
+}
+
+// in/out ratio = src/dst * (1 + trim), as the closest fraction whose denominator is at most kSpeexMaxDen.
+//
+// Fixed-point speexdsp needs a small denominator: its interpolating filter computes the phase as
+// ((frac * oversample) % den) << 15 in 32 bits and rounds with den cast to 16 bits (resample.c:456 / :519), so a
+// denominator of 2^15 or more turns the output into noise. An exact trimmed ratio rarely reduces that far
+// (48000:44100 at +171 ppm is 1000171:918750), which made most trims distort on the car. Capped at 32767 the ratio
+// is within 1.3 ppm of the request for 48 -> 44.1 kHz and 2 ppm for 16 -> 44.1 kHz; a same-rate stream moves in
+// steps of ~30 ppm around 1:1. The drift loop's integral absorbs either.
+static const uint64_t kSpeexMaxDen = 32767;
+
+static uint64_t gcd64(uint64_t a, uint64_t b) { while (b) { const uint64_t t = a % b; a = b; b = t; } return a; }
+
+// Best rational approximation of n/d with denominator <= maxd (continued fractions, as Python's
+// Fraction.limit_denominator). n < 2^37 and maxd < 2^16 here, so every product below fits in 64 bits.
+static void closestRatio(uint64_t n, uint64_t d, uint64_t maxd, uint64_t* pn, uint64_t* pd) {
+    const uint64_t g = gcd64(n, d);
+    if (g > 1) { n /= g; d /= g; }
+    if (d <= maxd) { *pn = n; *pd = d; return; }
+    uint64_t p0 = 0, q0 = 1, p1 = 1, q1 = 0, nn = n, dd = d;
+    for (;;) {
+        const uint64_t a = nn / dd;
+        const uint64_t q2 = q0 + a * q1;
+        if (q2 > maxd) break;
+        const uint64_t p2 = p0 + a * p1;
+        p0 = p1; q0 = q1; p1 = p2; q1 = q2;
+        const uint64_t r = nn - a * dd;
+        nn = dd; dd = r;
+        if (!dd) break;
+    }
+    const uint64_t k = (maxd - q0) / q1;   // the best semiconvergent below the limit
+    const uint64_t sp = p0 + k * p1, sq = q0 + k * q1;
+    // pick whichever of p1/q1 and sp/sq is nearer n/d: compare |p*d - n*q| / q without division
+    const uint64_t e1 = (p1 * d > n * q1) ? p1 * d - n * q1 : n * q1 - p1 * d;
+    const uint64_t e2 = (sp * d > n * sq) ? sp * d - n * sq : n * sq - sp * d;
+    if (e2 * q1 < e1 * sq) { *pn = sp; *pd = sq; } else { *pn = p1; *pd = q1; }
+}
+
+bool PcmResampler::applySpeexRatio() {
+    uint64_t num = 0, den = 0;
+    closestRatio((uint64_t)src_rate_ * (uint64_t)(1000000 + trim_ppm_), (uint64_t)dst_rate_ * 1000000u,
+                 kSpeexMaxDen, &num, &den);
+    if (!num || !den || num > 0xFFFFFFFFull) return false;
+    const int err = nbt_speex_resampler_set_rate_frac(static_cast<SpeexResamplerState*>(spx_), (spx_uint32_t)num,
+                                                      (spx_uint32_t)den, src_rate_, dst_rate_);
+    spx_trim_ = trim_ppm_;
+    spx_since_ = 0;
+    return err == RESAMPLER_ERR_SUCCESS;
+}
+
+void PcmResampler::updateStep() {
+    const uint64_t base = ((uint64_t)src_rate_ << 32) / dst_rate_;
+    step_q32_ = base * (uint64_t)(1000000 + trim_ppm_) / 1000000u;   // base < 2^36, x ~1e6 fits in 64 bits
+    // SPEEX stays filtering once it has started (a later return to 1:1 and no trim): switching back to copying
+    // would jump by the filter's latency.
+    const bool pass = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_) && trim_ppm_ == 0 && !spx_;
+    if (pass != passthrough_) {   // switching between copying and interpolating: start interpolation afresh
+        have_prev_ = false;
+        phase_q32_ = 0;
+    }
+    passthrough_ = pass;
+}
+
+void PcmResampler::setTrimPpm(int32_t ppm) {
+    if (ppm > 20000) ppm = 20000;
+    if (ppm < -20000) ppm = -20000;
+    trim_ppm_ = ppm;
+    updateStep();
+}
+
+void PcmResampler::configure(uint32_t src_rate, uint32_t src_channels,
+                             uint32_t dst_rate, uint32_t dst_channels) {
+    src_rate_ = src_rate ? src_rate : 48000;
+    dst_rate_ = dst_rate ? dst_rate : 48000;
+    src_ch_ = src_channels < 1 ? 1 : (src_channels > 8 ? 8 : src_channels);
+    dst_ch_ = dst_channels < 1 ? 1 : (dst_channels > 8 ? 8 : dst_channels);
+    destroySpeex();   // new rates / channels: re-created on the next process()
+    updateStep();   // keeps trim_ppm_
+    passthrough_ = (src_rate_ == dst_rate_) && (src_ch_ == dst_ch_) && trim_ppm_ == 0;
+    reset();
+}
+
+void PcmResampler::reset() {
+    phase_q32_ = 0;
+    have_prev_ = false;
+    memset(prev_, 0, sizeof(prev_));
+    if (spx_) {
+        SpeexResamplerState* st = static_cast<SpeexResamplerState*>(spx_);
+        nbt_speex_resampler_reset_mem(st);
+        nbt_speex_resampler_skip_zeros(st);   // no leading run of zeros (the filter's latency) after a restart
+    }
+}
+
+void PcmResampler::emit(const int32_t* frame, std::vector<int16_t>& out) const {
+    int32_t mapped[8];
+    if (src_ch_ == dst_ch_) {
+        for (uint32_t c = 0; c < dst_ch_; ++c) mapped[c] = frame[c];
+    } else if (src_ch_ == 1) {
+        for (uint32_t c = 0; c < dst_ch_; ++c) mapped[c] = frame[0];
+    } else if (dst_ch_ == 1) {
+        int32_t sum = 0;
+        for (uint32_t c = 0; c < src_ch_; ++c) sum += frame[c];
+        mapped[0] = sum / static_cast<int32_t>(src_ch_);
+    } else {
+        for (uint32_t c = 0; c < dst_ch_; ++c) mapped[c] = (c < src_ch_) ? frame[c] : 0;
+    }
+    for (uint32_t c = 0; c < dst_ch_; ++c) {
+        int32_t v = mapped[c];
+        if (v > 32767) v = 32767;
+        if (v < -32768) v = -32768;
+        out.push_back(static_cast<int16_t>(v));
+    }
+}
+
+void PcmResampler::process(const int16_t* in, size_t in_frames, std::vector<int16_t>& out) {
+    if (!in || in_frames == 0) return;
+    in_count_ += in_frames;
+    const size_t before = out.size();
+
+    if (passthrough_) {
+        out.insert(out.end(), in, in + in_frames * dst_ch_);
+    } else if (engine_ == SPEEX) {
+        processSpeex(in, in_frames, out);
+    } else {
+        processLinear(in, in_frames, out);
+    }
+    out_count_ += (out.size() - before) / dst_ch_;
+}
+
+void PcmResampler::processSpeex(const int16_t* in, size_t in_frames, std::vector<int16_t>& out) {
+    if (!spx_) {
+        int err = 0;
+        spx_ = nbt_speex_resampler_init(src_ch_, src_rate_, dst_rate_, quality_, &err);
+        if (!spx_ || err != RESAMPLER_ERR_SUCCESS || !applySpeexRatio()) {
+            destroySpeex();
+            engine_ = LINEAR;   // can't set it up: carry on with the linear engine
+            processLinear(in, in_frames, out);
+            return;
+        }
+        nbt_speex_resampler_skip_zeros(static_cast<SpeexResamplerState*>(spx_));
+        updateStep();   // passthrough_ off from now on
+    } else if (spx_trim_ != trim_ppm_ && spx_since_ >= dst_rate_) {
+        applySpeexRatio();   // at most once per second of output
+    }
+    SpeexResamplerState* st = static_cast<SpeexResamplerState*>(spx_);
+    const spx_uint32_t chunk = 1024;   // output frames per call
+    if (spx_buf_.size() < chunk * src_ch_) spx_buf_.resize(chunk * src_ch_);
+    const int16_t* ip = in;
+    size_t left = in_frames;
+    while (left > 0) {
+        spx_uint32_t in_len = (spx_uint32_t)left;
+        spx_uint32_t out_len = chunk;
+        nbt_speex_resampler_process_interleaved_int(st, ip, &in_len, &spx_buf_[0], &out_len);
+        for (spx_uint32_t f = 0; f < out_len; ++f) {
+            int32_t frame[8];
+            for (uint32_t c = 0; c < src_ch_; ++c) frame[c] = spx_buf_[f * src_ch_ + c];
+            emit(frame, out);
+        }
+        spx_since_ += out_len;
+        ip += (size_t)in_len * src_ch_;
+        left -= in_len;
+        if (in_len == 0 && out_len == 0) break;   // no progress: never spin
+    }
+}
+
+void PcmResampler::processLinear(const int16_t* in, size_t in_frames, std::vector<int16_t>& out) {
+    for (size_t f = 0; f < in_frames; ++f) {
+        int32_t cur[8];
+        for (uint32_t c = 0; c < src_ch_; ++c) cur[c] = in[f * src_ch_ + c];
+
+        if (!have_prev_) {
+            for (uint32_t c = 0; c < src_ch_; ++c) prev_[c] = cur[c];
+            have_prev_ = true;
+            phase_q32_ = 0;
+        }
+
+        const uint64_t one = 1ull << 32;
+        while (phase_q32_ < one) {
+            int32_t interp[8];
+            for (uint32_t c = 0; c < src_ch_; ++c) {
+                int64_t d = static_cast<int64_t>(cur[c]) - prev_[c];   // |d| < 2^16, phase < 2^32: fits
+                interp[c] = prev_[c] + static_cast<int32_t>((d * static_cast<int64_t>(phase_q32_)) >> 32);
+            }
+            emit(interp, out);
+            phase_q32_ += step_q32_;
+        }
+        phase_q32_ -= one;
+        for (uint32_t c = 0; c < src_ch_; ++c) prev_[c] = cur[c];
+    }
+}
+
+void PcmResampler::processBytes(const uint8_t* in, size_t len, std::vector<uint8_t>& out) {
+    size_t frame_bytes = static_cast<size_t>(src_ch_) * 2;
+    size_t frames = len / frame_bytes;
+    if (frames == 0) return;
+
+    std::vector<int16_t> src(frames * src_ch_);
+    memcpy(&src[0], in, frames * frame_bytes);   // PCM is little-endian on host and target
+
+    std::vector<int16_t> dst;
+    dst.reserve(frames * dst_ch_ * (static_cast<size_t>(dst_rate_) / src_rate_ + 1));
+    process(&src[0], frames, dst);
+
+    if (!dst.empty()) {
+        size_t old = out.size();
+        out.resize(old + dst.size() * 2);
+        memcpy(&out[old], &dst[0], dst.size() * 2);
+    }
+}
+
+} // namespace nbt

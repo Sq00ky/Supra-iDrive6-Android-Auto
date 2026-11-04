@@ -9,6 +9,8 @@
 #include <map>
 #include <pthread.h>
 #include "aa_cryptor.hpp"
+#include "audio/audio_acks.hpp"
+#include "sdr_builder.hpp"
 #include "touch_types.hpp"
 
 namespace nbt {
@@ -18,7 +20,9 @@ typedef void (*VideoFrameCallback)(uint32_t frame_index, const uint8_t* nal_data
 typedef void (*CodecConfigCallback)(const uint8_t* config_data, size_t config_len, void* user_data);
 // Android Auto PCM (ch 8 speech / ch 9 media / ch 16 system audio, message 0x0000 = 8-byte PTS + PCM) and stream state.
 typedef void (*AudioFrameCallback)(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data);
-typedef void (*AudioStateCallback)(uint8_t channel, bool started, void* user_data);
+// started: rate / channels = the AudioConfig the phone chose for this stream (START_INDICATION configuration_index
+// looked up in what our SDR offered), 0 / 0 when it gave no usable index. Stop: 0 / 0.
+typedef void (*AudioStateCallback)(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data);
 // Phone asked for video focus (VideoFocusRequest 0x8007 on the video channel): projected=false is the
 // "exit to car" icon (focus_mode UNFOCUSED/NATIVE), projected=true asks to come back. reason = focus_reason.
 typedef void (*VideoFocusCallback)(bool projected, uint32_t reason, void* user_data);
@@ -63,6 +67,21 @@ public:
     void postMicData(const uint8_t* pcm, size_t len);
     bool micOpen();
 
+    // Deferred audio acks (browser audio mode; audio/audio_acks.hpp). On: a PCM frame on ch 8 / 9 / 16 is acked once
+    // the consumer reports its bytes taken (postAudioConsumed), or after NBT_AA_ACK_FORCE_MS (default 1000) unacked.
+    // Off: acked on arrival (the consumer cannot report). Set before start(); applies from the next session. The ack
+    // window audio sinks get is AudioAcks::window() (NBT_AA_MAX_UNACKED).
+    void setDeferredAudioAcks(bool on);
+    // The audio consumer took `bytes` of `channel`'s PCM, oldest first (played, or dropped). Thread-safe (mixer thread);
+    // the acks go out from the session thread, woken through the wake pipe.
+    void postAudioConsumed(uint8_t channel, size_t bytes);
+
+    // Underflow reports (browser audio mode): AudioUnderflowNotification (0x800b) to the phone when the consumer ran
+    // dry on a started stream, as Google's head unit does. Set before start(). postAudioUnderflow is thread-safe
+    // (mixer thread); the message goes out from the session thread.
+    void setUnderflowReports(bool on);
+    void postAudioUnderflow(uint8_t channel);
+
 private:
     static void* sessionThreadStub(void* arg);
     void sessionLoop();
@@ -75,7 +94,9 @@ private:
     bool sendChannelOpenRequest(uint8_t channel_id);
     bool sendAvSetupResponse(uint8_t channel);
     bool sendVideoFocusIndication(uint8_t channel, bool focused = true, bool unrequested = false);
-    bool sendAvMediaAck(uint8_t channel, uint32_t count);
+    // One frame acked. rx_wall_ns != 0: also its arrival time (Ack field 3, wall clock in ns), as the DHU's audio
+    // sinks send it; 0 = none (video).
+    bool sendAvMediaAck(uint8_t channel, uint64_t rx_wall_ns = 0);
     bool sendAudioFocusResponse(uint8_t focus_state);
     bool readExact(uint8_t* buffer, size_t length);
     static uint32_t rxTimeoutMs();
@@ -134,8 +155,21 @@ private:
     void* audio_user_data_;
     AudioStateCallback audio_state_cb_;
     void* audio_state_user_data_;
-    uint32_t audio_frames_[3];   // [0] = ch 8 speech, [1] = ch 9 media, [2] = ch 16 system (session thread only)
+    uint32_t audio_frames_[3];   // per AudioStream (audio/channels.hpp: media, guidance, system); session thread only
+
+    uint16_t aa_minor_;              // protocol minor version this session asked for (NBT_AA_MINOR, default 6)
+
+    // Deferred audio acks and underflow reports (audio/audio_acks.hpp): their state lives in acks_ (thread-safe); the
+    // session thread records frames into it and sends what it releases.
+    AudioAcks acks_;
+    void drainAcks();                // session thread: send the acks acks_ releases
+    void drainUnderflows();          // session thread: send the underflow reports posted since the last drain
+    void wakeSessionThread();        // a byte down the wake pipe (consumer thread)
+    static bool sendAckThunk(uint8_t channel, uint64_t rx_wall_ns, void* self);
+    static bool sendUnderflowThunk(uint8_t channel, void* self);
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
+    // AudioConfigs our ServiceDiscoveryResponse offered per audio sink channel, in order (session thread).
+    std::vector<AaAudioConfig> offered_audio_[32];
 
     std::map<uint8_t, std::vector<uint8_t> > reassembly_;
     std::map<uint8_t, uint32_t> reassembly_total_;   // size the phone announced on the FIRST fragment

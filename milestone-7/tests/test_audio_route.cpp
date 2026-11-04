@@ -2,7 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: AudioRoute build retries and the "granted" callback (drives NBT_BT_PLAY).
 // A fake audioconn (shell script) refuses the first FAILS calls like the car's "AMCommand error", then succeeds.
-#include "audio_route.hpp"
+#include "audio/audio_route.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
