@@ -104,6 +104,29 @@ static void testFilter() {
         }
         assert(logged == 2);
     }
+    // Moving: every fix logs, and back to the cadence when the speed is 0 again. The first and sixth fix would log anyway.
+    {
+        CarGpsFilter flt;
+        CarFix f;
+        for (int i = 0; i < 12; ++i) {
+            std::vector<uint8_t> p = tick((uint8_t)i);
+            const bool moving = i >= 2 && i < 8;
+            if (moving) p[12] = 0x2c;       // speed 44, raw
+            CarGpsFilter::Result r = flt.feed(&p[0], p.size(), f);
+            assert(r.logFields == (moving || i % 5 == 0));
+        }
+    }
+    // Reversing, if the speed is negative then, counts as moving too.
+    {
+        CarGpsFilter flt;
+        CarFix f;
+        std::vector<uint8_t> p = tick(1);
+        flt.feed(&p[0], p.size(), f);
+        p = tick(2);
+        p[11] = 0xff; p[12] = 0xf0;
+        assert(flt.feed(&p[0], p.size(), f).logFields);
+        assert(f.speed == -16);
+    }
     // GPSFix changing logs at once, off the cadence. The first fix is not a change.
     {
         CarGpsFilter flt;
@@ -415,9 +438,12 @@ static void testAccuracy() {
     assert(parseGpsAccuracyE3("-5") == 10000);
     assert(parseGpsAccuracyE3("10000") == 10000);
     assert(parseGpsAccuracyE3("rubbish") == 10000);
-    assert(parseGpsAccuracyE3("1") == 1000);
+    // Inside the range Android Auto accepts, and at its edges: 1 m and 500 m would disable the accuracy on the phone.
+    assert(parseGpsAccuracyE3("1") == 10000);
+    assert(parseGpsAccuracyE3("2") == 2000);
     assert(parseGpsAccuracyE3("25") == 25000);
-    assert(parseGpsAccuracyE3("9999") == 9999000);
+    assert(parseGpsAccuracyE3("499") == 499000);
+    assert(parseGpsAccuracyE3("500") == 10000);
 }
 
 // Full client: attach() says so and the consumer stays out.
