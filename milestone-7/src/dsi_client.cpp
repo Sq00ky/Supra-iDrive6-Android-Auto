@@ -64,7 +64,7 @@ void* need(void* lib, const char* name) {
 
 DsiClient::DsiClient()
     : lib_(NULL), conn_(NULL), cli_(NULL), attached_(false), quiet_(false),
-      attachedCb_(NULL), dataCb_(NULL), user_(NULL) {}
+      attachedCb_(NULL), dataCb_(NULL), detachedCb_(NULL), user_(NULL) {}
 
 void DsiClient::setCallbacks(AttachedCb a, DataCb d, void* user) {
     attachedCb_ = a; dataCb_ = d; user_ = user;
@@ -184,6 +184,7 @@ void DsiClient::onDetachedTramp(void* self) {
     c->attached_ = false;
     printf("[DsiClient] DETACHED from server\n");
     fflush(stdout);
+    if (c->detachedCb_) c->detachedCb_(c, c->user_);
 }
 
 void DsiClient::onDataTramp(void* self, void* istream) {

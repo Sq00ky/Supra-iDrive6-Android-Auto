@@ -45,7 +45,10 @@ set(SOURCES
     src/dsi_client.cpp
     src/audio/voice_scenario.cpp
     src/audio/bt_play.cpp
-    src/ccs_input.cpp
+    src/most/client.cpp
+    src/most/trace.cpp
+    src/car/ccs_input.cpp
+    src/car/volume_input.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
     src/kombi_client.cpp

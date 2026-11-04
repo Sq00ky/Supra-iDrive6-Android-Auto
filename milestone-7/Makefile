@@ -45,7 +45,10 @@ SRCS = src/main.cpp \
        src/dsi_client.cpp \
        src/audio/voice_scenario.cpp \
        src/audio/bt_play.cpp \
-       src/ccs_input.cpp \
+       src/most/client.cpp \
+       src/most/trace.cpp \
+       src/car/ccs_input.cpp \
+       src/car/volume_input.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
@@ -77,7 +80,7 @@ test_display: test_display.cpp
 	$(CXX) $(CXXFLAGS) -o test_display test_display.cpp -L./lib -lscreen -lang-c++
 	@echo [DONE] Built test_display for QNX armv7le
 
-test_controls: test_controls.cpp src/dsi_client.cpp src/dsi_client.hpp src/most_msg.hpp src/ctl_wizard.hpp src/ccs_decoder.hpp
+test_controls: test_controls.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp src/most/msg.hpp src/car/ctl_wizard.hpp src/car/ccs_decoder.hpp src/aa_keys.hpp
 	@echo [CXX] test_controls.cpp
 	$(CXX) $(CXXFLAGS) -o test_controls test_controls.cpp src/dsi_client.cpp
 	@echo [DONE] Built test_controls for QNX armv7le
@@ -136,7 +139,7 @@ wfd_probe: tools/wfd_probe.cpp src/alt_wifi.hpp src/wireless_setup.hpp
 
 # Standalone volume-key capture/prompter: prints "press volume up 5x", waits, prints "press volume down 5x", waits, while
 # logging every MOST control message it can see to stdout and /mnt/umass01200t7/volcap.log. No daemon, no env needed.
-volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most_msg.hpp
+volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp src/most/msg.hpp
 	@echo [CXX] tools/volcap.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/volcap.cpp src/dsi_client.cpp -lang-c++
 	@echo [DONE] Built $@

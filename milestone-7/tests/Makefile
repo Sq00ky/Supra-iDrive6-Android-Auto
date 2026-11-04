@@ -32,7 +32,9 @@ SRC_test_audio_route       := src/audio/audio_route.cpp
 SRC_test_bcl_detect        := src/wireless_setup.cpp
 SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
+SRC_test_ccs_config        :=
 SRC_test_ccs_decoder       :=
+SRC_test_ccs_input         := src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
@@ -44,10 +46,16 @@ SRC_test_media_ack         :=
 SRC_test_media_msgs        :=
 SRC_test_mmr_launch        :=
 SRC_test_mmr_pps           :=
+SRC_test_most_client       := src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_most_msg          :=
+SRC_test_most_reassembler  :=
+SRC_test_most_registry     :=
+SRC_test_most_router       :=
+SRC_test_most_trace        := src/most/client.cpp src/most/trace.cpp tests/fake_dsi_client.cpp
 SRC_test_neutral_resume    :=
 SRC_test_pcm               := src/audio/pcm_ring.cpp src/audio/resampler.cpp $(SPEEX)
 SRC_test_resampler         := src/audio/resampler.cpp $(SPEEX)
+SRC_test_ptt               :=
 SRC_test_route_policy      :=
 SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
@@ -58,12 +66,15 @@ SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
 SRC_test_usb_log           :=
 SRC_test_voice_scenario    := src/audio/voice_scenario.cpp
+SRC_test_volume_input      := src/car/volume_input.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+SRC_test_volume_level      :=
 SRC_test_volume            := src/audio/mixer.cpp src/audio/playout.cpp src/audio/drift.cpp src/audio/stream_rate.cpp
 SRC_test_wpp               := src/wireless_setup.cpp
 
 # Arguments some tests take (paths relative to milestone-7).
 ARGS_test_ccs_decoder := tests/fixtures/controls_2026-10-22_e5.txt
 ARGS_test_ccs_push    := tests/fixtures/controls_2026-10-23_push.txt
+ARGS_test_ccs_input   := tests/fixtures/controls_2026-10-23_push.txt
 
 TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 

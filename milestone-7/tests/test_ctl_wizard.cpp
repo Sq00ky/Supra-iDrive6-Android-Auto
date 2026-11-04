@@ -2,12 +2,13 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Controller setup wizard: the Supra layout must need no env lines; a car with another instance, an inverted knob
 // and BACK/OPTIONS swapped must get exactly the lines that fix it.
-#include "ctl_wizard.hpp"
+#include "car/ctl_wizard.hpp"
 #include <stdio.h>
 #include <string>
 #include <vector>
 
 using namespace nbt;
+using namespace nbt::car;
 static int g_fail = 0;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); ++g_fail; } } while (0)
 

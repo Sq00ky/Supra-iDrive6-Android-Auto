@@ -19,12 +19,15 @@ public:
     typedef void (*AttachedCb)(DsiClient* c, void* user);
     typedef void (*DataCb)(DsiClient* c, uint32_t type, uint32_t id, uint32_t seq,
                            const uint8_t* payload, uint32_t len, void* user);
+    typedef void (*DetachedCb)(DsiClient* c, void* user);
 
     DsiClient();
 
     // interface/role map to "Role.Interface" (e.g. "SGBluetoothGap","BSS_GAP",35,0).
     bool open(const char* iface, const char* role, int major, int minor);
     void setCallbacks(AttachedCb a, DataCb d, void* user);
+    // Optional, before open(). Gets the user pointer given to setCallbacks. Which vtable slot is detach is inferred.
+    void setDetachCallback(DetachedCb d) { detachedCb_ = d; }
 
     // Valid only from within callbacks (connection thread).
     bool sendRequest(uint32_t requestId, const std::vector<uint8_t>& payload);
@@ -53,6 +56,7 @@ private:
     bool quiet_;
     AttachedCb attachedCb_;
     DataCb dataCb_;
+    DetachedCb detachedCb_;
     void* user_;
 };
 

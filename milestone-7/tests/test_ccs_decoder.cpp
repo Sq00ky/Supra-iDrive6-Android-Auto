@@ -2,7 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: replays the E5 controller messages of the 2026-10-22 car run through CcsDecoder.
 // g++ -std=gnu++98 -Wall -Wextra -Iinclude -Isrc -o /tmp/test_ccs tests/test_ccs_decoder.cpp && /tmp/test_ccs tests/fixtures/controls_2026-10-22_e5.txt
-#include "ccs_decoder.hpp"
+#include "car/ccs_decoder.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 using namespace nbt;
+using namespace nbt::car;
 
 int main(int argc, char** argv) {
     const char* path = argc > 1 ? argv[1] : "tests/fixtures/controls_2026-10-22_e5.txt";
@@ -66,8 +67,8 @@ int main(int argc, char** argv) {
     assert(w.feed(0xE5, 3, 0xC46, 0xC, a, 8, e, 4) == 1 && e[0].delta == 2);
     // Older CCS protocol (E5/01 fkt C10 knob, C20 key events; layout from the firmware).
     {
-        nbt::CcsDecoder c;
-        nbt::CcsEvent ev[8];
+        nbt::car::CcsDecoder c;
+        nbt::car::CcsEvent ev[8];
         uint8_t r0[7] = { 0x01, 0x1d, 0xff, 0x7f, 0xff, 0x1e, 0 };          // not configured: ignored
         assert(c.feed(0xE5, 1, 0xC10, 0xC, r0, 7, ev, 8) == 0);
         uint8_t r1[7] = { 0x01, 0x1d, 0x05, 0x7f, 0xff, 0x1e, 0 };          // first configured value: baseline
@@ -99,14 +100,14 @@ int main(int argc, char** argv) {
         assert(c.feed(0xE5, 1, 0xC20, 0xC, back, 7, ev, 8) == 1 && ev[0].keycode == nbt::AAK_BACK && ev[0].down == 0);
         back[3] = 3;                                                           // "no change": ignored
         assert(c.feed(0xE5, 1, 0xC20, 0xC, back, 7, ev, 8) == 0);
-        c.setSlotKey(nbt::CcsDecoder::slotByName("MEDIA"), 85);               // NBT_KEY_MEDIA override applies too
+        c.setSlotKey(nbt::car::CcsDecoder::slotByName("MEDIA"), 85);               // NBT_KEY_MEDIA override applies too
         uint8_t media[7] = { 0x01, 0x1d, 0x05, 1, 0, 0x00, 0x10 };
         assert(c.feed(0xE5, 1, 0xC20, 0xC, media, 7, ev, 8) == 1 && ev[0].keycode == 85);
         printf("test_ccs_decoder CCS (C10/C20) OK\n");
     }
     {   // G30 NBT EVO ID6 capture 2026-10-26 (v1.8.2 knob.log, issue #3): every C10 arrives twice, [2] counts up.
-        nbt::CcsDecoder g;
-        nbt::CcsEvent ev[8];
+        nbt::car::CcsDecoder g;
+        nbt::car::CcsEvent ev[8];
         const uint8_t m[3][7] = { { 0x01, 0x1d, 0x21, 0x80, 0x00, 0x1e, 0 }, { 0x01, 0x1d, 0x22, 0x80, 0x01, 0x1e, 0 },
                                   { 0x01, 0x1d, 0x23, 0x80, 0x02, 0x1e, 0 } };
         int cw = 0, events = 0;
@@ -118,28 +119,56 @@ int main(int argc, char** argv) {
         assert(cw == 2 && events == 2);                                       // baseline, then two clockwise detents
         printf("test_ccs_decoder CCS G30 capture OK\n");
     }
-    {   // Car capture 2026-11-03 (volcap.log on the car): AudioMaster FBlock 0x20 fkt 0x0C08, 5 bytes
-        // 01 00 LEVEL 00 MAX. Up presses walked 8,9,11,12,13,15; down presses 13,12,11,9,8,7; MAX is 0x64.
-        nbt::CcsDecoder v;
-        nbt::CcsEvent ev[8];
-        const int up[]   = { 8, 9, 11, 12, 13, 15 };
-        const int down[] = { 13, 12, 11, 9, 8, 7 };
-        for (int i = 0; i < 6; ++i) {
-            uint8_t m[5] = { 0x01, 0x00, (uint8_t)up[i], 0x00, 0x64 };
-            assert(v.feed(0x20, 0x00, 0xC08, 0xC, m, 5, ev, 8) == 1);
-            assert(ev[0].kind == 3 && ev[0].keycode == 100 && ev[0].delta == up[i]);
+    // reset: the messages stopped. Held keys get a release with cancel set, and the rotary re-bases.
+    {
+        nbt::car::CcsDecoder r;
+        nbt::car::CcsEvent ev[nbt::car::CCS_MAX_RESET_EVENTS];
+        assert(r.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS) == 0);        // nothing held
+
+        const uint8_t pos1[8] = { 1, 0x80, 0x10, 0, 0, 0, 0, 0xff };
+        const uint8_t pos2[8] = { 2, 0x80, 0x20, 1, 4, 0, 0, 0xff };     // 16 detents on, push and tilt right held
+        const uint8_t keys[7] = { 0, 1, 1, 0, 0, 0, 0 };                 // BACK and the unmapped OPTIONS held
+        assert(r.feed(0xE5, 3, 0xC46, 0xC, pos1, 8, ev, 8) == 0);
+        int n = r.feed(0xE5, 3, 0xC46, 0xC, pos2, 8, ev, 8);
+        assert(n == 3 && ev[0].kind == 2 && ev[0].delta == 16 && ev[0].cancel == 0 && ev[1].cancel == 0 && ev[2].cancel == 0);
+        assert(r.feed(0xE5, 3, 0xC47, 0xC, keys, 7, ev, 8) == 2 && ev[0].cancel == 0);
+        const uint8_t ccsBack[7] = { 1, 0x1D, 1, 1, 0, 0x00, 0x02 };     // the older protocol's BACK too
+        assert(r.feed(0xE5, 1, 0xC20, 0xC, ccsBack, 7, ev, 8) == 1);
+
+        n = r.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS);
+        assert(n == 5);
+        std::string got;
+        for (int i = 0; i < n; ++i) {
+            assert(ev[i].kind == 1 && ev[i].down == 0 && ev[i].cancel == 1);
+            got += ev[i].what;
+            got += ' ';
         }
-        uint8_t dup[5] = { 0x01, 0x00, 0x0F, 0x00, 0x64 };                    // same level again at once: dropped
-        assert(v.feed(0x20, 0x00, 0xC08, 0xC, dup, 5, ev, 8) == 0);
-        for (int i = 0; i < 6; ++i) {
-            uint8_t m[5] = { 0x01, 0x00, (uint8_t)down[i], 0x00, 0x64 };
-            assert(v.feed(0x20, 0x00, 0xC08, 0xC, m, 5, ev, 8) == 1);
-            assert(ev[0].kind == 3 && ev[0].keycode == 100 && ev[0].delta == down[i]);
+        assert(got == "TILT_RIGHT PUSH BACK BACK OPTIONS ");
+        assert(ev[4].keycode == 0);                                      // unmapped stays unmapped
+        assert(r.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS) == 0);        // and only once
+
+        // The next position is a new base, not a jump. The keys still held are seen as new presses, with no cancel.
+        const uint8_t pos3[8] = { 3, 0x90, 0x00, 0, 0, 0, 0, 0xff };
+        assert(r.feed(0xE5, 3, 0xC46, 0xC, pos3, 8, ev, 8) == 0);
+        const uint8_t pos4[8] = { 4, 0x90, 0x01, 0, 0, 0, 0, 0xff };
+        assert(r.feed(0xE5, 3, 0xC46, 0xC, pos4, 8, ev, 8) == 1 && ev[0].delta == 1);
+        n = r.feed(0xE5, 3, 0xC47, 0xC, keys, 7, ev, 8);
+        assert(n == 2 && ev[0].down == 1 && ev[0].cancel == 0);
+
+        // Every key held on both protocols fits.
+        nbt::car::CcsDecoder f;
+        const uint8_t all[7] = { 1, 1, 1, 1, 1, 1, 1 };
+        const uint8_t centre[8] = { 1, 0x80, 0x10, 1, 1, 0, 0, 0xff };
+        f.feed(0xE5, 3, 0xC47, 0xC, all, 7, ev, 8);
+        f.feed(0xE5, 3, 0xC46, 0xC, centre, 8, ev, 8);
+        const uint8_t ccsTilt[7] = { 1, 0x1D, 1, 1, 2, 0x1D, 0 }, ccsPush[7] = { 1, 0x1D, 1, 1, 0, 0x1E, 1 };
+        f.feed(0xE5, 1, 0xC20, 0xC, ccsTilt, 7, ev, 8);
+        f.feed(0xE5, 1, 0xC20, 0xC, ccsPush, 7, ev, 8);
+        for (int b = 0; b < nbt::car::CCS_SLOTS; ++b) {
+            const uint8_t k[7] = { 1, 0x1D, 1, 1, 0, 0x00, (uint8_t)(1u << b) };
+            f.feed(0xE5, 1, 0xC20, 0xC, k, 7, ev, 8);
         }
-        uint8_t bad[5] = { 0x01, 0x00, 0x05, 0x00, 0x00 };                    // MAX 0: rejected, not a level message
-        assert(v.feed(0x20, 0x00, 0xC08, 0xC, bad, 5, ev, 8) == 0);
-        assert(v.feed(0x20, 0x00, 0xC08, 0xC, bad, 4, ev, 8) == 0);           // short payload
-        printf("test_ccs_decoder volume (AudioMaster 0x0C08) OK\n");
+        assert(f.reset(ev, nbt::car::CCS_MAX_RESET_EVENTS) == nbt::car::CCS_MAX_RESET_EVENTS);
     }
     printf("test_ccs_decoder OK\n");
     return 0;

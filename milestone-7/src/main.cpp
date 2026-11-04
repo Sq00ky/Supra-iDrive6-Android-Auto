@@ -101,7 +101,12 @@
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
 #include "touch_probe.hpp"
-#include "ccs_input.hpp"
+#include "aa_keys.hpp"
+#include "car/ccs_config.hpp"
+#include "car/ccs_input.hpp"
+#include "car/volume_input.hpp"
+#include "most/client.hpp"
+#include "most/trace.hpp"
 #include "crash_handler.hpp"
 #include "a2i_client.h"
 #include "audio/voice_scenario.hpp"
@@ -143,6 +148,10 @@ static double upSec() {
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
+static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
+static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
+static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
+static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -1280,6 +1289,13 @@ static bool volOsdEnabled() {
     return !(v[0] == '0' && v[1] == 0);   // "0" (optionally trailing space) turns it off
 }
 
+// Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03, car/volume_level.hpp): mirror it on
+// the overlay. This is the value the amplifier actually applied, so the pill always matches what the driver hears.
+// From g_carVolume on the DSI callback thread.
+static void onCarVolume(int level, int max, void*) {
+    volumeApply(nbt::car::VolumeLevel::percent(level, max), false);
+}
+
 static void ensureVolOsd(nbt::VideoManager& vm) {
     if (!volOsdEnabled() || !vm.hasWindow()) return;
     void* w = (void*)vm.screenWindow();
@@ -1335,23 +1351,17 @@ static const char* const kMenuIdriveManual = "/opt/aa/menu-idrive";
 static volatile uint32_t g_keyToPhoneMs = 0;   // monoMs() of the last MENU / COM / MEDIA / NAV / MAP press sent to the phone
 static bool menuOpensIdrive() { return access(kMenuIdriveFlag, F_OK) == 0 || access(kMenuIdriveManual, F_OK) == 0; }
 
-static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
+static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
-    // Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03): mirror it on the overlay. This is
-    // the value the amplifier actually applied, so the pill always matches what the driver hears.
-    if (ev.kind == 3) {
-        int mx = (int)ev.keycode;
-        if (mx <= 0) mx = 100;
-        int pct = ev.delta * 100 / mx;
-        if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
-        volumeApply(pct, false);
-        return;
-    }
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
     if (back_hold && !ev.down) {
         int st = g_backState;
         g_backState = 0;
         if (st == 0) return;   // the press went to iDrive (it owned the screen): no hold timer ran, nothing to report
+        if (ev.cancel) {       // the MOST link went away with BACK held: not a short press, so the phone gets nothing
+            printf("[Knob] BACK hold cancelled: MOST link lost\n");
+            return;
+        }
         printf("[Knob] BACK released after %u ms (%s)\n", (unsigned)(monoMs() - g_backDownMs),
                st == 2 ? "hold already fired" : g_inputToPhone ? "short press -> phone" : "short press, iDrive owns the screen");
         if (st == 1 && g_inputToPhone) {        // short press: deliver it now
@@ -1407,7 +1417,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.08-relative"
+#define NBT_AAD_BUILD "v1.9.09-most"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1622,7 +1632,7 @@ int main(int argc, char* argv[]) {
     }
 
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
-    //    src/ccs_input.cpp (started below); iDrive keeps receiving every knob event itself.
+    //    g_most and g_ccs (started below); iDrive keeps receiving every knob event itself.
 
     // 3b. Volume overlay (NBT_VOL_OSD=1). Off by default: it creates an extra Screen window, so it is opt-in until the
     //     compositing is confirmed on the car. It mirrors the car's own volume (AudioMaster 0x20/0x0C08); there is no
@@ -1691,11 +1701,24 @@ int main(int argc, char* argv[]) {
     }
 
     if (nbt::knobEnabled()) {
-        if (!nbt::startCcsInput(&onKnobEvent, &g_session))
+        if (!g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session))
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
     }
+    // The car's volume is followed whether or not the knob is: it drives the overlay, not the phone.
+    if (!g_carVolume.attach(g_most, &onCarVolume, NULL))
+        printf("[Main] car volume input failed to start.\n");
+    // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
+    // logger for everything it sees now, so they turn that on.
+    const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;
+    if (ccsLogCompat && nbt::envFlag("NBT_MOST_LOG") != 1)
+        printf("[Main] NBT_CCS_DEBUG / NBT_CCS_ALL are replaced by NBT_MOST_LOG=1: turning that on.\n");
+    if ((nbt::envFlag("NBT_MOST_LOG") == 1 || ccsLogCompat) && !g_mostTrace.attach(g_most))
+        printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
+    g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
+    if (!g_most.start("NBTAAD_MOST"))
+        printf("[Main] MOST client failed to start: knob/keys disabled.\n");
 
     if (nbt::wirelessEnabled()) {
         pthread_t wt;
@@ -1764,10 +1787,15 @@ int main(int argc, char* argv[]) {
     // context first (prepareForSession), so a quick reconnect is safe too. Only once the context exists.
     int cp_idle_ticks = 0;
     unsigned cp_live_ticks = 0;
+    uint32_t most_health_ms = monoMs();
     while (g_running) {
         for (int w = 0; w < 5 && !g_mainWake && g_running && !driveModePeekDue(); ++w)
             usleep(50000);   // 250 ms tick, cut short on a wake or when a driving-mode step-aside is due
         g_mainWake = 0;
+        if (monoMs() - most_health_ms >= 60000u) {
+            most_health_ms = monoMs();
+            g_most.logHealth();
+        }
         bool act = g_session.isActive();
         if (act || g_sessionActive) cp_idle_ticks = 0;
         else if (++cp_idle_ticks == 10 && nbt::VideoManager::cpHandoff()) video.retuneForCarPlay();

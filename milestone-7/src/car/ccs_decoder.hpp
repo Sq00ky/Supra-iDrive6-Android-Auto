@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-#ifndef CCS_DECODER_HPP
-#define CCS_DECODER_HPP
+#ifndef CAR_CCS_DECODER_HPP
+#define CAR_CCS_DECODER_HPP
 
 // Pure decoder: iDrive controller (CCS35up, MOST FBlock 0xE5) status messages -> Android Auto input events.
 // Car-verified layout (test_controls run 2026-10-22, controller instance 0x03, op Status 0xC):
@@ -37,39 +37,26 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-#include <time.h>
+#include "aa_keys.hpp"
 
 namespace nbt {
-
-// Android key codes / Android Auto extended key codes (all declared on input channel 7 in the SDR).
-enum {
-    AAK_HOME = 3, AAK_BACK = 4, AAK_CALL = 5,
-    AAK_DPAD_UP = 19, AAK_DPAD_DOWN = 20, AAK_DPAD_LEFT = 21, AAK_DPAD_RIGHT = 22, AAK_DPAD_CENTER = 23,
-    AAK_SEARCH = 84,
-    AAK_ROTARY_CONTROLLER = 65536, AAK_MEDIA = 65537, AAK_NAVIGATION = 65538, AAK_TEL = 65540
-};
+namespace car {
 
 struct CcsEvent {
-    int kind;            // 1 = key (keycode, down), 2 = relative (keycode, delta), 3 = absolute volume
-                         //     (keycode = max, delta = current level)
+    int kind;            // 1 = key (keycode, down), 2 = relative (keycode, delta)
     uint32_t keycode;
     int down;
     int delta;
     const char* what;    // human readable source ("MEDIA", "ROTARY", "TILT_UP", ...)
+    int cancel;          // a release made up by CcsDecoder::reset, not a key the driver let go: never a key press
 };
 
-inline uint32_t ccsNowMs() {
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    return (uint32_t)t.tv_sec * 1000u + (uint32_t)(t.tv_nsec / 1000000);
-}
-
-enum { CCS_SLOTS = 7 };
+enum { CCS_SLOTS = 7, CCS_MAX_RESET_EVENTS = 2 * CCS_SLOTS + 4 };    // both protocols: hard keys, tilt, push
 
 class CcsDecoder {
 public:
     CcsDecoder() : inst_(0x03), ccsInst_(0x01), invert_(false), lastPos_(-1), tiltKey_(0), pushDown_(false),
-                   ccsLastPos_(-1), ccsTilt_(0), ccsPush_(false), volLv_(-1), volMax_(-1), volMs_(0) {
+                   ccsLastPos_(-1), ccsTilt_(0), ccsPush_(false) {
         memset(slot_, 0, sizeof(slot_));
         memset(ccsSlot_, 0, sizeof(ccsSlot_));
         static const char* const names[CCS_SLOTS] = { "MENU", "BACK", "OPTIONS", "COM", "MEDIA", "NAV", "MAP" };
@@ -112,22 +99,6 @@ public:
     int feed(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, const uint8_t* d, size_t n,
              CcsEvent* out, int max) {
         int k = 0;
-        // Volume, car-verified 2026-11-03 (volcap on the car, log /mnt/umass01200t7/volcap.log):
-        // steering-wheel + button = MFL FBlock 0x15 inst 0x02 fkt 0x0401 Status, 4 bytes 00 00 KK 01
-        // (KK 0x02 up, 0x01 down, 0x00 release; each press arrives twice ~3 ms apart).
-        // The absolute level follows ~6 ms later on AudioMaster FBlock 0x20 inst 0x00 fkt 0x0C08, 5 bytes
-        // 01 00 LEVEL 00 MAX (MAX = 0x64 = 100 here) -- level 8,9,11,12,13,15 while pressing up, 13,12,11,9,8,7
-        // while pressing down. Only the level is used: it is the value the car actually applied, so the overlay
-        // cannot drift from what the amplifier is doing.
-        if (fblock == 0x20 && op == 0xC && fkt == 0x0C08 && n >= 5) {
-            int lv = d[2], mx = d[4];
-            if (mx <= 0 || lv < 0 || lv > mx) return 0;
-            uint32_t now = ccsNowMs();
-            if (lv == volLv_ && mx == volMax_ && now - volMs_ < 40u) return 0;   // same step, duplicated
-            volLv_ = lv; volMax_ = mx; volMs_ = now;
-            add(out, max, k, 3, (uint32_t)mx, 0, lv, "VOLUME");
-            return k;
-        }
         if (fblock != 0xE5 || op != 0xC || !d) return 0;
         if ((fkt == 0xC10 || fkt == 0xC20) && inst == ccsInst_) return feedCcs(inst, fkt, d, n, out, max);
         if (inst != inst_) return 0;
@@ -160,6 +131,31 @@ public:
                 }
             }
         }
+        return k;
+    }
+
+    // The messages stopped (MOST link lost). Forget the positions, so the next rotary message re-bases rather than jumping
+    // by whatever moved meanwhile, and write a release with cancel set for every held key. Returns how many were written;
+    // CCS_MAX_RESET_EVENTS is always enough.
+    int reset(CcsEvent* out, int max) {
+        int k = 0;
+        lastPos_ = -1;
+        ccsLastPos_ = -1;
+        if (tiltKey_) add(out, max, k, 1, tiltKey_, 0, 0, tiltName(tiltKey_));
+        tiltKey_ = 0;
+        if (pushDown_) add(out, max, k, 1, AAK_DPAD_CENTER, 0, 0, "PUSH");
+        pushDown_ = false;
+        if (ccsTilt_) add(out, max, k, 1, ccsTilt_, 0, 0, tiltName(ccsTilt_));
+        ccsTilt_ = 0;
+        if (ccsPush_) add(out, max, k, 1, AAK_DPAD_CENTER, 0, 0, "PUSH");
+        ccsPush_ = false;
+        for (int i = 0; i < CCS_SLOTS; ++i) {
+            if (slot_[i]) add(out, max, k, 1, slotKey_[i], 0, 0, slotName_[i]);
+            if (ccsSlot_[i]) add(out, max, k, 1, slotKey_[i], 0, 0, slotName_[i]);
+            slot_[i] = false;
+            ccsSlot_[i] = false;
+        }
+        for (int i = 0; i < k; ++i) out[i].cancel = 1;
         return k;
     }
 
@@ -215,7 +211,7 @@ private:
 
     static void add(CcsEvent* out, int max, int& k, int kind, uint32_t key, int down, int delta, const char* what) {
         if (!out || k >= max) return;
-        out[k].kind = kind; out[k].keycode = key; out[k].down = down; out[k].delta = delta; out[k].what = what;
+        out[k].kind = kind; out[k].keycode = key; out[k].down = down; out[k].delta = delta; out[k].what = what; out[k].cancel = 0;
         ++k;
     }
 
@@ -232,11 +228,9 @@ private:
     int ccsLastPos_;
     uint32_t ccsTilt_;
     bool ccsPush_;
-    int volLv_;                  // last volume level reported by AudioMaster (FBlock 0x20)
-    int volMax_;
-    uint32_t volMs_;
 };
 
+} // namespace car
 } // namespace nbt
 
 #endif

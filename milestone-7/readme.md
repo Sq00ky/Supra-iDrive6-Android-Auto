@@ -511,6 +511,7 @@ Leave these unset unless you are testing.
 | `NBT_TOUCH_SX/SY/OX/OY`, `NBT_TOUCH_W/H`, `NBT_TOUCH_IDLE_MS`, `NBT_TOUCH_CFG_H`, `NBT_TOUCH_PORT` | Touch scale/offset, clamp (1280x720), stuck-finger release (400 ms), declared height (720), UDP port (30567) |
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |
 | `NBT_KNOB_RAW=1` | Log every raw controller message |
+| `NBT_MOST_LOG=1` | Log what the MOST client sees, tagged `[MOSTLOG]`: the registry, then for each message type the first 3 and then payload changes, at most 200 lines per type. For working out the car's signals from a drive. With `NBT_KNOB=0` too, the client still starts, for the log alone. The old `NBT_CCS_DEBUG=1` / `NBT_CCS_ALL=1` switch this on |
 | `NBT_GEAR_REVERSE` | Gear value for R (default 2; car codes 3 P, 1 N, 2 R, 5 D) |
 | `NBT_NEUTRAL_RESUME_S`, `NBT_GEAR_NEUTRAL` | Manual gearbox: seconds in neutral straight after reverse before Android Auto comes back over the park-assist view (default `5`; `0` = off). Leaving neutral or going back into reverse cancels it; not after you exited Android Auto. Gear value for N (default 1). Log: `[Gear] ... reverse -> neutral`. Not car-verified |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
@@ -775,8 +776,14 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    the daemon binds the port only while Android Auto is on screen (one socket gets each datagram). One 112-byte
    datagram per touch on the Supra, 2-4 shorter datagrams (24..64 bytes) on 1440x540 BMW units.
    They are forwarded to the phone as input events on channel 7; the touchscreen is declared as 1280x720.
-7. **Controller (`ccs_input`, `ccs_decoder.hpp`).** Observe-only MOST client on `DSYSMOSTServer` 4.5 that receives
-   copies of the controller's FBlock 0xE5 status messages.
+7. **Controller (`most/client`, `car/ccs_input`, `car/ccs_decoder.hpp`).** `most::Client` is the one observe-only MOST
+   client on `DSYSMOSTServer` 4.5. `CcsInput` is its consumer here: it receives copies of the controller's FBlock 0xE5
+   status messages. Handlers get whole messages: the client joins segments and leaves out transmit status, and counts
+   both. It logs one `[MOST]` line a minute with its message counts by class and its link state, so
+   a silent client still shows. When the link stops being up, keys still held are released on the phone and the knob
+   position re-bases. Messages are routed whatever the link state says. A second consumer, `VolumeInput`
+   (`car/volume_input`, `car/volume_level.hpp`), follows the car's master volume on AudioMaster FBlock 0x20 fkt 0x0C08
+   for the volume overlay; it adds no device-controller keys and runs with `NBT_KNOB=0` too.
 
 ### Cluster and HUD arrows (`kombi_nav`)
 
@@ -920,7 +927,12 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_session_owner` | Which transport (wireless / USB) may take the session from which |
 | `test_usb_accessory` | USB accessory: devctl layout, frame lengths, bridge over a fake `/dev/oap` (pty), session limit, unplug, stop, a writer stuck on a phone that stopped reading, open / switch retries |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
-| `test_ccs_decoder`, `test_ccs_push`, `test_most_msg` | Controller decode (CCS35up + old CCS) against car captures |
+| `test_ccs_decoder`, `test_ccs_push` | Controller decode (CCS35up + old CCS) against car captures |
+| `test_most_msg`, `test_most_router`, `test_most_reassembler`, `test_most_registry` | MOST message parse and build, message classes, routing, joining segments, the registry |
+| `test_most_trace` | `NBT_MOST_LOG` filter and the client's taps |
+| `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
+| `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
+| `test_volume_level`, `test_volume_input` | Car volume level against the car capture (AudioMaster 0x20/0x0C08), and from DSI frame to the overlay callback beside the controller |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
@@ -948,7 +960,12 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     `session_owner.hpp` (wireless vs USB: who owns the session, used by `startSession()` in `main`);
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
-  - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
+  - MOST, in `src/most/` (the library: no Android Auto code, no environment reads, no consumer names): `most/client`
+    (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `most/reassembler.hpp`), and the `NBT_MOST_LOG` logger
+    `most/trace` (+ `most/registry.hpp`);
+  - consumers of the MOST client, in `src/car/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`,
+    `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`, and `car/volume_input`
+    (+ `car/volume_level.hpp`) for the volume overlay;
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
     drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
     (+ `a2i_stream`); browser mode's parts: `stream_input.hpp` (one stream's state, by thread), `asound_device`
