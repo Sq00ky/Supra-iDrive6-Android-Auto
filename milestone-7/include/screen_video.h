@@ -36,6 +36,7 @@ typedef void* screen_display_t;
 
 #define SCREEN_APPLICATION_CONTEXT 0
 #define SCREEN_APPLICATION_WINDOW  0
+#define SCREEN_CHILD_WINDOW        1
 
 #define SCREEN_PROPERTY_DISPLAY        11
 #define SCREEN_PROPERTY_FORMAT         14
@@ -75,6 +76,7 @@ int screen_set_window_property_iv(screen_window_t win, int prop, const int *val)
 int screen_set_window_property_cv(screen_window_t win, int prop, int len, const char *val);
 int screen_set_window_property_pv(screen_window_t win, int prop, void **val);
 int screen_get_window_property_pv(screen_window_t win, int prop, void **val);
+int screen_get_window_property_iv(screen_window_t win, int prop, int *val);
 int screen_get_buffer_property_pv(screen_buffer_t buf, int prop, void **val);
 int screen_get_buffer_property_iv(screen_buffer_t buf, int prop, int *val);
 int screen_fill(screen_context_t ctx, screen_buffer_t buf, const int *attribs);

@@ -37,6 +37,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 namespace nbt {
 
@@ -49,19 +50,26 @@ enum {
 };
 
 struct CcsEvent {
-    int kind;            // 1 = key (keycode, down), 2 = relative (keycode, delta)
+    int kind;            // 1 = key (keycode, down), 2 = relative (keycode, delta), 3 = absolute volume
+                         //     (keycode = max, delta = current level)
     uint32_t keycode;
     int down;
     int delta;
     const char* what;    // human readable source ("MEDIA", "ROTARY", "TILT_UP", ...)
 };
 
+inline uint32_t ccsNowMs() {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint32_t)t.tv_sec * 1000u + (uint32_t)(t.tv_nsec / 1000000);
+}
+
 enum { CCS_SLOTS = 7 };
 
 class CcsDecoder {
 public:
     CcsDecoder() : inst_(0x03), ccsInst_(0x01), invert_(false), lastPos_(-1), tiltKey_(0), pushDown_(false),
-                   ccsLastPos_(-1), ccsTilt_(0), ccsPush_(false) {
+                   ccsLastPos_(-1), ccsTilt_(0), ccsPush_(false), volLv_(-1), volMax_(-1), volMs_(0) {
         memset(slot_, 0, sizeof(slot_));
         memset(ccsSlot_, 0, sizeof(ccsSlot_));
         static const char* const names[CCS_SLOTS] = { "MENU", "BACK", "OPTIONS", "COM", "MEDIA", "NAV", "MAP" };
@@ -104,6 +112,22 @@ public:
     int feed(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, const uint8_t* d, size_t n,
              CcsEvent* out, int max) {
         int k = 0;
+        // Volume, car-verified 2026-11-03 (volcap on the car, log /mnt/umass01200t7/volcap.log):
+        // steering-wheel + button = MFL FBlock 0x15 inst 0x02 fkt 0x0401 Status, 4 bytes 00 00 KK 01
+        // (KK 0x02 up, 0x01 down, 0x00 release; each press arrives twice ~3 ms apart).
+        // The absolute level follows ~6 ms later on AudioMaster FBlock 0x20 inst 0x00 fkt 0x0C08, 5 bytes
+        // 01 00 LEVEL 00 MAX (MAX = 0x64 = 100 here) -- level 8,9,11,12,13,15 while pressing up, 13,12,11,9,8,7
+        // while pressing down. Only the level is used: it is the value the car actually applied, so the overlay
+        // cannot drift from what the amplifier is doing.
+        if (fblock == 0x20 && op == 0xC && fkt == 0x0C08 && n >= 5) {
+            int lv = d[2], mx = d[4];
+            if (mx <= 0 || lv < 0 || lv > mx) return 0;
+            uint32_t now = ccsNowMs();
+            if (lv == volLv_ && mx == volMax_ && now - volMs_ < 40u) return 0;   // same step, duplicated
+            volLv_ = lv; volMax_ = mx; volMs_ = now;
+            add(out, max, k, 3, (uint32_t)mx, 0, lv, "VOLUME");
+            return k;
+        }
         if (fblock != 0xE5 || op != 0xC || !d) return 0;
         if ((fkt == 0xC10 || fkt == 0xC20) && inst == ccsInst_) return feedCcs(inst, fkt, d, n, out, max);
         if (inst != inst_) return 0;
@@ -208,6 +232,9 @@ private:
     int ccsLastPos_;
     uint32_t ccsTilt_;
     bool ccsPush_;
+    int volLv_;                  // last volume level reported by AudioMaster (FBlock 0x20)
+    int volMax_;
+    uint32_t volMs_;
 };
 
 } // namespace nbt

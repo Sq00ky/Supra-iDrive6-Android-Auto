@@ -41,6 +41,11 @@ public:
     void mix(const int16_t* media, const int16_t* guidance, const int16_t* system, size_t frames, bool duck,
              int16_t* out);
 
+    // Live media gain (the volume slider). Ramped over ~50 ms towards the target, applied per frame, so a jump
+    // from full to silent never clicks. Safe to call from another thread than mix(): the target is a plain float
+    // store and a block that sees a stale value just ramps one block later.
+    void setMediaGain(float g);
+
     float duckLevel() const { return duck_; }      // current duck factor (1 = not ducked)
     bool ducking() const { return hold_left_ > 0 || duck_ < 1.0f; }
     const DuckConfig& config() const { return cfg_; }
@@ -57,6 +62,10 @@ private:
     float release_step_;    // per frame
     uint32_t hold_frames_;
     uint32_t hold_left_;    // frames left before the release ramp may start
+    float media_gain_;      // current media gain (ramps towards media_target_)
+    volatile float media_target_;   // set by setMediaGain() from any thread
+    float media_step_;      // per-frame step for the media gain ramp
+
 };
 // Short linear fades so a real gap (padding that could not be avoided, or the end of a prompt) is not a click:
 // fadeOutTail ramps the last fade_frames of buf[0, frames) down to silence, fadeInHead the first fade_frames up.

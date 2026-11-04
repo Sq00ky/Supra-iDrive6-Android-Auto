@@ -87,6 +87,8 @@
 #include "audio/a2i_audio.hpp"
 #include "audio/backend.hpp"
 #include "audio/browser_audio.hpp"
+#include "volume.hpp"
+#include "volume_osd.hpp"
 #include "audio/bt_audio.hpp"
 #include "audio/mic_uplink.hpp"
 #include "video_manager.hpp"
@@ -1239,6 +1241,54 @@ static void* diagThread(void*) {
     return NULL;
 }
 
+// ---- Volume OSD (NBT_VOL_OSD) ---------------------------------------------------------------------------
+// The AA-side gain stage is the only volume we can actually set (no A2I/amp gain call exists on this unit), so
+// the overlay and the gain belong together: every change goes through volumeApply().
+static nbt::VolumeOsd  g_volumeOsd;
+static nbt::BrowserAudio* g_browserAudio = NULL;
+
+// The level the car reports on FBlock 0x20 is the amplifier's own master volume, which already governs our Android Auto
+// output -- so by default the overlay only mirrors it. Re-applying the same curve on the AA mixer would attenuate twice.
+// NBT_VOL_GAIN=1 also drives the AA mixer (full -40..0 dB curve) for the case where the car's volume turns out not to
+// reach our stream; one flag, so that is decided on the car instead of guessed here.
+static bool volGainEnabled() {
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("NBT_VOL_GAIN"); v = (e && *e) ? atoi(e) : 0; }
+    return v != 0;
+}
+
+static void volumeApply(int pct, bool setGain) {
+    const int p = nbt::volumeClampPct(pct);
+    if (setGain && volGainEnabled() && g_browserAudio) g_browserAudio->setMediaGain(nbt::volumePctToGain(p));
+    g_volumeOsd.setPct(p);
+    printf("[Volume] %d%% (%d dB)%s\n", p, nbt::volumePctToDb(p),
+           (setGain && volGainEnabled()) ? " [mixer]" : "");
+}
+
+// There is no demo sweep. The car's own volume arrives for real (AudioMaster 0x20/0x0C08, car-verified 2026-11-03) and
+// drives the pill; a synthetic sweep only ever fought the driver's input. NBT_VOL_DEMO is gone and ignored.
+
+// The pill is a CHILD of the projection window (see volume_osd.cpp), so it can only exist once that window does, and it
+// has to be recreated if the projection window is. Attached lazily here instead of at start-up.
+static void* g_volOsdParent = NULL;
+static bool g_volOsdOn = false;
+// The volume pill is on by default now that it is car-verified (see the VolOsd block below): NBT_VOL_OSD=0
+// turns it off, and any other value keeps it on, so an existing env file with =1 still works untouched.
+static bool volOsdEnabled() {
+    const char* v = getenv("NBT_VOL_OSD");
+    if (!v || !*v) return true;
+    return !(v[0] == '0' && v[1] == 0);   // "0" (optionally trailing space) turns it off
+}
+
+static void ensureVolOsd(nbt::VideoManager& vm) {
+    if (!volOsdEnabled() || !vm.hasWindow()) return;
+    void* w = (void*)vm.screenWindow();
+    if (w == g_volOsdParent) return;
+    if (g_volOsdOn) { g_volumeOsd.stop(); g_volOsdOn = false; }
+    g_volOsdParent = w;
+    g_volOsdOn = g_volumeOsd.start(vm.screenContext(), vm.screenWindow());
+}
+
 static void onTouchEvent(const nbt::TouchEventOut& ev, void* user) {
     if (!g_inputToPhone) return;   // iDrive owns the screen (driver exited AA or reverse camera)
     static_cast<nbt::AASession*>(user)->postTouchEvent(ev);
@@ -1287,6 +1337,16 @@ static bool menuOpensIdrive() { return access(kMenuIdriveFlag, F_OK) == 0 || acc
 
 static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
+    // Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03): mirror it on the overlay. This is
+    // the value the amplifier actually applied, so the pill always matches what the driver hears.
+    if (ev.kind == 3) {
+        int mx = (int)ev.keycode;
+        if (mx <= 0) mx = 100;
+        int pct = ev.delta * 100 / mx;
+        if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
+        volumeApply(pct, false);
+        return;
+    }
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
     if (back_hold && !ev.down) {
         int st = g_backState;
@@ -1347,7 +1407,7 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.80-wfdname"
+#define NBT_AAD_BUILD "v1.9.08-relative"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1549,6 +1609,7 @@ int main(int argc, char* argv[]) {
         if (underflow) browser.setUnderflowCallback(&onAudioUnderflow, NULL);
         g_session.setUnderflowReports(underflow);
         printf("[Browser] underflow reports to the phone: %s (NBT_AA_UNDERFLOW_REPORT)\n", underflow ? "on" : "off");
+        g_browserAudio = &browser;
         g_audioBackend = &browser;
     } else if (audio_mode == nbt::AUDIO_MODE_BT) {
         bt.init(nbt::readBtConfig());   // the car's Bluetooth source, NBT_BT_PLAY, NBT_SPEECH
@@ -1562,6 +1623,15 @@ int main(int argc, char* argv[]) {
 
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
     //    src/ccs_input.cpp (started below); iDrive keeps receiving every knob event itself.
+
+    // 3b. Volume overlay (NBT_VOL_OSD=1). Off by default: it creates an extra Screen window, so it is opt-in until the
+    //     compositing is confirmed on the car. It mirrors the car's own volume (AudioMaster 0x20/0x0C08); there is no
+    //     synthetic sweep and no env var for one.
+    if (volOsdEnabled()) {
+        printf("[VolOsd] will attach to the Android Auto window as a child when a phone connects\n");
+    } else {
+        printf("[VolOsd] off (NBT_VOL_OSD not set): the car's volume is decoded but nothing is drawn\n");
+    }
 
     // Microphone upload is not wired into AA yet; leave callback unset so the
     // A2I uplink reader does not flood slog while debugging video bring-up.
@@ -1847,6 +1917,7 @@ int main(int argc, char* argv[]) {
                                                                  : "driving-mode display time over: restoring Android Auto");
             was_dm_peek = dm_peek;
         }
+        ensureVolOsd(video);   // the pill needs the projection window as its parent
         bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !dm_peek;
         if (want && act && !overlay_on && video.decoderInCarPlayMode()) {
             printf("[Main] back to Android Auto after CarPlay: rebuilding the decoder context\n");

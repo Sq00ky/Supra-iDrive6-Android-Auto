@@ -416,6 +416,11 @@ bool BrowserAudio::routedForPlayback() {
     return r;
 }
 
+void BrowserAudio::setMediaGain(float g) {
+    // Ramped inside the mixer (per frame, ~50 ms), so this is safe from the UI thread while the mixer thread runs.
+    mixer_.setMediaGain(g);
+}
+
 void BrowserAudio::refocus(const char* why) {
     if (!refocus_ || !conn_ || !route_.available()) return;
     pthread_mutex_lock(&lock_);
