@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -817,24 +818,7 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // SensorStartResponse 0x8002 {status=1}, SensorEventIndication 0x8003 with repeated
 // NightMode night_mode=10 {is_night=1} and DrivingStatus driving_status=13 {status=1}.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
-static uint32_t pbFirstVarint(const std::vector<uint8_t>& d, size_t off, uint32_t field) {
-    size_t i = off;
-    while (i < d.size()) {
-        uint32_t tag = 0; int sh = 0;
-        while (i < d.size()) { uint8_t b = d[i++]; tag |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-        uint32_t f = tag >> 3, w = tag & 7;
-        if (w == 0) {
-            uint32_t v = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; v |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            if (f == field) return v;
-        } else if (w == 2) {
-            uint32_t len = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; len |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            i += len;
-        } else if (w == 1) { i += 8; } else if (w == 5) { i += 4; } else { break; }
-    }
-    return 0xFFFFFFFFu;
-}
+using proto::pbFirstVarint;
 
 bool AASession::sendSensorStartResponse(uint8_t channel, bool ok) {
     uint8_t plain[4] = { 0x80, 0x02, 0x08, (uint8_t)(ok ? 0x00 : 0x01) };

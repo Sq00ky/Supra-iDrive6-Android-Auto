@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "wireless_setup.hpp"
+#include "aa_proto.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,43 +32,36 @@ void putInt(std::vector<uint8_t>& out, int field, uint64_t v) {
     putVarint(out, v);
 }
 
-bool getVarint(const uint8_t* p, size_t n, size_t& pos, uint64_t& v) {
-    v = 0;
-    int shift = 0;
-    while (pos < n && shift < 64) {
-        uint8_t b = p[pos++];
-        v |= (uint64_t)(b & 0x7f) << shift;
-        if (!(b & 0x80)) return true;
-        shift += 7;
-    }
-    return false;
+bool findVarintField(const uint8_t* p, size_t n, int field, uint64_t& v) {
+    return proto::pbFindVarint(p, n, (uint32_t)field, v);
 }
 
-bool findVarintField(const uint8_t* p, size_t n, int field, uint64_t& v) {
-    size_t pos = 0;
-    while (pos < n) {
-        uint64_t key;
-        if (!getVarint(p, n, pos, key)) return false;
-        int f = (int)(key >> 3);
-        int wt = (int)(key & 7);
-        if (wt == 0) {
-            uint64_t x;
-            if (!getVarint(p, n, pos, x)) return false;
-            if (f == field) { v = x; return true; }
-        } else if (wt == 2) {
-            uint64_t len;
-            if (!getVarint(p, n, pos, len)) return false;
-            if (pos + len > n) return false;
-            pos += (size_t)len;
-        } else if (wt == 5) {
-            pos += 4;
-        } else if (wt == 1) {
-            pos += 8;
+std::string describeFields(const uint8_t* p, size_t n) {
+    std::string out;
+    char buf[48];
+    proto::PbReader r(p, n);
+    proto::PbField f;
+    while (r.next(f)) {
+        if (f.wire == 0) {
+            snprintf(buf, sizeof(buf), " f%u=%llu", f.num, (unsigned long long)f.value);
+        } else if (f.wire == 2) {
+            bool printable = true;
+            for (size_t i = 0; i < f.len; ++i) if (f.data[i] < 32 || f.data[i] > 126) printable = false;
+            if (printable) {
+                snprintf(buf, sizeof(buf), " f%u='", f.num);
+                out += buf;
+                out.append((const char*)f.data, f.len);
+                snprintf(buf, sizeof(buf), "'");
+            } else {
+                snprintf(buf, sizeof(buf), " f%u=<%u bytes>", f.num, (unsigned)f.len);
+            }
         } else {
-            return false;
+            snprintf(buf, sizeof(buf), " f%u=<%s>", f.num, f.wire == 5 ? "fixed32" : "fixed64");
         }
+        out += buf;
     }
-    return false;
+    if (!r.ok()) out += " <malformed>";
+    return out;
 }
 
 std::vector<uint8_t> frame(uint16_t id, const std::vector<uint8_t>& payload) {
@@ -368,39 +362,11 @@ static void hexdump(const char* tag, const uint8_t* p, size_t n) {
     printf("\n");
 }
 
-// Generic protobuf field dump (no schema): shows what the phone really sent.
-static void dumpProto(const uint8_t* p, size_t n) {
-    size_t pos = 0;
-    printf("[Wireless]    fields:");
-    while (pos < n) {
-        uint64_t key;
-        if (!wpp::getVarint(p, n, pos, key)) { printf(" <bad key>"); break; }
-        int f = (int)(key >> 3), wt = (int)(key & 7);
-        if (f == 0) { printf(" <field 0: not protobuf>"); break; }
-        if (wt == 0) {
-            uint64_t v;
-            if (!wpp::getVarint(p, n, pos, v)) { printf(" <bad varint>"); break; }
-            printf(" f%d=%llu", f, (unsigned long long)v);
-        } else if (wt == 2) {
-            uint64_t len;
-            if (!wpp::getVarint(p, n, pos, len) || pos + len > n) { printf(" <bad len>"); break; }
-            bool pr = true;
-            for (size_t i = 0; i < len; ++i) if (p[pos + i] < 32 || p[pos + i] > 126) pr = false;
-            if (pr) printf(" f%d='%.*s'", f, (int)len, (const char*)(p + pos));
-            else printf(" f%d=<%u bytes>", f, (unsigned)len);
-            pos += (size_t)len;
-        } else if (wt == 5) { printf(" f%d=<fixed32>", f); pos += 4;
-        } else if (wt == 1) { printf(" f%d=<fixed64>", f); pos += 8;
-        } else { printf(" <wiretype %d>", wt); break; }
-    }
-    printf("\n");
-}
-
 // Handles one phone message. Returns 0 = keep going, 1 = handshake finished OK, -1 = write failure.
 static int handleMsg(int fd, uint16_t id, const std::vector<uint8_t>& pl, const ApInfo& ap, uint16_t port,
                      bool& sentInfo, int& startRespSeen, bool& startAcked) {
     printf("[Wireless] RX msg id=%u len=%u\n", id, (unsigned)pl.size());
-    if (!pl.empty()) { hexdump("   payload", &pl[0], pl.size()); dumpProto(&pl[0], pl.size()); }
+    if (!pl.empty()) { hexdump("   payload", &pl[0], pl.size()); printf("[Wireless]    fields:%s\n", wpp::describeFields(&pl[0], pl.size()).c_str()); }
     if (id == wpp::kWifiInfoRequest) {
         std::vector<uint8_t> resp = wpp::buildInfoResponse(ap);
         printf("[Wireless] TX WifiInfoResponse ssid='%s' bssid='%s' security=%d\n",

@@ -39,9 +39,10 @@ enum MsgId {
 void putVarint(std::vector<uint8_t>& out, uint64_t v);
 void putString(std::vector<uint8_t>& out, int field, const std::string& s);
 void putInt(std::vector<uint8_t>& out, int field, uint64_t v);
-bool getVarint(const uint8_t* p, size_t n, size_t& pos, uint64_t& v);
 // Finds a varint field (returns false if absent). Skips other fields.
 bool findVarintField(const uint8_t* p, size_t n, int field, uint64_t& v);
+// The fields of a message with no schema, for the log: " f1=5 f2='text' f3=<4 bytes>", then " <malformed>" if it stops early.
+std::string describeFields(const uint8_t* p, size_t n);
 
 std::vector<uint8_t> frame(uint16_t id, const std::vector<uint8_t>& payload);
 std::vector<uint8_t> buildStartRequest(const std::string& ip, uint16_t port);
