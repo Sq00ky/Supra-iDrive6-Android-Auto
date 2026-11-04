@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "sdr_builder.hpp"
+#include "aa_proto.hpp"
 #include "nbt_env.hpp"
 #include "audio/config.hpp"
 #include "car_config.hpp"
@@ -164,57 +165,7 @@ AaChannel navStatusChannel() {
 
 // ---- protobuf ---------------------------------------------------------------------------------------------------
 
-enum { WIRE_VARINT = 0, WIRE_FIXED64 = 1, WIRE_LENGTH = 2, WIRE_FIXED32 = 5 };
-
-void putVarint(std::vector<uint8_t>& o, uint64_t v) {
-    while (v >= 0x80) { o.push_back((uint8_t)(v | 0x80)); v >>= 7; }
-    o.push_back((uint8_t)v);
-}
-
-bool getVarint(const uint8_t* p, size_t n, size_t& pos, uint64_t& v) {
-    v = 0; int sh = 0;
-    while (pos < n && sh < 64) {
-        uint8_t b = p[pos++];
-        v |= (uint64_t)(b & 0x7f) << sh;
-        if (!(b & 0x80)) return true;
-        sh += 7;
-    }
-    return false;
-}
-
-class ProtoWriter {
-public:
-    // Negative values go out sign-extended to 64 bits, as protobuf does for int32.
-    void integer(unsigned field, int value) {
-        putVarint(out_, (field << 3) | WIRE_VARINT);
-        putVarint(out_, (uint64_t)(int64_t)value);
-    }
-    void unsignedInteger(unsigned field, uint32_t value) {
-        putVarint(out_, (field << 3) | WIRE_VARINT);
-        putVarint(out_, value);
-    }
-    void string(unsigned field, const std::string& value) {
-        putVarint(out_, (field << 3) | WIRE_LENGTH);
-        putVarint(out_, value.size());
-        out_.insert(out_.end(), value.begin(), value.end());
-    }
-    void message(unsigned field, const ProtoWriter& value) {
-        putVarint(out_, (field << 3) | WIRE_LENGTH);
-        putVarint(out_, value.out_.size());
-        out_.insert(out_.end(), value.out_.begin(), value.out_.end());
-    }
-    void repeated(unsigned field, const std::vector<int>& values) {
-        for (size_t i = 0; i < values.size(); ++i) integer(field, values[i]);
-    }
-    void packed(unsigned field, const std::vector<int>& values) {
-        ProtoWriter list;
-        for (size_t i = 0; i < values.size(); ++i) putVarint(list.out_, (uint64_t)(int64_t)values[i]);
-        message(field, list);
-    }
-    const std::vector<uint8_t>& bytes() const { return out_; }
-private:
-    std::vector<uint8_t> out_;
-};
+using proto::ProtoWriter;
 
 ProtoWriter encode(const AaAudioConfig& c) {
     enum { F_SAMPLE_RATE = 1, F_BIT_DEPTH = 2, F_CHANNEL_COUNT = 3 };
@@ -738,27 +689,12 @@ namespace {
 // AV START_INDICATION: { session = 1, configuration_index = 2 }.
 void readAudioStart(const uint8_t* p, size_t n, uint32_t& session, uint32_t& index) {
     enum { F_SESSION = 1, F_CONFIGURATION_INDEX = 2 };
-    size_t pos = 0;
-    while (pos < n) {
-        uint64_t key, v = 0, l = 0;
-        if (!getVarint(p, n, pos, key)) return;
-        const unsigned f = (unsigned)(key >> 3), wt = (unsigned)(key & 7);
-        if (wt == WIRE_VARINT) {
-            if (!getVarint(p, n, pos, v)) return;
-            if (f == F_SESSION) session = (uint32_t)v;
-            else if (f == F_CONFIGURATION_INDEX) index = (uint32_t)v;
-        } else if (wt == WIRE_LENGTH) {
-            if (!getVarint(p, n, pos, l) || l > n - pos) return;
-            pos += (size_t)l;
-        } else if (wt == WIRE_FIXED64) {
-            if (n - pos < 8) return;
-            pos += 8;
-        } else if (wt == WIRE_FIXED32) {
-            if (n - pos < 4) return;
-            pos += 4;
-        } else {
-            return;
-        }
+    proto::PbReader r(p, n);
+    proto::PbField f;
+    while (r.next(f)) {
+        if (f.wire != proto::WIRE_VARINT) continue;
+        if (f.num == F_SESSION) session = (uint32_t)f.value;
+        else if (f.num == F_CONFIGURATION_INDEX) index = (uint32_t)f.value;
     }
 }
 

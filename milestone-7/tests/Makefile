@@ -60,6 +60,7 @@ SRC_test_ptt               :=
 SRC_test_route_policy      :=
 SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
+SRC_test_session_control   := src/aa_cryptor.cpp src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_lifecycle := src/aa_cryptor.cpp src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_owner     :=
 SRC_test_touch             := src/touch_probe.cpp

@@ -512,10 +512,7 @@ void AASession::postTouchEvent(const TouchEventOut& ev) {
     (void)w;
 }
 
-static void putVar(std::vector<uint8_t>& o, uint64_t v) {
-    while (v >= 0x80) { o.push_back((uint8_t)(v | 0x80)); v >>= 7; }
-    o.push_back((uint8_t)v);
-}
+static void putVar(std::vector<uint8_t>& o, uint64_t v) { proto::putVarint(o, v); }
 
 void AASession::postKeyEvent(uint32_t keycode, bool down) {
     KeyOut k; k.keycode = keycode; k.down = down ? 1 : 0; k.delta = 0; k.rel = false;
@@ -1291,7 +1288,8 @@ void AASession::sessionLoop() {
                     printf("[AASession] >>> Received ServiceDiscoveryRequest from phone! Sending ServiceDiscoveryResponse...\n");
                     sendServiceDiscoveryResponse();
                 } else if (msg_id == 0x0012) { // AudioFocusRequest
-                    uint8_t requested_focus = (frame_data.size() >= 4) ? frame_data[3] : 0;
+                    const uint32_t focus_field = pbFirstVarint(frame_data, 2, 1);   // AudioFocusRequest {type=1}
+                    uint8_t requested_focus = focus_field == 0xFFFFFFFFu ? 0 : (uint8_t)focus_field;
                     // AudioFocusType 1 GAIN, 2 GAIN_TRANSIENT, 3 GAIN_NAVI (guidance prompts), 4 RELEASE. Like openauto, answer
                     // RELEASE with LOSS (3) and everything else with GAIN (1); answering RELEASE with NONE (0) left the
                     // phone without a clean end of each guidance prompt.
@@ -1327,20 +1325,12 @@ void AASession::sessionLoop() {
                     break;
                 } else if (msg_id == 11) { // PingRequest
                     printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");
-                    // PingResponse {timestamp = field 1}: echo the request's timestamp varint.
-                    std::vector<uint8_t> ping_resp;
-                    ping_resp.push_back(0x00);
-                    ping_resp.push_back(0x0C); // Msg ID 12 (PingResponse)
-                    if (frame_data.size() > 3 && frame_data[2] == 0x08) {
-                        size_t i = 3;
-                        ping_resp.push_back(0x08);
-                        while (i < frame_data.size() && ping_resp.size() < 16) {
-                            uint8_t b = frame_data[i++];
-                            ping_resp.push_back(b);
-                            if (!(b & 0x80)) break;
-                        }
-                    }
-                    sendFrame(0x00, 0x03, &ping_resp[0], ping_resp.size()); // Pings are unencrypted
+                    enum { MSG_PING_RESPONSE = 0x000C, F_TIMESTAMP = 1 };
+                    proto::ProtoWriter ping_resp(MSG_PING_RESPONSE);   // echoes the request's timestamp
+                    uint64_t timestamp;
+                    if (frame_data.size() > 2 && proto::pbFindVarint(&frame_data[2], frame_data.size() - 2, F_TIMESTAMP, timestamp))
+                        ping_resp.unsignedInteger(F_TIMESTAMP, timestamp);
+                    sendFrame(0x00, 0x03, &ping_resp.bytes()[0], ping_resp.bytes().size()); // Pings are unencrypted
                 } else {
                     printf("[AASession] Control Message RX: ID=0x%04X, Len=%u\n",
                            msg_id, static_cast<unsigned int>(frame_data.size()));

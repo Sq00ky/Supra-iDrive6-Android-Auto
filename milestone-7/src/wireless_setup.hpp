@@ -36,7 +36,6 @@ enum MsgId {
 };
 
 // Protobuf helpers (proto2 wire format, only what WPP needs)
-void putVarint(std::vector<uint8_t>& out, uint64_t v);
 void putString(std::vector<uint8_t>& out, int field, const std::string& s);
 void putInt(std::vector<uint8_t>& out, int field, uint64_t v);
 // Finds a varint field (returns false if absent). Skips other fields.

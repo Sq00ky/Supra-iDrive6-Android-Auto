@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// aa_proto: reading the protobuf messages Android Auto sends. Pure, no I/O, safe on any input.
+// aa_proto: reading and writing Android Auto's protobuf messages. Pure, no I/O. The reader is safe on any input.
 #ifndef AA_PROTO_HPP
 #define AA_PROTO_HPP
 
@@ -12,14 +12,63 @@
 namespace nbt {
 namespace proto {
 
+enum { WIRE_VARINT = 0, WIRE_FIXED64 = 1, WIRE_LENGTH = 2, WIRE_FIXED32 = 5 };
+
+// ---- writing ----------------------------------------------------------------------------------------------------
+
+inline void putVarint(std::vector<uint8_t>& o, uint64_t v) {
+    while (v >= 0x80) { o.push_back((uint8_t)(v | 0x80)); v >>= 7; }
+    o.push_back((uint8_t)v);
+}
+
+class ProtoWriter {
+public:
+    ProtoWriter() {}
+    // A whole Android Auto message: the 2-byte big-endian id, then the fields.
+    explicit ProtoWriter(uint16_t messageId) {
+        out_.push_back((uint8_t)(messageId >> 8));
+        out_.push_back((uint8_t)messageId);
+    }
+    // Negative values go out sign-extended to 64 bits, as protobuf does for int32.
+    void integer(unsigned field, int value) {
+        putVarint(out_, (field << 3) | WIRE_VARINT);
+        putVarint(out_, (uint64_t)(int64_t)value);
+    }
+    void unsignedInteger(unsigned field, uint64_t value) {
+        putVarint(out_, (field << 3) | WIRE_VARINT);
+        putVarint(out_, value);
+    }
+    void string(unsigned field, const std::string& value) {
+        putVarint(out_, (field << 3) | WIRE_LENGTH);
+        putVarint(out_, value.size());
+        out_.insert(out_.end(), value.begin(), value.end());
+    }
+    void message(unsigned field, const ProtoWriter& value) {
+        putVarint(out_, (field << 3) | WIRE_LENGTH);
+        putVarint(out_, value.out_.size());
+        out_.insert(out_.end(), value.out_.begin(), value.out_.end());
+    }
+    void repeated(unsigned field, const std::vector<int>& values) {
+        for (size_t i = 0; i < values.size(); ++i) integer(field, values[i]);
+    }
+    void packed(unsigned field, const std::vector<int>& values) {
+        ProtoWriter list;
+        for (size_t i = 0; i < values.size(); ++i) putVarint(list.out_, (uint64_t)(int64_t)values[i]);
+        message(field, list);
+    }
+    const std::vector<uint8_t>& bytes() const { return out_; }
+private:
+    std::vector<uint8_t> out_;
+};
+
 // ---- reading ----------------------------------------------------------------------------------------------------
 
 struct PbField {
     uint32_t num;
-    uint32_t wire;          // 0 varint, 1 fixed64, 2 length-delimited, 5 fixed32
-    uint64_t value;         // wire 0
-    const uint8_t* data;    // wire 2
-    size_t len;             // wire 2
+    uint32_t wire;          // a WIRE_ value
+    uint64_t value;         // WIRE_VARINT
+    const uint8_t* data;    // WIRE_LENGTH
+    size_t len;             // WIRE_LENGTH
 };
 
 inline bool pbReadVarint(const uint8_t*& p, const uint8_t* end, uint64_t& v) {
@@ -43,15 +92,15 @@ public:
         f.num = (uint32_t)(tag >> 3);
         f.wire = (uint32_t)(tag & 7);
         f.value = 0; f.data = NULL; f.len = 0;
-        if (f.wire == 0) {
+        if (f.wire == WIRE_VARINT) {
             if (!pbReadVarint(p_, end_, f.value)) return fail();
-        } else if (f.wire == 1) {
+        } else if (f.wire == WIRE_FIXED64) {
             if (end_ - p_ < 8) return fail();
             p_ += 8;
-        } else if (f.wire == 5) {
+        } else if (f.wire == WIRE_FIXED32) {
             if (end_ - p_ < 4) return fail();
             p_ += 4;
-        } else if (f.wire == 2) {
+        } else if (f.wire == WIRE_LENGTH) {
             uint64_t n;
             if (!pbReadVarint(p_, end_, n) || n > (uint64_t)(end_ - p_)) return fail();
             f.data = p_; f.len = (size_t)n; p_ += n;
@@ -108,21 +157,21 @@ inline bool pbLooksLikeText(const uint8_t* p, size_t n) {
 // Sub-message at field num (length-delimited and not text), or an empty span.
 inline PbSpan pbMsg(const PbSpan& m, uint32_t num) {
     PbField f;
-    if (!pbFirst(m, num, f) || f.wire != 2 || pbLooksLikeText(f.data, f.len)) return PbSpan();
+    if (!pbFirst(m, num, f) || f.wire != WIRE_LENGTH || pbLooksLikeText(f.data, f.len)) return PbSpan();
     return PbSpan(f.data, f.len);
 }
 
 // String at field num; "" when absent or not text.
 inline std::string pbText(const PbSpan& m, uint32_t num) {
     PbField f;
-    if (!pbFirst(m, num, f) || f.wire != 2 || !pbLooksLikeText(f.data, f.len)) return std::string();
+    if (!pbFirst(m, num, f) || f.wire != WIRE_LENGTH || !pbLooksLikeText(f.data, f.len)) return std::string();
     return std::string((const char*)f.data, f.len);
 }
 
 // Varint at field num.
 inline bool pbInt(const PbSpan& m, uint32_t num, int64_t& v) {
     PbField f;
-    if (!pbFirst(m, num, f) || f.wire != 0) return false;
+    if (!pbFirst(m, num, f) || f.wire != WIRE_VARINT) return false;
     v = (int64_t)f.value;
     return true;
 }
@@ -132,7 +181,7 @@ inline bool pbFindVarint(const uint8_t* p, size_t n, uint32_t num, uint64_t& v) 
     PbReader r(p, n);
     PbField f;
     while (r.next(f)) {
-        if (f.num == num && f.wire == 0) { v = f.value; return true; }
+        if (f.num == num && f.wire == WIRE_VARINT) { v = f.value; return true; }
     }
     return false;
 }
