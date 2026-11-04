@@ -99,6 +99,7 @@
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
 #include "touch_probe.hpp"
+#include "aa_keys.hpp"
 #include "car/ccs_input.hpp"
 #include "crash_handler.hpp"
 #include "a2i_client.h"
@@ -1285,7 +1286,7 @@ static const char* const kMenuIdriveManual = "/opt/aa/menu-idrive";
 static volatile uint32_t g_keyToPhoneMs = 0;   // monoMs() of the last MENU / COM / MEDIA / NAV / MAP press sent to the phone
 static bool menuOpensIdrive() { return access(kMenuIdriveFlag, F_OK) == 0 || access(kMenuIdriveManual, F_OK) == 0; }
 
-static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
+static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
     if (back_hold && !ev.down) {
@@ -1621,7 +1622,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (nbt::knobEnabled()) {
-        if (!nbt::startCcsInput(&onKnobEvent, &g_session))
+        if (!nbt::car::startCcsInput(&onKnobEvent, &g_session))
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");

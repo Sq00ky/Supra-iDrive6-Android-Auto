@@ -39,6 +39,8 @@
 #include <pthread.h>
 
 using namespace nbt;
+using namespace nbt::most;
+using namespace nbt::car;
 
 namespace {
 
@@ -83,7 +85,7 @@ const char* opName(unsigned op) {
     }
 }
 
-void decodeCcs(const MostMsg& m) {
+void decodeCcs(const Msg& m) {
     const std::vector<uint8_t>& d = m.data;
     if (m.fblock != 0xE5) return;
     if (m.fkt == 0xC46 && d.size() >= 3) {
@@ -119,8 +121,8 @@ void decodeCcs(const MostMsg& m) {
 }
 
 void onMessage(const uint8_t* pl, uint32_t len) {
-    MostMsg m;
-    if (!parseMostMessage(pl, len, m)) {
+    Msg m;
+    if (!parseMessage(pl, len, m)) {
         printf("[%6ld] MOST message: could not parse (%u B)\n", nowMs() - g_t0, len);
         hex("   raw:", pl, len, 96);
         return;
@@ -175,8 +177,8 @@ void onData(DsiClient* c, uint32_t type, uint32_t id, uint32_t seq, const uint8_
         hex(tag, pl, len, 256);
     }
     if (id == 0x80000000u && len >= 6) {
-        g_client = mostRdU32(pl);
-        unsigned dev = mostRdU16(pl + 4);
+        g_client = rdLe32(pl);
+        unsigned dev = rdLe16(pl + 4);
         printf("[%6ld] registered: clientId=%u deviceId=0x%04X%s\n", nowMs() - g_t0, g_client, dev,
                g_client == 0xffffffffu ? "  (REGISTRATION REFUSED)" : "");
         if (g_client != 0xffffffffu && g_stage < 2) {

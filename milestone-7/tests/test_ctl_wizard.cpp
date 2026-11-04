@@ -8,6 +8,7 @@
 #include <vector>
 
 using namespace nbt;
+using namespace nbt::car;
 static int g_fail = 0;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); ++g_fail; } } while (0)
 

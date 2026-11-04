@@ -7,8 +7,8 @@
 // Supra: instance 0x03, clockwise = position up, hard-key slots MENU BACK OPTIONS COM MEDIA NAV MAP). It then
 // produces the nbt-aad.env lines (NBT_KNOB_INST, NBT_KNOB_INVERT, NBT_KEY_<slot>) needed to match, and nothing
 // for whatever already matches. Pure logic, no I/O: tests/test_ctl_wizard.cpp drives it with synthetic messages.
-#ifndef NBT_CTL_WIZARD_HPP
-#define NBT_CTL_WIZARD_HPP
+#ifndef CAR_CTL_WIZARD_HPP
+#define CAR_CTL_WIZARD_HPP
 
 #include "car/ccs_decoder.hpp"
 
@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace nbt {
+namespace car {
 
 class CtlWizard {
 public:
@@ -242,6 +243,7 @@ private:
     uint8_t keyInst_[CCS_SLOTS];
 };
 
+} // namespace car
 } // namespace nbt
 
 #endif

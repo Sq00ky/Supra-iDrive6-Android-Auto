@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-#ifndef CCS_INPUT_HPP
-#define CCS_INPUT_HPP
+#ifndef CAR_CCS_INPUT_HPP
+#define CAR_CCS_INPUT_HPP
 
 #include <stddef.h>
 #include <stdint.h>
 #include "car/ccs_decoder.hpp"
 
 namespace nbt {
+namespace car {
 
 typedef void (*CcsEventCb)(const CcsEvent& ev, void* user);
 
@@ -23,6 +24,7 @@ typedef void (*CcsEventCb)(const CcsEvent& ev, void* user);
 //      NBT_KNOB_RAW=1      log every raw DSI event (very noisy)
 bool startCcsInput(CcsEventCb cb, void* user);
 
+} // namespace car
 } // namespace nbt
 
 #endif

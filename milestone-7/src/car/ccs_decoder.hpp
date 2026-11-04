@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-#ifndef CCS_DECODER_HPP
-#define CCS_DECODER_HPP
+#ifndef CAR_CCS_DECODER_HPP
+#define CAR_CCS_DECODER_HPP
 
 // Pure decoder: iDrive controller (CCS35up, MOST FBlock 0xE5) status messages -> Android Auto input events.
 // Car-verified layout (test_controls run 2026-10-22, controller instance 0x03, op Status 0xC):
@@ -37,16 +37,10 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include "aa_keys.hpp"
 
 namespace nbt {
-
-// Android key codes / Android Auto extended key codes (all declared on input channel 7 in the SDR).
-enum {
-    AAK_HOME = 3, AAK_BACK = 4, AAK_CALL = 5,
-    AAK_DPAD_UP = 19, AAK_DPAD_DOWN = 20, AAK_DPAD_LEFT = 21, AAK_DPAD_RIGHT = 22, AAK_DPAD_CENTER = 23,
-    AAK_SEARCH = 84,
-    AAK_ROTARY_CONTROLLER = 65536, AAK_MEDIA = 65537, AAK_NAVIGATION = 65538, AAK_TEL = 65540
-};
+namespace car {
 
 struct CcsEvent {
     int kind;            // 1 = key (keycode, down), 2 = relative (keycode, delta)
@@ -210,6 +204,7 @@ private:
     bool ccsPush_;
 };
 
+} // namespace car
 } // namespace nbt
 
 #endif

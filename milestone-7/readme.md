@@ -928,7 +928,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     `session_owner.hpp` (wireless vs USB: who owns the session, used by `startSession()` in `main`);
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
-  - controller, in `src/car/` and `src/most/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `most/msg.hpp`, `car/ctl_wizard.hpp`);
+  - controller, in `src/car/` and `src/most/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `most/msg.hpp`, `car/ctl_wizard.hpp`, `aa_keys.hpp`);
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
     drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
     (+ `a2i_stream`); browser mode's parts: `stream_input.hpp` (one stream's state, by thread), `asound_device`

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 using namespace nbt;
+using namespace nbt::car;
 
 int main(int argc, char** argv) {
     const char* path = argc > 1 ? argv[1] : "tests/fixtures/controls_2026-10-23_push.txt";

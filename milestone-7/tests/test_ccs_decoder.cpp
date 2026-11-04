@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 using namespace nbt;
+using namespace nbt::car;
 
 int main(int argc, char** argv) {
     const char* path = argc > 1 ? argv[1] : "tests/fixtures/controls_2026-10-22_e5.txt";
@@ -66,8 +67,8 @@ int main(int argc, char** argv) {
     assert(w.feed(0xE5, 3, 0xC46, 0xC, a, 8, e, 4) == 1 && e[0].delta == 2);
     // Older CCS protocol (E5/01 fkt C10 knob, C20 key events; layout from the firmware).
     {
-        nbt::CcsDecoder c;
-        nbt::CcsEvent ev[8];
+        nbt::car::CcsDecoder c;
+        nbt::car::CcsEvent ev[8];
         uint8_t r0[7] = { 0x01, 0x1d, 0xff, 0x7f, 0xff, 0x1e, 0 };          // not configured: ignored
         assert(c.feed(0xE5, 1, 0xC10, 0xC, r0, 7, ev, 8) == 0);
         uint8_t r1[7] = { 0x01, 0x1d, 0x05, 0x7f, 0xff, 0x1e, 0 };          // first configured value: baseline
@@ -99,14 +100,14 @@ int main(int argc, char** argv) {
         assert(c.feed(0xE5, 1, 0xC20, 0xC, back, 7, ev, 8) == 1 && ev[0].keycode == nbt::AAK_BACK && ev[0].down == 0);
         back[3] = 3;                                                           // "no change": ignored
         assert(c.feed(0xE5, 1, 0xC20, 0xC, back, 7, ev, 8) == 0);
-        c.setSlotKey(nbt::CcsDecoder::slotByName("MEDIA"), 85);               // NBT_KEY_MEDIA override applies too
+        c.setSlotKey(nbt::car::CcsDecoder::slotByName("MEDIA"), 85);               // NBT_KEY_MEDIA override applies too
         uint8_t media[7] = { 0x01, 0x1d, 0x05, 1, 0, 0x00, 0x10 };
         assert(c.feed(0xE5, 1, 0xC20, 0xC, media, 7, ev, 8) == 1 && ev[0].keycode == 85);
         printf("test_ccs_decoder CCS (C10/C20) OK\n");
     }
     {   // G30 NBT EVO ID6 capture 2026-10-26 (v1.8.2 knob.log, issue #3): every C10 arrives twice, [2] counts up.
-        nbt::CcsDecoder g;
-        nbt::CcsEvent ev[8];
+        nbt::car::CcsDecoder g;
+        nbt::car::CcsEvent ev[8];
         const uint8_t m[3][7] = { { 0x01, 0x1d, 0x21, 0x80, 0x00, 0x1e, 0 }, { 0x01, 0x1d, 0x22, 0x80, 0x01, 0x1e, 0 },
                                   { 0x01, 0x1d, 0x23, 0x80, 0x02, 0x1e, 0 } };
         int cw = 0, events = 0;

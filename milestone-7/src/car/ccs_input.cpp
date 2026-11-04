@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace nbt {
+namespace car {
 
 namespace {
 
@@ -38,7 +39,7 @@ bool pttAssistant() {
     const char* e = getenv("NBT_PTT_ASSISTANT");
     return e && e[0] == '1';
 }
-void onPtt(const MostMsg& m) {
+void onPtt(const most::Msg& m) {
     if (m.data.empty()) return;
     unsigned v = m.data[0];
     if (v == 1) {
@@ -76,8 +77,8 @@ void onAttached(DsiClient* c, void*) {
 
 void onData(DsiClient* c, uint32_t, uint32_t id, uint32_t, const uint8_t* pl, uint32_t len, void*) {
     if (id == 0x80000000u && len >= 6) {
-        g_client = mostRdU32(pl);
-        unsigned dev = mostRdU16(pl + 4);
+        g_client = most::rdLe32(pl);
+        unsigned dev = most::rdLe16(pl + 4);
         printf("[Knob] registered: clientId=%u deviceId=0x%04X%s\n", g_client, dev,
                g_client == 0xffffffffu ? "  (REGISTRATION REFUSED)" : "");
         if (g_client != 0xffffffffu && g_stage < 2) {
@@ -85,14 +86,14 @@ void onData(DsiClient* c, uint32_t, uint32_t id, uint32_t, const uint8_t* pl, ui
             static const uint16_t kKeys[] = { 0xE510, 0xE503, 0xE505, 0xE512, 0xE514, 0xE501, 0xE502, 0x1502 };
             std::vector<uint16_t> keys(kKeys, kKeys + sizeof(kKeys) / sizeof(kKeys[0]));
             g_stage = 2;
-            c->sendRequest(1, buildRegisterDevCtrls(g_client, keys));
+            c->sendRequest(1, most::buildRegisterDevCtrls(g_client, keys));
             printf("[Knob] registerDevCtrls sent (8 keys): waiting for controller events\n");
         }
         return;
     }
     if (id != 0x80000001u) return;
-    MostMsg m;
-    if (!parseMostMessage(pl, len, m)) return;
+    most::Msg m;
+    if (!most::parseMessage(pl, len, m)) return;
     ++g_msgs;
     if (m.fblock == 0x15) {
         if (m.fkt == 0x512 && m.opType == 0xC) onPtt(m);
@@ -158,4 +159,5 @@ bool startCcsInput(CcsEventCb cb, void* user) {
     return true;
 }
 
+} // namespace car
 } // namespace nbt
