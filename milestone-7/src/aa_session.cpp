@@ -902,21 +902,11 @@ using proto::pbFirstVarint;
 // SensorStartRequest min_update_period (field 2, int64). DHU r2.1 treats -1 as "do not send", and otherwise sends each
 // report as it comes. Here it is only logged, to see what the phone asks for. False: the field is absent.
 static bool pbSensorPeriod(const std::vector<uint8_t>& d, size_t off, int64_t& out) {
-    size_t i = off;
-    while (i < d.size()) {
-        uint8_t tag = d[i++];
-        if ((tag & 7) != 0 || (tag & 0x80)) return false;   // this message is short varints: stop at anything else
-        uint64_t v = 0;
-        int sh = 0;
-        while (i < d.size() && sh < 70) {
-            uint8_t b = d[i++];
-            if (sh < 64) v |= (uint64_t)(b & 0x7F) << sh;
-            sh += 7;
-            if (!(b & 0x80)) break;
-        }
-        if ((tag >> 3) == 2) { out = (int64_t)v; return true; }
-    }
-    return false;
+    enum { F_MIN_PERIOD = 2 };
+    uint64_t v;
+    if (off >= d.size() || !proto::pbFindVarint(&d[off], d.size() - off, F_MIN_PERIOD, v)) return false;
+    out = (int64_t)v;
+    return true;
 }
 
 bool AASession::sendSensorStartResponse(uint8_t channel, bool ok) {
