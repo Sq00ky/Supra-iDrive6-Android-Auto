@@ -42,6 +42,19 @@ static void testFormat() {
     assert(text[0] == 0);
 }
 
+// The limit the iDrive app's table is checked against at compile time has to be the real one.
+static void testMaxItems() {
+    assert(kLineBytes == 17);
+    Item items[kMaxItems + 1];
+    for (int i = 0; i <= kMaxItems; ++i) {
+        items[i].key = "123456789";
+        items[i].value = -99999;    // the widest value that keeps a line fixed
+    }
+    char text[kMaxBytes];
+    assert(format(text, sizeof(text), items, kMaxItems) == kMaxItems * kLineBytes);
+    assert(format(text, sizeof(text), items, kMaxItems + 1) == -1);
+}
+
 static void testParse() {
     const char* text = "gear           2\npdc            0\nmode0          4\nmode1         -1\n";
     int v = 99;
@@ -136,6 +149,7 @@ static void testFile() {
 
 int main() {
     testFormat();
+    testMaxItems();
     testParse();
     testFile();
     printf("test_car_state OK\n");

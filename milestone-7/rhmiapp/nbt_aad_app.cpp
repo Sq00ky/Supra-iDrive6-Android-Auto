@@ -492,8 +492,15 @@ void sendToDaemon(const char* msg) {
 // "what is it now?" when it starts (src/car_state.hpp), and a message on the control port reports each change. To add a
 // value, add a row here and read its key in the daemon. Every change is logged with the raw text, so a code can be
 // checked on the car.
+//
+// Only for state that changes at human speed, about once a second at most: each change does file and socket calls on
+// this thread. Faster signals (speed, RPM, steering angle) belong in the daemon, read from MOST. Keys are 9 characters
+// at most.
 enum CarIndex { kCarGear, kCarPdc, kCarDayNight, kCarMode0, kCarMode1, kCarDsc, kCarCount };
 const int kCarNoValue = -1000;   // nothing received yet
+// A table too big for the file would stop it updating, and a restarted daemon would start from old values. This build
+// has no static_assert: a negative array size is the error.
+typedef char CarTableFitsTheFile[(int)kCarCount <= (int)nbt::carstate::kMaxItems ? 1 : -1];
 
 bool onCarValue(int index, const bmw::BasicString<unsigned short>& value);
 template <int kIndex>

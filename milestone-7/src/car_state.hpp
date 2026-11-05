@@ -14,6 +14,9 @@
 // A reader takes the keys it knows and ignores the rest, so the app and the daemon can differ by a version: they are
 // installed separately. -1 means no value yet. `cat` shows the whole state.
 //
+// This is for state that changes at human speed, about once a second at most. Each change rewrites the file and sends a
+// message, on the app's thread. Faster signals (speed, RPM, steering angle) belong in the daemon, read from MOST.
+//
 // The file is overwritten in place and only then shortened. QNX /dev/shmem has no rename(), and truncating first leaves
 // a moment where a reader finds nothing (see writeUiState in main.cpp). A reader that catches a rewrite can still see a
 // mix of the old and the new bytes. The message on the control port follows the write and corrects it.
@@ -30,8 +33,10 @@ namespace carstate {
 
 static const char* const kPath = "/dev/shmem/nbt-aad-car";
 enum {
-    kKeyWidth = 9,     // longest key
-    kMaxBytes = 512    // the whole file: room for 30 lines
+    kKeyWidth = 9,                                 // longest key
+    kLineBytes = kKeyWidth + 1 + 6 + 1,            // key, space, number, newline
+    kMaxBytes = 512,                               // the whole file
+    kMaxItems = (kMaxBytes - 1) / kLineBytes       // a writer with more can't update the file at all
 };
 const int kNoValue = -1;
 
