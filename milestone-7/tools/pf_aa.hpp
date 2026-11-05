@@ -3,7 +3,7 @@
 #ifndef NBT_TOOLS_PF_AA_HPP
 #define NBT_TOOLS_PF_AA_HPP
 
-// nbt-pf (tools/nbt_pf.cpp): let Android Auto through the car's packet filter once, instead of the daemon switching the
+// pf_aa (tools/pf_aa.cpp): let Android Auto through the car's packet filter once, instead of the daemon switching the
 // whole filter off with `pfctl -d` at every start. The stock /fs/sda0/etc/pf.conf (loaded at boot by start_net.sh,
 // `pfctl -f /etc/pf.conf -e`) blocks everything and opens only CarPlay's ports on the hotspot (uap0) and Miracast's on
 // the Wi-Fi Direct group (wfd0). The phone's Android Auto link is one TCP connection to 5277 on either, so four lines
@@ -72,6 +72,31 @@ inline Coverage coverage(const std::string& conf) {
     return c;
 }
 
+// conf without the Android Auto rules: every pass rule for 5277 and every comment line naming NBT-AAD dropped. On a car
+// that got them from pf_aa or by hand this is the stock pf.conf again; it is what /opt/aa/pf.bak holds.
+inline std::string stripAaRules(const std::string& conf) {
+    std::string out;
+    size_t start = 0;
+    while (start < conf.size()) {
+        size_t end = conf.find('\n', start);
+        bool nl = end != std::string::npos;
+        if (!nl) end = conf.size();
+        std::string line = conf.substr(start, end - start);
+        std::string rule = line;
+        size_t hash = rule.find('#');
+        bool ours = hash != std::string::npos && line.find("NBT-AAD") != std::string::npos &&
+                    line.find_first_not_of(" \t") == hash;
+        if (hash != std::string::npos) rule.erase(hash);
+        if (hasToken(rule, "pass") && hasToken(rule, "5277")) ours = true;
+        if (!ours) {
+            out += line;
+            if (nl) out += '\n';
+        }
+        start = end + 1;
+    }
+    return out;
+}
+
 // conf with the missing rules appended at the end (unchanged when nothing is missing).
 inline std::string withRules(const std::string& conf, const Coverage& have) {
     if (have.uap0 && have.wfd0) return conf;
@@ -129,6 +154,31 @@ inline EnvEdit setKeepPf(const std::string& env) {
         r.changed = true;
     }
     return r;
+}
+
+// nbt-aad.env without any NBT_KEEP_PF setting (pf_aa --uninstall: with the stock pf.conf back, the daemon has to switch
+// the filter off again). Comment lines stay. removed: how many setting lines were dropped.
+inline std::string dropKeepPf(const std::string& env, int* removed) {
+    const std::string key = std::string(kEnvKey) + "=";
+    std::string out;
+    int n = 0;
+    size_t start = 0;
+    while (start < env.size()) {
+        size_t end = env.find('\n', start);
+        bool nl = end != std::string::npos;
+        if (!nl) end = env.size();
+        std::string line = env.substr(start, end - start);
+        size_t i = line.find_first_not_of(" \t\r");
+        if (i != std::string::npos && line[i] != '#' && line.compare(i, key.size(), key) == 0) {
+            ++n;
+        } else {
+            out += line;
+            if (nl) out += '\n';
+        }
+        start = end + 1;
+    }
+    if (removed) *removed = n;
+    return out;
 }
 
 } // namespace pfaa

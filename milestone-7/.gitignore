@@ -4,7 +4,7 @@ release/
 *.d
 nbt-aad
 wfd_probe
-nbt-pf
+pf_aa
 test_display
 test_controls
 plugin/libhmiaad.so

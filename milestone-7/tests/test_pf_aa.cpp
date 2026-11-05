@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for tools/pf_aa.hpp (nbt-pf): finding the Android Auto rules in pf.conf, appending them, NBT_KEEP_PF=1.
+// Host test for tools/pf_aa.hpp (pf_aa): finding the Android Auto rules in pf.conf, appending them, NBT_KEEP_PF=1.
 
 #include "../tools/pf_aa.hpp"
 #include <assert.h>
@@ -77,6 +77,30 @@ int main() {
     for (int i = 0; i < 15; ++i) { char b[32]; snprintf(b, sizeof b, "NBT_X%d=1\n", i); full += b; }
     e = nbt::pfaa::setKeepPf(full);
     assert(e.position == 16 && e.position > nbt::pfaa::kMaxEnvSettings);
+
+    // 8. --uninstall: every NBT_KEEP_PF setting goes, comments and other settings stay; nothing to drop = unchanged.
+    int removed = -1;
+    std::string d = nbt::pfaa::dropKeepPf("# NBT_KEEP_PF=1 note\nNBT_A=1\nNBT_KEEP_PF=1\n  NBT_KEEP_PF=0\nNBT_B=2", &removed);
+    assert(removed == 2 && d == "# NBT_KEEP_PF=1 note\nNBT_A=1\nNBT_B=2");
+    d = nbt::pfaa::dropKeepPf("NBT_A=1\n", &removed);
+    assert(removed == 0 && d == "NBT_A=1\n");
+    // setKeepPf then dropKeepPf gives the file back.
+    std::string env0 = "NBT_LOG_FILE=/mnt/umass01200t7/nbt-aad.log\n";
+    assert(nbt::pfaa::dropKeepPf(nbt::pfaa::setKeepPf(env0).text, &removed) == env0 && removed == 1);
+
+    // 9. /opt/aa/pf.bak: the rules (from pf_aa or hand-made variants) stripped again give the stock file back;
+    //    the stock file itself is unchanged.
+    assert(nbt::pfaa::stripAaRules(stock) == stock);
+    assert(nbt::pfaa::stripAaRules(added) == stock);
+    assert(nbt::pfaa::stripAaRules(half) == stock);
+    std::string hand = stock + "# Android Auto wireless (NBT-AAD): TCP 5277 on the CarPlay AP, both directions\n"
+                               "pass in quick on uap0 proto tcp to port {5277} \n";
+    assert(nbt::pfaa::stripAaRules(hand) == stock);
+    Coverage s = nbt::pfaa::coverage(nbt::pfaa::stripAaRules(hand));
+    assert(!s.uap0 && !s.wfd0);
+    // Not ours: the CarPlay range rule (49512:65535), a 52770 rule, an unrelated comment.
+    std::string other = "# carplay\npass quick on uap0 proto tcp to port 52770\n";
+    assert(nbt::pfaa::stripAaRules(other) == other);
 
     printf("test_pf_aa: all passed\n");
     return 0;
