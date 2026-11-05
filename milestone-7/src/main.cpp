@@ -683,6 +683,7 @@ static bool cpLiveRetune() {
 
 static nbt::TcpServer* g_tcp = NULL;           // set once the listener runs (wireless recovery re-creates it)
 static nbt::UsbAccessory* g_usb = NULL;        // set while Android Auto over USB runs (NBT_USB=1)
+static const uint32_t kUsbByeWaitMs = 500;     // of the 3 s before the iDrive app sends SIGTERM after 'quit'
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
@@ -2166,6 +2167,13 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
     printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
+    // Before usb.stop(), which takes the link away. A phone that isn't told keeps streaming into the void and ignores
+    // the next daemon's session. Wireless phones just reconnect, so they are not told to quit.
+    if (g_owner.get() == nbt::kTransportUsb) {
+        const bool answered = g_session.byeAndWait(kUsbByeWaitMs);
+        printf("[Main] [+%.2f s] USB session: %s\n", upSec() - t0,
+               answered ? "ended by the phone" : "no answer to the ByeByeRequest");
+    }
     g_usb = NULL;              // the wireless thread stops asking it
     usb.stop();                // no new USB session either; ends the USB bridge (and with it a USB session)
     printf("[Main] [+%.2f s] USB accessory stopped\n", upSec() - t0);

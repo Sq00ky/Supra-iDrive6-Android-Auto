@@ -79,6 +79,7 @@ AASession::AASession()
     satellites_sent_ = 0;
     satellites_last_ms_ = 0;
     satellites_last_used_ = 0;
+    pending_bye_ = false;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
@@ -364,6 +365,7 @@ bool AASession::start(int client_fd) {
     pending_night_ = false;
     location_started_ = false;
     pending_location_ = false;
+    pending_bye_ = false;
     mic_open_ = false;
     mic_queue_.clear();
     pthread_mutex_unlock(&touch_mutex_);
@@ -410,6 +412,22 @@ void AASession::stop() {
     }
     releaseSocket();
     pthread_mutex_unlock(&lifecycle_mutex_);
+}
+
+bool AASession::byeAndWait(uint32_t wait_ms) {
+    if (!isRunning()) return true;
+    pthread_mutex_lock(&touch_mutex_);
+    pending_bye_ = true;
+    pthread_mutex_unlock(&touch_mutex_);
+    wakeSessionThread();
+    for (uint32_t waited = 0; waited < wait_ms && isRunning(); waited += 10) usleep(10000);
+    return !isRunning();
+}
+
+bool AASession::sendByeRequest() {
+    const uint8_t plain[4] = { 0x00, 0x0F, 0x08, 0x01 };   // ByeByeRequest {reason=1}: quit, as the phone sends it
+    std::vector<uint8_t> enc;
+    return cryptor_.encrypt(plain, sizeof(plain), enc) && sendFrame(0x00, 0x0B, &enc[0], enc.size());
 }
 
 void AASession::noteRx(uint8_t channel, uint8_t flags, uint16_t length) {
@@ -671,9 +689,15 @@ void AASession::drainTouch() {
     pending_night_ = false;
     bool location = pending_location_ && location_started_;
     pending_location_ = false;
+    bool bye = pending_bye_;
+    pending_bye_ = false;
     std::vector<std::vector<uint8_t> > mic;
     mic.swap(mic_queue_);
     pthread_mutex_unlock(&touch_mutex_);
+    if (bye) {   // nothing queued matters any more
+        printf("[AASession] >>> ByeByeRequest to the phone: %s\n", sendByeRequest() ? "sent" : "not sent");
+        return;
+    }
     for (size_t i = 0; i < mic.size(); ++i) {
         if (!sendMicFrame(mic[i])) { printf("[AASession] mic -> phone: SEND FAILED\n"); break; }
         if ((mic_sent_++ % 250) == 0) printf("[AASession] mic -> phone: %u chunks sent (%u bytes each)\n", mic_sent_, (unsigned)mic[i].size());
@@ -1453,6 +1477,9 @@ void AASession::sessionLoop() {
                            "ByeByeResponse %s, ending the session\n",
                            reason == 0xFFFFFFFFu ? -1 : (int)reason, reason == 1 ? " = quit" : "",
                            (unsigned)media_frames_, ok ? "sent" : "SEND FAILED");
+                    break;
+                } else if (msg_id == 0x0010) { // ByeByeResponse: the phone has ended the session we asked it to
+                    printf("[AASession] >>> ByeByeResponse from the phone: ending the session\n");
                     break;
                 } else if (msg_id == 11) { // PingRequest
                     printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");

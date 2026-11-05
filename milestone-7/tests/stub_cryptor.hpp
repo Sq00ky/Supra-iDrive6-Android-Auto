@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host-test stand-in for aa_cryptor.hpp: no OpenSSL, and "encrypted" frames are plain, so a test can read what the session
-// sends. Include it before aa_session.cpp: it takes the real header's guard (tests/test_session_sensors.cpp).
+// Host-test stand-in for aa_cryptor.hpp: no OpenSSL or handshake, and "encrypted" frames are plain text both ways, so a
+// test can read what the session sends and script the phone. It takes the real header's guard, so it has to come first:
+// included ahead of aa_session.cpp (tests/test_session_sensors.cpp) or with -include (test_session_bye in the Makefile).
 #ifndef AA_CRYPTOR_HPP
 #define AA_CRYPTOR_HPP
 #include <stdint.h>

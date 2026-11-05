@@ -56,6 +56,10 @@ public:
         kStale          // only encrypted frames we can't decrypt: the phone is still in an earlier session
     };
     Outcome outcome() const { return decrypted_any_ ? kEstablished : undecrypted_ ? kStale : kNoAnswer; }
+    // The daemon is stopping: asks the phone to end the session (ByeByeRequest, sent by the session thread) and waits
+    // up to wait_ms for its answer, which ends the session. true: the session has ended. Thread-safe. Call it while
+    // the connection is still up. Before the TLS handshake has finished nothing can be sent, and it just waits.
+    bool byeAndWait(uint32_t wait_ms);
     // Touch forwarding (default on, NBT_TOUCH_FWD=0 disables): thread-safe, called from the touch thread.
     // Events are queued and sent by the session thread.
     void postTouchEvent(const TouchEventOut& ev);
@@ -112,6 +116,8 @@ private:
     // sinks send it; 0 = none (video).
     bool sendAvMediaAck(uint8_t channel, uint64_t rx_wall_ns = 0);
     bool sendAudioFocusResponse(uint8_t focus_state);
+    bool sendByeRequest();
+    bool pending_bye_;                             // guarded by touch_mutex_: send a ByeByeRequest on next drain
     bool readExact(uint8_t* buffer, size_t length);
     static uint32_t rxTimeoutMs();
     bool isRunning() const;
