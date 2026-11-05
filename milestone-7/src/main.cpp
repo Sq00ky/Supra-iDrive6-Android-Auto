@@ -214,7 +214,8 @@ static volatile int g_pdc = -1;                    // -1 = unknown (no report ye
 // onStatus, from the vehicle's FES VehicleDynamicSwitchHMI; 15 / 63 = not valid) as "drivemode <prop> <n>". With the
 // iDrive menu checkbox "Show driving mode changes" (flag file below, read on every change) a change of mode makes
 // Android Auto step aside for NBT_DRIVEMODE_SHOW_MS (default 3500) so iDrive's own driving-mode popup is visible, then
-// it comes back by itself. The first value after start is only the baseline. Not car-verified.
+// it comes back by itself. The baseline is the mode in /dev/shmem/nbt-aad-car; with no valid mode there (an older app),
+// the first value is the baseline unless its <prev> shows a change. Not car-verified.
 static const char* const kDriveModeFlag   = "/var/opt/aa/show-drivemode";
 static const char* const kDriveModeManual = "/opt/aa/show-drivemode";
 static volatile int g_driveMode = -1;              // last valid mode (-1 = none yet)

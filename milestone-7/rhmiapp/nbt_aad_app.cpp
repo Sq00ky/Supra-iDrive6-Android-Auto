@@ -489,13 +489,15 @@ void sendToDaemon(const char* msg) {
 
 // ---- car values -> daemon --------------------------------------------------------------------------------------------
 // CDS values arrive as UTF-16 JSON-like text, for example {"gear":2}. A daemon needs them both ways: the file answers
-// "what is it now?" when it starts (src/car_state.hpp), and a message on the control port reports each change. To add a
-// value, add a row here and read its key in the daemon. Every change is logged with the raw text, so a code can be
-// checked on the car.
+// "what is it now?" when it starts (src/car_state.hpp), and a message on the control port reports each change. Every
+// change is logged with the raw text, so a code can be checked on the car.
+//
+// To add a value: add a row here, read its key in the daemon's readCarValues, and, if it can change while the daemon
+// runs, handle it in ctlThread. ctlThread matches commands by prefix, so a key must not start with ping, show, hide or
+// quit.
 //
 // Only for state that changes at human speed, about once a second at most: each change does file and socket calls on
-// this thread. Faster signals (speed, RPM, steering angle) belong in the daemon, read from MOST. Keys are 9 characters
-// at most.
+// this thread. Faster signals (speed, RPM, steering angle) belong in the daemon, read from MOST.
 enum CarIndex { kCarGear, kCarPdc, kCarDayNight, kCarMode0, kCarMode1, kCarDsc, kCarCount };
 const int kCarNoValue = -1000;   // nothing received yet
 // A table too big for the file would stop it updating, and a restarted daemon would start from old values. This build
@@ -512,7 +514,7 @@ bool onDscChanged(void*, const bmw::BasicString<unsigned short>&);
 
 struct CarValue {
     const char* property;     // CDS property (libhmiremoting.so property table)
-    const char* key;          // name in the file and in the control message
+    char key[nbt::carstate::kKeyWidth + 1];   // name in the file and in the control message; a longer key doesn't compile
     const char* field;        // the JSON field holding the number; NULL = the first number in the text
     const char* oldFile;      // a daemon from before car_state.hpp reads this at start
     bool (*handler)(void*, const bmw::BasicString<unsigned short>&);
