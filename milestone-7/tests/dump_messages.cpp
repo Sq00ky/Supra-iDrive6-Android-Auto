@@ -39,6 +39,22 @@ static void media() {
     show(kFile, "nbt.session.AudioUnderflow", "underflow", aaUnderflowNotification(5), MESSAGE_ID_BYTES);
 }
 
+// The phone sends these, so there's no code of ours to build them: the bodies tests/test_media_msgs.cpp parses.
+static void mediaPlayback() {
+    static const char* const kFile = "aa_session.proto";
+    static const uint8_t kStatus[] = { 0x08, 0x03, 0x12, 0x0B, 'A','p','p','l','e',' ','M','u','s','i','c', 0x18, 0x2A, 0x20, 0x01 };
+    static const uint8_t kMetadata[] = {
+        0x0A, 0x08, 'S','o','n','g',' ','O','n','e',
+        0x12, 0x06, 'A','r','t','i','s','t',
+        0x1A, 0x05, 'A','l','b','u','m',
+        0x22, 0x03, 0xFF, 0xD8, 0xFF,
+        0x2A, 0x08, 'M','y',' ','M','i','x',' ','1',
+        0x30, 0xD2, 0x01
+    };
+    show(kFile, "nbt.session.MediaPlaybackStatus", "status", std::vector<uint8_t>(kStatus, kStatus + sizeof(kStatus)), 0);
+    show(kFile, "nbt.session.MediaPlaybackMetadata", "metadata", std::vector<uint8_t>(kMetadata, kMetadata + sizeof(kMetadata)), 0);
+}
+
 static void wireless() {
     static const char* const kFile = "aa_wireless.proto";
     enum { FRAME_HEADER_BYTES = 4 };
@@ -84,6 +100,7 @@ static void nav() {
 int main() {
     manifests();
     media();
+    mediaPlayback();
     wireless();
     nav();
     return 0;
