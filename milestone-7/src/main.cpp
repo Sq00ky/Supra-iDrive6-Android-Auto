@@ -453,7 +453,8 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // /dev/shmem/nbt-aad-state, state = idle | connecting | connected, overlay = 1 while Android Auto is on screen and
 // the knob drives the phone (the plugin then ignores Force Stop / Restart: those presses can only be stray knob
 // input reaching the iDrive menu under the overlay), 3 = same, MENU / COM / MEDIA / NAV / MAP went to the phone in the last 3 s
-// (the plugin re-holds iDrive instead of treating MENU as a hard key), 2 = same, and BACK is being held (hold timer running): iDrive
+// (the plugin re-holds iDrive instead of treating MENU as a hard key), 4 = same, another car control in the last 3 s,
+// 5 = same, only the knob turned or was pushed in the last 3 s (v1.9.19), 2 = same, and BACK is being held (hold timer running): iDrive
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
@@ -464,7 +465,8 @@ static void writeUiState(const char* state, int overlay) {
     // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
     // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
     // tried to bind the control port itself.
-    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key).
+    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key, 4 car
+    // control, 5 knob turn / push only).
     // fscanf("%23s %d %d") still matches.
     char rec[32];
     int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d\n", state ? state : "idle", (int)getpid(), overlay);
@@ -1320,8 +1322,14 @@ static uint32_t monoMs();
 // volume change), from g_carInput / onCarVolume. Overlay 4 tells the iDrive app "iDrive just reacted to the driver";
 // overlay 1 when iDrive leaves the blank state means the car opened a screen of its own (camera, safety, warning).
 static volatile uint32_t g_carInputMs = 0;
+// A knob turn or push alone (overlay 5). iDrive does nothing with either on its blank Android Auto state, so the iDrive
+// app no longer takes them for the driver opening a screen: the safety button pressed 1.4 s after a push left Android
+// Auto over the safety menu (car 2026-11-05). Where iDrive's focus is elsewhere the app still counts them.
+static volatile uint32_t g_knobInputMs = 0;
+static bool knobOnlyInput(const char* what) { return what && (!strcmp(what, "ROTARY") || !strcmp(what, "PUSH")); }
 static void onCarInput(const char* what, void*) {
-    g_carInputMs = monoMs() | 1u;
+    if (knobOnlyInput(what)) g_knobInputMs = monoMs() | 1u;
+    else g_carInputMs = monoMs() | 1u;
     static uint32_t s_logged = 0;
     if (monoMs() - s_logged > 2000u) { s_logged = monoMs(); printf("[Input] driver input: %s\n", what); }
 }
@@ -1472,17 +1480,23 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         }
         return;
     }
-    if (ev.kind == 2) s->postRelativeEvent(ev.keycode, ev.delta);
-    else {
+    if (ev.kind == 2) {
+        g_knobInputMs = monoMs() | 1u;            // a turn: overlay 5, iDrive does nothing with it on the blank state
+        s->postRelativeEvent(ev.keycode, ev.delta);
+    } else {
         // Every key that reaches the phone: iDrive got the same key and may have left the blank state (BACK pops its
         // history, which after a MENU / hard-key re-hold is the iDrive main menu, not our menu: car 2026-10-29 short
-        // BACK minimized Android Auto). Overlay 3 makes the iDrive app put it back instead of minimizing.
-        if (ev.down) g_keyToPhoneMs = monoMs() | 1u;
+        // BACK minimized Android Auto). Overlay 3 makes the iDrive app put it back instead of minimizing. Not the
+        // knob's push: on the blank state iDrive does nothing with it (overlay 5, g_knobInputMs).
+        if (ev.down) {
+            if (ev.keycode == nbt::AAK_DPAD_CENTER) g_knobInputMs = monoMs() | 1u;
+            else g_keyToPhoneMs = monoMs() | 1u;
+        }
         s->postKeyEvent(ev.keycode, ev.down != 0);
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.18-osd1281"
+#define NBT_AAD_BUILD "v1.9.19-safety"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1883,7 +1897,11 @@ int main(int argc, char* argv[]) {
             uint32_t ci = g_carInputMs;
             bool inputRecent = ci && (uint32_t)(monoMs() - ci) < 3000u;   // the driver touched a car control
             if (ci && !inputRecent) g_carInputMs = 0;
-            int ov = g_inputToPhone ? (g_backState == 1 ? 2 : (menuRecent ? 3 : (inputRecent ? 4 : 1))) : 0;
+            uint32_t ki = g_knobInputMs;
+            bool knobRecent = ki && (uint32_t)(monoMs() - ki) < 3000u;    // only the knob turned / pushed
+            if (ki && !knobRecent) g_knobInputMs = 0;
+            int ov = g_inputToPhone
+                         ? (g_backState == 1 ? 2 : (menuRecent ? 3 : (inputRecent ? 4 : (knobRecent ? 5 : 1)))) : 0;
             if (strcmp(st, ui_state) != 0 || ov != ui_overlay) {
                 writeUiState(st, ov);
                 if (strcmp(st, ui_state) != 0) printf("[UiState] iDrive menu entry: %s\n", st);

@@ -63,7 +63,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-36-overlays (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-37-safety (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -557,6 +557,12 @@ bool onCallStatus0(void*, const bmw::BasicString<unsigned short>& v) { return on
 bool onCallStatus1(void*, const bmw::BasicString<unsigned short>& v) { return onCallStatus(1, v); }
 
 int g_lastPdc = -1000;
+// The driver chose Android Auto while park assist was on: the daemon keeps it up until park assist ends ("[Park] Android
+// Auto chosen during park assist: kept until it ends"), so park assist does not own the screen for the app either until
+// PDCStatus changes. Without this, PDCStatus staying 1 for 47 s after reversing made the safety button "during park
+// assist: left to that logic" and Android Auto stayed over the safety menu (car 2026-11-05).
+bool g_pdcDismissed = false;
+bool pdcOwnsScreen() { return g_lastPdc == kPdcActive && !g_pdcDismissed; }
 
 bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) {
     char text[160];
@@ -571,6 +577,7 @@ bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) 
     if (pdc != g_lastPdc) {
         alog("CDS %s = '%s' -> pdc %d", kPdcProperty, text, pdc);
         g_lastPdc = pdc;
+        g_pdcDismissed = false;                          // park assist starts or ends: a new episode
         FILE* f = fopen(kPdcFile, "w");
         if (f) { fprintf(f, "pdc %d\n", pdc); fclose(f); }
         char msg[32];
@@ -578,6 +585,15 @@ bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) 
         sendToDaemon(msg);
     }
     return true;
+}
+
+// Every "show" goes through here: the daemon takes it as the driver choosing Android Auto, over park assist too.
+void sendShow() {
+    if (g_lastPdc == kPdcActive && !g_pdcDismissed) {
+        g_pdcDismissed = true;
+        alog("park assist on: Android Auto chosen over it, so iDrive screens make it step aside again until park assist ends");
+    }
+    sendToDaemon("show");
 }
 
 int g_lastDayNight = -1000;
@@ -796,7 +812,8 @@ struct DaemonState {
     char state[24];     // idle | connecting | connected
     int pid;            // > 0 and alive, else 0
     int overlay;        // 1 = Android Auto on screen, knob goes to the phone; 2 = same, BACK held (v1.8.26+);
-                        // 3 = same, MENU / COM / MEDIA / NAV / MAP just went to the phone (v1.8.29+ / v1.8.34+): re-hold
+                        // 3 = same, MENU / COM / MEDIA / NAV / MAP just went to the phone (v1.8.29+ / v1.8.34+): re-hold;
+                        // 4 = same, another car control in the last 3 s; 5 = same, only the knob turned / pushed (v1.9.19+)
 };
 
 bool pidAlive(int pid) {
@@ -911,6 +928,7 @@ bool envFlagOn(const char* name, bool def) {
 int  g_holdOn = -1;            // NBT_AA_HOLD, read once
 bool g_aaVisible = false;      // iDrive reports our state 13 visible / focused
 bool g_aaFocused = false;
+uint32_t g_aaFocusLostMs = 0;  // nowMs() when state 13 last lost the focus
 bool g_holding = false;        // we put iDrive on state 13 for the current Android Auto overlay
 bool g_hideSent = false;       // we asked the daemon to step aside (a hard key took iDrive elsewhere)
 int  g_prevOverlay = 0;
@@ -921,6 +939,7 @@ bool g_holdGaveUp = false;
 bool g_popupAside = false;     // stepped aside for an iDrive context (warning/camera/...): stays aside, no re-hold
 nbt::OverlayWatch g_ow;        // "Show iDrive warnings": hmi.graphicalContext -> step aside / come back (overlay_watch.hpp)
 bool driverInputNow(const DaemonState& d);
+bool knobInputNow(const DaemonState& d);
 
 uint32_t nowMs() {
     struct timespec ts;
@@ -983,7 +1002,13 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     owInit();
     DaemonState d = readDaemonState();
     bool aa = d.pid > 0 && d.overlay && !strcmp(d.state, "connected");
-    g_ow.onContext(vc, !strcmp(widget, "GFXIDENTIFIER_INVALID"), aa && driverInputNow(d), aa, nowMs());
+    // A knob turn or push alone (daemon overlay 5) does nothing on our focused blank state, so it explains this screen
+    // only where iDrive's focus was elsewhere. CDS reports a new screen 15-50 ms before state 13's focus loss: a loss that
+    // recent still counts as focused.
+    uint32_t now = nowMs();
+    bool knobCounts = !g_aaFocused && (uint32_t)(now - g_aaFocusLostMs) > 500u;
+    bool input = aa && (driverInputNow(d) || (knobCounts && knobInputNow(d)));
+    g_ow.onContext(vc, !strcmp(widget, "GFXIDENTIFIER_INVALID"), input, aa, now, knobCounts);
     return true;
 }
 
@@ -1015,8 +1040,12 @@ DaemonState readDaemonState();
 bool onAaFocus(void*, const bmw::Parcel& p) {
     bool f = false;
     p.readBool(f);
+    if (g_aaFocused && !f) g_aaFocusLostMs = nowMs();
     g_aaFocused = f;
     alog("hold: state %u focus -> %d", kAaState, (int)f);
+    // iDrive is on our blank state again. The overlay watch only learns that here (hmi.graphicalContext reports state 13
+    // as GFXIDENTIFIER_INVALID 50002), so the same iDrive screen opened again counts as a new one.
+    if (f) g_ow.onOwnState(nbt::OverlayWatch::kAaState, nowMs());
     // MENU went to Android Auto (daemon overlay 3) but iDrive also left for its main menu: come straight back, so the
     // knob does not drive iDrive's main menu under the picture until the next poll.
     if (!f && g_runApp && holdEnabled() && g_holding && !callActive()) {
@@ -1035,12 +1064,12 @@ bool onAaVisible(void*, const bmw::Parcel& p) {
     // iDrive came back to our blank state by itself while Android Auto is minimized (BACK in iDrive walks its history
     // back to the Android Auto screen; car 2026-10-29: blank screen for 3 s). That is the driver going back to Android
     // Auto, as with CarPlay: bring it to the front. Not in reverse / park assist / a call.
-    if (v && !g_holding && holdEnabled() && !callActive() && g_lastGear != kReverseGear && g_lastPdc != kPdcActive) {
+    if (v && !g_holding && holdEnabled() && !callActive() && g_lastGear != kReverseGear && !pdcOwnsScreen()) {
         DaemonState d = readDaemonState();
         if (d.pid > 0 && !d.overlay && !strcmp(d.state, "connected")) {
             alog("hold: iDrive went back to the Android Auto screen: asking nbt-aad to come to the front");
             g_ow.reset(nowMs());
-            sendToDaemon("show");
+            sendShow();
             g_prevOverlay = 0;                           // serviceHold() takes the coming overlay as new (holding)
         }
     }
@@ -1075,13 +1104,23 @@ bool carAsideEnabled() {
     return v != 0;
 }
 
-// This poll: did the driver do anything iDrive may be reacting to?
+// This poll: did the driver do anything iDrive may be reacting to? Not a knob turn or push alone (overlay 5, daemon
+// v1.9.19+): iDrive does nothing with those on our focused blank state - see knobInputNow().
 bool driverInputNow(const DaemonState& d) {
-    if (d.overlay >= 2) return true;                     // 2 BACK held, 3 key to the phone, 4 other car control
+    if (d.overlay >= 2 && d.overlay != 5) return true;   // 2 BACK held, 3 key to the phone, 4 other car control
     time_t now = time(NULL);
     if (g_driveModeChange && now - g_driveModeChange < 5) return true;
     if (g_dscChange && now - g_dscChange < 5) return true;
     return false;
+}
+
+// Overlay 5: only the knob turned or was pushed (to the phone) in the last 3 s.
+bool knobInputNow(const DaemonState& d) { return d.overlay == 5; }
+
+// A driving-mode or DSC/DTC change in the last s seconds: iDrive's display for it closes by itself.
+bool driveModeOrDscWithin(int s) {
+    time_t now = time(NULL);
+    return (g_driveModeChange && now - g_driveModeChange < s) || (g_dscChange && now - g_dscChange < s);
 }
 
 void stepAsideForCar(const char* what) {
@@ -1096,6 +1135,15 @@ void stepAsideForCar(const char* what) {
          what, ctx[0] ? ctx : "no graphicalContext yet");
 }
 
+// Show iDrive warnings: Android Auto steps aside for an iDrive screen until it closes (overlay_watch.hpp). Same order as
+// reverse / park assist: picture down at once, no re-hold of state 13 while it is up.
+void stepAsideForOverlay() {
+    g_popupAside = true;
+    g_hideSent = true;
+    g_holding = false;
+    sendToDaemon("hide");
+}
+
 void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
     if (!holdEnabled()) return;
     bool overlay = d.pid > 0 && d.overlay;
@@ -1104,15 +1152,11 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
     if (warningsOn()) {
         owInit();
         bool aa = overlay && !strcmp(d.state, "connected");
-        bool reverse = g_lastGear == kReverseGear, pdc = g_lastPdc == kPdcActive, call = callActive();
+        bool reverse = g_lastGear == kReverseGear, pdc = pdcOwnsScreen(), call = callActive();
         int ctx = g_ow.current();
-        switch (g_ow.poll(nowMs(), aa, aa && driverInputNow(d), reverse || pdc || call)) {
+        switch (g_ow.poll(nowMs(), aa, aa && driverInputNow(d), reverse || pdc || call, aa && knobInputNow(d))) {
         case nbt::OverlayWatch::STEP_ASIDE:
-            // Same order as reverse / park assist: picture down at once, no re-hold of state 13 while it is up.
-            g_popupAside = true;
-            g_hideSent = true;
-            g_holding = false;
-            sendToDaemon("hide");
+            stepAsideForOverlay();
             alog("warnings: iDrive context %d came up on its own over Android Auto (screen under it: %d): Android Auto "
                  "steps aside until it closes", g_ow.aside(), g_ow.asideFrom());
             return;
@@ -1121,7 +1165,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
             g_popupAside = false;
             g_wantHome = false;
             g_prevOverlay = 0;                           // the coming overlay is new: serviceHold() holds state 13 again
-            sendToDaemon("show");
+            sendShow();
             return;
         case nbt::OverlayWatch::DRIVER:
             alog("warnings: iDrive context %d follows driver input: not a warning, hold as usual", ctx);
@@ -1146,12 +1190,13 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         // Android Auto stepped aside by itself (phone's exit icon, BACK hold, signal lost) while iDrive still shows our
         // blank state: give the driver the iDrive main menu. Not in reverse (the camera returns to us, then the
         // overlay comes back) and not when a hard key already took iDrive somewhere else.
-        bool reverse = g_lastGear == kReverseGear, pdc = g_lastPdc == kPdcActive;
-        // Driving mode just changed with "Show driving mode changes" ticked: the daemon steps aside for iDrive's popup
-        // and comes back by itself, so stay on the blank state (like reverse).
-        bool drivemode = driveModeOn() && g_driveModeChange && time(NULL) - g_driveModeChange < 15;
+        bool reverse = g_lastGear == kReverseGear, pdc = pdcOwnsScreen();
+        // Driving mode or DSC/DTC just changed with "Show driving mode changes" ticked: the daemon steps aside for
+        // iDrive's display and comes back by itself, so stay on the blank state (like reverse). Before rhmiapp-37 a DSC
+        // change sent iDrive to its main menu here (car 2026-11-05, twice in one drive).
+        bool drivemode = driveModeOn() && driveModeOrDscWithin(15);
         if (drivemode) {
-            alog("hold: Android Auto stepped aside for the driving-mode display: staying on state %u", kAaState);
+            alog("hold: Android Auto stepped aside for the driving-mode / DSC display: staying on state %u", kAaState);
         } else if (g_aaVisible && !g_hideSent && !reverse && !pdc) {
             app->triggerEvent(kEvGoHome);
             alog("hold: Android Auto stepped aside: event %u -> iDrive main menu", kEvGoHome);
@@ -1181,16 +1226,27 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
     static int s_unfocused = 0;
     static bool s_unfocusedInput = false;                // driver input seen at any poll of this focus loss
     if (overlay && g_holding && g_aaVisible && !g_aaFocused && !callActive()) {
-        if (driverInputNow(d)) s_unfocusedInput = true;
+        if (driverInputNow(d)) s_unfocusedInput = true;  // a knob turn / push alone cannot take state 13's focus
         if (++s_unfocused >= 2 && time(NULL) - g_holdTime >= 1) {
             s_unfocused = 0;
-            if (carAsideEnabled() && !warningsOn() && !s_unfocusedInput && g_lastGear != kReverseGear &&
-                g_lastPdc != kPdcActive) {
-                s_unfocusedInput = false;
+            bool input = s_unfocusedInput;
+            s_unfocusedInput = false;
+            bool blocked = g_lastGear == kReverseGear || pdcOwnsScreen();
+            if (carAsideEnabled() && !warningsOn() && !input && !blocked) {
                 stepAsideForCar("took the focus");
                 return;
             }
-            s_unfocusedInput = false;
+            // Show iDrive warnings: an iDrive screen holds the focus with no driver input in this episode, one the
+            // overlay watch let through (it came up while Android Auto was down for park assist, within 2 s of our own
+            // event 52, or just after a key). Event 52 does not close it - the safety menu refused it for 34 s under the
+            // picture while the knob drove it unseen (car 2026-11-05) - so step aside until it closes. Not within 15 s
+            // of a driving-mode / DSC change: that display (2.6-8 s in the car logs) closes by itself, checkbox on or off.
+            if (warningsOn() && !input && !blocked && !driveModeOrDscWithin(15) && g_ow.takeAside(nowMs())) {
+                stepAsideForOverlay();
+                alog("warnings: iDrive context %d holds the focus over Android Auto with no driver input: Android Auto "
+                     "steps aside until it closes", g_ow.aside());
+                return;
+            }
             fireHold(app, "state lost focus (OPTIONS panel?)");
         }
         return;
@@ -1239,14 +1295,16 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         // Confirmed on the next poll, so an incoming call's status (CDS) can arrive first.
         // Except MENU by default (daemon overlay 3): it opened Android Auto's own menu, so iDrive goes back to state 13.
         if (d.overlay == 3) { fireHold(app, "a hard key went to Android Auto"); return; }
-        if (g_lastGear == kReverseGear || g_lastPdc == kPdcActive) return;   // camera / PDC view: the daemon steps aside itself
+        if (g_lastGear == kReverseGear || pdcOwnsScreen()) return;   // camera / PDC view: the daemon steps aside itself
         // Confirmed over two polls, and only if neither saw driver input (the 3 s input window can run out while iDrive
         // is still on the screen the driver opened).
         static time_t s_carLeft = 0;
         static bool s_carLeftInput = false;
         if (carAsideEnabled() && !warningsOn()) {          // with warnings on, the overlay watch decides
-            if (!s_carLeft || time(NULL) - s_carLeft > 3) { s_carLeft = time(NULL); s_carLeftInput = driverInputNow(d); return; }
-            bool input = s_carLeftInput || driverInputNow(d);
+            // A knob turn / push counts here: iDrive is off our blank state, so it may have acted on it.
+            bool inputNow = driverInputNow(d) || knobInputNow(d);
+            if (!s_carLeft || time(NULL) - s_carLeft > 3) { s_carLeft = time(NULL); s_carLeftInput = inputNow; return; }
+            bool input = s_carLeftInput || inputNow;
             s_carLeft = 0;
             s_carLeftInput = false;
             if (!input) { stepAsideForCar("left state 13 for its own screen"); return; }
@@ -1277,7 +1335,7 @@ void startDaemonOrShow() {
     g_startTime = time(NULL);
     if (d.pid != 0) {
         alog("start: nbt-aad already running (pid %d, %s): asking it to come to the front", d.pid, d.state);
-        sendToDaemon("show");
+        sendShow();
         if (!strcmp(d.state, "connected") && holdEnabled()) {
             g_wantHome = false;                          // serviceHold() puts iDrive on state 13 once the overlay is up
             g_prevOverlay = 0;                           // treat the coming overlay as new (also when it never went down)
@@ -1756,7 +1814,7 @@ void statusRun(void* /*self*/) {
         g_entryStart = false;                            // one shot, before the return-to-menu step below moves iDrive
         if (time(NULL) - g_startTime <= kHomeWindowS &&
             nbt::entrykey::showOnConnect(g_focusKnown, g_menuFocused, d.overlay != 0)) {
-            sendToDaemon("show");
+            sendShow();
             alog("connected after the Open Android Auto entry, our menu on top: asking nbt-aad to come to the front");
         }
     }
@@ -1869,6 +1927,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
     g_focusKnown = true;
     g_menuFocused = f;
     alog("menu state %u focus -> %d", kMenuState, (int)f);
+    if (f) g_ow.onOwnState(nbt::OverlayWatch::kMenuState, nowMs());   // iDrive is on our menu (CDS: 50000)
     // BACK and tilt-left also reach iDrive and pop it from the blank state 13 to its parent, our menu. Until the 1 s
     // status poll put it back, knob turns / pushes drove our menu rows under the Android Auto picture (car
     // 2026-10-28, nbt-aad-app-11: ten pops in 10 s). Put iDrive back on state 13 right here instead.

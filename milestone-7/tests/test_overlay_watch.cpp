@@ -114,6 +114,73 @@ int main() {
         w.onContext(13, false, false, AA, 3000);
         assert(w.poll(5000, NO_AA, false, false) == OverlayWatch::COME_BACK);
     }
+    // 11. The safety button twice (Supra, rhmiapp-36 log 2026-11-05): CDS reports our blank state as 50002 /
+    //     GFXIDENTIFIER_INVALID, so iDrive coming back to it is known from state 13's focus notification. The second
+    //     press of the same screen is a change again, and closing it onto 13 brings Android Auto back.
+    {
+        OverlayWatch w;
+        w.onContext(20, false, false, NO_AA, 0);
+        w.onOwnState(OverlayWatch::kAaState, 1000);                        // event 52 taken: focus on 13
+        w.onContext(50002, true, false, AA, 1000);                         // its CDS echo: INVALID, ignored
+        w.onContext(745, false, false, AA, 5000, false);                   // 'Toyota Supra Safety'
+        assert(w.poll(5400, AA, false, false) == OverlayWatch::STEP_ASIDE);
+        assert(w.aside() == 745 && w.asideFrom() == OverlayWatch::kAaState);
+        w.onOwnState(OverlayWatch::kAaState, 9000);                        // menu closed: focus back on 13
+        assert(w.poll(10000, NO_AA, false, false) == OverlayWatch::NONE);
+        assert(w.poll(11000, NO_AA, false, false) == OverlayWatch::COME_BACK);
+        w.onContext(745, false, false, AA, 20000, false);                  // pressed again: same id, still a change
+        assert(w.poll(20400, AA, false, false) == OverlayWatch::STEP_ASIDE);
+        // A pending screen iDrive leaves for 13 again before the poll was a flash.
+        OverlayWatch f;
+        f.onOwnState(OverlayWatch::kAaState, 0);
+        f.onContext(745, false, false, AA, 5000, false);
+        f.onOwnState(OverlayWatch::kAaState, 5100);
+        assert(f.poll(5400, AA, false, false) == OverlayWatch::NONE);
+    }
+    // 12. A knob push (daemon overlay 5) cannot open a screen from our focused blank state: the safety button 1.4 s
+    //     after a push is still the car's. Where 13 did not have the focus (a unit that never takes it) the push may have.
+    {
+        OverlayWatch w;
+        w.onOwnState(OverlayWatch::kAaState, 0);
+        w.onContext(745, false, false, AA, 5000, false);
+        assert(w.poll(5400, AA, false, false, true) == OverlayWatch::STEP_ASIDE);
+        OverlayWatch u;
+        u.onContext(20, false, false, NO_AA, 0);
+        u.onContext(55, false, true, AA, 5000, true);                      // knob counted at the event
+        assert(u.poll(5400, AA, false, false, false) == OverlayWatch::DRIVER);
+        OverlayWatch v;
+        v.onContext(20, false, false, NO_AA, 0);
+        v.onContext(55, false, false, AA, 5000, true);                     // push reached the state file after the event
+        assert(v.poll(5400, AA, false, false, true) == OverlayWatch::DRIVER);
+        // A key (overlay 3 / 4) counts wherever the focus was.
+        OverlayWatch k;
+        k.onOwnState(OverlayWatch::kAaState, 0);
+        k.onContext(638, false, false, AA, 5000, false);
+        assert(k.poll(5400, AA, true, false, false) == OverlayWatch::DRIVER);
+    }
+    // 13. A screen the watch let through - here 0.8 s after our own event 52 (car 2026-11-05: the safety menu came back
+    //     at 147.370, event 52 at 146.615) - that then holds iDrive's focus with no input: the app steps aside for it
+    //     with takeAside(); back on 13 for 2 s brings Android Auto back. Never for 13 / 10 / ignored ids, and only once.
+    {
+        OverlayWatch w;
+        w.addIgnore(1856);
+        w.onOwnState(OverlayWatch::kAaState, 0);
+        assert(!w.takeAside(500));                                          // on our own state: nothing to do
+        w.own(146615);
+        w.onContext(745, false, false, AA, 147370, false);                 // inside the own-move window: taken as home
+        assert(w.poll(147700, AA, false, false) == OverlayWatch::NONE);
+        assert(w.takeAside(149000) && w.isAside() && w.aside() == 745 && w.asideFrom() == OverlayWatch::kAaState);
+        assert(!w.takeAside(149500));                                       // once
+        assert(w.poll(150000, NO_AA, false, false) == OverlayWatch::NONE); // still up
+        w.onOwnState(OverlayWatch::kAaState, 159400);
+        assert(w.poll(160000, NO_AA, false, false) == OverlayWatch::NONE);
+        assert(w.poll(161400, NO_AA, false, false) == OverlayWatch::COME_BACK);
+        w.onContext(1856, false, false, AA, 170000);                        // ignored id: never taken aside
+        assert(w.poll(170400, AA, false, false) == OverlayWatch::NONE);
+        assert(!w.takeAside(171000));
+        w.onOwnState(OverlayWatch::kMenuState, 172000);
+        assert(!w.takeAside(173000));
+    }
     printf("test_overlay_watch: all passed\n");
     return 0;
 }

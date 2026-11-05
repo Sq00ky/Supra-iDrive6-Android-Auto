@@ -88,7 +88,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > id '1280'`. Open question for the car run: whether Screen visibility on that window clears the camera (on this unit the
 > video may be drawn by LayerManager, which only follows surface 1280).
 >
-> **v1.9.18-osd1281 (not car-verified as a daemon; the mechanism is car-verified by `tools/osd1281probe`):** the volume
+> **v1.9.18-osd1281 (car-verified on the Supra 2026-11-05; first probed with `tools/osd1281probe`):** the volume
 > pill is LayerManager surface **1281** of its own instead of sharing the picture's surface 1280. LayerManagerService
 > creates the surface for a window whose id string is a number on its first post and binds the window to it (decompiled
 > 2026-11-05, probe on the Supra the same day). While Android Auto is shown the layer's order is `0x501,0x500`: on this
@@ -113,6 +113,26 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > already shows: messages, calls, now playing). Previously only widgets named `*popup*` counted, and only while state 13
 > was visible, so a CCM waited ~25 s (F31 bench, 2026-11-05). With the box unticked, nothing changes.
 > Log: `warnings: iDrive context N came up on its own ...` / `... closed (back on M for 2 s): Android Auto comes back`.
+>
+> **v1.9.19-safety + rhmiapp-37-safety (not car-verified): the safety button makes Android Auto step aside.** In the
+> v1.9.18 test none of four presses did (Supra, 2026-11-05), each for its own reason, all fixed:
+> - PDCStatus stays 1 for a while after reversing, and a screen during park assist was left to the park logic although
+>   the driver had chosen Android Auto over it (the daemon keeps it up until park assist ends). Once Android Auto is
+>   chosen during park assist, park assist no longer owns the screen for the app either, until PDCStatus changes.
+> - iDrive's return to our blank state reaches hmi.graphicalContext only as `GFXIDENTIFIER_INVALID` context 50002 (our
+>   menu is 50000), so the watch never saw it, and the same safety menu opened a second time looked like no change. Our
+>   states now come from their focus notifications. This also makes "back on our state 13 for 2 s: Android Auto comes
+>   back" work for the first time: before, a step-aside over the blank state usually ended only through the entry.
+> - A knob push 1.4 s earlier counted as the driver opening the screen. The daemon now reports a knob turn or push alone
+>   as overlay 5 (MENU / BACK / COM / MEDIA / NAV / MAP / tilt stay 3, other car controls 4), and the app ignores it
+>   while iDrive's focus is on our blank state, where iDrive does nothing with either.
+> - A screen that holds iDrive's focus over Android Auto for two polls with no driver input now makes it step aside even
+>   when the watch let it through (opened while Android Auto was down for park assist, or within 2 s of our own event
+>   52). Before, event 52 was re-fired instead; the safety menu refused it for 34 s while the knob drove it unseen.
+> - A DSC/DTC step-aside no longer sends iDrive to its main menu (only driving-mode changes were recognised).
+>
+> Log: `warnings: iDrive context 745 came up on its own ...`, `warnings: iDrive context N holds the focus over Android
+> Auto ...`, `park assist on: Android Auto chosen over it ...`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
