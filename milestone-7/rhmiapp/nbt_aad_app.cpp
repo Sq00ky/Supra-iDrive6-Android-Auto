@@ -492,9 +492,9 @@ void sendToDaemon(const char* msg) {
 // "what is it now?" when it starts (src/car_state.hpp), and a message on the control port reports each change. Every
 // change is logged with the raw text, so a code can be checked on the car.
 //
-// To add a value: add a row here, read its key in the daemon's readCarValues, and, if it can change while the daemon
-// runs, handle it in ctlThread. ctlThread matches commands by prefix, so a key must not start with ping, show, hide or
-// quit.
+// To add a value: name its key in car_state.hpp, add a row here, read it in the daemon's readCarValues, and, if it can
+// change while the daemon runs, handle it in ctlThread. ctlThread matches commands by prefix, so a key must not start
+// with ping, show, hide or quit.
 //
 // Only for state that changes at human speed, about once a second at most: each change does file and socket calls on
 // this thread. Faster signals (speed, RPM, steering angle) belong in the daemon, read from MOST.
@@ -524,21 +524,21 @@ struct CarValue {
 // Not here: communication.callStatus and hmi.graphicalContext. Only the app uses them, so no daemon needs a file or a
 // message.
 CarValue g_car[kCarCount] = {
-    { "driving.gear", "gear", NULL, "/dev/shmem/nbt-aad-gear", &onCarValueStub<kCarGear>, kCarNoValue },
+    { "driving.gear", NBT_CAR_KEY_GEAR, NULL, "/dev/shmem/nbt-aad-gear", &onCarValueStub<kCarGear>, kCarNoValue },
     // Park Distance Control / park assist state (libhmiremoting: CAN ParkingFunctions PDCStatus, published as
     // {"PDCStatus":%d}). It changes when the driver presses the park-assist button as well as in reverse.
-    { "sensors.PDCStatus", "pdc", NULL, "/dev/shmem/nbt-aad-pdc", &onPdcChanged, kCarNoValue },
+    { "sensors.PDCStatus", NBT_CAR_KEY_PDC, NULL, "/dev/shmem/nbt-aad-pdc", &onPdcChanged, kCarNoValue },
     // Car day/night for Android Auto's night mode (rhmiapp-15). libhmiremoting CCdsPropertyDayNightChange::onStatus
     // @0x2171e0 formats '{"dayNightChangeOver":%u}' from the vehicle DayNight_ChangeOver signal: 1 day, 2 night, 0 no
     // change, 3 invalid. The daemon maps the raw value like factory CarPlay does.
-    { "vehicle.dayNightChangeOver", "daynight", "dayNightChangeOver", "/dev/shmem/nbt-aad-daynight",
+    { "vehicle.dayNightChangeOver", NBT_CAR_KEY_DAYNIGHT, "dayNightChangeOver", "/dev/shmem/nbt-aad-daynight",
       &onCarValueStub<kCarDayNight>, kCarNoValue },
     // Driving mode (rhmiapp-21). Both: only the one the car's variant codes ever reports. See onDriveMode.
-    { "driving.mode", "mode0", "mode", NULL, &onDriveMode0, kCarNoValue },
-    { "driving.mode35up", "mode1", "mode", NULL, &onDriveMode1, kCarNoValue },
+    { "driving.mode", NBT_CAR_KEY_MODE0, "mode", NULL, &onDriveMode0, kCarNoValue },
+    { "driving.mode35up", NBT_CAR_KEY_MODE1, "mode", NULL, &onDriveMode1, kCarNoValue },
     // DSC / DTC button: "same as sport mode", it flips when the button changes the stability program. See onDscChanged.
-    // Not read at start: the daemon keeps no copy, and each "dsc" message carries the previous value.
-    { "driving.DSCActive", "dsc", "DSCActive", NULL, &onDscChanged, kCarNoValue },
+    // Not read at start: the daemon keeps no copy, and each message carries the previous value.
+    { "driving.DSCActive", NBT_CAR_KEY_DSC, "DSCActive", NULL, &onDscChanged, kCarNoValue },
 };
 
 inline int lastGear() { return g_car[kCarGear].last; }
@@ -714,7 +714,7 @@ bool onDscChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) 
     // filter, a change to or from it is the signal coming and going, not the driver pressing DSC/DTC.
     if (was == kCarNoValue || was < 0 || v < 0 || was == 15 || v == 15 || !driveModeOn()) return true;
     char msg[40];
-    snprintf(msg, sizeof(msg), "dsc %d %d", v, was);
+    snprintf(msg, sizeof(msg), "%s %d %d", car.key, v, was);
     sendToDaemon(msg);
     return true;
 }

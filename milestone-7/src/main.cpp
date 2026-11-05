@@ -384,20 +384,20 @@ static void readCarValues() {
     }
     const char* path = nbt::carstate::kPath;
     int v = nbt::carstate::kNoValue;
-    if (nbt::carstate::parse(text, "gear", &v) && v != nbt::carstate::kNoValue) {
+    if (nbt::carstate::parse(text, NBT_CAR_KEY_GEAR, &v) && v != nbt::carstate::kNoValue) {
         g_gear = v;
         printf("[Gear] initial gear %d (from %s)\n", v, path);
     }
-    if (nbt::carstate::parse(text, "pdc", &v) && v != nbt::carstate::kNoValue) {
+    if (nbt::carstate::parse(text, NBT_CAR_KEY_PDC, &v) && v != nbt::carstate::kNoValue) {
         g_pdc = v;
         printf("[Park] initial park-assist state %d (from %s)\n", v, path);
     }
-    if (nbt::carstate::parse(text, "daynight", &v) && v != nbt::carstate::kNoValue) {
+    if (nbt::carstate::parse(text, NBT_CAR_KEY_DAYNIGHT, &v) && v != nbt::carstate::kNoValue) {
         g_dayNight = v;
         printf("[Night] initial day/night change-over %d (from %s)\n", v, path);
     }
     // Only the one the car's variant codes reports. Without a baseline the first press would not count as a change.
-    static const char* const kModeKeys[2] = { "mode0", "mode1" };
+    static const char* const kModeKeys[2] = { NBT_CAR_KEY_MODE0, NBT_CAR_KEY_MODE1 };
     for (int prop = 0; prop < 2; ++prop) {
         if (nbt::carstate::parse(text, kModeKeys[prop], &v) && driveModeValid(prop, v)) {
             g_driveMode = v;
@@ -427,23 +427,23 @@ static void* ctlThread(void*) {
             continue;
         }
         if (!strncmp(buf, "show", 4)) { printf("[Ctl] 'show' from a second launch (iDrive menu): overlay to front.\n"); g_showReq = 1; }
-        else if (!strncmp(buf, "gear ", 5)) {
-            int g = atoi(buf + 5);
+        else if (const char* gear = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_GEAR)) {
+            int g = atoi(gear);
             if (g != g_gear) printf("[Gear] gear %d -> %d (from iDrive app)\n", (int)g_gear, g);
             g_gear = g;
         }
-        else if (!strncmp(buf, "pdc ", 4)) {
-            int v = atoi(buf + 4);
+        else if (const char* pdc = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_PDC)) {
+            int v = atoi(pdc);
             if (v != g_pdc) printf("[Park] park-assist state %d -> %d (from iDrive app)\n", (int)g_pdc, v);
             g_pdc = v;
         }
-        else if (!strncmp(buf, "daynight ", 9)) {
-            int v = atoi(buf + 9);
+        else if (const char* night = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_DAYNIGHT)) {
+            int v = atoi(night);
             if (v != g_dayNight) printf("[Night] day/night change-over %d -> %d (from iDrive app)\n", (int)g_dayNight, v);
             g_dayNight = v;
         }
         else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
-        else if (!strncmp(buf, "dsc ", 4)) onDscMsg(buf + 4);
+        else if (const char* dsc = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_DSC)) onDscMsg(dsc);
         else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] [%9.3f] 'quit' received.\n", upSec()); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
         else printf("[Ctl] unknown request '%s' ignored.\n", buf);

@@ -28,6 +28,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+// The keys, in one place for the app, the file and the control messages. Macros, because the app's table holds each key
+// in a char array, which only a string literal can initialise.
+#define NBT_CAR_KEY_GEAR     "gear"
+#define NBT_CAR_KEY_PDC      "pdc"
+#define NBT_CAR_KEY_DAYNIGHT "daynight"
+#define NBT_CAR_KEY_MODE0    "mode0"
+#define NBT_CAR_KEY_MODE1    "mode1"
+#define NBT_CAR_KEY_DSC      "dsc"
+
 namespace nbt {
 namespace carstate {
 
@@ -77,6 +86,14 @@ inline bool parse(const char* text, const char* key, int* value) {
         if (line) ++line;
     }
     return false;
+}
+
+// The text after "<key> " in a control message, or NULL when the message is for another key.
+inline const char* valueAfterKey(const char* msg, const char* key) {
+    if (!msg || !key) return NULL;
+    size_t len = strlen(key);
+    if (len == 0 || strncmp(msg, key, len) != 0 || msg[len] != ' ') return NULL;
+    return msg + len + 1;
 }
 
 // Replaces the file's content without a moment where it is empty.

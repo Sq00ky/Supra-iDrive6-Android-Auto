@@ -85,6 +85,23 @@ static void testParse() {
     assert(!parse(text, "gear", NULL));
 }
 
+static void testValueAfterKey() {
+    assert(strcmp(valueAfterKey("gear 2", NBT_CAR_KEY_GEAR), "2") == 0);
+    assert(strcmp(valueAfterKey("pdc -1", NBT_CAR_KEY_PDC), "-1") == 0);
+    assert(strcmp(valueAfterKey("daynight 3", NBT_CAR_KEY_DAYNIGHT), "3") == 0);
+    assert(strcmp(valueAfterKey("dsc 2 1", NBT_CAR_KEY_DSC), "2 1") == 0);
+    assert(strcmp(valueAfterKey("gear ", NBT_CAR_KEY_GEAR), "") == 0);
+
+    assert(!valueAfterKey("gear", NBT_CAR_KEY_GEAR));        // no separator, no value
+    assert(!valueAfterKey("gear2 1", NBT_CAR_KEY_GEAR));     // a longer key isn't this key
+    assert(!valueAfterKey("gea 1", NBT_CAR_KEY_GEAR));
+    assert(!valueAfterKey("pdc 1", NBT_CAR_KEY_GEAR));
+    assert(!valueAfterKey("", NBT_CAR_KEY_GEAR));
+    assert(!valueAfterKey(NULL, NBT_CAR_KEY_GEAR));
+    assert(!valueAfterKey("gear 2", NULL));
+    assert(!valueAfterKey(" 2", ""));
+}
+
 static void testFile() {
     char path[64];
     snprintf(path, sizeof(path), "tests/build/test_car_state.%d.tmp", (int)getpid());
@@ -151,6 +168,7 @@ int main() {
     testFormat();
     testMaxItems();
     testParse();
+    testValueAfterKey();
     testFile();
     printf("test_car_state OK\n");
     return 0;
