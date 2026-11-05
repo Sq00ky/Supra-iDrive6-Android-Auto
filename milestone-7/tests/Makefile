@@ -111,7 +111,7 @@ $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 
 # This one #includes aa_session.cpp, so it is not in its SRC list, and with several sources -MF keeps only the last one's
 # dependencies: without this line, a change to the session would not rebuild it.
-$(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp stub_cryptor.hpp
+$(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
 
 # Not here: rhmiapp_host_test, which dlopens a host build of rhmiapp/libNbtAad.so linked against
 # rhmiapp_fake_appframework.cpp.
