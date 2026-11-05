@@ -69,7 +69,7 @@ TARGET = nbt-aad
 check:
 	$(MAKE) -C tests check
 
-all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe
+all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe nbt-pf
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -138,6 +138,13 @@ wfd_probe: tools/wfd_probe.cpp src/alt_wifi.hpp src/wireless_setup.hpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/wfd_probe.cpp -lsocket -lang-c++
 	@echo [DONE] Built $@
 
+# nbt-pf: one-time packet-filter setup - appends the Android Auto rules (TCP 5277 on uap0 / wfd0) to
+# /fs/sda0/etc/pf.conf if missing and sets NBT_KEEP_PF=1 in /opt/aa/nbt-aad.env. `nbt-pf --check` changes nothing.
+nbt-pf: tools/nbt_pf.cpp tools/pf_aa.hpp
+	@echo [CXX] tools/nbt_pf.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/nbt_pf.cpp -lang-c++
+	@echo [DONE] Built $@
+
 # Standalone volume-key capture/prompter: prints "press volume up 5x", waits, prints "press volume down 5x", waits, while
 # logging every MOST control message it can see to stdout and /mnt/umass01200t7/volcap.log. No daemon, no env needed.
 volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp src/most/msg.hpp
@@ -147,7 +154,7 @@ volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp 
 
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe nbt-pf
 
 # osdprobe: standalone check that this unit lets us own an LM surface for our own window.
 osdprobe: tools/osdprobe.cpp

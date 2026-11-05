@@ -549,7 +549,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_HIDE_IDLE` | `0` | iDrive gets the screen while no phone is connected. Off = overlay stays up for the whole run |
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |
 | `NBT_CTL` | `0` | Single-instance control port (UDP 127.0.0.1:52790) |
-| `NBT_KEEP_PF` | set to `1` | Don't run `pfctl -d` at start (see [Troubleshooting](#troubleshooting)) |
+| `NBT_KEEP_PF` | set to `1` | Don't run `pfctl -d` at start. Only with the Android Auto rules in `pf.conf`: `nbt-pf` adds both (see [Troubleshooting](#troubleshooting)) |
 
 ### Advanced / experimental
 
@@ -714,10 +714,25 @@ follow the list above.
 
 ### Phone joins the Wi-Fi but no picture
 
-The phone connects to TCP 5277 on `uap0` (172.16.224.1). The car's packet filter blocks that port, so the daemon
-runs `pfctl -d` at start. The log shows `'pfctl -d' ... returned 0` when it worked. If the return value isn't 0
-(one car returned 256), post the log. A single allow rule for the port, instead of disabling the filter, is being
-worked on.
+The phone connects to TCP 5277 on `uap0` (172.16.224.1), or on `wfd0` (172.16.222.1) over Wi-Fi Direct. The car's
+packet filter blocks that port, so the daemon runs `pfctl -d` at start. The log shows `'pfctl -d' ... returned 0` when
+it worked. If the return value isn't 0 (one car returned 256), post the log.
+
+**Keeping the packet filter on (`nbt-pf`, one time):** instead of switching the whole filter off, let the port through
+it. Copy `nbt-pf` from the release next to the daemon and run it once:
+
+```
+cp /mnt/umass01200t7/nbt-pf /opt/aa/nbt-pf
+chmod 755 /opt/aa/nbt-pf
+/opt/aa/nbt-pf
+```
+
+It reads `/fs/sda0/etc/pf.conf` (the car's `/etc/pf.conf`). If the Android Auto rules are missing it checks the new
+file with `pfctl -n`, keeps the original as `pf.conf.orig` and appends four lines (TCP 5277 both ways on `uap0` and
+`wfd0`); if they are there it says so. Either way it then sets `NBT_KEEP_PF=1` in `/opt/aa/nbt-aad.env`. `/fs/sda0` is
+remounted read-write only for the edit. Restart the head unit afterwards. `nbt-pf --check` only reports. Undo:
+`cp /fs/sda0/etc/pf.conf.orig /fs/sda0/etc/pf.conf` and remove the `NBT_KEEP_PF` line. A software update brings the
+stock `pf.conf` back; run it again then. Car-verified on the Supra (the same four lines added by hand).
 
 ### Assistant doesn't hear you / reply is silent or quiet
 
@@ -1085,7 +1100,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 - Force Stop / Restart: the v1.8.3 state-file fix needs a car test.
 - iDrive still reacts to touches while Android Auto is shown (the UDP touch stream goes to both).
 - CarPlay after Android Auto (v1.8.6): confirm the CarPlay picture is no longer zoomed on a `1180_480` car.
-- Firewall: replace `pfctl -d` with one allow rule for the AA port (needs the car's live `pfctl` rules first).
+- Firewall: `nbt-pf` (one-time pf.conf rule + `NBT_KEEP_PF=1`) is the opt-in; making it the install default is open.
 - The older CCS controller: knob rotation (v1.8.4) needs a car confirmation, including the turn direction.
 - `carplay.ini` screen codings such as `1180_480` or `900_540` are the CarPlay picture size, not always the panel: set
   `NBT_SCREEN` to the real panel size (e.g. `1280x480`, `1440x540`) if Android Auto doesn't fill the screen.
