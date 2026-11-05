@@ -36,6 +36,83 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > autostarts within 15 minutes (cold boots, so only when something resets the unit) the next boot skips the autostart
 > (`start with the car: SKIPPED by the bootloop guard`); menu Start, a clean daemon exit or 10 minutes of uptime reset
 > it (`/var/opt/aa/bootguard`).
+>
+> **rhmiapp-32-bootguard:** the guard also counts boots while the head unit's clock is unset (1980 at boot on many
+> cars, issue #84); before, those boots were never counted and the guard could not trip. The iDrive app also resets it
+> once it has stayed up 5 minutes after starting with the car.
+>
+> **v1.9.11-cameras / rhmiapp-35-cameras (not car-verified):** the volume overlay steps aside with Android Auto (in
+> v1.9.08 it kept surface 1280 up, so the reverse camera stayed under the picture). iDrive screens the car opens by
+> itself - the camera button, Side View / Top View / 360, the safety and driver-assistance button, Check Control - now
+> make Android Auto step aside and stay aside until the Android Auto entry is chosen: when iDrive leaves the blank state
+> or takes its focus and the daemon saw no driver input (knob, controller keys, steering-wheel volume / voice, a
+> driving-mode or DSC change) in that time, the car did it. `NBT_AA_CAR_ASIDE=0` turns that off. The DSC / DTC button
+> (`driving.DSCActive`) steps aside for iDrive's own display and comes back, like a driving-mode change, with the same
+> "Show driving mode changes" box. Every `hmi.graphicalContext` change is logged, so the camera and safety screens'
+> ids can be learned from a car log.
+>
+> **v1.9.12-osdoff:** the volume overlay is OFF by default again; `NBT_VOL_OSD=1` turns it on. To be drawn at all its
+> window has to be LayerManager surface 1280, the Android Auto picture's own surface, and on some cars it takes that
+> surface over: a black screen with only the volume pill, and the PDC / camera view stays under Android Auto.
+>
+> **v1.9.13-osdon:** the volume overlay is on by default again; `NBT_VOL_OSD=0` turns it off (needed on cars where it
+> takes surface 1280 over, e.g. the G30 above).
+>
+> **v1.9.14-osdorder (not car-verified):** the volume overlay window is created only after the current decoder context
+> has sent 30 frames, so mm-renderer's own `winid=1280` window always exists first, and it is taken down and recreated
+> whenever the decoder context is rebuilt (reconnects). A volume level from before the overlay existed no longer shows
+> it at once. Log: `[VolOsd] video running (decoder context N, M frames): creating the overlay after it`.
+>
+> **v1.9.15-osdcam (not car-verified):** reverse camera broken after the volume pill had been shown once (G30, log 3:
+> reverse fine for a whole drive, broken right after the first volume change). LayerManager gives surface 1280 to the
+> newest window with that id that has drawn, so the pill's window took the surface over and `LayerManagerControl set
+> surface 1280 visibility 0` hid the pill instead of the picture. Now, once the pill has been drawn, stepping aside
+> (reverse, park assist, camera views, MENU, ...) also closes the decoder context (the picture goes with mm-renderer's
+> window) and removes the overlay window; coming back builds a new context and asks the phone for a keyframe, the same
+> path as coming back from CarPlay. Sessions where the pill never appeared are unchanged. Log:
+> `[VolOsd] overlay was drawn, so it holds surface 1280: closing the video ...` and
+> `[Main] back to Android Auto after iDrive (overlay had surface 1280): rebuilding the decoder context`.
+>
+> **v1.9.16-idr (not car-verified):** v1.9.15 fixed the reverse camera on the G30, but the picture came back grey,
+> jittery and in wrong colours: the rebuilt decoder got the phone's running stream of P-frames with no keyframe. Now the
+> phone is told it lost the screen (video focus UNFOCUSED) when the decoder is closed, FOCUSED on the way back makes it
+> restart with SPS/PPS + IDR, and frames are held until that IDR arrives. No keyframe within 2 s: focus off/on again
+> (twice); after 6 s frames pass anyway. Log: `[VideoManager] keyframe after the decoder rebuild (N frames ... dropped)`,
+> `[Main] picture back after the decoder rebuild (N ms)`.
+>
+> **v1.9.17-mmrwin (experiment, opt-in `NBT_MMR_WIN_HIDE=1`):** keeps the decoder open when Android Auto steps aside after
+> the pill was drawn. mm-renderer's output window joins our window group `cpvideogrp<pid>`, so our Screen context gets
+> its handle in a SCREEN_EVENT_CREATE (event numbers read from the unit's libscreen.so); stepping aside sets that window
+> VISIBLE 0 at z -1000 and coming back restores the values read before. Without the flag, or when no window was seen, the
+> v1.9.16 close-and-rebuild runs. The events are logged either way: `[VideoManager] screen event 1 (create) window ...
+> id '1280'`. Open question for the car run: whether Screen visibility on that window clears the camera (on this unit the
+> video may be drawn by LayerManager, which only follows surface 1280).
+>
+> **v1.9.18-osd1281 (not car-verified as a daemon; the mechanism is car-verified by `tools/osd1281probe`):** the volume
+> pill is LayerManager surface **1281** of its own instead of sharing the picture's surface 1280. LayerManagerService
+> creates the surface for a window whose id string is a number on its first post and binds the window to it (decompiled
+> 2026-11-05, probe on the Supra the same day). While Android Auto is shown the layer's order is `0x501,0x500`: on this
+> unit the FIRST surface of a layer's list is drawn on top (`1280,1281` left the pill under the video). The hide order
+> `0x100` holds neither, so the pill always leaves with the picture: the decoder stays open on every step-aside, and the
+> v1.9.14-v1.9.17 workarounds are gone (overlay created after 30 frames and rebuilt with the decoder, decoder
+> close/rebuild + keyframe wait, `NBT_MMR_WIN_HIDE`, which is now ignored). This removes the black screen with only the
+> pill, Android Auto staying over the reverse camera, and the grey picture after reverse. The first two-surface order is
+> read back; if LayerManagerControl did not take it, the plain order is put back and the pill stays off for that run.
+> Log: `[VolOsd] LayerManager surface 1281 ready`, `[VolOsd] Android Auto layer render order is now 1281, 1280`.
+> Also new: after 5 refused Bluetooth link requests in a row (`ServiceRequestError`) the daemon says why the car refuses
+> them (it only accepts the phone's link while that phone's Bluetooth audio is connected) and logs the phone's services.
+>
+> **rhmiapp-36-overlays (not car-verified): "Show iDrive warnings" rebuilt on hmi.graphicalContext.** Any iDrive screen
+> that comes up on its own over Android Auto (no knob / key / volume / touch input behind it) makes Android Auto step
+> aside on the next status poll (about 0.3-1.3 s), whether or not iDrive took our state 13. Check Control (context 681,
+> `LT_ScrollLabel_CCM_Details`), collision warnings, climate, 360 camera, safety menus, driver profile, notices all count;
+> no per-model list. While it is up nothing re-holds state 13. When iDrive has been back on the screen it showed under
+> Android Auto (or on our state 13 / menu 10) for 2 s, Android Auto comes back once; a 681/20 flip-flop does not count.
+> If it closes onto another screen, the driver went on in iDrive and the Android Auto entry brings it back.
+> `NBT_AA_WARN_IGNORE=<ctx>,<ctx>` in nbt-aad.env lists contexts that never cause a step-aside (screens Android Auto
+> already shows: messages, calls, now playing). Previously only widgets named `*popup*` counted, and only while state 13
+> was visible, so a CCM waited ~25 s (F31 bench, 2026-11-05). With the box unticked, nothing changes.
+> Log: `warnings: iDrive context N came up on its own ...` / `... closed (back on M for 2 s): Android Auto comes back`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at

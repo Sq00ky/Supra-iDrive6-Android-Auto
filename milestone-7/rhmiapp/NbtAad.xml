@@ -16,6 +16,7 @@
       <raAction id="27"/>
       <raAction id="28"/>
       <raAction id="29"/>
+      <raAction id="30"/>
       <hmiAction id="25" target="12"/>
     </actions>
     <models>
@@ -58,6 +59,10 @@
       <textIdModel id="47" textId="21">
         <synonyms/>
       </textIdModel>
+      <raBoolModel id="48"/>
+      <textIdModel id="49" textId="22">
+        <synonyms/>
+      </textIdModel>
       <raIntModel id="40" modelType="NativeStateID" value="1"/>
       <raIntModel id="41" modelType="NativeStateID" value="20"/>
     </models>
@@ -79,6 +84,7 @@
           <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
           <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
           <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
+          <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
           <button action="25" id="65" model="36" text="About"/>
         </components>
       </hmiState>

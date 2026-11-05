@@ -81,6 +81,21 @@ int screen_get_buffer_property_pv(screen_buffer_t buf, int prop, void **val);
 int screen_get_buffer_property_iv(screen_buffer_t buf, int prop, int *val);
 int screen_fill(screen_context_t ctx, screen_buffer_t buf, const int *attribs);
 int screen_post_window(screen_window_t win, screen_buffer_t buf, int count, const int *rects, int flags);
+int screen_get_window_property_cv(screen_window_t win, int prop, int len, char *val);
+/* Events. Numbers read from the unit's libscreen.so (2026-11-05): screen_get_event_property_iv returns the event
+ * type for property 0x2f; screen_get_event_property_pv returns the window (event+0x20) for property 0x34 on event
+ * types 1 and 3; screen_get_event takes a 64-bit timeout in r2:r3 (0 = poll, -1 = forever). Stock QNX values. */
+typedef void* screen_event_t;
+#define SCREEN_EVENT_CREATE            1
+#define SCREEN_EVENT_PROPERTY          2
+#define SCREEN_EVENT_CLOSE             3
+#define SCREEN_PROPERTY_TYPE           47
+#define SCREEN_PROPERTY_WINDOW         52
+int screen_create_event(screen_event_t *ev);
+int screen_destroy_event(screen_event_t ev);
+int screen_get_event(screen_context_t ctx, screen_event_t ev, uint64_t timeout);
+int screen_get_event_property_iv(screen_event_t ev, int prop, int *val);
+int screen_get_event_property_pv(screen_event_t ev, int prop, void **val);
 
 typedef struct {
     uint32_t width;

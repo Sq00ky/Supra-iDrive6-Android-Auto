@@ -49,6 +49,7 @@ SRCS = src/main.cpp \
        src/most/trace.cpp \
        src/car/ccs_input.cpp \
        src/car/volume_input.cpp \
+       src/car/input_activity.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
@@ -151,6 +152,10 @@ clean:
 # osdprobe: standalone check that this unit lets us own an LM surface for our own window.
 osdprobe: tools/osdprobe.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/osdprobe.cpp -L./lib -lscreen -lang-c++
+
+# osd1281probe: can the volume pill be its own LayerManager surface (window id "1281") next to 1280?
+osd1281probe: tools/osd1281probe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/osd1281probe.cpp -L./lib -lscreen -lang-c++
 
 # lmrestore: put screen 0's layer render order back after an experiment cleared it.
 lmrestore: tools/lmrestore.cpp

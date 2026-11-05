@@ -108,7 +108,17 @@ VideoManager::VideoManager()
       worker_busy_(false),
       strm_lib_(NULL),
       cp_mode_(false),
-      window_ready_(false) {
+      parked_(false),
+      wait_idr_(false),
+      screen_ev_(0),
+      mmr_win_(0),
+      mmr_hidden_(false),
+      mmr_saved_vis_(1),
+      mmr_saved_z_(0),
+      screen_events_logged_(0),
+      idr_dropped_(0),
+      decoder_gen_(0), frames_in_gen_(0), window_ready_(false), overlay_surface_(0), overlay_verified_(false),
+      overlay_failed_(false) {
     memset(&sink_, 0, sizeof(sink_));
     pthread_mutex_init(&queue_mutex_, NULL);
     pthread_mutex_init(&decoder_mutex_, NULL);
@@ -702,6 +712,8 @@ bool VideoManager::createDecoder() {
         }
         printf("[VideoManager] Hardware decoder pipeline active (ctxt: '%s', out: %d, in: %d, seed-speed: %d, pre-speed: %d, play: %d, post-speed: %d)!\n",
                ctx_name, mmr_output_id_, mmr_input_id_, seed_speed_res, pre_speed_res, play_res, post_speed_res);
+        frames_in_gen_ = 0;
+        ++decoder_gen_;                  // mm-renderer's winid=1280 window is new: the volume overlay must follow it
         if ((mmr_input_id_ < 0 || play_res < 0) && fn_err) {
             const void* err_info = fn_err(mmr_ctxt_);
             if (err_info) {
@@ -722,8 +734,10 @@ bool VideoManager::createDecoder() {
     pthread_mutex_lock(&queue_mutex_);
     reset_pending_ = true;
     accepting_ = (mdev_fd_ >= 0);
+    if (parked_) { wait_idr_ = true; idr_dropped_ = 0; }   // rebuilt mid-stream: nothing decodes before an IDR
     pthread_mutex_unlock(&queue_mutex_);
     cp_mode_ = false;
+    parked_ = false;
     return mmr_ctxt_ != NULL && mdev_fd_ >= 0;
 }
 
@@ -737,7 +751,9 @@ bool VideoManager::prepareForSession() {
     pthread_mutex_lock(&decoder_mutex_);
     bool ok = true;
     if (!mmr_ctxt_) {
-        printf("[VideoManager] Android Auto phone connected: creating the decoder context now\n");
+        if (parked_) printf("[VideoManager] Android Auto back on screen: creating a new decoder context (the old one was "
+                            "closed while iDrive had the screen)\n");
+        else printf("[VideoManager] Android Auto phone connected: creating the decoder context now\n");
         ok = createDecoder();
     } else if (cp_mode_) {
         printf("[VideoManager] Android Auto phone connected: rebuilding the decoder context (it carried CarPlay's settings)\n");
@@ -831,6 +847,44 @@ bool VideoManager::retuneForCarPlay() {
     return r_out >= 0 && r_in >= 0;
 }
 
+void VideoManager::parkDecoder() {
+    if (!is_initialized_) return;
+    pthread_mutex_lock(&decoder_mutex_);
+    if (mmr_ctxt_ && !cp_mode_) {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        destroyDecoder();            // stops the worker (accepting_ = false) and closes mm-renderer's window
+        parked_ = true;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        printf("[VideoManager] decoder context closed while iDrive has the screen (%ld ms): the Android Auto picture is "
+               "gone; a new context is built when Android Auto comes back\n", ms);
+    }
+    pthread_mutex_unlock(&decoder_mutex_);
+}
+
+bool VideoManager::waitingForKeyframe() {
+    pthread_mutex_lock(&queue_mutex_);
+    bool w = wait_idr_;
+    pthread_mutex_unlock(&queue_mutex_);
+    return w;
+}
+
+void VideoManager::releaseKeyframeWait() {
+    pthread_mutex_lock(&queue_mutex_);
+    if (wait_idr_) printf("[VideoManager] no keyframe after the decoder rebuild (%u frames dropped): passing frames on\n",
+                          idr_dropped_);
+    wait_idr_ = false;
+    pthread_mutex_unlock(&queue_mutex_);
+}
+
+bool VideoManager::decoderParked() {
+    pthread_mutex_lock(&decoder_mutex_);
+    bool p = parked_ && !mmr_ctxt_;
+    pthread_mutex_unlock(&decoder_mutex_);
+    return p;
+}
+
 bool VideoManager::decoderInCarPlayMode() {
     pthread_mutex_lock(&decoder_mutex_);
     bool c = cp_mode_;
@@ -879,8 +933,87 @@ bool VideoManager::workerRunning() {
     return r;
 }
 
+void VideoManager::pollScreenEvents() {
+    if (!window_ready_ || !sink_.ctx) return;
+    if (!screen_ev_ && screen_create_event(&screen_ev_) != 0) {
+        static bool s_logged = false;
+        if (!s_logged) { s_logged = true; printf("[VideoManager] screen_create_event failed errno=%d: no window events\n", errno); }
+        screen_ev_ = 0;
+        return;
+    }
+    for (int n = 0; n < 32; ++n) {
+        if (screen_get_event(sink_.ctx, screen_ev_, 0) != 0) {
+            static bool s_logged = false;
+            if (!s_logged) { s_logged = true; printf("[VideoManager] screen_get_event failed errno=%d\n", errno); }
+            return;
+        }
+        int type = 0;
+        screen_get_event_property_iv(screen_ev_, SCREEN_PROPERTY_TYPE, &type);
+        if (type == 0) return;                           // SCREEN_EVENT_NONE: queue empty
+        void* w = 0;
+        if (type == SCREEN_EVENT_CREATE || type == SCREEN_EVENT_CLOSE)
+            screen_get_event_property_pv(screen_ev_, SCREEN_PROPERTY_WINDOW, &w);
+        char id[64] = "";
+        int vis = -1, z = 0;
+        if (w && type == SCREEN_EVENT_CREATE) {
+            screen_get_window_property_cv((screen_window_t)w, SCREEN_PROPERTY_ID_STRING, sizeof(id) - 1, id);
+            screen_get_window_property_iv((screen_window_t)w, SCREEN_PROPERTY_VISIBLE, &vis);
+            screen_get_window_property_iv((screen_window_t)w, SCREEN_PROPERTY_ZORDER, &z);
+        }
+        if (screen_events_logged_ < 40 || type == SCREEN_EVENT_CREATE || type == SCREEN_EVENT_CLOSE) {
+            ++screen_events_logged_;
+            printf("[VideoManager] screen event %d%s window %p id '%s' vis %d z %d\n", type,
+                   type == SCREEN_EVENT_CREATE ? " (create)" : type == SCREEN_EVENT_CLOSE ? " (close)" : "", w, id, vis, z);
+        }
+        // Only windows that join our group cpvideogrp<pid> reach this context: mm-renderer's output window. Its id
+        // string may still be empty at join time, so it is not required to be "1280" (logged above either way).
+        if (type == SCREEN_EVENT_CREATE && w && w != sink_.win && (!id[0] || !strcmp(id, NBT_SCREEN_WINDOW_ID))) {
+            if (mmr_win_ && mmr_win_ != w) screen_destroy_window((screen_window_t)mmr_win_);   // stale handle
+            mmr_win_ = w;
+            mmr_hidden_ = false;
+            printf("[VideoManager] mm-renderer's video window joined our group (%p): it can be hidden without closing "
+                   "the decoder\n", w);
+        } else if (type == SCREEN_EVENT_CLOSE && w && w == mmr_win_) {
+            printf("[VideoManager] mm-renderer's video window closed (%p)\n", w);
+            screen_destroy_window((screen_window_t)w);   // releases our handle only
+            mmr_win_ = 0;
+            mmr_hidden_ = false;
+        }
+    }
+}
+
+bool VideoManager::hideVideoWindow() {
+    if (!mmr_win_) return false;
+    screen_window_t w = (screen_window_t)mmr_win_;
+    if (!mmr_hidden_) {
+        mmr_saved_vis_ = 1;
+        mmr_saved_z_ = 0;
+        screen_get_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &mmr_saved_vis_);
+        screen_get_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &mmr_saved_z_);
+    }
+    int v = 0, z = NBT_SCREEN_ZORDER_BACKGROUND;
+    int r1 = screen_set_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &v);
+    int e1 = errno;
+    int r2 = screen_set_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &z);
+    int e2 = errno;
+    int rv = -1, rz = 0;
+    screen_get_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &rv);
+    screen_get_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &rz);
+    printf("[VideoManager] video window hidden, decoder kept open: visible rc=%d errno=%d, z rc=%d errno=%d | was vis %d "
+           "z %d, got vis %d z %d\n", r1, e1, r2, e2, mmr_saved_vis_, mmr_saved_z_, rv, rz);
+    mmr_hidden_ = true;
+    return r1 == 0;
+}
+
 void VideoManager::setVisible(bool visible) {
     sink_.is_visible = visible;
+    if (visible && mmr_hidden_ && mmr_win_) {
+        screen_window_t w = (screen_window_t)mmr_win_;
+        int r2 = screen_set_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &mmr_saved_z_);
+        int r1 = screen_set_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &mmr_saved_vis_);
+        printf("[VideoManager] video window shown again: vis %d rc=%d, z %d rc=%d\n", mmr_saved_vis_, r1, mmr_saved_z_, r2);
+        mmr_hidden_ = false;
+    }
     // No window yet (CarPlay hand-off, no Android Auto phone so far): there is nothing of ours to show or hide, and
     // every LayerManager call below would act on the factory CarPlay's surface 1280.
     if (!window_ready_) return;
@@ -900,13 +1033,19 @@ void VideoManager::setVisible(bool visible) {
     char cmd[768];
     if (visible) {
         const nbt::CarConfig& cc = nbt::carConfig();
+        // The plain order first (car-proven); with the pill's surface the two-surface order follows at once, so a
+        // LayerManagerControl that refused the list has still put the picture up.
+        char pill[160] = "";
+        if (overlay_surface_ > 0)
+            snprintf(pill, sizeof(pill), "%s set layer 0x80000000 render order 0x%x,0x500 2>/dev/null; ", L,
+                     (unsigned)overlay_surface_);
         snprintf(cmd, sizeof(cmd),
-                 "%s set layer 0x80000000 render order 0x500 2>/dev/null; "
+                 "%s set layer 0x80000000 render order 0x500 2>/dev/null; %s"
                  "%s set surface 1280 source region 0 0 %d %d 2>/dev/null; "
                  "%s set surface 1280 destination region 0 0 %d %d 2>/dev/null; "
                  "%s set surface 256 visibility 0 2>/dev/null; "
                  "%s set surface 1280 visibility 1 2>/dev/null",
-                 L, L, cc.screenW, cc.screenH, L, cc.screenW, cc.screenH, L, L);
+                 L, pill, L, cc.screenW, cc.screenH, L, cc.screenW, cc.screenH, L, L);
     } else {
         snprintf(cmd, sizeof(cmd),
                  "%s set layer 0x80000000 render order 0x100 2>/dev/null; "
@@ -917,10 +1056,77 @@ void VideoManager::setVisible(bool visible) {
     system(cmd);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
-    printf("[VideoManager] Screen overlay visibility changed: %s (Z-Order: %d, %ld ms)\n",
-           visible ? "VISIBLE" : "HIDDEN", z_order, ms);
+    printf("[VideoManager] Screen overlay visibility changed: %s (Z-Order: %d, %ld ms)%s\n",
+           visible ? "VISIBLE" : "HIDDEN", z_order, ms, (visible && overlay_surface_ > 0) ? " [volume pill on top]" : "");
+    if (visible && overlay_surface_ > 0 && !overlay_verified_) verifyOverlayOrder();
     if (visible) fixCarPlayLayer();
     else restoreFactoryGeometry();   // the factory CarPlay shares surface 1280: give it its own regions back
+}
+
+// Surface ids after "surface render order:" in `LayerManagerControl get layer` output, e.g.
+// "    - surface render order: 1281(0x501), 1280(0x500),". Returns how many, -1 when the line is missing.
+static int parseLayerRenderOrder(const char* dump, int* ids, int max) {
+    const char* k = strstr(dump, "surface render order:");
+    if (!k) return -1;
+    k += strlen("surface render order:");
+    int n = 0;
+    while (*k && *k != '\n' && n < max) {
+        while (*k == ' ' || *k == ',' || *k == '\t') ++k;
+        if (*k < '0' || *k > '9') break;
+        char* e = NULL;
+        ids[n++] = (int)strtol(k, &e, 10);
+        k = e;
+        while (*k && *k != ',' && *k != '\n') ++k;   // skip "(0x501)"
+    }
+    return n;
+}
+
+void VideoManager::verifyOverlayOrder() {
+    overlay_verified_ = true;
+    FILE* p = popen("/opt/sys/bin/LayerManagerControl get layer 0x80000000 2>&1", "r");
+    if (!p) return;
+    char buf[2048];
+    size_t used = 0;
+    buf[0] = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), p)) {
+        size_t n = strlen(line);
+        if (used + n + 1 < sizeof(buf)) {
+            memcpy(buf + used, line, n + 1);
+            used += n;
+        }
+    }
+    pclose(p);
+    int ids[8];
+    const int n = parseLayerRenderOrder(buf, ids, 8);
+    if (n >= 2 && ids[0] == overlay_surface_ && ids[1] == 1280) {
+        printf("[VolOsd] Android Auto layer render order is now %d, %d: the volume pill is on top of the picture\n",
+               ids[0], ids[1]);
+        return;
+    }
+    bool has1280 = false;
+    for (int i = 0; i < n; ++i)
+        if (ids[i] == 1280) has1280 = true;
+    printf("[VolOsd] LayerManagerControl did not take the render order 0x%x,0x500 (layer lists %d surface(s)%s): "
+           "plain order put back, no volume pill this run\n", (unsigned)overlay_surface_, n,
+           has1280 ? "" : ", without 1280");
+    overlay_failed_ = true;
+    overlay_surface_ = 0;
+    system("/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x500 2>/dev/null");
+}
+
+bool VideoManager::applyOverlayOrder() {
+    if (!window_ready_ || !sink_.is_visible) return false;   // hidden: the hide order holds neither surface
+    char cmd[160];
+    if (overlay_surface_ > 0)
+        snprintf(cmd, sizeof(cmd),
+                 "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x%x,0x500 2>/dev/null",
+                 (unsigned)overlay_surface_);
+    else
+        snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x500 2>/dev/null");
+    system(cmd);
+    if (overlay_surface_ > 0 && !overlay_verified_) verifyOverlayOrder();
+    return true;
 }
 
 int VideoManager::surface1280Visible() {
@@ -1126,6 +1332,11 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
     // Non-blocking enqueue: network thread pushes frame and returns immediately!
     pthread_mutex_lock(&queue_mutex_);
     if (!accepting_) { pthread_mutex_unlock(&queue_mutex_); return false; }
+    if (wait_idr_) {
+        if (!looksLikeIdr(data, length)) { ++idr_dropped_; pthread_mutex_unlock(&queue_mutex_); return true; }
+        wait_idr_ = false;
+        printf("[VideoManager] keyframe after the decoder rebuild (%u frames without one dropped)\n", idr_dropped_);
+    }
     if (frame_queue_.size() >= 15) {
         bool dropped = false;
         size_t dropped_size = 0;
@@ -1271,6 +1482,7 @@ void VideoManager::workerLoop() {
                 uint64_t elapsed_us = (done_us >= start_us) ? (done_us - start_us) : 0;
 
                 frame_count++;
+                if (ret == 0) ++frames_in_gen_;
                 if (ret != 0 || frame_count <= 35 || (frame_count % 30) == 0) {
                     printf("[VideoManager] mdev frame #%u END (%u bytes%s, raw=%u, cfg=%u, pts=%llu, elapsed=%llu us) -> MsgSendvs_r ret=%d (status: %s)\n",
                            frame_count, static_cast<unsigned int>(item.data.size()),

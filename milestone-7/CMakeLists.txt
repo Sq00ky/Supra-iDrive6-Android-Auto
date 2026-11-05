@@ -49,6 +49,7 @@ set(SOURCES
     src/most/trace.cpp
     src/car/ccs_input.cpp
     src/car/volume_input.cpp
+    src/car/input_activity.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
     src/kombi_client.cpp

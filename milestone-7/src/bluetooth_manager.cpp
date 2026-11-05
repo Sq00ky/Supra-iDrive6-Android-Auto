@@ -114,6 +114,11 @@ double upSecBt() {
 std::string g_phoneAddr;
 uint32_t g_phoneConn = 0;
 bool g_listAsked = false;
+// Refused phone-opened links in a row (ServiceRequestError, reset by ServiceRequestComplete), and whether the phone's
+// service list was already fetched once for such a run (DSI callback thread only).
+unsigned g_reqErrRun = 0;
+bool g_reqErrListAsked = false;
+bool g_reqErrListPending = false;
 
 const char* connName(uint32_t c) {
     static const char* const k[] = { "not in range", "in range", "connected", "service connected" };
@@ -195,6 +200,33 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
             g_dir.onPhoneRequest(svc, monoSec());
             pthread_mutex_unlock(&g_dirMx);
         }
+        if (id == kInfServiceRequestComplete) g_reqErrRun = 0;
+        if (id == kInfServiceRequestError && ++g_reqErrRun % 60 == 5) {
+            // The car's Bluetooth manager (Connectivity) refused the phone's link. One or two right after the phone
+            // connects are normal: it asks before its Bluetooth audio is up, and the next request completes (seen on
+            // three cars). Connectivity's PFEvent_ServiceRequest handler (static RE 2026-11-05, not car-verified) accepts a
+            // phone-opened SPP link only while that same phone has Bluetooth audio (A2DP) connected to the car and SPP is
+            // enabled in the car's Bluetooth set-up; it also refuses it with the ignition (terminal R) off, in the pairing
+            // menu and during an NFC session.
+            printf("[BluetoothManager] the car has refused the phone's Android Auto Bluetooth link %u times in a row. "
+                   "The car accepts it only while this phone's Bluetooth audio is connected: check Bluetooth audio for "
+                   "the phone in iDrive (Mobile devices) and Media audio for the car on the phone, with the ignition on "
+                   "and the pairing menu closed\n", g_reqErrRun);
+            if (!g_reqErrListAsked && !addr.empty()) {   // which of its services the car has connected (once per run)
+                g_reqErrListAsked = true;
+                g_reqErrListPending = true;
+                std::vector<uint8_t> p;
+                DsiClient::putString(p, addr.c_str());
+                waitTxIdle();
+                c->sendRequest(kReqServiceListGet, p);
+            }
+        }
+        fflush(stdout);
+        return;
+    }
+    if (!btTrace() && g_reqErrListPending && id == kRspServiceListGet) {
+        g_reqErrListPending = false;
+        logServiceList(pl, len, true);
         fflush(stdout);
         return;
     }

@@ -39,10 +39,42 @@ public:
     bool prepareForSession();
     bool retuneForCarPlay();
     bool decoderInCarPlayMode();
+    // Closes the decoder context (and with it mm-renderer's winid=1280 window) while iDrive has the screen. Needed once
+    // the volume overlay has drawn: its window then holds LayerManager surface 1280, so hiding the surface no longer
+    // hides the video. prepareForSession() builds a new context (a new, newest 1280 window) when Android Auto returns.
+    void parkDecoder();
+    bool decoderParked();
+    // After a parked context is rebuilt the phone is mid-stream: P-frames without their reference decode as grey,
+    // jittery, wrong-colour garbage (G30, v1.9.15). Frames are dropped until the first IDR. releaseKeyframeWait()
+    // gives up waiting (the phone never sent one).
+    bool waitingForKeyframe();
+    // NBT_MMR_WIN_HIDE=1 (experiment): mm-renderer's winid=1280 window joins our window group, so our context gets a
+    // SCREEN_EVENT_CREATE with its handle. pollScreenEvents() (main loop) records it; hideVideoWindow() sets it
+    // VISIBLE 0 at the background z-order with the decoder left open, setVisible(true) restores what was read.
+    void pollScreenEvents();
+    bool videoWindowKnown() const { return mmr_win_ != 0; }
+    bool hideVideoWindow();
+    void releaseKeyframeWait();
     void fixCarPlayLayer();
     // LayerManager visibility of surface 1280 (shared with the factory CarPlay window): 1 / 0, -1 = unknown.
     static int surface1280Visible();
     bool hasWindow() const { return window_ready_; }
+    // The volume pill's own LayerManager surface (VolumeOsd::kSurfaceId once LayerManager made it, 0 = none). While the
+    // picture is shown it goes FIRST in layer 0x80000000's render order: on this unit the first surface of a layer's
+    // list is drawn on top (osd1281probe, Supra 2026-11-05: {1280, 1281} left the pill under the video, {1281, 1280}
+    // showed it over the picture). The hide order (0x100) holds neither, so the pill always leaves with the picture.
+    // Main thread only, like setVisible(). applyOverlayOrder() rewrites the order now when the picture is shown
+    // (false when it is hidden: setVisible(true) applies it then). The first two-surface order is read back; if
+    // LayerManagerControl did not take it, the plain order is restored and overlayOrderFailed() stays true.
+    void setOverlaySurface(int id) { overlay_surface_ = id > 0 ? id : 0; }
+    int overlaySurface() const { return overlay_surface_; }
+    bool applyOverlayOrder();
+    bool overlayOrderFailed() const { return overlay_failed_; }
+    // The volume overlay must come up after mm-renderer's own winid=1280 window, never before it: on a G30 (v1.9.08)
+    // an overlay window created first kept LayerManager surface 1280 and the panel showed only the pill. A new decoder
+    // context (each connection that rebuilds it) recreates that window, so the overlay follows these two counters.
+    uint32_t decoderGeneration() const { return decoder_gen_; }
+    uint32_t framesSinceDecoder() const { return frames_in_gen_; }
     // The Android Auto context and window, so the volume overlay can be a CHILD of the projection window: a window
     // with its own id string never reaches this panel (no LayerManager surface), and one named "1280" *becomes* the
     // projection surface and covers Android Auto (car 2026-11-03, nbt-aad-68).
@@ -102,7 +134,21 @@ private:
     std::string grp_name_;
     pthread_mutex_t decoder_mutex_; // createDecoder / destroyDecoder / retuneForCarPlay
     bool cp_mode_;                  // guarded by decoder_mutex_: context carries CarPlay's settings
+    bool parked_;                   // guarded by decoder_mutex_: context closed while iDrive has the screen
+    bool wait_idr_;                 // guarded by queue_mutex_: drop frames until an IDR (rebuilt mid-stream)
+    void* screen_ev_;               // main thread only (pollScreenEvents / hideVideoWindow / setVisible)
+    void* mmr_win_;                 // mm-renderer's window in our group (from SCREEN_EVENT_CREATE), or 0
+    bool mmr_hidden_;               // hideVideoWindow() took it down: setVisible(true) restores
+    int mmr_saved_vis_, mmr_saved_z_;
+    int screen_events_logged_;
+    uint32_t idr_dropped_;          // guarded by queue_mutex_
+    volatile uint32_t decoder_gen_;     // +1 per decoder context created
+    volatile uint32_t frames_in_gen_;   // frames sent to mdev since the current context was created
     volatile bool window_ready_;    // createWindow() finished (setVisible() is a no-op before)
+    int overlay_surface_;           // main thread only: the pill's surface, on top of 1280 while shown (0 = none)
+    bool overlay_verified_;         // the two-surface render order was read back once
+    bool overlay_failed_;           // ... and LayerManagerControl did not take it: not tried again this run
+    void verifyOverlayOrder();
     std::vector<VideoQueueItem> frame_queue_;
     std::vector<uint8_t> cached_codec_config_;
 };
