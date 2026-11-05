@@ -1167,6 +1167,10 @@ static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
 static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
 static const double kShortSessionS = 15.0;
 static void onSessionEnded(void* user_data) {
+    nbt::UsbAccessory* usb = g_usb;
+    const nbt::AASession::Outcome outcome = g_session.outcome();
+    if (usb && g_owner.get() == nbt::kTransportUsb && outcome != nbt::AASession::kEstablished)
+        usb->noteSessionFailed(outcome == nbt::AASession::kStale);
     g_sessionActive = false;
     g_owner.set(nbt::kTransportNone);
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);

@@ -56,6 +56,59 @@ static void* poster(void* a) {
     return NULL;
 }
 
+// What a phone still in an earlier session does: encrypted frames, no answer to the VersionRequest. No handshake ran
+// here, so the real cryptor can't decrypt them either.
+static void sendEncryptedFrames(int fd, int n) {
+    const uint8_t frame[4 + 8] = { 6, 0x0B, 0, 8, 0x17, 3, 3, 0, 3, 1, 2, 3 };
+    for (int i = 0; i < n; ++i) assert(write(fd, frame, sizeof(frame)) == (ssize_t)sizeof(frame));
+}
+
+static void waitEnded(int before) {
+    for (int w = 0; w < 400 && __sync_fetch_and_add(&g_ended, 0) <= before; ++w) usleep(5000);
+    assert(__sync_fetch_and_add(&g_ended, 0) > before);
+}
+
+static void testOutcomes() {
+    AASession s;
+    s.setDisconnectCallback(&onEnded, NULL);
+    int sv[2];
+
+    // Encrypted frames that never decrypt end the session by themselves, while the phone keeps the socket open.
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    int before = __sync_fetch_and_add(&g_ended, 0);
+    assert(s.start(sv[0]));
+    assert(readVersionRequest(sv[1]));
+    sendEncryptedFrames(sv[1], 16);
+    waitEnded(before);
+    s.stop();
+    assert(s.outcome() == AASession::kStale);
+    close(sv[1]);
+
+    // Fewer than the limit, then the phone goes away: the session waited, and it still counts as stale.
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    before = __sync_fetch_and_add(&g_ended, 0);
+    assert(s.start(sv[0]));
+    assert(readVersionRequest(sv[1]));
+    sendEncryptedFrames(sv[1], 3);
+    usleep(50000);
+    assert(s.isActive());   // under the limit: the session waits
+    close(sv[1]);
+    waitEnded(before);
+    s.stop();
+    assert(s.outcome() == AASession::kStale);
+
+    // The phone says nothing at all.
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    before = __sync_fetch_and_add(&g_ended, 0);
+    assert(s.start(sv[0]));
+    assert(readVersionRequest(sv[1]));
+    close(sv[1]);
+    waitEnded(before);
+    s.stop();
+    assert(s.outcome() == AASession::kNoAnswer);
+    printf("outcomes: ok\n");
+}
+
 int main() {
     signal(SIGPIPE, SIG_IGN);
     AASession s;
@@ -107,6 +160,7 @@ int main() {
     int fds_after = countFds();
     printf("cycles=%d ended_callbacks=%d fds before=%d after=%d\n", N, (int)__sync_fetch_and_add(&g_ended, 0), fds_before, fds_after);
     assert(fds_after <= fds_before + 1);
+    testOutcomes();
     printf("test_session_lifecycle OK\n");
     return 0;
 }

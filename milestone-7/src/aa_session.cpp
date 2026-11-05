@@ -34,6 +34,10 @@ static uint32_t monoMs() {
     return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
 }
 
+// Under a second of video from a phone in an earlier session. A few are let through in case the first frames of a
+// session are ever not application data.
+static const uint32_t kMaxUndecrypted = 16;
+
 AASession::AASession()
     : client_fd_(-1),
       running_(0),
@@ -52,6 +56,8 @@ AASession::AASession()
       rx_seq_next_(0),
       rx_seq_known_(false),
       rx_records_(0),
+      decrypted_any_(false),
+      undecrypted_(0),
       rx_note_count_(0),
       rx_start_s_(0) {
     pthread_mutex_init(&lifecycle_mutex_, NULL);
@@ -369,6 +375,8 @@ bool AASession::start(int client_fd) {
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
     rx_records_ = 0;
+    decrypted_any_ = false;
+    undecrypted_ = 0;
     rx_note_count_ = 0;
     rx_start_s_ = monoS();
     memset(av_session_, 0, sizeof(av_session_));
@@ -1061,8 +1069,16 @@ void AASession::sessionLoop() {
                     reassembly_[channel].clear();
                     reassembly_total_.erase(channel);
                     reassembly_wire_.erase(channel);
+                    // A phone still streaming an earlier session never answers this one, and its frames keep the
+                    // no-data timeout from firing: without this the session would sit here for as long as it streams.
+                    if (!decrypted_any_ && ++undecrypted_ >= kMaxUndecrypted) {
+                        printf("[AASession] none of the first %u encrypted frames could be decrypted: the phone is "
+                               "still in an earlier session, ending this one\n", (unsigned)undecrypted_);
+                        break;
+                    }
                     continue;
                 }
+                decrypted_any_ = true;
             } else {
                 decrypted_chunk = payload;
             }

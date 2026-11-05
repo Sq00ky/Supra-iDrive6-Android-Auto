@@ -51,6 +51,12 @@ static const double kSelfSwitchAfterS = 0.5;
 // After our switch the phone drops off the bus and comes back as an accessory; if its aoap-switch node is still there
 // this long after, the switch did nothing and the node no longer holds wireless off.
 static const double kSwitchSettleS = 10.0;
+// After a USB reset: no session on the phone for this long (medialauncher waits 2 s for its own resets). If it comes
+// back as a new device, that one starts straight away.
+static const double kResetSettleS = 3.0;
+// A phone that does not answer may just be starting Android Auto (or showing a prompt): a reset would start that over.
+// So one more try first.
+static const int kSilentSessionsBeforeReset = 2;
 
 static double monoSec() {
     struct timespec ts;
@@ -384,6 +390,8 @@ UsbAccessory::UsbAccessory(ClientConnectedCallback callback, void* user_data, Ow
       watch_thread_(0),
       is_running_(false),
       phone_present_(false),
+      session_failed_(false),
+      session_stale_(false),
       bridge_(NULL),
       not_ours_ticks_(0),
       direct_(NULL),
@@ -412,6 +420,45 @@ void UsbAccessory::setFlag(bool& f, bool v) {
     pthread_mutex_lock(&flag_mutex_);
     f = v;
     pthread_mutex_unlock(&flag_mutex_);
+}
+
+void UsbAccessory::noteSessionFailed(bool stale) {
+    pthread_mutex_lock(&flag_mutex_);
+    session_failed_ = true;
+    session_stale_ = stale;
+    pthread_mutex_unlock(&flag_mutex_);
+}
+
+// Runs with no bridge up. The session reports its end after closing its socket, so its bridge may have been reaped a
+// scan earlier; the retry gap keeps the next session from starting before this has run.
+void UsbAccessory::handleFailedSession() {
+    pthread_mutex_lock(&flag_mutex_);
+    const bool failed = session_failed_;
+    const bool stale = session_stale_;
+    session_failed_ = false;
+    pthread_mutex_unlock(&flag_mutex_);
+    if (!failed || !direct_) return;
+    AccessoryNode* n = findNode(last_node_);
+    if (!n) return;   // unplugged
+    if (stale) {
+        resetPhone(n->name, "still in an earlier session");
+    } else if (++n->silent_sessions >= kSilentSessionsBeforeReset) {
+        n->silent_sessions = 0;
+        resetPhone(n->name, "not answering");
+    }
+}
+
+bool UsbAccessory::resetPhone(const std::string& key, const char* why) {
+    if (!resets_.take(monoSec())) {
+        printf("[UsbAccessory] %s: %s, but %d USB resets did not help: not resetting it again for now, unplug and "
+               "replug the phone\n", key.c_str(), why, (int)aoap::ResetBudget::kMax);
+        return false;
+    }
+    printf("[UsbAccessory] %s: %s: resetting it\n", key.c_str(), why);
+    if (!direct_->resetDevice(key)) return false;
+    AccessoryNode* n = findNode(key);
+    if (n) n->next_try_s = monoSec() + kResetSettleS;
+    return true;
 }
 
 bool UsbAccessory::start() {
@@ -524,6 +571,7 @@ void UsbAccessory::watchLoop() {
         const double now = monoSec();
         const Transport owner = owner_ ? owner_(owner_data_) : kTransportNone;
         if (!bridge_ && mayStart(owner, kTransportUsb)) {
+            handleFailedSession();
             // medialauncher creates /dev/android* only if the phone answered its one AOA request at plug-in: a phone
             // still in "charging only" did not, and is asked again through io-usb until it answers.
             if (direct_ && androids.empty() && accs.empty()) {
@@ -560,12 +608,14 @@ void UsbAccessory::watchLoop() {
             for (size_t i = 0; i < accs.size() && !bridge_; ++i) {
                 AccessoryNode* n = findNode(accs[i]);
                 if (!n) {
-                    AccessoryNode a = { accs[i], 0, 0, 0 };
+                    AccessoryNode a = { accs[i], 0, 0, 0, 0 };
                     nodes_.push_back(a);
                     n = &nodes_.back();
                 }
                 if (n->sessions >= kMaxSessionsPerNode || n->open_fails >= kMaxOpenFails) continue;
                 if (now < n->next_try_s) continue;
+                if (direct_ && direct_->takePresentAtStart(accs[i]) &&
+                    resetPhone(accs[i], "already in accessory mode when the daemon started")) continue;
                 BridgeResult r = startBridge(accs[i]);   // does not add to nodes_: n stays valid
                 if (r == kBridgeStarted) {
                     n->open_fails = 0;
@@ -594,6 +644,7 @@ void UsbAccessory::watchLoop() {
 bool UsbAccessory::usbWantsPhone(const std::vector<std::string>& androids, const std::vector<std::string>& accs,
                                  bool accessory_waiting, double now) {
     if (bridge_ || accessory_waiting) return true;   // a session, or an accessory waiting out the driver grace
+    if (resets_.within(now, kSwitchSettleS)) return true;   // off the bus for a moment because of our reset
     for (size_t i = 0; i < androids.size(); ++i) {
         const SwitchNode* s = NULL;
         for (size_t j = 0; j < switches_.size(); ++j) {
@@ -668,6 +719,7 @@ UsbAccessory::BridgeResult UsbAccessory::startBridge(const std::string& node) {
     b->has_fwd = (link || b->has_reader) && pthread_create(&b->fwd, NULL, &bridgeForwarder, b) == 0;
     b->has_writer = b->has_fwd && pthread_create(&b->writer, NULL, &bridgeWriter, b) == 0;
     bridge_ = b;
+    last_node_ = node;
     not_ours_ticks_ = 0;
     if (!b->has_writer || (link && !link->startRx(&directRx, b))) {
         printf("[UsbAccessory] bridge threads failed to start\n");
