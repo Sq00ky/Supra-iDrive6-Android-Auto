@@ -40,6 +40,32 @@ inline bool carGpsEnabled() {
     return envFlag("NBT_CAR_GPS") != 0;
 }
 
+// Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
+// the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
+inline int videoResolution() {
+    const char* e = getenv("NBT_VID_RES");
+    if (e && strcmp(e, "1") == 0) return 1;
+    if (e && strcmp(e, "3") == 0) return 3;
+    return 2;
+}
+inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
+inline int videoCanvasHeight() { return videoResolution() == 1 ? 480 : videoResolution() == 3 ? 1080 : 720; }
+
+// NBT_VID_FPS (PR #66): "30" or "60"; anything else = 0 (not set). On the wire VideoConfig.fps is 1 = 60 fps and
+// 2 = 30 fps (the phone app's VideoFrameRateType; obd2aa and open-android-auto agree, aasdk has the names swapped), and
+// the DHU manifest we send carries 2: unset, the phone is asked for 30 fps (car logs: ~30 fps delivered) while the
+// decoder is declared at 60, as before.
+inline unsigned videoFpsSetting() {
+    const char* e = getenv("NBT_VID_FPS");
+    if (e && strcmp(e, "30") == 0) return 30u;
+    if (e && strcmp(e, "60") == 0) return 60u;
+    return 0u;
+}
+// What the phone is asked for: NBT_VID_FPS, else the manifest's 30.
+inline unsigned videoRequestedFps() { return videoFpsSetting() ? videoFpsSetting() : 30u; }
+// What the decoder (mdev format packet, MM-Renderer input) is declared with: NBT_VID_FPS, else 60 (unchanged).
+inline unsigned videoDecoderFps() { return videoFpsSetting() ? videoFpsSetting() : 60u; }
+
 // The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
 // Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified,

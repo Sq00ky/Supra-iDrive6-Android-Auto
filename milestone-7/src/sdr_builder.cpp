@@ -620,24 +620,36 @@ bool configureSensors(ServiceDiscovery& m) {
 }
 
 bool configureMainVideo(ServiceDiscovery& m) {
-    int vres = 0, vmw = 0, vmh = 0, vdpi;
-    const bool res = envInt("NBT_VID_RES", vres);
-    const bool mw = envInt("NBT_VID_MW", vmw);
-    const bool mh = envInt("NBT_VID_MH", vmh);
-    // Default DPI 140 (car-verified 2026-10-23, w9: rail icons no longer overlap in crop mode).
-    // NBT_VID_DPI=<n> overrides, NBT_VID_DPI=0 keeps the phone's own DPI.
-    // MINI round display (1180_480 coding): DPI 152 and 40 px side insets by default (car-verified on a MINI F60).
+    int vmw = 0, vmh = 0, vdpi;
+    // NBT_VID_RES (PR #66): the canvas the phone renders (VIDEO_800X480 / VIDEO_1280X720 default / VIDEO_1920X1080);
+    // invalid values = 720p. Decoder size, insets, DPI and touch follow it (nbt_env.hpp videoCanvas*).
+    const char* resEnv = getenv("NBT_VID_RES");
+    const bool res = resEnv && *resEnv;
+    const int vres = videoResolution();
+    // NBT_VID_FPS (PR #66): 30 -> VIDEO_FPS_30, 60 -> VIDEO_FPS_60; unset keeps the manifest's VIDEO_FPS_30.
+    const unsigned fpsSet = videoFpsSetting();
+    const bool fps = fpsSet != 0;
+    const int vfps = fpsSet == 60 ? VIDEO_FPS_60 : VIDEO_FPS_30;
+    // The DHU's legacy margins (1280 x 480) only fit the 720p canvas: the others get 0 unless NBT_VID_MW / NBT_VID_MH.
+    bool mw = vres != VIDEO_1280X720, mh = mw;
+    if (envInt("NBT_VID_MW", vmw)) mw = true;
+    if (envInt("NBT_VID_MH", vmh)) mh = true;
+    // Default DPI 140 (car-verified 2026-10-23, w9: rail icons no longer overlap in crop mode), scaled with the canvas
+    // width so 480p / 1080p keep the same layout (88 / 210). NBT_VID_DPI=<n> overrides, NBT_VID_DPI=0 keeps the
+    // phone's own DPI. MINI round display (1180_480 coding): DPI 152 and 40 px side insets at 720p (car-verified on a
+    // MINI F60), scaled the same way.
     const bool mini = miniRoundPanel();
-    vdpi = mini ? 152 : 140;
+    vdpi = ((mini ? 152 : 140) * videoCanvasWidth() + 640) / 1280;
     bool dpi = true;
     if (envInt("NBT_VID_DPI", vdpi) && vdpi <= 0) { dpi = false; vdpi = 0; }
-    // Default (car-verified in w7 on the 1280x480 panel): the phone keeps its UI inside the top rows of its
-    // 1280x720 canvas that the panel can show (480 rows -> bottom inset 240) and we show those rows 1:1. Other
-    // panels (NBT_SCREEN / carplay.ini) get 720 - rows shown at panel width, e.g. 1440x540 -> 480 rows -> 240.
-    // NBT_VID_NATIVE=1 adds a right inset of 1280 - panel width (1180x480 -> 0,240,0,100).
+    // Default (car-verified in w7 on the 1280x480 panel): the phone keeps its UI inside the part of its canvas the
+    // panel can show and we show it scaled evenly: 720p on 1280x480 = the top 480 rows 1:1 (bottom inset 240), 480p =
+    // the top 800x300 at x1.6 (0,180,0,0). Other panels (NBT_SCREEN / carplay.ini) get matching insets; taller ones
+    // fill the height and reserve the hidden columns on the right. NBT_VID_NATIVE=1 shows the canvas 1:1 and adds a
+    // right inset for the columns beyond the panel (1180x480 at 720p -> 0,240,0,100).
     // NBT_VID_INSETS=off restores the plain manifest.
-    const int side = mini ? 40 : 0;
-    VideoInsets insets(0, 720 - canvasRowsShown(), side, 1280 - canvasColsShown() + side);
+    const int side = mini ? 40 * videoCanvasWidth() / 1280 : 0;
+    VideoInsets insets(0, videoCanvasHeight() - canvasRowsShown(), side, videoCanvasWidth() - canvasColsShown() + side);
     bool hasInsets = true;
     const char* ins = getenv("NBT_VID_INSETS");
     if (ins && *ins) {
@@ -648,18 +660,21 @@ bool configureMainVideo(ServiceDiscovery& m) {
             if (sscanf(ins, "%d,%d,%d,%d", &t, &b, &l, &r) >= 2) { hasInsets = true; insets = VideoInsets(t, b, l, r); }
         }
     }
-    if (!res && !mw && !mh && !hasInsets && !dpi) return false;
+    if (!res && !fps && !mw && !mh && !hasInsets && !dpi) return false;
     AaChannel* c = findChannel(m, AA_CH_MAIN_VIDEO);
     if (!c || c->service != AaChannel::VIDEO_SINK) return false;
     VideoConfig& v = c->videoSink.config;
     if (res) v.resolution = vres;
+    if (fps) v.fps = vfps;
     if (mw) v.marginWidth = vmw;
     if (mh) v.marginHeight = vmh;
     if (dpi) { v.dpi = vdpi; v.realDensity = vdpi; }
     if (hasInsets) v.insets = insets;
-    if (mini) printf("[SDR] MINI round display (carplay.ini 1180_480): default DPI 152, side insets 40 px (NBT_VID_DPI / NBT_VID_INSETS override)\n");
-    printf("[SDR] main VideoConfig override: res=%s%d mw=%s%d mh=%s%d dpi=%s%d insets=%s(%d,%d,%d,%d)\n",
-           res ? "" : "(keep)", vres, mw ? "" : "(keep)", vmw, mh ? "" : "(keep)", vmh,
+    if (mini) printf("[SDR] MINI round display (carplay.ini 1180_480): default DPI %d, side insets %d px (NBT_VID_DPI / NBT_VID_INSETS override)\n",
+                     ((152 * videoCanvasWidth() + 640) / 1280), side);
+    printf("[SDR] main VideoConfig override: res=%s%d fps=%s%d (%u fps asked, decoder %u) mw=%s%d mh=%s%d dpi=%s%d insets=%s(%d,%d,%d,%d)\n",
+           res ? "" : "(keep)", vres, fps ? "" : "(keep)", fps ? vfps : (int)v.fps, videoRequestedFps(), videoDecoderFps(),
+           mw ? "" : "(keep)", vmw, mh ? "" : "(keep)", vmh,
            dpi ? "" : "(keep)", vdpi, hasInsets ? "" : "(keep)", insets.top, insets.bottom, insets.left, insets.right);
     return true;
 }
@@ -710,17 +725,19 @@ bool configureRailHide(ServiceDiscovery& m) {
     return m.sessionConfiguration != before;
 }
 
-// Touchscreen geometry the phone is told about. The phone renders a 1280x720 canvas that we squash into the 480-row
-// panel, so by default the touch space is declared 1280x720 and the forwarder scales y by 1.5 (NBT_TOUCH_SY).
+// Touchscreen geometry the phone is told about: the whole video canvas, hidden rows included (PR #66), so 1280x720 at
+// 720p (the DHU declares 1280x480) and 800x480 at 480p; the forwarder maps panel pixels onto it (touchScale()).
 // NBT_TOUCH_CFG_H overrides the height.
 bool configureTouchScreen(ServiceDiscovery& m) {
-    int h = 720;
+    int w = videoCanvasWidth(), h = videoCanvasHeight();
     envInt("NBT_TOUCH_CFG_H", h);
     AaChannel* c = findChannel(m, AA_CH_MAIN_INPUT);
-    if (!c || c->service != AaChannel::INPUT_SOURCE || !c->input.hasTouchScreen || c->input.touchScreen.height == h)
+    if (!c || c->service != AaChannel::INPUT_SOURCE || !c->input.hasTouchScreen ||
+        (c->input.touchScreen.width == w && c->input.touchScreen.height == h))
         return false;
+    c->input.touchScreen.width = w;
     c->input.touchScreen.height = h;
-    printf("[SDR] touchscreen declared 1280x%d\n", h);
+    printf("[SDR] touchscreen declared %dx%d\n", w, h);
     return true;
 }
 

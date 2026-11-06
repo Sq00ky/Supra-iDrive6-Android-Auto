@@ -16,8 +16,10 @@
 #include <time.h>
 
 // Experiment overrides (defaults keep the proven 1280x480 behaviour):
-//   NBT_VID_SRC_H = height declared to mdev (coded stream height = the phone's 1280x720 canvas, default 720)
-//   NBT_VID_DST_H = MM-Renderer destination height (720 on the 480-row panel shows the top 480 rows 1:1; 480 squashes the canvas)
+//   NBT_VID_SRC_H = height declared to mdev (default: the video canvas height, 720 at 720p; PR #66)
+//   NBT_VID_DST_H = MM-Renderer destination height (default derived from the canvas and panel aspect ratios)
+// At 720p on 1280x480, the default 720 destination height shows the top 480 rows at 1:1; forcing 480 squashes the
+// canvas. These manual overrides still allow older calibrations. The decoder rate is NBT_VID_FPS (default 60).
 // Seconds since the head unit booted (QNX CLOCK_MONOTONIC; the same clock as the log's [ t ] stamps).
 static double uptimeS() {
     struct timespec ts;
@@ -742,12 +744,12 @@ bool VideoManager::createDecoder() {
         }
 
         // Step 4: Attach Input to Hardware Video Push Engine ('H264' FourCC)
-        // Match the widescreen Android Auto SDP profile. 1280x480 preserves
-        // the car display's 8:3 aspect ratio and maps 1:1 onto the 1280x480 panel.
+        // Match the coded stream advertised to the phone (the video canvas, NBT_VID_RES), not the physical panel:
+        // the renderer scales the whole canvas evenly and the panel clips its reserved margins (PR #66).
         char in_url[256];
         snprintf(in_url, sizeof(in_url),
-                 "mdevpush:/dev/name/local/mdev?fourcc=H264&queue_capacity=60&video.frame_rate=60&video.depth=16&video.width=1280&video.height=%d",
-                 vidEnvInt("NBT_VID_SRC_H", 720));
+                 "mdevpush:/dev/name/local/mdev?fourcc=H264&queue_capacity=60&video.frame_rate=%u&video.depth=16&video.width=%d&video.height=%d",
+                 (unsigned)sink_.config.fps, nbt::videoCanvasWidth(), vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()));
         mmr_input_id_ = fn_in_attach(mmr_ctxt_, in_url, "track");
 
         // Re-apply parameters AFTER input_attach creates the track engine.
@@ -1342,10 +1344,10 @@ bool VideoManager::sendMdevFormat(uint32_t width, uint32_t height, uint32_t fps)
     struct FormatPayload {
         uint32_t magic;    // 2
         uint32_t fourcc;   // 'H264' (0x48323634)
-        uint32_t width;    // 1280
-        uint32_t height;   // 480 for widescreen AA profile
+        uint32_t width;    // coded stream width (the video canvas, not the panel)
+        uint32_t height;   // coded stream height, hidden rows included
         uint32_t depth;    // 16
-        uint32_t fps;      // 60
+        uint32_t fps;      // the decoder rate (NBT_VID_FPS, default 60)
         uint32_t rsvd0;    // 0
         uint32_t rsvd1;    // 0
     } fmt;
@@ -1549,7 +1551,7 @@ void VideoManager::workerLoop() {
                 // mdemux_process_packet; the format packet is our only observed trigger
                 // into that dispatcher, even when it is later reported unchanged.
                 bool ok = sendMdevSync() &&
-                          sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), 60) &&
+                          sendMdevFormat((uint32_t)nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps) &&
                           sendMdevConfig(&item.data[0], item.data.size());
                 mdev_initialized_ = ok;
                 if (!ok) {
@@ -1557,7 +1559,7 @@ void VideoManager::workerLoop() {
                 }
             } else {
                 if (!mdev_initialized_) {
-                    bool ok = sendMdevSync() && sendMdevFormat(1280, (uint32_t)vidEnvInt("NBT_VID_SRC_H", 720), 60);
+                    bool ok = sendMdevSync() && sendMdevFormat((uint32_t)nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps);
                     mdev_initialized_ = ok;
                     if (!ok) {
                         printf("[VideoManager] Warning: mdev format handshake failed; dropping frame until retry.\n");

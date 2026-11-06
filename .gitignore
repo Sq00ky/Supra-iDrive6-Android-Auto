@@ -1,0 +1,11 @@
+*.o
+.idea
+.vscode
+.DS_Store
+
+milestone-7/nbt-aad
+milestone-7/plugin/libhmiaad.so
+milestone-7/plugin/plugin_check
+milestone-7/rhmiapp/libNbtAad.so
+milestone-7/test_controls
+milestone-7/test_display

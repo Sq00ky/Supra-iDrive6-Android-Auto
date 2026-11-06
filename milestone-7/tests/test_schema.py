@@ -27,6 +27,8 @@ SETTINGS = [
     ("negative insets", {"NBT_VID_INSETS": "-1,-2,-3,-4"}),
     ("BMW, wide screen", {"NBT_VEHICLE": "bmw", "NBT_SCREEN": "1440x540"}),
     ("rail status hidden", {"NBT_RAIL_HIDE": "all"}),
+    ("480p at 60 fps", {"NBT_VID_RES": "1", "NBT_VID_FPS": "60"}),
+    ("1080p at 30 fps", {"NBT_VID_RES": "3", "NBT_VID_FPS": "30"}),
 ]
 MANIFEST = "nbt.manifest.ServiceDiscoveryResponse"
 WIRE_VARINT, WIRE_LENGTH = 0, 2

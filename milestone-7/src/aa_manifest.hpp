@@ -58,7 +58,7 @@ enum AaDriverPosition { DRIVER_POSITION_LEFT = 0 };
 enum AaMediaCodec { CODEC_AUDIO_PCM = 1, CODEC_VIDEO_H264 = 3 };
 enum AaAudioType { AUDIO_TYPE_GUIDANCE = 1, AUDIO_TYPE_SYSTEM = 2, AUDIO_TYPE_MEDIA = 3 };
 
-enum AaVideoResolution { VIDEO_800X480 = 1, VIDEO_1280X720 = 2 };
+enum AaVideoResolution { VIDEO_800X480 = 1, VIDEO_1280X720 = 2, VIDEO_1920X1080 = 3 };
 enum AaVideoFps { VIDEO_FPS_60 = 1, VIDEO_FPS_30 = 2 };
 enum AaDisplayType { DISPLAY_MAIN = 0, DISPLAY_CLUSTER = 1, DISPLAY_AUXILIARY = 2 };
 enum AaUiTheme { UI_THEME_AUTOMATIC = 0 };

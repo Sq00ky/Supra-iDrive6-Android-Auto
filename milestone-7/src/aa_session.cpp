@@ -495,12 +495,13 @@ uint32_t AASession::rxTimeoutMs() {
     static uint32_t cached = 0xFFFFFFFFu;
     if (cached == 0xFFFFFFFFu) {
         const char* e = getenv("NBT_RX_TIMEOUT_S");
-        // Default 2 s (v1.6.6, was 6 s in v1.6.5): the phone pings exactly once a second (car log 2026-10-24: 78
-        // pings, max gap 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence
-        // means the Wi-Fi link is gone. Without it a sudden drop never ended the session (no RST arrives) and the
-        // last frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 2-3 s.
+        // Default 5 s (PR #66; 2 s since v1.6.6, 6 s before): on a slower head unit (F22, NBTevo_N18032I) 2 s ended
+        // sessions on brief wireless gaps. The phone pings exactly once a second (car log 2026-10-24: 78 pings, max gap
+        // 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence still means the
+        // Wi-Fi link is gone: without a timeout a sudden drop never ended the session (no RST arrives) and the last
+        // frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 5-6 s.
         // NBT_RX_TIMEOUT_S=0 disables.
-        cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 2000u;
+        cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 5000u;
     }
     return cached;
 }

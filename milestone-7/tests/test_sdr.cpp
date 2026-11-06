@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "sdr_builder.hpp"
+#include "nbt_env.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,6 +140,35 @@ int main() {
         assert(containsBytes(serializeManifest(sessionManifest(dhuIdentity())), f13clock, 2));
         unsetenv("NBT_RAIL_HIDE");
         printf("rail hide OK\n");
+    }
+    {
+        // NBT_VID_FPS (PR #66): "30" -> VIDEO_FPS_30 (2), "60" -> VIDEO_FPS_60 (1); anything else keeps the DHU's 2.
+        // Only the fps byte may change; the decoder rate follows the setting (default 60), the request defaults to 30.
+        const char* values[] = { "30", "60", NULL, "", "0", "24", "30fps", " 30", "-30", "999999999999999999999" };
+        setenv("NBT_VID_INSETS", "off", 1);
+        setenv("NBT_VID_DPI", "0", 1);
+        unsetenv("NBT_VID_MW"); unsetenv("NBT_VID_MH"); unsetenv("NBT_VID_RES");
+        const std::vector<uint8_t> ref = serializeManifest(referenceManifest(dhuIdentity()));
+        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+            if (values[i]) setenv("NBT_VID_FPS", values[i], 1); else unsetenv("NBT_VID_FPS");
+            ServiceDiscovery v = referenceManifest(dhuIdentity());
+            const bool changed = configureMainVideo(v);
+            int got = -1;
+            for (size_t k = 0; k < v.channels.size(); ++k)
+                if (v.channels[k].id == AA_CH_MAIN_VIDEO) got = v.channels[k].videoSink.config.fps;
+            assert(got == (i == 1 ? VIDEO_FPS_60 : VIDEO_FPS_30));
+            assert(changed == (i <= 1));
+            assert(videoFpsSetting() == (i == 0 ? 30u : i == 1 ? 60u : 0u));
+            assert(videoRequestedFps() == (i == 1 ? 60u : 30u));
+            assert(videoDecoderFps() == (i == 0 ? 30u : 60u));
+            const std::vector<uint8_t> b = serializeManifest(v);
+            assert(b.size() == ref.size());
+            size_t diff = 0;
+            for (size_t k = 0; k < b.size(); ++k) if (b[k] != ref[k]) ++diff;
+            assert(diff == (i == 1 ? 1u : 0u));
+        }
+        unsetenv("NBT_VID_FPS"); unsetenv("NBT_VID_INSETS"); unsetenv("NBT_VID_DPI");
+        printf("video fps OK\n");
     }
     printf("test_sdr OK\n");
     return 0;

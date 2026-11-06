@@ -31,7 +31,9 @@ std::vector<uint8_t> serializeManifest(const ServiceDiscovery& manifest);
 bool configureSensors(ServiceDiscovery& manifest);
 
 // The main display's VideoConfig. Environment (all optional):
-//   NBT_VID_RES  = VideoResolution enum (1 = 800x480, 2 = 1280x720, 3 = 1920x1080)
+//   NBT_VID_RES  = VideoResolution enum (1 = 800x480, 2 = 1280x720, 3 = 1920x1080); unset or invalid = 2. Decoder
+//                  geometry, insets, DPI and touch coordinates use the same canvas (PR #66).
+//   NBT_VID_FPS  = 30 or 60 (wire VIDEO_FPS_30 = 2 / VIDEO_FPS_60 = 1); unset keeps the manifest's 30 fps request.
 //   NBT_VID_MW / NBT_VID_MH = margin width / height
 //   NBT_VID_DPI, NBT_VID_INSETS = "top,bottom,left,right"
 // Returns true if anything was changed (prints what it did).
@@ -52,7 +54,7 @@ int parseRailHide(const char* s);
 // Unset: unchanged (0, the phone draws all three). Returns true if anything was changed (prints what it did).
 bool configureRailHide(ServiceDiscovery& manifest);
 
-// Declares the touchscreen (channel 7) as 1280 x NBT_TOUCH_CFG_H (default 720).
+// Declares the touchscreen (channel 7) at the video canvas size (1280x720 at 720p). NBT_TOUCH_CFG_H overrides its height.
 bool configureTouchScreen(ServiceDiscovery& manifest);
 
 // Removes whole channels by id. The list comes from NBT_SDR_DROP ("9", "8,9", "none" = keep everything); when unset

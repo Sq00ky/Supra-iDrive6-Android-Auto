@@ -181,6 +181,15 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > right whenever it is opened. While Android Auto is on screen the page counts as our menu, like the menu itself: if
 > iDrive lands on it, iDrive is put back on the blank state, and it is never taken for an iDrive warning. Log:
 > `settings state 14 focus -> 1`, `settings: six checkbox models refreshed`.
+>
+> **v1.9.32-pr66 (not car-verified on a Supra; PR #66 by @ryanriccio1, car-verified on his F22 M235i NBTevo_N18032I):
+> video profiles and frame rate.** `NBT_VID_RES=1` (800x480) now works: the decoder, insets, DPI and touch all follow
+> the canvas, so the phone keeps its UI in the top 800x300 and the panel shows it evenly at x1.6 (softer, but Google
+> Maps' 3D buildings run more smoothly). `NBT_VID_RES=3` (1080p) is an experiment: it crashed a 2 GB head unit, and the
+> phone only sends 1080p on 5 GHz. `NBT_VID_FPS=30` declares the decoder at 30 fps, the rate the phone actually sends
+> over Wi-Fi (it is asked for 30 by default), which was smoother on the F22; `NBT_VID_FPS=60` asks the phone for 60.
+> Unset, nothing changes. `NBT_RX_TIMEOUT_S` defaults to 5 s (was 2), so short wireless gaps no longer end the
+> session. New log line every 5 s: `[VideoRate] phone frames=N in 5.0 s (30.2 fps), requested=30 fps, decoder 60 fps`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -582,7 +591,8 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 |---|---|---|
 | `NBT_LOG_FILE` | (none) | Append the daemon log to this file; it survives a head-unit reset. Same name = appended |
 | `NBT_MENU_RETURN` | home | Where iDrive goes once connected: `media` = Media/Radio list, `off` = stay in our menu |
-| `NBT_RX_TIMEOUT_S` | 2 | Seconds without data from the phone before iDrive gets the screen back; `0` = off |
+| `NBT_RX_TIMEOUT_S` | 5 | Seconds without data from the phone before iDrive gets the screen back; `0` = off (2 before v1.9.32) |
+| `NBT_VID_FPS` | (unset) | `30` or `60`: the frame rate asked of the phone and the decoder's rate. Unset: the phone is asked for 30 fps (what it delivers over Wi-Fi anyway) and the decoder is declared at 60, as before. `30` declares the decoder at 30 too (smoother on a slower head unit, car-verified on an F22); `60` asks the phone for 60 |
 | `NBT_BACK_HOLD_MS` | 2500 | BACK hold time to minimize; `0` = off (BACK forwarded at once) |
 | `NBT_KNOB_INVERT` | off | `1` reverses the rotary direction |
 | `NBT_KEY_<SLOT>` | see above | Android keycode for a hard key, `0` = ignore. SLOT = `MENU BACK OPTIONS COM MEDIA NAV MAP`. Defaults 3 HOME, 4 BACK, 0, 5 CALL, 65537 MEDIA, 65538 NAV, 65538 NAV |
@@ -655,12 +665,13 @@ Leave these unset unless you are testing.
 | `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
-| `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets (default `0,240,0,0` on 1280x480; MINI round display with the `1180_480` coding: `0,240,40,40`, car-verified on a MINI F60) |
-| `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20, tester-verified on a MINI F60) |
-| `NBT_VID_DPI` | Video DPI (default 140, MINI `1180_480` round display 152; `0` = phone default). Higher = bigger picture but less room: Android Auto gets 480 x 160 / DPI dp of height (549 dp at 140, 480 dp at 160). From about 150 up the rail can run out of height and the mic slides under the 4th app icon; `NBT_RAIL_HIDE=all` gives it back some room |
+| `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets, calculated from the video canvas and panel size: on 1280x480 `0,240,0,0` at 720p and `0,180,0,0` at 480p. MINI round display (`1180_480` coding) side insets: 40 px at 720p (car-verified on a MINI F60), 25 px at 480p. `off` keeps the manifest's insets |
+| `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20 at 720p, tester-verified on a MINI F60; -12.5 at 480p) |
+| `NBT_VID_DPI` | Video DPI (default 140 at 720p, scaled with the canvas: 88 at 480p, 210 at 1080p; MINI `1180_480` round display 152 / 95 / 228; `0` = phone default). Higher = bigger picture but less room: Android Auto gets 480 x 160 / DPI dp of height (549 dp at 140, 480 dp at 160). From about 150 up the rail can run out of height and the mic slides under the 4th app icon; `NBT_RAIL_HIDE=all` gives it back some room |
 | `NBT_RAIL_HIDE` | Ask the phone not to draw its clock, phone signal and/or battery level at the top of the rail, so the rail icons get more height: `all`, or any of `clock,signal,battery` (default: unset, all shown). The number of rail icons itself is the phone's choice; the head unit cannot set it |
-| `NBT_VID_RES`, `NBT_VID_MW`, `NBT_VID_MH` | Other video config overrides |
-| `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Decoder / renderer heights (default 720) |
+| `NBT_VID_RES` | Video profile: `1` = 800x480, `2` = 1280x720 (default), `3` = 1920x1080. Unset or invalid values use `2`. Sets what the phone renders, the decoder size and the touch coordinates together. `1` is car-verified on an F22 (softer, but Google Maps' 3D buildings run more smoothly); `3` crashed a 2 GB head unit and the phone only sends 1080p on 5 GHz Wi-Fi, so it is an experiment |
+| `NBT_VID_MW`, `NBT_VID_MH` | Manual video margin width / height overrides (0 by default at 480p / 1080p) |
+| `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Manual decoder / renderer height overrides. Defaults follow the video profile and panel size |
 | `NBT_VIDEO_DUMP=1` | Raw H.264 to `/tmp/aa_video.h264` (4 MB cap) |
 | `NBT_MMR_WAIT_S` | Wait for the MM-Renderer at start (default 90) |
 | `NBT_MMR_SPAWN` | Start the MM-Renderer ourselves when none is running (default 1, 0 = never): at once on a car without CarPlay coded (no `/var/opt/conn/carplay/carplay.ini`), where the head unit never starts it; with CarPlay coded, only if none is running `NBT_MMR_BOOT_S` after boot (CarPlay coded but not active, e.g. its activation removed by a software update). A running one is never started twice. One we start is stopped when nbt-aad exits; its pid is kept in `/dev/shmem/nbt-aad-mmr.pid` so a restarted nbt-aad can stop it too |
@@ -944,15 +955,18 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    routes the processed car mic into the A2I uplink `/output_mono_AirPlayUL`, which the daemon captures and sends on
    ch 14.
 5. **Video (`video_manager`).**
-   - Screen window `1280` (1280x480 @ 60, z-order 2000) plus an MM-Renderer context fed by the hardware decoder
+   - Screen window `1280` (panel-sized, z-order 2000) plus an MM-Renderer context fed by the hardware decoder
      `/dev/name/local/mdev`.
    - The factory CarPlay context `cpvideoctx*` must be purged at start, or frames are accepted but nothing is drawn.
-   - The phone renders a 1280x720 canvas. In crop mode (the default) the phone keeps its UI in the top 480 rows
-     (bottom inset 240), and the panel shows those rows 1:1.
+   - By default the phone renders a 1280x720 canvas. On a 1280x480 panel it keeps its UI in the top 480 rows
+     (bottom inset 240), and the panel shows those rows 1:1. With `NBT_VID_RES=1` it renders 800x480 and keeps the
+     UI in the top 300 rows, which scale evenly (x1.6) to fill that panel. Other panels get matching insets and
+     uniform scaling. `NBT_VID_FPS` sets the frame rate.
 6. **Touch (`touch_probe`).** The car sends touch as UDP to port 30567 (from 160.48.199.115:30501), where the HMI also listens;
    the daemon binds the port only while Android Auto is on screen (one socket gets each datagram). One 112-byte
    datagram per touch on the Supra, 2-4 shorter datagrams (24..64 bytes) on 1440x540 BMW units.
-   They are forwarded to the phone as input events on channel 7; the touchscreen is declared as 1280x720.
+   They are forwarded to the phone as input events on channel 7. The touchscreen is declared at the video canvas
+   size: 1280x720, or 800x480 with `NBT_VID_RES=1`.
 7. **Controller (`most/client`, `car/ccs_input`, `car/ccs_decoder.hpp`).** `most::Client` is the one observe-only MOST
    client on `DSYSMOSTServer` 4.5. `CcsInput` is its consumer here: it receives copies of the controller's FBlock 0xE5
    status messages. Handlers get whole messages: the client joins segments and leaves out transmit status, and counts
@@ -1124,6 +1138,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
+| `test_video_geometry` (+ `src/sdr_builder.cpp`) | 480p, 720p and 1080p at 30 / 60 fps / unset across screen sizes: aspect ratio, phone insets, DPI, MINI calibration and touch coordinates |
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates); drift loops P and PI in a one-hour closed loop at -300..+300 ppm |
 | `test_audio_acks` | The session's deferred acks and underflow reports: off / on, sent guidance-media-system, a failed send, leftovers at a new stream, ack times, forced acks, `NBT_AA_MAX_UNACKED` |
