@@ -10,7 +10,7 @@
 
 namespace nbt {
 
-// Android Auto audio sink channels. 8 and 9 come from the DHU template; 16 is added by addSystemAudioSink.
+// Android Auto audio sink channels. 8 and 9 are in the reference manifest; 16 is added by addSystemAudioSink.
 enum { AA_CH_GUIDANCE_AUDIO = 8, AA_CH_MEDIA_AUDIO = 9, AA_CH_SYSTEM_AUDIO = 16 };
 inline bool isAaAudioSinkChannel(unsigned ch) {
     return ch == AA_CH_GUIDANCE_AUDIO || ch == AA_CH_MEDIA_AUDIO || ch == AA_CH_SYSTEM_AUDIO;

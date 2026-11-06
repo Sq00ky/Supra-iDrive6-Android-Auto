@@ -2,7 +2,6 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: offered AudioConfigs read back from the SDR we send, and the phone's choice in AV START_INDICATION.
 #include "sdr_builder.hpp"
-#include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
@@ -16,23 +15,26 @@ static bool is(const AaAudioConfig& c, uint32_t rate, uint32_t bits, uint32_t ch
     return c.sample_rate == rate && c.bits == bits && c.channels == ch;
 }
 
+static bool same(const ServiceDiscovery& a, const ServiceDiscovery& b) {
+    return serializeManifest(a) == serializeManifest(b);
+}
+
 int main() {
     // The SDR as the session builds it in browser mode: DHU template + the ch 16 system-audio sink.
     setenv("NBT_SYSTEM_SINK", "1", 1);
-    std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
+    ServiceDiscovery sdr = referenceManifest(dhuIdentity());
     CHECK(addSystemAudioSink(sdr) == 1);
 
     // 1. Offer lists, in the order the phone indexes them.
-    std::vector<AaAudioConfig> g = sdrAudioConfigs(&sdr[0], sdr.size(), 8);
+    std::vector<AaAudioConfig> g = sdrAudioConfigs(sdr, 8);
     CHECK(g.size() == 2);
     CHECK(g.size() == 2 && is(g[0], 16000, 16, 1) && is(g[1], 48000, 16, 1));   // guidance: 16 kHz, then 48 kHz
-    std::vector<AaAudioConfig> m = sdrAudioConfigs(&sdr[0], sdr.size(), 9);
+    std::vector<AaAudioConfig> m = sdrAudioConfigs(sdr, 9);
     CHECK(m.size() == 1 && is(m[0], 48000, 16, 2));                              // media: 48 kHz stereo only
-    std::vector<AaAudioConfig> s = sdrAudioConfigs(&sdr[0], sdr.size(), 16);
+    std::vector<AaAudioConfig> s = sdrAudioConfigs(sdr, 16);
     CHECK(s.size() == 1 && is(s[0], 16000, 16, 1));                              // system: 16 kHz mono
-    CHECK(sdrAudioConfigs(&sdr[0], sdr.size(), 6).empty());    // video sink: no audio configs
-    CHECK(sdrAudioConfigs(&sdr[0], sdr.size(), 99).empty());   // no such channel
-    CHECK(sdrAudioConfigs(NULL, 0, 8).empty());
+    CHECK(sdrAudioConfigs(sdr, 6).empty());    // video sink: no audio configs
+    CHECK(sdrAudioConfigs(sdr, 99).empty());   // no such channel
 
     // 2. START_INDICATION payloads (after the 2-byte message id), as the car logged them.
     uint32_t sess = 0, idx = 0;
@@ -65,44 +67,44 @@ int main() {
     {
         setenv("NBT_AUDIO_MODE", "browser", 1);
         unsetenv("NBT_GUIDANCE_RATE");
-        std::vector<uint8_t> b = sdr;
+        ServiceDiscovery b = sdr;
         CHECK(limitGuidanceOffers(b) == 1);
-        std::vector<AaAudioConfig> g1 = sdrAudioConfigs(&b[0], b.size(), 8);
+        std::vector<AaAudioConfig> g1 = sdrAudioConfigs(b, 8);
         CHECK(g1.size() == 1 && is(g1[0], 48000, 16, 1));
         // everything else untouched: the other sinks, and the rest of the SDR byte for byte
-        std::vector<AaAudioConfig> m1 = sdrAudioConfigs(&b[0], b.size(), 9);
+        std::vector<AaAudioConfig> m1 = sdrAudioConfigs(b, 9);
         CHECK(m1.size() == 1 && is(m1[0], 48000, 16, 2));
-        std::vector<AaAudioConfig> s1 = sdrAudioConfigs(&b[0], b.size(), 16);
+        std::vector<AaAudioConfig> s1 = sdrAudioConfigs(b, 16);
         CHECK(s1.size() == 1 && is(s1[0], 16000, 16, 1));
-        CHECK(b.size() + 9 == sdr.size() || b.size() + 10 == sdr.size() || b.size() + 11 == sdr.size());
+        CHECK(serializeManifest(sdr).size() - serializeManifest(b).size() == 9);
         // the phone's only choice is index 0 = 48 kHz
         const uint8_t start0[] = { 0x08, 0x04, 0x10, 0x00 };
         CHECK(resolveAudioStart(start0, sizeof(start0), g1, &sess, &idx, &c) && is(c, 48000, 16, 1));
         // idempotent
-        std::vector<uint8_t> b2 = b;
-        CHECK(limitGuidanceOffers(b2) == 0 && b2 == b);
+        ServiceDiscovery b2 = b;
+        CHECK(limitGuidanceOffers(b2) == 0 && same(b2, b));
 
         // NBT_GUIDANCE_RATE=16000 keeps the other offer; 0 keeps both; a rate not offered changes nothing
         setenv("NBT_GUIDANCE_RATE", "16000", 1);
         b = sdr;
         CHECK(limitGuidanceOffers(b) == 1);
-        g1 = sdrAudioConfigs(&b[0], b.size(), 8);
+        g1 = sdrAudioConfigs(b, 8);
         CHECK(g1.size() == 1 && is(g1[0], 16000, 16, 1));
         setenv("NBT_GUIDANCE_RATE", "0", 1);
         b = sdr;
-        CHECK(limitGuidanceOffers(b) == 0 && b == sdr);
+        CHECK(limitGuidanceOffers(b) == 0 && same(b, sdr));
         setenv("NBT_GUIDANCE_RATE", "44100", 1);
         b = sdr;
-        CHECK(limitGuidanceOffers(b) == 0 && b == sdr);
+        CHECK(limitGuidanceOffers(b) == 0 && same(b, sdr));
         unsetenv("NBT_GUIDANCE_RATE");
 
         // a sink with one offer is never emptied; other channels and other modes are left alone
         b = sdr;
-        CHECK(keepAudioSinkRate(b, 9, 44100) == 0 && b == sdr);
-        CHECK(keepAudioSinkRate(b, 9, 48000) == 0 && b == sdr);
-        CHECK(keepAudioSinkRate(b, 99, 48000) == 0 && b == sdr);
+        CHECK(keepAudioSinkRate(b, 9, 44100) == 0 && same(b, sdr));
+        CHECK(keepAudioSinkRate(b, 9, 48000) == 0 && same(b, sdr));
+        CHECK(keepAudioSinkRate(b, 99, 48000) == 0 && same(b, sdr));
         setenv("NBT_AUDIO_MODE", "bt", 1);
-        CHECK(limitGuidanceOffers(b) == 0 && b == sdr);
+        CHECK(limitGuidanceOffers(b) == 0 && same(b, sdr));
         unsetenv("NBT_AUDIO_MODE");
     }
 

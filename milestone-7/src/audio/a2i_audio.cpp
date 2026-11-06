@@ -14,7 +14,7 @@ const uint32_t kAaMediaRate    = 48000;   // AA media: 48 kHz stereo (DHU channe
 const uint32_t kAaSpeechRate   = 16000;   // AA speech: 16 kHz mono  (DHU channel 8, config 0)
 const uint32_t kMicRate        = 16000;   // mic: 16 kHz mono (DHU channel 14)
 const uint32_t kEndpointRate   = 44100;   // A2I open rate car-verified by Fork C v1.4.x
-// DHU service discovery (include/dhu_sdp.h): ch 8 = SPEECH (we answer config 0 = 16 kHz mono),
+// DHU service discovery (referenceManifest in sdr_builder): ch 8 = SPEECH (we answer config 0 = 16 kHz mono),
 // ch 9 = MEDIA 48 kHz stereo, ch 14 = microphone source 16 kHz mono.
 enum { AA_CH_AUDIO_SPEECH = 8, AA_CH_AUDIO_MEDIA = 9 };
 

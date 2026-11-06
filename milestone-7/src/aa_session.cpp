@@ -10,7 +10,6 @@
 #include <stdlib.h>
 #include "aa_session.hpp"
 #include "audio/aa_media_msgs.hpp"
-#include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -763,44 +762,26 @@ bool AASession::sendAuthComplete() {
 
 bool AASession::sendServiceDiscoveryResponse() {
     // Control Message ID 0x0006 (MESSAGE_SERVICE_DISCOVERY_RESPONSE)
-    // Uses Google's canonical reference Desktop Head Unit (DHU) capability manifest
-    // including all 9 mandatory channels: Video, Media Audio, Speech, System Audio,
-    // Input (touch/rotary), Sensors (Driving Status, Night Mode), Mic, and Nav.
+    // Starts from the manifest Google's reference Desktop Head Unit (DHU) advertises, including all 9 mandatory
+    // channels: Video, Media Audio, Speech, System Audio, Input (touch/rotary), Sensors, Mic, and Nav.
+    // The head unit identifies as the car on every transport (override with NBT_CAR_* / NBT_HU_* env).
+    SdrIdentity ident;
+    ident.loadEnv();
+    printf("[AASession] ServiceDiscovery identity: %s %s %s (BT channel: %s)\n",
+           ident.carMake.c_str(), ident.carModel.c_str(), ident.carYear.c_str(),
+           ident.btAdapterAddress.empty() ? "none" : ident.btAdapterAddress.c_str());
+    const ServiceDiscovery manifest = sessionManifest(ident);
+    const std::vector<uint8_t> sdr = serializeManifest(manifest);
     std::vector<uint8_t> plain_sdr;
     plain_sdr.push_back(0x00);
     plain_sdr.push_back(0x06); // Message ID: 6 (ServiceDiscoveryResponse)
-    if (nbt::wirelessEnabled() || getenv("NBT_SDR_IDENTITY")) {
-        // Wireless / real-car identity: same channels as the DHU manifest, but the
-        // head unit identifies as the Toyota (override with NBT_CAR_* / NBT_HU_* env).
-        SdrIdentity ident;
-        ident.loadEnv();
-        std::vector<uint8_t> sdr = buildServiceDiscovery(kDhuSdpProtobuf, kDhuSdpProtobufLen, ident);
-        printf("[AASession] ServiceDiscovery identity: %s %s %s (BT channel: %s)\n",
-               ident.carMake.c_str(), ident.carModel.c_str(), ident.carYear.c_str(),
-               ident.btAdapterAddress.empty() ? "none" : ident.btAdapterAddress.c_str());
-        patchMainVideo(sdr);
-        patchTouchConfig(sdr);
-        dropSdrChannels(sdr);
-        retypeGuidanceSink(sdr);
-        addSystemAudioSink(sdr);
-        limitGuidanceOffers(sdr);
-        plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
-    } else {
-        std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
-        patchMainVideo(sdr);
-        patchTouchConfig(sdr);
-        dropSdrChannels(sdr);
-        retypeGuidanceSink(sdr);
-        addSystemAudioSink(sdr);
-        limitGuidanceOffers(sdr);
-        plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
-    }
+    plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
 
     // Remember what each audio sink offered: the phone names its choice by position in START_INDICATION.
     for (int i = 0; i < AUDIO_NSTREAMS; ++i) {
         const uint8_t ch = audioChannelForStream(kAudioLogOrder[i]);
         std::vector<AaAudioConfig>& o = offered_audio_[ch];
-        o = sdrAudioConfigs(&plain_sdr[2], plain_sdr.size() - 2, ch);
+        o = sdrAudioConfigs(manifest, ch);
         if (o.empty()) continue;
         printf("[AASession] ch %u audio sink offers:", ch);
         for (size_t k = 0; k < o.size(); ++k)
