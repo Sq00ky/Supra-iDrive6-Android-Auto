@@ -21,6 +21,7 @@ LDLIBS   := -lpthread -lssl -lcrypto -lm
 SPEEX := $(ROOT)/src/audio/speex.c
 
 # Each test and the daemon sources it links (beyond its own .cpp).
+SRC_test_aa_sensor_msg     :=
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
 SRC_test_audio_acks        := src/audio/audio_acks.cpp
@@ -35,6 +36,7 @@ SRC_test_overlay_watch     :=
 SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
+SRC_test_car_gps           := src/car/geoid.cpp src/car/gps.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_ccs_config        :=
 SRC_test_ccs_decoder       :=
 SRC_test_ccs_input         := src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
@@ -65,6 +67,7 @@ SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
 SRC_test_session_lifecycle := src/aa_cryptor.cpp src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_owner     :=
+SRC_test_session_sensors   := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_touch             := src/touch_probe.cpp
 SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
@@ -107,6 +110,10 @@ run-$(1): $(OUT)/$(1)
 	  && echo "[PASS] $(1)" || { echo "[FAIL] $(1) (tests/$(OUT)/$(1).log)"; tail -20 tests/$(OUT)/$(1).log; exit 1; }
 endef
 $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
+
+# This one #includes aa_session.cpp, so it is not in its SRC list, and with several sources -MF keeps only the last one's
+# dependencies: without this line, a change to the session would not rebuild it.
+$(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp stub_cryptor.hpp
 
 # Not here: rhmiapp_host_test, which dlopens a host build of rhmiapp/libNbtAad.so linked against
 # rhmiapp_fake_appframework.cpp.

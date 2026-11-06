@@ -27,6 +27,13 @@ static double monoS() {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+// The clock of LocationFix::rx_ms.
+static uint32_t monoMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
+}
+
 AASession::AASession()
     : client_fd_(-1),
       running_(0),
@@ -56,6 +63,16 @@ AASession::AASession()
     night_state_ = -1;
     night_started_ = false;
     pending_night_ = false;
+    have_fix_ = false;
+    location_started_ = false;
+    pending_location_ = false;
+    location_sent_ = 0;
+    memset(&car_satellites_, 0, sizeof(car_satellites_));
+    have_satellites_ = false;
+    satellites_started_ = false;
+    satellites_sent_ = 0;
+    satellites_last_ms_ = 0;
+    satellites_last_used_ = 0;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
@@ -140,6 +157,27 @@ void AASession::postNightMode(bool night) {
         ssize_t w = write(wake_pipe_[1], &b, 1);
         (void)w;
     }
+}
+
+void AASession::postCarLocation(const LocationFix& fix) {
+    pthread_mutex_lock(&touch_mutex_);
+    car_fix_ = fix;
+    have_fix_ = true;
+    if (location_started_) pending_location_ = true;
+    bool wake = pending_location_;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake && wake_pipe_[1] >= 0) {
+        char b = 1;
+        ssize_t w = write(wake_pipe_[1], &b, 1);
+        (void)w;
+    }
+}
+
+void AASession::postCarSatellites(const SatelliteStatus& status) {
+    pthread_mutex_lock(&touch_mutex_);
+    car_satellites_ = status;
+    have_satellites_ = true;
+    pthread_mutex_unlock(&touch_mutex_);
 }
 
 void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
@@ -318,10 +356,15 @@ bool AASession::start(int client_fd) {
     pending_focus_ = 0;
     night_started_ = false;
     pending_night_ = false;
+    location_started_ = false;
+    pending_location_ = false;
     mic_open_ = false;
     mic_queue_.clear();
     pthread_mutex_unlock(&touch_mutex_);
     mic_sent_ = 0;
+    location_sent_ = 0;
+    satellites_started_ = false;
+    satellites_sent_ = 0;
     media_frames_ = 0;
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
@@ -465,6 +508,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
             }
             if (r == 0) {
                 drainAcks();
+                drainSatellites();
                 if (limit_ms) {
                     idle_ms += tick_ms;
                     if (idle_ms >= limit_ms) {
@@ -620,6 +664,8 @@ void AASession::drainTouch() {
     pending_focus_ = 0;
     bool night = pending_night_ && night_started_;
     pending_night_ = false;
+    bool location = pending_location_ && location_started_;
+    pending_location_ = false;
     std::vector<std::vector<uint8_t> > mic;
     mic.swap(mic_queue_);
     pthread_mutex_unlock(&touch_mutex_);
@@ -628,6 +674,7 @@ void AASession::drainTouch() {
         if ((mic_sent_++ % 250) == 0) printf("[AASession] mic -> phone: %u chunks sent (%u bytes each)\n", mic_sent_, (unsigned)mic[i].size());
     }
     if (night && !sendSensorEvent(10)) printf("[AASession] NIGHT_MODE event: SEND FAILED\n");
+    if (location && !sendSensorEvent(1)) printf("[AASession] LOCATION event: SEND FAILED\n");
     if (focus) {
         bool ok = sendVideoFocusIndication(6, focus == 1, true);
         printf("[AASession] video focus -> phone: %s (unrequested) %s\n", focus == 1 ? "FOCUSED/projected" : "UNFOCUSED/native", ok ? "sent" : "SEND FAILED");
@@ -834,7 +881,9 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // ---- Sensor channel (AA channel 1) -------------------------------------------
 // Wire layout (aasdk): SensorStartRequest 0x8001 {sensor_type=1 varint, min_period=2},
 // SensorStartResponse 0x8002 {status=1}, SensorEventIndication 0x8003 with repeated
-// NightMode night_mode=10 {is_night=1} and DrivingStatus driving_status=13 {status=1}.
+// LocationData location_data=1 (aa_sensor_msg.hpp), NightMode night_mode=10 {is_night=1} and
+// DrivingStatus driving_status=13 {status=1}.
+// LocationData location_data=1 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
 static uint32_t pbFirstVarint(const std::vector<uint8_t>& d, size_t off, uint32_t field) {
     size_t i = off;
@@ -853,6 +902,26 @@ static uint32_t pbFirstVarint(const std::vector<uint8_t>& d, size_t off, uint32_
         } else if (w == 1) { i += 8; } else if (w == 5) { i += 4; } else { break; }
     }
     return 0xFFFFFFFFu;
+}
+
+// SensorStartRequest min_update_period (field 2, int64). DHU r2.1 treats -1 as "do not send", and otherwise sends each
+// report as it comes. Here it is only logged, to see what the phone asks for. False: the field is absent.
+static bool pbSensorPeriod(const std::vector<uint8_t>& d, size_t off, int64_t& out) {
+    size_t i = off;
+    while (i < d.size()) {
+        uint8_t tag = d[i++];
+        if ((tag & 7) != 0 || (tag & 0x80)) return false;   // this message is short varints: stop at anything else
+        uint64_t v = 0;
+        int sh = 0;
+        while (i < d.size() && sh < 70) {
+            uint8_t b = d[i++];
+            if (sh < 64) v |= (uint64_t)(b & 0x7F) << sh;
+            sh += 7;
+            if (!(b & 0x80)) break;
+        }
+        if ((tag >> 3) == 2) { out = (int64_t)v; return true; }
+    }
+    return false;
 }
 
 bool AASession::sendSensorStartResponse(uint8_t channel, bool ok) {
@@ -886,6 +955,35 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         uint8_t st = e ? (uint8_t)atoi(e) : 0;
         plain.push_back(0x6A); plain.push_back(0x02); plain.push_back(0x08); plain.push_back(st);
         printf("[AASession] >>> Sensor DRIVING_STATUS event (status=%u)\n", st);
+    } else if (sensor_type == 1) { // LOCATION: the newest position (postCarLocation)
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = have_fix_;
+        LocationFix f = car_fix_;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have || !locationFresh(f, monoMs())) {
+            printf("[AASession] >>> Sensor LOCATION: no recent car GPS fix (sent when one arrives)\n");
+            return true;
+        }
+        buildLocationEvent(f, plain);
+        if (location_sent_++ % 60 == 0)
+            printf("[AASession] >>> Sensor LOCATION event #%u (%.6f, %.6f, accuracy %.1f m, speed %.2f m/s%s, bearing %.1f%s, "
+                   "altitude %.1f m%s)\n",
+                   location_sent_, f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.accuracy_e3 / 1000.0, f.speed_e3 / 1000.0,
+                   f.has_speed ? "" : " not sent", f.bearing_e6 / 1e6, f.has_bearing ? "" : " not sent",
+                   f.altitude_e2 / 100.0, f.has_altitude ? "" : " not sent");
+    } else if (sensor_type == 21) { // GPS_SATELLITE: the newest count (postCarSatellites), 0 with nothing recent
+        const uint32_t now = monoMs();
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = have_satellites_;
+        SatelliteStatus s = car_satellites_;
+        pthread_mutex_unlock(&touch_mutex_);
+        uint32_t used = satellitesUsedNow(have, s, now);
+        buildSatelliteEvent(used, plain);
+        // Set before sending: a failing send must not run again on every pass of the session loop.
+        satellites_last_ms_ = now;
+        if (satellites_sent_++ % 60 == 0 || used != satellites_last_used_)
+            printf("[AASession] >>> Sensor GPS_SATELLITE event #%u (used=%u)\n", satellites_sent_, used);
+        satellites_last_used_ = used;
     } else {
         return true; // no data source for other sensors: ack only
     }
@@ -894,6 +992,11 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         return sendFrame(1, 0x0B, &enc[0], enc.size());
     }
     return false;
+}
+
+void AASession::drainSatellites() {
+    if (!satellites_started_ || monoMs() - satellites_last_ms_ < kSatelliteSendEveryMs) return;
+    if (!sendSensorEvent(21)) printf("[AASession] GPS_SATELLITE event: SEND FAILED\n");
 }
 
 void AASession::sessionLoop() {
@@ -925,6 +1028,7 @@ void AASession::sessionLoop() {
         // Forced acks are due on time even while video keeps select() from ever timing out.
         drainAcks();
         drainUnderflows();
+        drainSatellites();
         uint8_t header[4];
         if (!readExact(header, 4)) {
             if (isRunning()) {
@@ -1071,7 +1175,11 @@ void AASession::sessionLoop() {
 
             if (channel == 1 && msg_id == 0x8001) { // SensorStartRequest
                 uint32_t st = pbFirstVarint(frame_data, 2, 1);
-                printf("[AASession] >>> SensorStartRequest (type=%u)\n", st);
+                int64_t period = 0;
+                if (pbSensorPeriod(frame_data, 2, period))
+                    printf("[AASession] >>> SensorStartRequest (type=%u, period=%lld)\n", st, (long long)period);
+                else
+                    printf("[AASession] >>> SensorStartRequest (type=%u, no period)\n", st);
                 sendSensorStartResponse(channel, true);
                 if (st == 10) {
                     pthread_mutex_lock(&touch_mutex_);
@@ -1079,6 +1187,13 @@ void AASession::sessionLoop() {
                     pending_night_ = false;
                     pthread_mutex_unlock(&touch_mutex_);
                 }
+                if (st == 1) {
+                    pthread_mutex_lock(&touch_mutex_);
+                    location_started_ = true;
+                    pending_location_ = false;
+                    pthread_mutex_unlock(&touch_mutex_);
+                }
+                if (st == 21) satellites_started_ = true;
                 if (st != 0xFFFFFFFFu) sendSensorEvent(st);
             } else if (channel == 14 && msg_id == 0x8005) { // AVInputOpenRequest {open=1, anc=2, ec=3, max_unacked=4}
                 uint32_t open = pbFirstVarint(frame_data, 2, 1);
