@@ -43,8 +43,9 @@ The Daemon sits on your headunit and waits for you to click "Android Auto" and s
 3. A prepared Flash Drive
 
 ### Bavarian SSH Client
-[demo.webm](https://github.com/user-attachments/assets/748a5e50-f6e3-45f7-bfe6-d170d2698856)
+https://github.com/user-attachments/assets/4a2647f7-915d-4a10-8dcd-f914aef9b308
 Click start and you should be good to go.
+
 ### TurboCode Proxy
 It's super easy, press "Search ZGW", you should see your VIN number pop up as long as your ODB -> ENet cable is successfully connected.
 Take note of the IP Address you need to connect to. This may vary, you should see a 169.254.x.x:22 IP Address. You can click **Start** as well and SSH in to 127.0.0.1 -P 6969
