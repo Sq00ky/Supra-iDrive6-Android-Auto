@@ -133,6 +133,25 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 >
 > Log: `warnings: iDrive context 745 came up on its own ...`, `warnings: iDrive context N holds the focus over Android
 > Auto ...`, `park assist on: Android Auto chosen over it ...`.
+>
+> **v1.9.20-aa1282 + rhmiapp-38-aa1282 (car-verified 2026-11-05 on a GR Supra, Pixel 9 Pro over Wi-Fi): Android Auto
+> on a LayerManager surface of its own.** On the car, surface 1282 appeared ~500 ms after the first post, the layer's
+> render order read `1281(0x501), 1282(0x502)`, and the driving-mode, park-assist and Toyota Supra Safety screens each
+> took the screen and handed it back. CarPlay itself was not used in that run.
+> Until v1.9.19 the picture used surface 1280, the factory CarPlay window's (carplay.ini
+> `WindowName=1280`): every hide handed CarPlay its regions back, every show re-showed and resized CarPlay's layer
+> `0x800d0000`. Now our window and mm-renderer's output window are named **"1282"**, so LayerManager makes surface 1282
+> on their first post (the same mechanism as the volume pill's 1281, car-verified 2026-11-05). Shown: layer
+> `0x80000000` order `0x502` (`0x501,0x502` with the pill); hidden: `0x100` as before. Surface 1280 and layer
+> `0x800d0000` are never written; 1280's visibility is still read to notice CarPlay taking the screen (on the own
+> surface only a hidden -> visible change counts, since iDrive may leave it visible after a CarPlay session). The
+> context retuned for CarPlay keeps CarPlay's window id `1280`. A show that runs before LayerManager has made 1282 is
+> applied again once it exists. The iDrive app's cleanup after a killed daemon hides the daemon's surface (from
+> `/dev/shmem/nbt-aad-surface`) and restores CarPlay's regions only for a daemon that shared 1280.
+> `NBT_AA_SURFACE=1280` in nbt-aad.env = the shared path of v1.9.19 for a run. Log: `[VideoManager] Android Auto uses
+> its own LayerManager surface 1282`, `LayerManager surface 1282 is there (native surface N, ~M ms after ...)`, then
+> once, a few seconds into the picture, `LayerManager while Android Auto is shown: ...` with the surface's visibility,
+> regions and the layer's render order.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -558,6 +577,7 @@ Leave these unset unless you are testing.
 | Setting | Effect |
 |---|---|
 | `NBT_AA_PORT` | TCP port the phone is told to use (default 5277). Port 52770 has been tried and failed on one car; under investigation |
+| `NBT_AA_SURFACE` | LayerManager surface for the Android Auto picture (default `1282`, its own; `1280` = shared with the factory CarPlay as before v1.9.20) |
 | `NBT_USB` | **Experiment, off.** `1` = Android Auto over USB through the head unit's own Android Open Accessory drivers, next to wireless. Not car-verified. With it on, an Android phone plugged in while the daemon runs is switched to accessory mode (`aoap-switch`, `/dev/android<bus><dev>`) as `Android` / `Android Auto`, and the session runs over `/dev/oap<bus><dev>` (`devc-serusb-aoap`). The phone then stays in accessory mode, so iDrive's USB media (MTP) doesn't see it until it is replugged; after 3 sessions on one plug-in, replug it (a node that can't be opened or switched yet is retried every second and doesn't count as a session). USB and wireless share the one session: while a phone is on the cable the wireless thread leaves the Bluetooth links alone (`[Wireless] phone on the USB cable ...`, the same idle state as a car without a hotspot config); once USB gives up on the phone (out of tries or sessions, or switched by another client such as BMW's A4A) wireless is available again without unplugging it (`[Wireless] no phone for USB any more ...`) and a wireless connection that arrives anyway is refused (`USB Android Auto session running: refusing the wireless connection`); a phone plugged in during a wireless session waits until that session ends. Log: `[UsbAccessory] ...`. If the phone never answers, `NBT_USB_MANUFACTURER` / `NBT_USB_MODEL` change the identity sent |
 | `NBT_USB_DIRECT` | **Experiment, off.** With `NBT_USB=1`: `1` = read the phone through libusbdi (io-usb) instead of `/dev/oap*`. `devc-serusb-aoap` lets any client read the node (the media app's A4A handler opens it too) and a transfer that arrives while our read is not waiting can go to the other reader or be lost in the driver's queue: TLS records went missing in bursts and the phone dropped the session (car logs 2026-10-31). With it on, once the phone is in accessory mode the daemon stops `devc-serusb-aoap` (`[UsbDirect] stopped devc-serusb-aoap`), attaches to the accessory itself and keeps 8 reads queued. It also switches phones itself: the head unit asks a new USB device whether it speaks Android accessory only once, at plug-in, so a phone still set to "charging only" got no `/dev/android*` node and nothing happened until a replug. A device that has no node half a second after it appears is asked again through io-usb every second for up to 2 minutes (`[UsbDirect] usb0.N.0: AOA protocol 2: switch to accessory mode sent`); a device that leaves the request unanswered for a second is not a phone and is not asked again, and the head unit's own Microchip/SMSC devices (vendor 0424) are never asked. And it keeps `devc-serusb-aoap` from starting in the first place: it claims `/opt/mm/bin/devc-serusb-aoap` in the QNX path space and refuses every open of it, so the head unit's start of the driver fails (it logs that and leaves the phone alone, no retry) and the phone is opened as soon as it appears (`[UsbDirect] claimed /opt/mm/bin/devc-serusb-aoap`). QNX drops the claim when nbt-aad exits; `NBT_USB_CLAIM_DRIVER=0` goes back to stopping the driver after it has started. Falls back to `/dev/oap*` if io-usb can't be reached. Log: `[UsbDirect] ...` |
 | `NBT_BTSPP_DEV` | Use only this SPP node (default: scan `/dev/btspp0..7`) |

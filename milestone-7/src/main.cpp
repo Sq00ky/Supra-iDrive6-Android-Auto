@@ -1242,7 +1242,10 @@ static void* diagThread(void*) {
     int me = (int)getpid();
     printf("[Diag] --- LayerManager ---\n");
     fflush(stdout);
-    system("/opt/sys/bin/LayerManagerControl get surface 1280");
+    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl get surface %d", nbt::VideoManager::aaSurface());
+    system(cmd);                                                        // Android Auto's own surface (1282)
+    if (!nbt::VideoManager::sharesCarPlaySurface())
+        system("/opt/sys/bin/LayerManagerControl get surface 1280");   // the factory CarPlay's, read only
     system("/opt/sys/bin/LayerManagerControl get surface 256");
     system("/opt/sys/bin/LayerManagerControl get layer 0x80000000");
     system("/opt/sys/bin/LayerManagerControl get screen 0");
@@ -1496,7 +1499,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.19-safety"
+#define NBT_AAD_BUILD "v1.9.20-aa1282"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1869,6 +1872,7 @@ int main(int argc, char* argv[]) {
     // context first (prepareForSession), so a quick reconnect is safe too. Only once the context exists.
     int cp_idle_ticks = 0;
     unsigned cp_live_ticks = 0;
+    int cp_1280_last = -1;       // surface 1280's visibility at the last CarPlay check while Android Auto was minimized
     uint32_t most_health_ms = monoMs();
     while (g_running) {
         for (int w = 0; w < 5 && !g_mainWake && g_running && !driveModePeekDue(); ++w)
@@ -2015,9 +2019,17 @@ int main(int argc, char* argv[]) {
         // stays connected, MINI tester 2026-10-29): CarPlay plays through our decoder context, so without its factory
         // settings it opens zoomed (the hand-off retune used to run only after the AA session ended). While Android
         // Auto is minimized we keep surface 1280 hidden; when it turns visible anyway, iDrive is showing CarPlay on it.
+        // On Android Auto's own surface (v1.9.20) we never hide 1280, and iDrive may leave it visible after a CarPlay
+        // session: only a change from hidden to visible while Android Auto is minimized counts there.
         // NBT_CP_LIVE_RETUNE=0 disables. Not car-verified.
-        if (act && !overlay_on && cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 &&
-            !video.decoderInCarPlayMode() && nbt::VideoManager::surface1280Visible() == 1) {
+        bool cp_shows = false;
+        if (overlay_on || !act) cp_1280_last = -1;
+        else if (cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 && !video.decoderInCarPlayMode()) {
+            int v = nbt::VideoManager::surface1280Visible();
+            cp_shows = v == 1 && (nbt::VideoManager::sharesCarPlaySurface() || cp_1280_last == 0);
+            cp_1280_last = v;
+        }
+        if (cp_shows) {
             printf("[Main] CarPlay took the screen while Android Auto is still connected: giving the decoder CarPlay's "
                    "settings (the Android Auto entry brings Android Auto back)\n");
             g_userExit = 1;
@@ -2037,6 +2049,7 @@ int main(int argc, char* argv[]) {
         ensureVolOsd(video);   // the pill reads the panel size from the projection window
         syncVolOsdSurface(video);
         video.pollScreenEvents();   // mm-renderer's window joining our group (logged; used by NBT_MMR_WIN_HIDE=1)
+        video.serviceAaSurface();   // Android Auto's own LayerManager surface: shown once LayerManager has made it
         // Decoder rebuilt on the way back: frames are held until the phone's keyframe. None within 2 s: cycle the video
         // focus (UNFOCUSED, FOCUSED a tick later), twice; after 6 s pass frames on rather than stay black.
         if (g_idrWaitMs) {

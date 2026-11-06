@@ -56,8 +56,19 @@ public:
     bool hideVideoWindow();
     void releaseKeyframeWait();
     void fixCarPlayLayer();
-    // LayerManager visibility of surface 1280 (shared with the factory CarPlay window): 1 / 0, -1 = unknown.
+    // LayerManager visibility of surface 1280 (the factory CarPlay window's): 1 / 0, -1 = unknown.
     static int surface1280Visible();
+    // Android Auto's own LayerManager surface (NBT_AA_SURFACE, default 1282). Our window and mm-renderer's output
+    // window carry it as their id string, so LayerManager makes the surface when the first of them posts and binds
+    // the newest one that posted. 1280 = the shared-with-CarPlay path of v1.9.19 and earlier (surface 1280, its
+    // factory geometry restored on every hide, CarPlay's layer 0x800d0000 fixed up on every show).
+    static int aaSurface();
+    static const char* aaWindowId();
+    static bool sharesCarPlaySurface() { return aaSurface() == 1280; }
+    // Main loop, every tick: the surface only exists once one of our windows has posted, so a show that ran before
+    // that found nothing to show. Re-applies the current visibility the first time the surface is there, and logs
+    // LayerManager's view of it and of the Android Auto layer once Android Auto has been on screen with frames.
+    void serviceAaSurface();
     bool hasWindow() const { return window_ready_; }
     // The volume pill's own LayerManager surface (VolumeOsd::kSurfaceId once LayerManager made it, 0 = none). While the
     // picture is shown it goes FIRST in layer 0x80000000's render order: on this unit the first surface of a layer's
@@ -103,7 +114,7 @@ private:
     bool isAccepting();      // takes queue_mutex_
     bool workerRunning();    // takes queue_mutex_
 
-    bool createWindow();      // QNX Screen window "1280" (at start, or on the first Android Auto connection)
+    bool createWindow();      // QNX Screen window aaWindowId() (at start, or on the first Android Auto connection)
     bool createDecoder();     // decoder_mutex_ held
     void destroyDecoder();    // decoder_mutex_ held
     void quiesceWorker();
@@ -145,9 +156,12 @@ private:
     volatile uint32_t decoder_gen_;     // +1 per decoder context created
     volatile uint32_t frames_in_gen_;   // frames sent to mdev since the current context was created
     volatile bool window_ready_;    // createWindow() finished (setVisible() is a no-op before)
-    int overlay_surface_;           // main thread only: the pill's surface, on top of 1280 while shown (0 = none)
+    int overlay_surface_;           // main thread only: the pill's surface, on top of the picture while shown (0 = none)
     bool overlay_verified_;         // the two-surface render order was read back once
     bool overlay_failed_;           // ... and LayerManagerControl did not take it: not tried again this run
+    bool aa_surface_seen_;          // main thread only: LayerManager has surface aaSurface() (it persists for the boot)
+    bool aa_surface_logged_;        // ... and its state + the layer's render order were logged once while shown
+    unsigned aa_surface_ticks_;     // serviceAaSurface() calls since the window was created
     void verifyOverlayOrder();
     std::vector<VideoQueueItem> frame_queue_;
     std::vector<uint8_t> cached_codec_config_;

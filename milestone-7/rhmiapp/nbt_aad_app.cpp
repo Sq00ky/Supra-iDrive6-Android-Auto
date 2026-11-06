@@ -63,7 +63,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-37-safety (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-38-aa1282 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -1373,6 +1373,19 @@ void beginStop(bool restart) {
 // ourselves (only if Android Auto was on screen) and always restore the CarPlay regions the daemon saved at start.
 const char* const kLmTool  = "/opt/sys/bin/LayerManagerControl";
 const char* const kLmSaved = "/dev/shmem/nbt-aad-lm1280";   // "src x y w h dst x y w h" (src/lm_geometry.hpp)
+// Android Auto's own LayerManager surface (daemon v1.9.20+, default 1282), written by the daemon at start. Missing:
+// a daemon that shares CarPlay's surface 1280.
+const char* const kAaSurfaceFile = "/dev/shmem/nbt-aad-surface";
+
+int aaSurfaceOfDaemon() {
+    FILE* f = fopen(kAaSurfaceFile, "r");
+    int id = 0;
+    if (f) {
+        if (fscanf(f, "%d", &id) != 1) id = 0;
+        fclose(f);
+    }
+    return id > 0 && id <= 65535 ? id : 1280;
+}
 
 void runLm(const char* a1, const char* a2, const char* a3, const char* a4, const char* a5 = NULL,
            const char* a6 = NULL, const char* a7 = NULL, const char* a8 = NULL, const char* a9 = NULL) {
@@ -1412,11 +1425,14 @@ void recoverScreenIfUnclean() {
     if (n < 2 || pid <= 0 || pidAlive(pid)) return;
     alog("nbt-aad pid %d is gone without a clean exit (state '%s', overlay %d): restoring the screen", pid, st, n >= 3 ? ov : 0);
     if (n >= 3 && ov) {                                  // Android Auto was on screen: the daemon's hide sequence
+        char aa[12];
+        snprintf(aa, sizeof(aa), "%d", aaSurfaceOfDaemon());   // never CarPlay's 1280 unless the daemon shared it
         runLm("set", "layer", "0x80000000", "render", "order", "0x100");
         runLm("set", "surface", "256", "visibility", "1");
-        runLm("set", "surface", "1280", "visibility", "0");
+        runLm("set", "surface", aa, "visibility", "0");
     }
-    FILE* g = fopen(kLmSaved, "r");
+    // CarPlay's regions only matter where the daemon shared surface 1280 with it (NBT_AA_SURFACE=1280).
+    FILE* g = aaSurfaceOfDaemon() == 1280 ? fopen(kLmSaved, "r") : NULL;
     int r[8];
     if (g && fscanf(g, "src %d %d %d %d dst %d %d %d %d", &r[0], &r[1], &r[2], &r[3], &r[4], &r[5], &r[6], &r[7]) == 8 &&
         r[2] > 0 && r[3] > 0 && r[6] > 0 && r[7] > 0) {
@@ -1427,7 +1443,7 @@ void recoverScreenIfUnclean() {
         alog("CarPlay geometry restored from %s: source %s,%s %sx%s, destination %s,%s %sx%s", kLmSaved,
              v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]);
     } else {
-        alog("no saved CarPlay geometry (%s): surface 1280 regions left as they are", kLmSaved);
+        alog("no saved CarPlay geometry (%s) or Android Auto on its own surface: surface 1280 left as it is", kLmSaved);
     }
     if (g) fclose(g);
     unlink(kStateFile);
