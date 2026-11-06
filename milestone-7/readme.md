@@ -152,6 +152,15 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > its own LayerManager surface 1282`, `LayerManager surface 1282 is there (native surface N, ~M ms after ...)`, then
 > once, a few seconds into the picture, `LayerManager while Android Auto is shown: ...` with the surface's visibility,
 > regions and the layer's render order.
+>
+> **v1.9.27-mmr118 (not car-verified; issue #118): CarPlay coded but not active.** A software update can remove the
+> CarPlay activation and leave `carplay.ini` behind. The head unit then never starts its CarPlay processes, and with
+> them the MM-Renderer, the hardware video decoder. Until now `carplay.ini` alone made nbt-aad wait for the head unit's
+> MM-Renderer, so the picture stayed black. Now, if no MM-Renderer is running once the head unit has been up 60 s
+> (`NBT_MMR_BOOT_S`), nbt-aad starts it itself, as it already did on cars without CarPlay coded. One that is running
+> is never started twice, and one that nbt-aad started is stopped when nbt-aad exits. Log: `CarPlay coded, but no
+> mm-renderer N s after boot, and CarPlay's own processes (acpd, mdnsd) are not running either ...: starting
+> mm-renderer ourselves`, then `[MMR] Started ...` and `mm-renderer reachable after ...`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -626,7 +635,8 @@ Leave these unset unless you are testing.
 | `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Decoder / renderer heights (default 720) |
 | `NBT_VIDEO_DUMP=1` | Raw H.264 to `/tmp/aa_video.h264` (4 MB cap) |
 | `NBT_MMR_WAIT_S` | Wait for the MM-Renderer at start (default 90) |
-| `NBT_MMR_SPAWN` | Start the MM-Renderer ourselves when none is running (default 1, 0 = never): only on a car without CarPlay coded (no `/var/opt/conn/carplay/carplay.ini`), where the head unit never starts it; with CarPlay coded the head unit's is used. One we start is stopped when nbt-aad exits; its pid is kept in `/dev/shmem/nbt-aad-mmr.pid` so a restarted nbt-aad can stop it too |
+| `NBT_MMR_SPAWN` | Start the MM-Renderer ourselves when none is running (default 1, 0 = never): at once on a car without CarPlay coded (no `/var/opt/conn/carplay/carplay.ini`), where the head unit never starts it; with CarPlay coded, only if none is running `NBT_MMR_BOOT_S` after boot (CarPlay coded but not active, e.g. its activation removed by a software update). A running one is never started twice. One we start is stopped when nbt-aad exits; its pid is kept in `/dev/shmem/nbt-aad-mmr.pid` so a restarted nbt-aad can stop it too |
+| `NBT_MMR_BOOT_S` | With CarPlay coded: how long after boot the head unit's own MM-Renderer is waited for before nbt-aad starts one (default 60; the Supra's is up ~23 s after boot) |
 | `NBT_PURGE_ALL=1` | Destroy every MM-Renderer context, not only `aadvideoctx*`/`cpvideoctx*` |
 | `NBT_TOUCH_SX/SY/OX/OY`, `NBT_TOUCH_W/H`, `NBT_TOUCH_IDLE_MS`, `NBT_TOUCH_CFG_H`, `NBT_TOUCH_PORT` | Touch scale/offset, clamp (1280x720), stuck-finger release (400 ms), declared height (720), UDP port (30567) |
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |

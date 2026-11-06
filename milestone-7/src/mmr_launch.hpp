@@ -8,9 +8,11 @@
 // mm-renderer (/opt/conn/bin/carplay/mm-renderer) is the hardware video decoder service. HMood starts it only as
 // part of the CONN_CARPLAY package (Connectivity.cfg process 18, env entries 21-24), so on a car without CarPlay
 // enabled it never runs: mmr_connect() fails (ESRCH, or ENXIO once an earlier renderer left its PPS object) and
-// Android Auto stays black. VideoManager::init() then starts one itself, but only on a car WITHOUT CarPlay coded (no
-// carplay.ini, carPlayCoded()) and only if no mm-renderer process exists: there HMood never starts one. On a coded
-// car HMood owns it and we only wait (CarPlay and Android Auto on the same car is not a case we support).
+// Android Auto stays black. VideoManager::init() then starts one itself, only if no mm-renderer process exists
+// (spawnStep() below): at once on a car WITHOUT CarPlay coded (no carplay.ini, carPlayCoded()), where HMood never starts
+// one; on a CarPlay-coded car only once the head unit has been up NBT_MMR_BOOT_S (default 60) without one. carplay.ini
+// alone does not prove CarPlay runs: it stays on /var when a software update removes the CarPlay activation, and then
+// HMood never starts CONN_CARPLAY either (issue #118, G31 NBTevo_Y23236I: black until CarPlay was re-activated).
 // It uses the factory environment and arguments plus -f (stay in the foreground: without it mm-renderer calls
 // procmgr_daemon() and the pid spawn() returns is gone at once, so we would not know whom to stop).
 //
@@ -19,7 +21,8 @@
 // daemon finds the marker, adopts the renderer and stops it on its own exit. /dev/shmem is wiped at reboot, so a
 // marker never outlives the boot it was written in.
 //
-// NBT_MMR_SPAWN=0: never start it.
+// NBT_MMR_SPAWN=0: never start it. NBT_MMR_BOOT_S (default 60): on a CarPlay-coded car, how long after boot we leave it
+// to the head unit.
 //
 // This header is host-testable (tests/test_mmr_launch.cpp); mmr_launch.cpp holds the QNX parts.
 
@@ -48,15 +51,41 @@ inline bool carPlayCoded(const char* const* paths = kCarPlayIniPaths) {
 static const char* const kRendererPath = "/opt/conn/bin/carplay/mm-renderer";
 static const char* const kMarker = "/dev/shmem/nbt-aad-mmr.pid";
 
-// True if an executable path (as /proc/<pid>/exefile or procfs_debuginfo reports it, trailing newline allowed)
-// is mm-renderer. Matched on the tail so /fs/sda0/repository/istep/opt/conn/... counts too.
-inline bool exePathIsRenderer(const char* path) {
-    if (!path) return false;
-    static const char kTail[] = "/conn/bin/carplay/mm-renderer";
+// True if an executable path (as /proc/<pid>/exefile or procfs_debuginfo reports it, trailing newline allowed) ends in
+// tail. Matched on the tail so /fs/sda0/repository/istep/opt/conn/... counts too.
+inline bool exePathEndsWith(const char* path, const char* tail) {
+    if (!path || !tail) return false;
     size_t n = strlen(path);
     while (n > 0 && (path[n - 1] == '\n' || path[n - 1] == '\r' || path[n - 1] == ' ')) --n;
-    size_t t = sizeof(kTail) - 1;
-    return n >= t && strncmp(path + n - t, kTail, t) == 0;
+    size_t t = strlen(tail);
+    return t > 0 && n >= t && strncmp(path + n - t, tail, t) == 0;
+}
+
+// mm-renderer itself.
+inline bool exePathIsRenderer(const char* path) { return exePathEndsWith(path, "/conn/bin/carplay/mm-renderer"); }
+
+// The other processes of CONN_CARPLAY (Connectivity.cfg package 13 hosts process 17 /opt/conn/bin/carplay/acpd,
+// 18 mm-renderer and 20 /opt/conn/bin/carplay/mdnsd; HMood starts and stops them together). Only for the log: whether
+// CarPlay is active at all, or only its renderer is missing.
+inline bool exePathIsCarPlayHelper(const char* path) {
+    return exePathEndsWith(path, "/conn/bin/carplay/acpd") || exePathEndsWith(path, "/conn/bin/carplay/mdnsd");
+}
+
+// While mm-renderer is not reachable, VideoManager::init() asks this every 2 s: start one now, or keep waiting.
+//   spawn     NBT_MMR_SPAWN (0 = never start one)
+//   coded     carplay.ini exists (carPlayCoded())
+//   running   an mm-renderer process exists (the head unit's or ours): wait for it, never start a second one
+//   tried     we already started one (or tried to) in this run
+//   uptime_s  seconds since the head unit booted (CLOCK_MONOTONIC)
+//   boot_s    NBT_MMR_BOOT_S: how long after boot a CarPlay-coded head unit gets to start its own
+// Not coded: HMood never starts one, so at once. Coded: HMood starts it with CarPlay, ~20 s after boot (Supra:
+// reachable 22.5 s after boot, car-verified v1.5.9); none by boot_s means CarPlay is coded but not active, and nobody
+// else will start it.
+enum SpawnStep { kSpawnWait = 0, kSpawnStart = 1 };
+inline SpawnStep spawnStep(int spawn, bool coded, bool running, bool tried, double uptime_s, int boot_s) {
+    if (spawn == 0 || running || tried) return kSpawnWait;
+    if (!coded) return kSpawnStart;
+    return uptime_s >= (double)boot_s ? kSpawnStart : kSpawnWait;
 }
 
 // Reads <proc_root>/<pid>/exefile into buf. False if the process (or the file) does not exist.
@@ -109,6 +138,8 @@ public:
 
     // First running mm-renderer in /proc (0 = none).
     static int findRunning();
+    // First running acpd or mdnsd of CONN_CARPLAY in /proc (0 = none): CarPlay is active.
+    static int findCarPlayHelper();
     static bool pidIsRenderer(int pid);
 
 private:

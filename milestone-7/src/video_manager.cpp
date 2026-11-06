@@ -18,6 +18,13 @@
 // Experiment overrides (defaults keep the proven 1280x480 behaviour):
 //   NBT_VID_SRC_H = height declared to mdev (coded stream height = the phone's 1280x720 canvas, default 720)
 //   NBT_VID_DST_H = MM-Renderer destination height (720 on the 480-row panel shows the top 480 rows 1:1; 480 squashes the canvas)
+// Seconds since the head unit booted (QNX CLOCK_MONOTONIC; the same clock as the log's [ t ] stamps).
+static double uptimeS() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
 static int vidEnvInt(const char* name, int def) {
     const char* e = getenv(name);
     return (e && *e) ? atoi(e) : def;
@@ -383,27 +390,52 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
                 // overlay hidden so iDrive and the reverse camera stay usable. NBT_MMR_WAIT_S (default 90, 0 = no wait).
                 // HMood starts it only with CONN_CARPLAY (mmr_launch.hpp). On a car without CarPlay coded (no
                 // carplay.ini) nobody else ever will, so start it ourselves if no mm-renderer process exists
-                // (NBT_MMR_SPAWN=0: never). On a coded car it is HMood's: only wait for it.
+                // (NBT_MMR_SPAWN=0: never). A coded car whose CarPlay is not active (activation removed by a software
+                // update, carplay.ini left on /var) gets none from HMood either (issue #118): there, start it once the
+                // head unit has been up NBT_MMR_BOOT_S (default 60) with no mm-renderer process (mmr::spawnStep).
                 int err0 = errno;
-                int wait_s = vidEnvInt("NBT_MMR_WAIT_S", 90);
-                bool coded = mmr::carPlayCoded();
+                const int wait_s = vidEnvInt("NBT_MMR_WAIT_S", 90);
+                const int spawn = vidEnvInt("NBT_MMR_SPAWN", 1);
+                const int boot_s = vidEnvInt("NBT_MMR_BOOT_S", 60);
+                const bool coded = mmr::carPlayCoded();
                 printf("[VideoManager] mm-renderer not reachable yet (mmr_connect failed, errno=%d): waiting up to %d s, overlay hidden.\n",
                        err0, wait_s);
-                if (coded) {
-                    printf("[VideoManager] CarPlay coded (carplay.ini): mm-renderer is the head unit's, not starting one.\n");
-                } else if (wait_s > 0 && vidEnvInt("NBT_MMR_SPAWN", 1) != 0) {
-                    int other = mmr::Launcher::findRunning();
-                    if (other > 0) {
-                        printf("[VideoManager] mm-renderer pid %d is running but not reachable yet: waiting for it.\n", other);
-                    } else {
-                        printf("[VideoManager] CarPlay not coded (no carplay.ini): the head unit never starts mm-renderer, "
-                               "starting it now.\n");
-                        if (!mmr_launch_.start()) printf("[VideoManager] Could not start mm-renderer.\n");
-                    }
+                if (spawn == 0) {
+                    printf("[VideoManager] NBT_MMR_SPAWN=0: only waiting for one, never starting it.\n");
+                } else if (coded) {
+                    printf("[VideoManager] CarPlay coded (carplay.ini): the head unit starts mm-renderer with CarPlay. If none "
+                           "runs %d s after boot (head unit up %.0f s now), CarPlay is not active and nbt-aad starts it "
+                           "(NBT_MMR_BOOT_S).\n", boot_s, uptimeS());
                 }
                 fflush(stdout);
+                bool tried = false;    // started one (or tried to) in this run
+                int waited_for = 0;    // the other mm-renderer pid already logged
                 for (int t = 0; !mmr_cnx_ && t < wait_s * 2; ++t) {
                     mmr_launch_.alive();   // reaps ours if it died (logged, marker removed)
+                    if (spawn != 0 && !tried && t % 4 == 0) {   // every 2 s: a walk over /proc
+                        const int other = mmr::Launcher::findRunning();
+                        if (other > 0 && other != waited_for) {
+                            printf("[VideoManager] mm-renderer pid %d is running but not reachable yet: waiting for it.\n", other);
+                            waited_for = other;
+                        }
+                        const double up = uptimeS();
+                        if (mmr::spawnStep(spawn, coded, other > 0, tried, up, boot_s) == mmr::kSpawnStart) {
+                            if (!coded) {
+                                printf("[VideoManager] CarPlay not coded (no carplay.ini): the head unit never starts mm-renderer, "
+                                       "starting it now.\n");
+                            } else {
+                                const int helper = mmr::Launcher::findCarPlayHelper();
+                                printf("[VideoManager] CarPlay coded, but no mm-renderer %.0f s after boot, and CarPlay's own "
+                                       "processes (acpd, mdnsd) %s: starting mm-renderer ourselves (stopped when nbt-aad exits; "
+                                       "NBT_MMR_SPAWN=0 turns this off).\n", up,
+                                       helper > 0 ? "are running, so only its renderer is gone"
+                                                  : "are not running either: CarPlay is not active on this head unit");
+                            }
+                            tried = true;
+                            if (!mmr_launch_.start()) printf("[VideoManager] Could not start mm-renderer.\n");
+                            fflush(stdout);
+                        }
+                    }
                     usleep(500000);
                     mmr_cnx_ = fn_connect(NULL);
                     if (mmr_cnx_)

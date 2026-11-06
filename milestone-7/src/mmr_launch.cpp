@@ -56,20 +56,28 @@ bool Launcher::pidIsRenderer(int pid) {
     return exePath(pid, path, sizeof(path)) && exePathIsRenderer(path);
 }
 
-int Launcher::findRunning() {
+namespace {
+// First process in /proc whose executable path matches (0 = none).
+int findProcess(bool (*match)(const char*)) {
     DIR* d = opendir("/proc");
     if (!d) return 0;
     int found = 0;
     struct dirent* de;
+    char path[PATH_MAX];
     while (!found && (de = readdir(d)) != NULL) {
         char* end = NULL;
         long pid = strtol(de->d_name, &end, 10);
         if (pid <= 0 || !end || *end) continue;
-        if (pidIsRenderer((int)pid)) found = (int)pid;
+        if (exePath((int)pid, path, sizeof(path)) && match(path)) found = (int)pid;
     }
     closedir(d);
     return found;
 }
+} // namespace
+
+int Launcher::findRunning() { return findProcess(&exePathIsRenderer); }
+
+int Launcher::findCarPlayHelper() { return findProcess(&exePathIsCarPlayHelper); }
 
 void Launcher::forget() {
     pid_ = 0;

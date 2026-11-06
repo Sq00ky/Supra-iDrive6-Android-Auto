@@ -62,6 +62,7 @@ static void countTaps(size_t base, int* downs, int* ups) {
 }
 static size_t evCount() { pthread_mutex_lock(&g_mx); size_t n = g_ev.size(); pthread_mutex_unlock(&g_mx); return n; }
 int main() {
+    unlink("/tmp/nbt-test-touch-peer");   // a peer learned by an earlier run (touch_probe.cpp, NBT_HOST_TEST path)
     setenv("NBT_TOUCH_SY", "1.0", 1); setenv("NBT_TOUCH_H", "480", 1);
     assert(startTouchForward(30599, &cb, NULL));
     setTouchOwned(true);                  // the forwarder only binds the port while Android Auto is on screen
