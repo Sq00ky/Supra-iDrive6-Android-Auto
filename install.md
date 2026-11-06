@@ -106,7 +106,7 @@ We're then install the plugins, which is done with these commands:
 ```bash
 mkdir -p /opt/hmi/ID5/data/ro/Plugins/NbtAad
 cd /opt/hmi/ID5/data/ro/Plugins/NbtAad/
-cp /mnt/umassXXXXX/release/* ./
+cp /mnt/umassXXXXX/Releases/* ./
 ls -l /opt/hmi/ID5/data/ro/Plugins/NbtAad/
 ```
 
