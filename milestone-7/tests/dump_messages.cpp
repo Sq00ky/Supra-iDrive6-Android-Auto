@@ -4,6 +4,7 @@
 //   MSG TAB <proto file> TAB <message type> TAB <label> TAB <body in hex>
 // The marker tells these from the log lines the manifest code prints. The manifest follows the NBT_ settings in the
 // environment, so the test runs this once per setting.
+#include "aa_control_msgs.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include "kombi_nav_test_util.hpp"
 #include "sdr_builder.hpp"
@@ -28,6 +29,11 @@ static void manifests() {
     SdrIdentity identity;
     identity.loadEnv();
     show(kFile, kType, "session manifest", serializeManifest(sessionManifest(identity)), 0);
+}
+
+static void control() {
+    enum { MESSAGE_ID_BYTES = 2 };
+    show("aa_session.proto", "nbt.session.ByeByeRequest", "quit", aaByeByeRequest(AA_BYE_REASON_QUIT), MESSAGE_ID_BYTES);
 }
 
 static void media() {
@@ -99,6 +105,7 @@ static void nav() {
 
 int main() {
     manifests();
+    control();
     media();
     mediaPlayback();
     wireless();

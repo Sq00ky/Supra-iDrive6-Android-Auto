@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_control_msgs.hpp"
 #include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
@@ -425,9 +426,9 @@ bool AASession::byeAndWait(uint32_t wait_ms) {
 }
 
 bool AASession::sendByeRequest() {
-    const uint8_t plain[4] = { 0x00, 0x0F, 0x08, 0x01 };   // ByeByeRequest {reason=1}: quit, as the phone sends it
+    const std::vector<uint8_t> plain = aaByeByeRequest(AA_BYE_REASON_QUIT);
     std::vector<uint8_t> enc;
-    return cryptor_.encrypt(plain, sizeof(plain), enc) && sendFrame(0x00, 0x0B, &enc[0], enc.size());
+    return cryptor_.encrypt(&plain[0], plain.size(), enc) && sendFrame(0x00, 0x0B, &enc[0], enc.size());
 }
 
 void AASession::noteRx(uint8_t channel, uint8_t flags, uint16_t length) {
