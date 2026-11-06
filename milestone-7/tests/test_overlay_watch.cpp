@@ -181,6 +181,21 @@ int main() {
         w.onOwnState(OverlayWatch::kMenuState, 172000);
         assert(!w.takeAside(173000));
     }
+    // 14. The Settings page (14) is part of our menu, not a car screen: focus there never causes a step-aside, and
+    //     while aside it counts as a way back like 10 / 13 (rhmiapp-39).
+    {
+        OverlayWatch w;
+        w.onOwnState(OverlayWatch::kSettingsState, 0);
+        assert(!w.takeAside(500));
+        w.onOwnState(OverlayWatch::kAaState, 1000);
+        w.own(1200);
+        w.onContext(692, false, false, AA, 1400, false);                   // inside the own-move window: taken as home
+        assert(w.poll(1700, AA, false, false) == OverlayWatch::NONE);
+        assert(w.takeAside(2000) && w.aside() == 692);
+        w.onOwnState(OverlayWatch::kSettingsState, 3000);                  // driver went on into Settings
+        assert(w.poll(4000, NO_AA, false, false) == OverlayWatch::NONE);
+        assert(w.poll(5000, NO_AA, false, false) == OverlayWatch::COME_BACK);
+    }
     printf("test_overlay_watch: all passed\n");
     return 0;
 }

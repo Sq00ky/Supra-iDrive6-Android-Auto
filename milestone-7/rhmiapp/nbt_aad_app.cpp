@@ -11,6 +11,9 @@
 //                                       the row reads "Connecting..." / "Open Android Auto" with the daemon state
 //   Force Stop          (raAction 22) - "quit", then SIGTERM after 3 s, SIGKILL after 10 s
 //   Restart             (raAction 23) - Force Stop, then Start
+//   Settings            (hmiAction 80 -> hmiState 14) - the six checkboxes (rhmiapp-39: they were rows of hmiState 10
+//                                       before, which kept the menu long); the app refreshes their models on focus
+//   About               (hmiAction 25 -> hmiState 12) - one Richtext text, XML only
 // When the phone connects after Start, the app sends iDrive back to the main menu (focusEvent 50 -> NativeStateID 1,
 // the way BMW's ActiveSeating leaves its own screen), so stray knob presses under the Android Auto overlay land
 // there and not on Force Stop / Restart. Those two rows are also ignored while the overlay is up.
@@ -63,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-38-aa1282 (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-39-settings (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -222,8 +225,11 @@ const unsigned    kEntryTextModel = 3;       // <entryButton model="3"> = textId
 const unsigned    kTextDefault    = 1;       // "Android Auto"           (NbtAad_ALL_Texts.zip, make_db.py)
 const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
-// Android Auto menu (NbtAad.xml): hmiState 10 with three rows.
+// Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
+// and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
+// handler here, to refresh the six checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
+const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the six checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
 const unsigned    kActStop        = 22;      // <raAction id="22"/> row "Force Stop"
 const unsigned    kActRestart     = 23;      // <raAction id="23"/> row "Restart"
@@ -240,8 +246,9 @@ const int         kHomeWindowS    = 180;     // after Start, go home on "connect
 // touches then land on that state (nothing selectable) instead of the iDrive menu underneath. iDrive still handles
 // the hard keys itself (MENU / OPTION / MEDIA / COM / NAV / MAP leave the state; no PluginApp API can stop that), so
 // leaving the state the way CarPlay is left = Android Auto steps aside ("hide" to the daemon). BACK only pops the
-// state back to our menu (state 10): we put iDrive straight back on state 13. NBT_AA_HOLD=0 in nbt-aad.env turns it off
-// (old behaviour: once connected, iDrive goes to its main menu, NBT_MENU_RETURN).
+// state back to our menu (state 10, or its Settings page 14): we put iDrive straight back on state 13.
+// NBT_AA_HOLD=0 in nbt-aad.env turns it off (old behaviour: once connected, iDrive goes to its main menu,
+// NBT_MENU_RETURN).
 const unsigned    kAaState        = 13;      // <hmiState id="13">
 const unsigned    kEvHoldAa       = 52;      // <focusEvent id="52" target="13"/>
 const unsigned    kHandlerFocus   = 1;       // addHandler(stateId, kind): FOCUS (Parcel bool)
@@ -258,7 +265,8 @@ const unsigned    kSpinFrames      = 8;
 const unsigned    kSpinMs          = 200;
 const unsigned    kStartButton     = 61;      // <button id="61"> (Start row)
 const unsigned    kPropWaiting     = 8;       // LABEL_WAITINGANIMATION
-// "Start automatically" checkbox (rhmiapp-7, called "Start with the car" before rhmiapp-19): <checkbox action="24" model="34"> in hmiState 10. On = the flag file
+// "Start automatically" checkbox (rhmiapp-7, called "Start with the car" before rhmiapp-19): <checkbox action="24"
+// model="34"> in hmiState 14 (the Settings page since rhmiapp-39; it sat in hmiState 10 before). On = the flag file
 // exists; then nbt-aad is launched kAutostartDelayS after the HMI loaded this app at boot (CAppManager onInit), so a
 // phone that connects on its own gets Android Auto without opening the menu. The About row (hmiAction 25 -> hmiState
 // 12) is XML only.
@@ -277,11 +285,11 @@ const long        kAutostartDelayS = 15;
 // updateModel(274, table); state property 24 = 3). Plain labels / Richtext labels are one row, cut at ~34 characters.
 const unsigned    kAboutModel      = 37;
 const unsigned    kAboutText       = 17;
-// "Save logs to USB" checkbox (rhmiapp-10): <checkbox action="26" model="38"> in hmiState 10, flag
+// "Save logs to USB" checkbox (rhmiapp-10): <checkbox action="26" model="38"> in hmiState 14, flag
 // /var/opt/aa/usblog (nbt::usblog). Off = no log files at all; on = both logs on the first /mnt/umass* stick.
 const unsigned    kActUsbLog       = 26;
 const unsigned    kUsbLogModel     = 38;
-// "MENU key opens iDrive" checkbox (rhmiapp-14): <checkbox action="27" model="42"> in hmiState 10, flag file read by
+// "MENU key opens iDrive" checkbox (rhmiapp-14): <checkbox action="27" model="42"> in hmiState 14, flag file read by
 // nbt-aad on every MENU press. Off (default) = MENU opens Android Auto's menu and iDrive is put back on the blank state.
 const unsigned    kActMenuIdrive   = 27;
 const unsigned    kMenuIdriveModel = 42;
@@ -881,7 +889,12 @@ DaemonState readDaemonState() {
 }
 
 bool g_focusKnown = false;     // a focus notification for our menu arrived at least once
-bool g_menuFocused = false;
+bool g_menuFocused = false;    // focus notification of hmiState 10 (the menu itself)
+bool g_settingsFocused = false; // focus notification of hmiState 14 (the Settings page under it, rhmiapp-39)
+// "The driver is in our own UI" (menu or its Settings page). Used by the hold: coming back to either is not a car
+// screen taking over. g_menuFocused alone stays the answer to "is the menu itself on top", which is what the
+// connected-after-Start return to the main menu tests (a driver reading Settings must not be pulled out of it).
+bool inOurMenu() { return g_menuFocused || g_settingsFocused; }
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
 bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
 time_t g_startTime = 0;
@@ -1255,10 +1268,12 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
     s_unfocusedInput = false;
     if (!overlay || !g_holding || g_aaVisible) return;
     if (time(NULL) - g_holdTime < 1) return;            // iDrive needs a moment to show the state
-    if (g_aaSeen && g_menuFocused) {
-        // BACK popped iDrive from state 13 to our menu (state 10): BACK belongs to the phone, put iDrive straight back
-        // on the blank state. Also during a call: iDrive's own call screen never focuses our menu.
-        fireHold(app, callActive() ? "BACK returned to our menu during a call" : "BACK returned to our menu");
+    if (g_aaSeen && inOurMenu()) {
+        // BACK popped iDrive from state 13 to our menu (state 10), or a stray knob push went on into the Settings page
+        // (state 14): both belong to the phone, put iDrive straight back on the blank state. Also during a call:
+        // iDrive's own call screen never focuses our menu.
+        fireHold(app, callActive() ? "BACK returned to our menu during a call"
+                                   : (g_settingsFocused ? "in our Settings page" : "BACK returned to our menu"));
         return;
     }
     if (callActive()) {
@@ -1287,8 +1302,8 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         else if (!g_holdGaveUp) { g_holdGaveUp = true; alog("hold: iDrive did not show state %u: knob/touch may reach iDrive this time", kAaState); }
         return;
     }
-    if (g_menuFocused) {
-        fireHold(app, "BACK returned to our menu");      // BACK goes to the phone; keep iDrive on the blank state
+    if (inOurMenu()) {
+        fireHold(app, g_settingsFocused ? "back in our Settings page" : "BACK returned to our menu");  // BACK goes to the phone; keep iDrive on the blank state
     } else {
         // Neither our blank state nor our menu: a hard key (MENU / MEDIA / NAV / COM / MAP / OPTION) took iDrive
         // elsewhere, the way MENU leaves native CarPlay. Android Auto steps aside; the iDrive entry brings it back.
@@ -1942,6 +1957,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
     p.readBool(f);
     g_focusKnown = true;
     g_menuFocused = f;
+    if (f) g_settingsFocused = false;   // the menu itself is on top: the Settings page is not (see onSettingsFocus)
     alog("menu state %u focus -> %d", kMenuState, (int)f);
     if (f) g_ow.onOwnState(nbt::OverlayWatch::kMenuState, nowMs());   // iDrive is on our menu (CDS: 50000)
     // BACK and tilt-left also reach iDrive and pop it from the blank state 13 to its parent, our menu. Until the 1 s
@@ -1959,6 +1975,30 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
                 fireHold(g_app, "BACK/tilt popped to our menu (immediate)");
             }
         }
+    }
+    return true;
+}
+
+// Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
+// focus notification is used for two things: the six checkbox models are refreshed from their flag files every time
+// the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
+// counts as "our own UI" for the hold and for the overlay watch.
+bool onSettingsFocus(void*, const bmw::Parcel& p) {
+    bool f = false;
+    p.readBool(f);
+    g_focusKnown = true;
+    g_settingsFocused = f;
+    alog("settings state %u focus -> %d", kSettingsState, (int)f);
+    if (!f) return true;
+    g_ow.onOwnState(nbt::OverlayWatch::kSettingsState, nowMs());   // iDrive is in our menu, not on a car screen
+    if (g_app) {
+        showAutostart(g_app);
+        showUsbLog(g_app);
+        showMenuIdrive(g_app);
+        showDriveMode(g_app);
+        showKombiNav(g_app);
+        showWarnings(g_app);
+        alog("settings: six checkbox models refreshed");
     }
     return true;
 }
@@ -1999,6 +2039,10 @@ bool appOnInit(bmw::PluginApp* self) {
         d.object = self;
         d.stub = &onMenuFocus;
         self->addHandler(kMenuState, 1, d);
+        bmw::ActionDelegate s;                           // Settings page: refresh the checkbox models, hold accounting
+        s.object = self;
+        s.stub = &onSettingsFocus;
+        self->addHandler(kSettingsState, kHandlerFocus, s);
         bmw::ActionDelegate f;
         f.object = self;
         f.stub = &onAaFocus;
@@ -2010,7 +2054,7 @@ bool appOnInit(bmw::PluginApp* self) {
     }
     bool ok = self->onInit();
     showAbout(self);
-    alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u + menu focus handler registered, base onInit -> %d, start with the car %s, "
+    alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u + menu focus handler + settings focus handler registered, base onInit -> %d, start with the car %s, "
          "save logs to USB %s, MENU opens iDrive %s", kEntryAction, kActStart, kActStop, kActRestart, kActAutostart,
          kActUsbLog, kActMenuIdrive, (int)ok, autostartOn() ? "on" : "off", nbt::usblog::enabled() ? "on" : "off",
          menuIdriveOn() ? "on" : "off");

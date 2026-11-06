@@ -18,6 +18,7 @@
       <raAction id="29"/>
       <raAction id="30"/>
       <hmiAction id="25" target="12"/>
+      <hmiAction id="80" target="14"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -65,6 +66,9 @@
       </textIdModel>
       <raIntModel id="40" modelType="NativeStateID" value="1"/>
       <raIntModel id="41" modelType="NativeStateID" value="20"/>
+      <textIdModel id="82" textId="23">
+        <synonyms/>
+      </textIdModel>
     </models>
     <events>
       <focusEvent id="50" targetModel="40"/>
@@ -79,12 +83,7 @@
           <button action="22" id="62" model="32" text="Force Stop"/>
           <button action="23" id="63" model="33" text="Restart"/>
           <separator id="66"/>
-          <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
-          <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
-          <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
-          <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
-          <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
-          <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
+          <button action="80" id="81" model="82" text="Settings"/>
           <button action="25" id="65" model="36" text="About"/>
         </components>
       </hmiState>
@@ -128,6 +127,24 @@
               <property id="21" value="0"/>
             </properties>
           </image>
+        </components>
+      </hmiState>
+      <!-- Settings (rhmiapp-39): the six checkboxes, reached from the Settings row (hmiAction 80) in hmiState 10.
+           Wired like the About page (state 12): parentId 10, so BACK returns to the menu. Checkboxes in a child state
+           are the normal pattern - BMW's own SecurityMenu.xml: hmiState 856 parentId 854 ("Werkstattmodus") holds four
+           <checkbox> rows, opened from a button in 854. Kept LAST in this list: the framework numbers plugin states
+           50000 + XML order, so appending does not move state 13 (50002) or state 10 (50000). -->
+      <hmiState id="14" parentId="10" text="Settings" textModel="82">
+        <properties>
+          <property id="24" value="3"/>
+        </properties>
+        <components>
+          <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
+          <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
+          <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
+          <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
+          <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
+          <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
         </components>
       </hmiState>
     </hmiStates>

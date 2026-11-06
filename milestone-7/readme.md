@@ -170,6 +170,17 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > higher `NBT_VID_DPI`: the 480 rows are 480 x 160 / DPI dp tall, 549 dp at the default 140 but 480 dp at 160, where
 > the mic slid under a 4th app icon (tester photo). Some phone versions are said to ignore signal and battery. Off by
 > default. Log: `[SDR] NBT_RAIL_HIDE=all: session_configuration 7, ...`.
+>
+> **rhmiapp-39-settings (not car-verified): the six checkboxes moved to a Settings submenu.** The Android Auto menu is
+> now Start Android Auto / Force Stop / Restart, a separator, **Settings** and **About**. The six checkboxes (Start
+> automatically, Save logs to USB, MENU key opens iDrive, Show driving mode changes, Turn arrows in cluster/HUD, Show
+> iDrive warnings) sit on the **Settings** page (`hmiState 14`, `hmiAction` 80, `parentId` 10 so BACK returns to the
+> menu), in the same order as before. Nothing else changed: same raActions, same models, same flag files in
+> `/var/opt/aa`. Checkboxes on a child page are the normal iDrive pattern (BMW's own `SecurityMenu.xml` has four in
+> `hmiState 856` under 854), and the app refreshes the six models each time the page gets the focus, so the ticks are
+> right whenever it is opened. While Android Auto is on screen the page counts as our menu, like the menu itself: if
+> iDrive lands on it, iDrive is put back on the blank state, and it is never taken for an iDrive warning. Log:
+> `settings state 14 focus -> 1`, `settings: six checkbox models refreshed`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -466,12 +477,19 @@ Bluetooth reconnect.
 | Start Android Auto | Starts `/opt/aa/nbt-aad`, or brings a running one to the front. Reads "Connecting..." during setup, then "Open Android Auto" |
 | Force Stop | Asks the daemon to quit; SIGTERM after 3 s, SIGKILL after 6 s |
 | Restart | Force Stop, then Start |
+| Settings | Opens the Settings page (the six checkboxes below, `hmiState 14`); BACK returns to this menu |
+| About | One wrapping text block (a Richtext list, like BMW's own ActiveSeating intro text, English only): "NBT-AAD: native wireless Android Auto", "Developed by nanaisu", the GitHub address, and the free-of-charge notice |
+
+**Settings page** (the Settings row; `hmiState 14`, reached with `hmiAction` 80):
+
+| Row | Action |
+|---|---|
+| Start automatically (checkbox; "Start with the car" before rhmiapp-19) | When ticked, the iDrive app starts the daemon 15 s after the head unit boots (not on every ignition-on: the head unit stays up ~10 min after ignition off, and the daemon keeps running), so a phone that connects on its own gets Android Auto without opening this menu. Stored as `/var/opt/aa/autostart` on the car's persistence partition, which is writable at runtime (`/opt/aa` usually isn't); a hand-made `/opt/aa/autostart` also counts (needs the status polling, i.e. no `status.disable`) |
 | Save logs to USB (checkbox) | Off by default: no log files, nothing kept in RAM. When ticked, the daemon and the iDrive app append to `nbt-aad.log` / `nbt-aad-app.log` on the first writable USB stick (`/mnt/umass*`). A stick plugged in later is picked up within 5 s; a file over 64 MB is renamed to `*.old.log`. Stored as `/var/opt/aa/usblog` (a hand-made `/opt/aa/usblog` also counts). `NBT_LOG_FILE` still forces a daemon log file |
 | MENU key opens iDrive (checkbox) | Off by default: MENU opens Android Auto's menu (phone home screen) and iDrive stays on the blank state. When ticked, MENU minimizes Android Auto and opens the iDrive main menu, like native CarPlay, and is not sent to the phone. Stored as `/var/opt/aa/menu-idrive` (a hand-made `/opt/aa/menu-idrive` also counts); read on every MENU press |
 | Show driving mode changes (checkbox) | Off by default. When ticked, changing the driving mode (Sport, Comfort, ECO PRO, ...) makes Android Auto step aside like in reverse so iDrive's own driving-mode display is visible, then Android Auto comes back by itself after `NBT_DRIVEMODE_SHOW_MS` (default 3500 ms). The iDrive app reads CDS `driving.mode` / `driving.mode35up` and logs every value (`CDS driving.mode = '{"mode":n}'`). Stored as `/var/opt/aa/show-drivemode`, read on every change. Car-tested on a Supra (`driving.mode35up` 3 / 4). v1.8.45 / rhmiapp-22 (car-verified, Supra): the app also sends the previous mode, so the first change after the daemon starts is no longer taken as its baseline; the daemon reacts at once instead of on its next 250 ms tick; the LayerManager switch runs in one shell. iDrive is visible 0.3-0.5 s after the CDS value (`... HIDDEN (Z-Order: -1000, N ms)`: 262-468 ms). That was quick enough to show iDrive's blank Android Auto page before its popup, so v1.8.46 waits `NBT_DRIVEMODE_DELAY_MS` (default 400 ms; `0` = at once) after the change; a further change while iDrive has the screen only extends it |
 | Turn arrows in cluster/HUD (checkbox) | Off by default. When ticked, Google Maps' (or another Android Auto nav app's) next turn, its distance and the road name show in the J29's instrument cluster and windscreen HUD, as with an iDrive route. See [Turn arrows in the cluster and HUD](#turn-arrows-in-the-cluster-and-hud-j29). Stored as `/var/opt/aa/kombi-nav` (a hand-made `/opt/aa/kombi-nav` also counts); the daemon checks it once a second, so unticking clears the arrow at once |
-| Start automatically (checkbox; "Start with the car" before rhmiapp-19) | When ticked, the iDrive app starts the daemon 15 s after the head unit boots (not on every ignition-on: the head unit stays up ~10 min after ignition off, and the daemon keeps running), so a phone that connects on its own gets Android Auto without opening this menu. Stored as `/var/opt/aa/autostart` on the car's persistence partition, which is writable at runtime (`/opt/aa` usually isn't); a hand-made `/opt/aa/autostart` also counts (needs the status polling, i.e. no `status.disable`) |
-| About | One wrapping text block (a Richtext list, like BMW's own ActiveSeating intro text, English only): "NBT-AAD: native wireless Android Auto", "Developed by nanaisu", the GitHub address, and the free-of-charge notice |
+| Show iDrive warnings (checkbox) | Off by default. When ticked, any iDrive screen that comes up on its own over Android Auto (Check Control, a collision warning, the 360 camera, a safety menu, ...) makes Android Auto step aside until it closes. Stored as `/var/opt/aa/show-warnings`; the contexts are logged either way. See the rhmiapp-36 entry above |
 
 ### Favourite key
 
@@ -1025,7 +1043,7 @@ Nothing in HmiMain3D is patched.
 |---|---|
 | `libNbtAad.so` | App code (`pluginAppInfo` entry point) |
 | `NbtAad.manifest` | Tells CAppManager what to load |
-| `NbtAad.xml` | Entry in Media/Radio (native state 20 = ST_Ent_Selection) after the Bluetooth audio row (focus 2270), opening the Start / Force Stop / Restart menu (raActions 21/22/23), plus the one-press entry **Open Android Auto** right after it (raAction 2, see [Favourite key](#favourite-key)) |
+| `NbtAad.xml` | Entry in Media/Radio (native state 20 = ST_Ent_Selection) after the Bluetooth audio row (focus 2270), opening the Start / Force Stop / Restart menu (raActions 21/22/23) with the **Settings** page (`hmiState` 14, the six checkboxes) and **About**, plus the one-press entry **Open Android Auto** right after it (raAction 2, see [Favourite key](#favourite-key)) |
 | `NbtAad_Direct.xml` | Alternative: one-press entry that starts the daemon directly (raAction 2). Rename it to `NbtAad.xml` |
 | `NbtAad_Multimedia.xml` | Alternative: iDrive's own Multimedia placement rule |
 | `NbtAad_ALL_Texts.zip`, `NbtAad_ALL_Images.zip` | Text (6 languages) and icon DBs, regenerated by `python3 rhmiapp/make_db.py`. 55001 = 63x54 row icon, 55002 = 549x484 preview, 55010..55017 = connecting animation frames |

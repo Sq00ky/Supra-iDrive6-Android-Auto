@@ -7,10 +7,10 @@
 //
 // Blocklist, not allowlist (issue thread, 2026-11-05): the screens a car can raise on its own (Check Control, collision
 // / obstacle warnings, climate, the 360 camera, intelligent safety, seat memory, TA/TP, driver profile, notices...) vary
-// too much between models to list them. So: any context that appears while Android Auto is on screen, with no driver
-// input behind it, is iDrive's own overlay -> step aside at once. Not overlays: our blank state (13), our menu (10),
-// contexts listed in NBT_AA_WARN_IGNORE (screens Android Auto already shows itself), anything within 2 s of our own
-// iDrive moves (event 52, show, the entry), and GFXIDENTIFIER_INVALID transitions.
+// too much between models to list. So: any context that appears while Android Auto is on screen, with no driver
+// input behind it, is iDrive's own overlay -> step aside at once. Not overlays: our blank state (13), our menu (10 and
+// its Settings page 14), contexts listed in NBT_AA_WARN_IGNORE (screens Android Auto already shows itself), anything
+// within 2 s of our own iDrive moves (event 52, show, the entry), and GFXIDENTIFIER_INVALID transitions.
 //
 // Our own states come from their focus notifications (onOwnState), not from hmi.graphicalContext: CDS numbers them the
 // framework's way (50002 for 13, 50000 for 10 on the Supra) and reports 13 only as GFXIDENTIFIER_INVALID, so without it
@@ -65,8 +65,8 @@ public:
         pendKnob_ = knobCounts;
     }
 
-    // iDrive's focus is on our blank state (kAaState) or our menu (kMenuState): from that state's focus notification.
-    // A pending screen that iDrive left for us again was a flash.
+    // iDrive's focus is on our blank state (kAaState), our menu (kMenuState) or its Settings page (kSettingsState):
+    // from that state's focus notification. A pending screen that iDrive left for us again was a flash.
     void onOwnState(int state, uint32_t now) {
         if (state == cur_) return;
         cur_ = state;
@@ -129,6 +129,7 @@ public:
 
     static const int kAaState = 13;     // <hmiState id="13">, our blank state (hmi.graphicalContext: 50002 on the Supra)
     static const int kMenuState = 10;   // <hmiState id="10">, our menu (hmi.graphicalContext: 50000 on the Supra)
+    static const int kSettingsState = 14; // <hmiState id="14">, the menu's Settings page (its six checkboxes)
 
 private:
     static const int kMaxIgnore = 16;
@@ -137,7 +138,7 @@ private:
     static const uint32_t kBackMs = 2000;     // back on the old screen this long = the overlay is really gone
     static const uint32_t kHideLagMs = 3000;
 
-    static bool isOwnState(int vc) { return vc == kAaState || vc == kMenuState; }
+    static bool isOwnState(int vc) { return vc == kAaState || vc == kMenuState || vc == kSettingsState; }
     bool isOwn(int vc) const {
         if (isOwnState(vc)) return true;
         for (int i = 0; i < nIgnore_; ++i) if (ignore_[i] == vc) return true;
