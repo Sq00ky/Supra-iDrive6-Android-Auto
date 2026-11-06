@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 namespace nbt {
 
@@ -444,6 +445,7 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id) {
     ServiceDiscovery m = referenceManifest(id);
     configureSensors(m);
     configureMainVideo(m);
+    configureRailHide(m);
     configureTouchScreen(m);
     dropSdrChannels(m);
     retypeGuidanceSink(m);
@@ -660,6 +662,52 @@ bool configureMainVideo(ServiceDiscovery& m) {
            res ? "" : "(keep)", vres, mw ? "" : "(keep)", vmw, mh ? "" : "(keep)", vmh,
            dpi ? "" : "(keep)", vdpi, hasInsets ? "" : "(keep)", insets.top, insets.bottom, insets.left, insets.right);
     return true;
+}
+
+int parseRailHide(const char* s) {
+    if (!s) return 0;
+    while (*s == ' ') ++s;
+    if (!*s) return 0;
+    if (*s >= '0' && *s <= '9') {
+        char* end = NULL;
+        const long v = strtol(s, &end, 0);
+        while (end && *end == ' ') ++end;
+        return (end && !*end && v >= 0 && v <= SESSION_HIDE_ALL) ? (int)v : -1;
+    }
+    int mask = 0;
+    while (*s) {
+        while (*s == ' ' || *s == ',' || *s == ';' || *s == '+' || *s == '|') ++s;
+        if (!*s) break;
+        char w[16];
+        size_t n = 0;
+        while (*s && *s != ' ' && *s != ',' && *s != ';' && *s != '+' && *s != '|') {
+            if (n + 1 >= sizeof(w)) return -1;
+            w[n++] = (char)tolower((unsigned char)*s++);
+        }
+        w[n] = 0;
+        if (strcmp(w, "clock") == 0) mask |= SESSION_HIDE_CLOCK;
+        else if (strcmp(w, "signal") == 0) mask |= SESSION_HIDE_PHONE_SIGNAL;
+        else if (strcmp(w, "battery") == 0) mask |= SESSION_HIDE_BATTERY_LEVEL;
+        else if (strcmp(w, "all") == 0) mask |= SESSION_HIDE_ALL;
+        else if (strcmp(w, "none") != 0 && strcmp(w, "off") != 0) return -1;
+    }
+    return mask;
+}
+
+bool configureRailHide(ServiceDiscovery& m) {
+    const char* s = getenv("NBT_RAIL_HIDE");
+    if (!s || !*s) return false;
+    const int mask = parseRailHide(s);
+    if (mask < 0) {
+        printf("[SDR] NBT_RAIL_HIDE='%s' ignored (clock, signal, battery, all or none)\n", s);
+        return false;
+    }
+    const int before = m.sessionConfiguration;
+    m.sessionConfiguration = (m.sessionConfiguration & ~SESSION_HIDE_ALL) | mask;
+    printf("[SDR] NBT_RAIL_HIDE=%s: session_configuration %d, the phone is asked not to draw: clock %s, signal %s, "
+           "battery %s\n", s, m.sessionConfiguration, (mask & SESSION_HIDE_CLOCK) ? "yes" : "no",
+           (mask & SESSION_HIDE_PHONE_SIGNAL) ? "yes" : "no", (mask & SESSION_HIDE_BATTERY_LEVEL) ? "yes" : "no");
+    return m.sessionConfiguration != before;
 }
 
 // Touchscreen geometry the phone is told about. The phone renders a 1280x720 canvas that we squash into the 480-row

@@ -102,6 +102,44 @@ int main() {
         assert(memcmp(&session[0], sensors, sizeof(sensors)) == 0);
         printf("sensor channel OK (%u bytes)\n", (unsigned)bytes.size());
     }
+    {
+        // NBT_RAIL_HIDE -> ServiceDiscoveryResponse field 13 (session_configuration)
+        assert(parseRailHide(NULL) == 0 && parseRailHide("") == 0 && parseRailHide("  ") == 0);
+        assert(parseRailHide("clock") == SESSION_HIDE_CLOCK);
+        assert(parseRailHide("signal") == SESSION_HIDE_PHONE_SIGNAL);
+        assert(parseRailHide("battery") == SESSION_HIDE_BATTERY_LEVEL);
+        assert(parseRailHide("Clock, Battery") == (SESSION_HIDE_CLOCK | SESSION_HIDE_BATTERY_LEVEL));
+        assert(parseRailHide("signal+clock;battery") == SESSION_HIDE_ALL);
+        assert(parseRailHide("all") == SESSION_HIDE_ALL && parseRailHide("ALL") == 7);
+        assert(parseRailHide("none") == 0 && parseRailHide("off") == 0 && parseRailHide("0") == 0);
+        assert(parseRailHide("5") == 5 && parseRailHide("0x3") == 3 && parseRailHide(" 7 ") == 7);
+        assert(parseRailHide("8") == -1 && parseRailHide("-1") == -1 && parseRailHide("3x") == -1);
+        assert(parseRailHide("clock,wifi") == -1 && parseRailHide("averyveryverylongword") == -1);
+
+        const uint8_t f13zero[] = { 0x68, 0x00 }, f13all[] = { 0x68, 0x07 }, f13clock[] = { 0x68, 0x01 };
+        ServiceDiscovery v = referenceManifest(dhuIdentity());
+        const std::vector<uint8_t> before = serializeManifest(v);
+        assert(containsBytes(before, f13zero, 2) && !containsBytes(before, f13all, 2));
+        unsetenv("NBT_RAIL_HIDE");
+        assert(!configureRailHide(v) && serializeManifest(v) == before);      // unset: the DHU's 0, byte for byte
+        setenv("NBT_RAIL_HIDE", "wifi", 1);
+        assert(!configureRailHide(v) && v.sessionConfiguration == 0);         // not understood: ignored
+        setenv("NBT_RAIL_HIDE", "all", 1);
+        assert(configureRailHide(v) && v.sessionConfiguration == 7);
+        std::vector<uint8_t> after = serializeManifest(v);
+        assert(after.size() == before.size() && containsBytes(after, f13all, 2));
+        assert(!configureRailHide(v));                                       // a second run changes nothing
+        v.sessionConfiguration = 8;                                          // other bits are kept
+        setenv("NBT_RAIL_HIDE", "clock", 1);
+        assert(configureRailHide(v) && v.sessionConfiguration == 9);
+        setenv("NBT_RAIL_HIDE", "none", 1);
+        assert(configureRailHide(v) && v.sessionConfiguration == 8);
+        // A session gets it too.
+        setenv("NBT_RAIL_HIDE", "clock", 1);
+        assert(containsBytes(serializeManifest(sessionManifest(dhuIdentity())), f13clock, 2));
+        unsetenv("NBT_RAIL_HIDE");
+        printf("rail hide OK\n");
+    }
     printf("test_sdr OK\n");
     return 0;
 }

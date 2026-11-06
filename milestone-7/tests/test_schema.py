@@ -26,6 +26,7 @@ SETTINGS = [
     ("reference identity", {"NBT_SDR_IDENTITY": "1"}),
     ("negative insets", {"NBT_VID_INSETS": "-1,-2,-3,-4"}),
     ("BMW, wide screen", {"NBT_VEHICLE": "bmw", "NBT_SCREEN": "1440x540"}),
+    ("rail status hidden", {"NBT_RAIL_HIDE": "all"}),
 ]
 MANIFEST = "nbt.manifest.ServiceDiscoveryResponse"
 WIRE_VARINT, WIRE_LENGTH = 0, 2

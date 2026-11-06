@@ -161,6 +161,15 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > is never started twice, and one that nbt-aad started is stopped when nbt-aad exits. Log: `CarPlay coded, but no
 > mm-renderer N s after boot, and CarPlay's own processes (acpd, mdnsd) are not running either ...: starting
 > mm-renderer ourselves`, then `[MMR] Started ...` and `mm-renderer reachable after ...`.
+>
+> **v1.9.28-railhide (not car-verified; includes v1.9.27-mmr118 and PR #80): `NBT_RAIL_HIDE`, more room on the
+> rail.** Android Auto alone decides which icons its rail shows (launcher, mic, navigation, media, phone and one slot
+> for the last other app); the head unit cannot set how many. What it can do is ask the phone to leave out the status
+> block at the top of the rail: `NBT_RAIL_HIDE=all` (or any of `clock,signal,battery`) sets those bits of the
+> ServiceDiscoveryResponse `session_configuration`. That leaves the icons more height, for a bigger picture with a
+> higher `NBT_VID_DPI`: the 480 rows are 480 x 160 / DPI dp tall, 549 dp at the default 140 but 480 dp at 160, where
+> the mic slid under a 4th app icon (tester photo). Some phone versions are said to ignore signal and battery. Off by
+> default. Log: `[SDR] NBT_RAIL_HIDE=all: session_configuration 7, ...`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -630,7 +639,8 @@ Leave these unset unless you are testing.
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
 | `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets (default `0,240,0,0` on 1280x480; MINI round display with the `1180_480` coding: `0,240,40,40`, car-verified on a MINI F60) |
 | `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20, tester-verified on a MINI F60) |
-| `NBT_VID_DPI` | Video DPI (default 140, MINI `1180_480` round display 152; `0` = phone default) |
+| `NBT_VID_DPI` | Video DPI (default 140, MINI `1180_480` round display 152; `0` = phone default). Higher = bigger picture but less room: Android Auto gets 480 x 160 / DPI dp of height (549 dp at 140, 480 dp at 160). From about 150 up the rail can run out of height and the mic slides under the 4th app icon; `NBT_RAIL_HIDE=all` gives it back some room |
+| `NBT_RAIL_HIDE` | Ask the phone not to draw its clock, phone signal and/or battery level at the top of the rail, so the rail icons get more height: `all`, or any of `clock,signal,battery` (default: unset, all shown). The number of rail icons itself is the phone's choice; the head unit cannot set it |
 | `NBT_VID_RES`, `NBT_VID_MW`, `NBT_VID_MH` | Other video config overrides |
 | `NBT_VID_SRC_H`, `NBT_VID_DST_H` | Decoder / renderer heights (default 720) |
 | `NBT_VIDEO_DUMP=1` | Raw H.264 to `/tmp/aa_video.h264` (4 MB cap) |

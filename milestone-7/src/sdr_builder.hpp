@@ -37,6 +37,21 @@ bool configureSensors(ServiceDiscovery& manifest);
 // Returns true if anything was changed (prints what it did).
 bool configureMainVideo(ServiceDiscovery& manifest);
 
+// ServiceDiscoveryResponse field 13 (session_configuration) bits: the head unit draws these itself, so the phone leaves
+// them out of its UI. Read by the phone while the head unit asks for a protocol below 4.3 (we ask for 1.6); from 4.3 on
+// it reads UiConfig field 5 instead. On a vertical rail they are the status block at its top (signal, battery, clock).
+// Names as published (open-android-auto, AA 17.3); some phone versions are reported to ignore signal and battery.
+enum { SESSION_HIDE_CLOCK = 1, SESSION_HIDE_PHONE_SIGNAL = 2, SESSION_HIDE_BATTERY_LEVEL = 4, SESSION_HIDE_ALL = 7 };
+
+// Pure helper used by configureRailHide (host-tested): "clock,signal,battery" (any order; separators space , ; + |),
+// "all", "none" / "off", or a number 0..7. Returns the bit mask, or -1 if anything is not understood.
+int parseRailHide(const char* s);
+
+// NBT_RAIL_HIDE: asks the phone not to draw the clock / phone signal / battery level, which gives the icons below them
+// on the rail more room (at a higher NBT_VID_DPI the rail runs out of height and the mic slides under the 4th app icon).
+// Unset: unchanged (0, the phone draws all three). Returns true if anything was changed (prints what it did).
+bool configureRailHide(ServiceDiscovery& manifest);
+
 // Declares the touchscreen (channel 7) as 1280 x NBT_TOUCH_CFG_H (default 720).
 bool configureTouchScreen(ServiceDiscovery& manifest);
 
