@@ -13,39 +13,65 @@ INCLUDES = -I./include -I./src
 # Remove -fPIC and -Bdynamic to produce a true QNX executable (ET_EXEC), not a shared lib (ET_DYN)
 CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 # Set RPATH so QNX's dynamic linker automatically finds liba2i_client.so in /opt/mm/lib without copying
-LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
+LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -lm -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 SRCS = src/main.cpp \
-       src/audio_manager.cpp \
-       src/a2i_stream.cpp \
-       src/audio_route.cpp \
-       src/audio_mixer.cpp \
-       src/browser_audio.cpp \
-       src/pcm_utils.cpp \
+       src/audio/a2i_audio.cpp \
+       src/audio/config.cpp \
+       src/audio/bt_audio.cpp \
+       src/audio/speech_out.cpp \
+       src/audio/mic_uplink.cpp \
+       src/audio/a2i_stream.cpp \
+       src/audio/audio_route.cpp \
+       src/audio/mixer.cpp \
+       src/audio/playout.cpp \
+       src/audio/drift.cpp \
+       src/audio/stream_rate.cpp \
+       src/audio/browser_audio.cpp \
+       src/audio/pcm_ring.cpp \
+       src/audio/resampler.cpp \
+       src/audio/asound_device.cpp \
        src/video_manager.cpp \
+       src/mmr_launch.cpp \
        src/tcp_server.cpp \
        src/usb_accessory.cpp \
        src/usb_direct.cpp \
        src/aa_session.cpp \
+       src/audio/audio_acks.cpp \
        src/aa_cryptor.cpp \
        src/bluetooth_manager.cpp \
        src/wireless_setup.cpp \
        src/touch_probe.cpp \
        src/dsi_client.cpp \
-       src/voice_scenario.cpp \
-       src/bt_play.cpp \
-       src/ccs_input.cpp \
+       src/audio/voice_scenario.cpp \
+       src/audio/bt_play.cpp \
+       src/most/client.cpp \
+       src/most/trace.cpp \
+       src/car/ccs_input.cpp \
+       src/car/volume_input.cpp \
+       src/car/input_activity.cpp \
+       src/car/geoid.cpp \
+       src/car/gps.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/kombi_client.cpp \
-       src/kombi_nav.cpp
+       src/kombi_nav.cpp \
+       src/volume_osd.cpp
 
-OBJS = $(SRCS:.cpp=.o)
+# C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
+CSRCS = src/audio/speex.c
+CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
+
+OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
 TARGET = nbt-aad
 
-.PHONY: all clean
+.PHONY: all clean check
 
-all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe
+# Host tests with the Linux g++ (tests/Makefile), not qcc.
+check:
+	$(MAKE) -C tests check
+
+all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -57,7 +83,7 @@ test_display: test_display.cpp
 	$(CXX) $(CXXFLAGS) -o test_display test_display.cpp -L./lib -lscreen -lang-c++
 	@echo [DONE] Built test_display for QNX armv7le
 
-test_controls: test_controls.cpp src/dsi_client.cpp src/dsi_client.hpp src/most_msg.hpp src/ctl_wizard.hpp src/ccs_decoder.hpp
+test_controls: test_controls.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp src/most/msg.hpp src/car/ctl_wizard.hpp src/car/ccs_decoder.hpp src/aa_keys.hpp
 	@echo [CXX] test_controls.cpp
 	$(CXX) $(CXXFLAGS) -o test_controls test_controls.cpp src/dsi_client.cpp
 	@echo [DONE] Built test_controls for QNX armv7le
@@ -101,6 +127,10 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 	@echo [CXX] $<
 	$(CXX) $(CXXFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
 
+%.o: %.c
+	@echo [CC] $<
+	$(CC) $(CFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+
 -include $(OBJS:.o=.d)
 
 # Standalone read-only probe for the car's Wi-Fi Direct group (NBT_ALT_WIFI=DIRECT): prints ifconfig wfd0, the
@@ -110,6 +140,36 @@ wfd_probe: tools/wfd_probe.cpp src/alt_wifi.hpp src/wireless_setup.hpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/wfd_probe.cpp -lsocket -lang-c++
 	@echo [DONE] Built $@
 
+# pf_aa: the Android Auto rules (TCP 5277 on uap0 / wfd0) in /fs/sda0/etc/pf.conf instead of pfctl -d.
+# pf_aa --install (backup to /opt/aa/pf.bak, rules, NBT_KEEP_PF=1) | --check | --uninstall (restore from pf.bak).
+pf_aa: tools/pf_aa.cpp tools/pf_aa.hpp
+	@echo [CXX] tools/pf_aa.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/pf_aa.cpp -lang-c++
+	@echo [DONE] Built $@
+
+# Standalone volume-key capture/prompter: prints "press volume up 5x", waits, prints "press volume down 5x", waits, while
+# logging every MOST control message it can see to stdout and /mnt/umass01200t7/volcap.log. No daemon, no env needed.
+volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp src/most/msg.hpp
+	@echo [CXX] tools/volcap.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/volcap.cpp src/dsi_client.cpp -lang-c++
+	@echo [DONE] Built $@
+
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa
+
+# osdprobe: standalone check that this unit lets us own an LM surface for our own window.
+osdprobe: tools/osdprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/osdprobe.cpp -L./lib -lscreen -lang-c++
+
+# osd1281probe: can the volume pill be its own LayerManager surface (window id "1281") next to 1280?
+osd1281probe: tools/osd1281probe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/osd1281probe.cpp -L./lib -lscreen -lang-c++
+
+# lmrestore: put screen 0's layer render order back after an experiment cleared it.
+lmrestore: tools/lmrestore.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/lmrestore.cpp -lang-c++
+
+# kdprobe: the supported overlay path -- KD window + EGL/GLES surface (see tools/kdprobe.cpp).
+kdprobe: tools/kdprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/kdprobe.cpp -L./lib -lscreen -lKD -lEGL -lGLESv2 -lang-c++ -lm

@@ -34,6 +34,12 @@ inline const char* carMakeName(int m) {
     }
 }
 
+// Where Connectivity writes carplay.ini from the coding, in search order (NULL-terminated). Only present on a car with
+// CarPlay coded; mmr::carPlayCoded() uses the same list.
+static const char* const kCarPlayIniPaths[] = {
+    "/var/opt/conn/carplay/carplay.ini", "/fs/sda1/opt/conn/carplay/carplay.ini", NULL
+};
+
 struct CarConfig {
     int screenW, screenH;
     int make;                   // CarMake
@@ -183,9 +189,7 @@ inline CarConfig load() {
 
     int iw = 0, ih = 0;
     const char* forced = getenv("NBT_CARPLAY_INI");
-    const char* paths[3] = { forced && *forced ? forced : NULL,
-                             "/var/opt/conn/carplay/carplay.ini",
-                             "/fs/sda1/opt/conn/carplay/carplay.ini" };
+    const char* paths[3] = { forced && *forced ? forced : NULL, kCarPlayIniPaths[0], kCarPlayIniPaths[1] };
     for (int i = 0; i < 3; ++i) {
         if (!paths[i]) continue;
         CarConfig t = c;

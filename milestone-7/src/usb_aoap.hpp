@@ -83,6 +83,29 @@ inline size_t frameLength(const uint8_t* p, size_t avail) {
     return hdr + ((static_cast<size_t>(p[2]) << 8) | p[3]);
 }
 
+// How many USB resets a phone gets. Not per accessory node: a reset can bring the phone back under a new key, which
+// is a new node, so a per-node count would never run out on a phone that keeps failing.
+class ResetBudget {
+public:
+    enum { kMax = 2 };
+    ResetBudget() : used_(0), last_s_(-1e9) {}
+    // True (and counted) when one more reset is allowed. The count starts over kWindowS after the last reset.
+    bool take(double now) {
+        if (now - last_s_ >= kWindowS()) used_ = 0;
+        if (used_ >= kMax) return false;
+        ++used_;
+        last_s_ = now;
+        return true;
+    }
+    // Within s of the last reset: the phone may be off the bus because of it.
+    bool within(double now, double s) const { return now - last_s_ < s; }
+
+private:
+    static double kWindowS() { return 120.0; }
+    int used_;
+    double last_s_;
+};
+
 } // namespace aoap
 } // namespace nbt
 

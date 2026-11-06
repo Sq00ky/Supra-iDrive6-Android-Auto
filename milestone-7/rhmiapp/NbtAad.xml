@@ -16,7 +16,9 @@
       <raAction id="27"/>
       <raAction id="28"/>
       <raAction id="29"/>
+      <raAction id="30"/>
       <hmiAction id="25" target="12"/>
+      <hmiAction id="80" target="14"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -58,13 +60,21 @@
       <textIdModel id="47" textId="21">
         <synonyms/>
       </textIdModel>
+      <raBoolModel id="48"/>
+      <textIdModel id="49" textId="22">
+        <synonyms/>
+      </textIdModel>
       <raIntModel id="40" modelType="NativeStateID" value="1"/>
       <raIntModel id="41" modelType="NativeStateID" value="20"/>
+      <textIdModel id="82" textId="23">
+        <synonyms/>
+      </textIdModel>
     </models>
     <events>
       <focusEvent id="50" targetModel="40"/>
       <focusEvent id="51" targetModel="41"/>
       <focusEvent id="52" target="13"/>
+      <focusEvent id="53" target="10"/>
     </events>
     <hmiStates>
       <hmiState id="10" text="Android Auto" textModel="3">
@@ -73,11 +83,7 @@
           <button action="22" id="62" model="32" text="Force Stop"/>
           <button action="23" id="63" model="33" text="Restart"/>
           <separator id="66"/>
-          <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
-          <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
-          <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
-          <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
-          <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
+          <button action="80" id="81" model="82" text="Settings"/>
           <button action="25" id="65" model="36" text="About"/>
         </components>
       </hmiState>
@@ -113,6 +119,62 @@
       <hmiState id="11" text="Android Auto" textModel="3">
         <components>
           <image id="70" model="12">
+            <properties>
+              <property id="3" value="true"/>
+              <property id="9" value="549"/>
+              <property id="10" value="484"/>
+              <property id="20" value="0"/>
+              <property id="21" value="0"/>
+            </properties>
+          </image>
+        </components>
+      </hmiState>
+      <!-- Settings (rhmiapp-39): the six checkboxes, reached from the Settings row (hmiAction 80) in hmiState 10.
+           Wired like the About page (state 12): parentId 10, so BACK returns to the menu. Checkboxes in a child state
+           are the normal pattern - BMW's own SecurityMenu.xml: hmiState 856 parentId 854 ("Werkstattmodus") holds four
+           <checkbox> rows, opened from a button in 854. Kept LAST in this list: the framework numbers plugin states
+           50000 + XML order, so appending does not move state 13 (50002) or state 10 (50000). -->
+      <hmiState id="14" parentId="10" text="Settings" textModel="82">
+        <properties>
+          <property id="24" value="3"/>
+        </properties>
+        <components>
+          <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
+          <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
+          <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
+          <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
+          <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
+          <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
+        </components>
+      </hmiState>
+    </hmiStates>
+  </pluginApp>
+  <!-- One-press entry "Open Android Auto" (raAction 2), right after the menu entry. Property 55 is its UUID: without
+       one, iDrive refuses to store a plugin entry on a favourite key. Keep the UUID fixed: a new one orphans keys
+       already stored. Connected: Android Auto comes to the front; otherwise our menu opens (focusEvent 53) with the
+       status, and nbt-aad is started if needed. -->
+  <pluginApp applicationType="Custom" applicationWeight="199" entryButtonFocusID="32753" insertAfterFocusID="32752" insertStateID="20" text="Open Android Auto">
+    <comment/>
+    <entryButton action="2" id="101" model="103" imageModel="104" previewModel="113">
+      <properties>
+        <property id="55" value="02773afe-a0dc-564a-95d8-a4768ea38a65"/>
+      </properties>
+    </entryButton>
+    <actions>
+      <raAction id="2"/>
+    </actions>
+    <models>
+      <textIdModel id="103" textId="14">
+        <synonyms/>
+      </textIdModel>
+      <imageIdModel id="104" imageId="55001"/>
+      <imageIdModel id="112" imageId="55002"/>
+      <raPreviewModel id="113" modelType="StatePreview" previewState="110"/>
+    </models>
+    <hmiStates>
+      <hmiState id="110" text="Open Android Auto" textModel="103">
+        <components>
+          <image id="111" model="112">
             <properties>
               <property id="3" value="true"/>
               <property id="9" value="549"/>

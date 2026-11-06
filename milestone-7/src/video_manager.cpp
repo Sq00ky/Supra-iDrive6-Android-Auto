@@ -16,16 +16,51 @@
 #include <time.h>
 
 // Experiment overrides (defaults keep the proven 1280x480 behaviour):
-//   NBT_VID_SRC_H = height declared to mdev (defaults to the selected video canvas height)
-//   NBT_VID_DST_H = MM-Renderer destination height (derived from the canvas and panel aspect ratios)
-// At 720p on 1280x480, the default 720 destination height shows the top 480 rows at 1:1.
-// Forcing that height to 480 squashes the canvas. These manual overrides still allow older calibrations.
+//   NBT_VID_SRC_H = height declared to mdev (default: the video canvas height, 720 at 720p; PR #66)
+//   NBT_VID_DST_H = MM-Renderer destination height (default derived from the canvas and panel aspect ratios)
+// At 720p on 1280x480, the default 720 destination height shows the top 480 rows at 1:1; forcing 480 squashes the
+// canvas. These manual overrides still allow older calibrations. The decoder rate is NBT_VID_FPS (default 60).
+// Seconds since the head unit booted (QNX CLOCK_MONOTONIC; the same clock as the log's [ t ] stamps).
+static double uptimeS() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
 static int vidEnvInt(const char* name, int def) {
     const char* e = getenv(name);
     return (e && *e) ? atoi(e) : def;
 }
 
+// ---- Android Auto's own LayerManager surface (v1.9.20-aa1282) -------------------------------------------------------
+// Until v1.9.19 Android Auto drew on surface 1280, the one the factory CarPlay window uses (carplay.ini WindowName),
+// and had to hand CarPlay its geometry back on every hide. LayerManagerService makes a surface for ANY window whose id
+// string is an unused number, on that window's first post (decompiled 2026-11-05; car-verified with surface 1281 for
+// the volume pill), so Android Auto gets a surface of its own and never writes CarPlay's 1280 or its layer 0x800d0000.
+// NBT_AA_SURFACE=1280 brings the shared path back for a run. The id of the iDrive app's crash cleanup is in kAaSurfaceFile.
+static const char* const kAaSurfaceFile = "/dev/shmem/nbt-aad-surface";
+
+int nbt::VideoManager::aaSurface() {
+    static int s = 0;
+    if (!s) {
+        int v = vidEnvInt("NBT_AA_SURFACE", 1282);
+        if (v != 1280 && (v < 1282 || v > 65535)) {   // 256 is iDrive's, 1281 the volume pill's
+            printf("[VideoManager] NBT_AA_SURFACE=%d is not usable (1280, or 1282-65535): surface 1282\n", v);
+            v = 1282;
+        }
+        s = v;
+    }
+    return s;
+}
+
+const char* nbt::VideoManager::aaWindowId() {
+    static char id[12] = "";
+    if (!id[0]) snprintf(id, sizeof(id), "%d", aaSurface());
+    return id;
+}
+
 // ---- factory CarPlay geometry of LayerManager surface 1280 (see lm_geometry.hpp) ------------------------------------
+// Only with NBT_AA_SURFACE=1280, where Android Auto shares that surface.
 static const char* const kLmSaved = "/dev/shmem/nbt-aad-lm1280";
 static nbt::LmGeometry g_lmFactory;
 static bool g_lmHave = false;
@@ -82,7 +117,7 @@ static void captureFactoryGeometry() {
 
 // Hands surface 1280 back to the factory CarPlay with its own regions (ours are set again by setVisible(true)).
 static void restoreFactoryGeometry() {
-    if (!g_lmHave) return;
+    if (!g_lmHave || !nbt::VideoManager::sharesCarPlaySurface()) return;
     char cmd[160];
     snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set surface 1280 source region %d %d %d %d 2>/dev/null",
              g_lmFactory.src.x, g_lmFactory.src.y, g_lmFactory.src.w, g_lmFactory.src.h);
@@ -110,7 +145,17 @@ VideoManager::VideoManager()
       worker_busy_(false),
       strm_lib_(NULL),
       cp_mode_(false),
-      window_ready_(false) {
+      parked_(false),
+      wait_idr_(false),
+      screen_ev_(0),
+      mmr_win_(0),
+      mmr_hidden_(false),
+      mmr_saved_vis_(1),
+      mmr_saved_z_(0),
+      screen_events_logged_(0),
+      idr_dropped_(0),
+      decoder_gen_(0), frames_in_gen_(0), window_ready_(false), overlay_surface_(0), overlay_verified_(false),
+      overlay_failed_(false), aa_surface_seen_(false), aa_surface_logged_(false), aa_surface_ticks_(0) {
     memset(&sink_, 0, sizeof(sink_));
     pthread_mutex_init(&queue_mutex_, NULL);
     pthread_mutex_init(&decoder_mutex_, NULL);
@@ -131,7 +176,8 @@ void* VideoManager::workerThreadStub(void* arg) {
     return NULL;
 }
 
-// Steps 1-13 of the old init(): QNX Screen context + window "1280" in our window group, one black buffer, hidden.
+// Steps 1-13 of the old init(): QNX Screen context + window aaWindowId() ("1282") in our window group, one black
+// buffer, hidden.
 bool VideoManager::createWindow() {
     if (window_ready_) return true;
     const screen_config_t config = sink_.config;
@@ -172,7 +218,8 @@ bool VideoManager::createWindow() {
     int usage = SCREEN_USAGE_VIDEO;
     screen_set_window_property_iv(sink_.win, SCREEN_PROPERTY_USAGE, &usage);
 
-    // 5. Set Window ID String ("1280", cloned from carplay.ini)
+    // 5. Set Window ID String: aaWindowId(), "1282" (Android Auto's own LayerManager surface; "1280", the carplay.ini
+    //    WindowName, with NBT_AA_SURFACE=1280)
     screen_set_window_property_cv(sink_.win, SCREEN_PROPERTY_ID_STRING,
                                   strlen(config.window_id), config.window_id);
 
@@ -223,13 +270,20 @@ bool VideoManager::createWindow() {
     int vis_res = screen_set_window_property_iv(sink_.win, SCREEN_PROPERTY_VISIBLE, &vis);
     screen_set_window_property_iv(sink_.win, SCREEN_PROPERTY_ZORDER, &z_order);
 
-    // 13. Surface 1280 in GENIVI LayerManagerService: leave it invisible and leave the stock iDrive Surface 256 alone.
-    //     Surface id "1280" is the window name from carplay.ini (WindowName=1280), not a width, and the factory
-    //     CarPlay window uses the same surface: its regions are NOT touched here (setVisible(true) sets ours, hiding
-    //     puts the factory ones back), so starting the daemon never changes the CarPlay picture.
-    system("/opt/sys/bin/LayerManagerControl set surface 1280 visibility 0 2>/dev/null");
-    system("/opt/sys/bin/LayerManagerControl set surface 1280 opacity 1.0 2>/dev/null");
-    system("/opt/sys/bin/LayerManagerControl set surface 1280 zorder 2000 2>/dev/null");
+    // 13. Android Auto's surface in GENIVI LayerManagerService: invisible, and the stock iDrive Surface 256 left alone.
+    //     With our own surface (default 1282) it may not exist yet: LayerManager makes it ~1 s after the post above,
+    //     and serviceAaSurface() applies the current visibility once it is there. With NBT_AA_SURFACE=1280 this is the
+    //     factory CarPlay window's surface (carplay.ini WindowName=1280): its regions are NOT touched here.
+    {
+        char lm[256];
+        snprintf(lm, sizeof(lm),
+                 "/opt/sys/bin/LayerManagerControl set surface %d visibility 0 2>/dev/null; "
+                 "/opt/sys/bin/LayerManagerControl set surface %d opacity 1.0 2>/dev/null; "
+                 "/opt/sys/bin/LayerManagerControl set surface %d zorder 2000 2>/dev/null",
+                 aaSurface(), aaSurface(), aaSurface());
+        system(lm);
+    }
+    aa_surface_ticks_ = 0;
 
     printf("[VideoManager] QNX Screen window prepared (buf: %p, ptr: %p, post: %d, zorder: %d, vis: %d [%d]).\n",
            sink_.buf, ptr, post_res, z_order, vis, vis_res);
@@ -243,13 +297,13 @@ bool VideoManager::createWindow() {
 
 bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
     printf("[VideoManager] Initializing QNX Screen context for window '%s' (%ux%u @ %ufps)...\n",
-           NBT_SCREEN_WINDOW_ID, width, height, fps);
+           aaWindowId(), width, height, fps);
 
     screen_config_t config;
     config.width     = width;
     config.height    = height;
     config.fps       = fps;
-    config.window_id = NBT_SCREEN_WINDOW_ID;
+    config.window_id = aaWindowId();
     config.z_order   = NBT_SCREEN_ZORDER_ACTIVE; // 2000: Forces window above HmiMain3D (order 999)
 
     sink_.config = config;
@@ -260,11 +314,20 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
         snprintf(g, sizeof(g), "cpvideogrp%d", getpid());   // window group, matches factory CarPlay "cpvideogrp<pid>"
         grp_name_ = g;
     }
-    // Surface 1280's factory CarPlay geometry (read-only) and the repair of what a SIGKILLed daemon left behind.
-    captureFactoryGeometry();
-    restoreFactoryGeometry();   // no-op normally
-    // CarPlay hand-off: the window is created only when an Android Auto phone connects. Its id string "1280" is the
-    // one Connectivity's CarPlay window uses, and LayerManager binds surface 1280 to the newest window with that id:
+    if (sharesCarPlaySurface()) {
+        // Surface 1280's factory CarPlay geometry (read-only) and the repair of what a SIGKILLed daemon left behind.
+        captureFactoryGeometry();
+        restoreFactoryGeometry();   // no-op normally
+        unlink(kAaSurfaceFile);
+    } else {
+        printf("[VideoManager] Android Auto uses its own LayerManager surface %d (NBT_AA_SURFACE; 1280 = shared with "
+               "CarPlay as before v1.9.20): surface 1280 and CarPlay's layer 0x800d0000 are never written\n",
+               aaSurface());
+        FILE* f = fopen(kAaSurfaceFile, "w");   // for the iDrive app's cleanup after a SIGKILL or crash
+        if (f) { fprintf(f, "%d\n", aaSurface()); fclose(f); }
+    }
+    // CarPlay hand-off: the window is created only when an Android Auto phone connects. With NBT_AA_SURFACE=1280 its
+    // id string "1280" is the one Connectivity's CarPlay window uses, and LayerManager binds surface 1280 to the newest window with that id:
     // created at start ("Start automatically" + an iPhone first after boot), it took surface 1280 away from CarPlay,
     // whose picture then stayed black, and after a Force Stop the surface was left without a window until the next
     // reboot (MINI tester, 2026-10-29). NBT_CP_HANDOFF=0 keeps the old order (window at start).
@@ -272,7 +335,7 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
         if (!createWindow()) return false;
     } else {
         printf("[VideoManager] screen window '%s' is created when an Android Auto phone connects (surface 1280 stays "
-               "with the factory CarPlay until then)\n", NBT_SCREEN_WINDOW_ID);
+               "with the factory CarPlay until then)\n", aaWindowId());
     }
 
     is_initialized_ = true;
@@ -320,20 +383,65 @@ bool VideoManager::init(uint32_t width, uint32_t height, uint32_t fps) {
         strm_lib_ = strm_h;
 
         if (fn_connect) {
+            mmr_launch_.adopt();   // a renderer an earlier nbt-aad started (crash / SIGKILL): ours to stop on exit
             mmr_cnx_ = fn_connect(NULL);
             if (!mmr_cnx_) {
                 // Started from the iDrive entry shortly after boot, mm-renderer may not be up yet: mmr_connect()
                 // then fails, no decoder context is created, /dev/name/local/mdev never appears and every frame
                 // is dropped (black screen for the whole session, car-seen 2026-10-24). Wait for it, with the
                 // overlay hidden so iDrive and the reverse camera stay usable. NBT_MMR_WAIT_S (default 90, 0 = no wait).
-                int wait_s = vidEnvInt("NBT_MMR_WAIT_S", 90);
+                // HMood starts it only with CONN_CARPLAY (mmr_launch.hpp). On a car without CarPlay coded (no
+                // carplay.ini) nobody else ever will, so start it ourselves if no mm-renderer process exists
+                // (NBT_MMR_SPAWN=0: never). A coded car whose CarPlay is not active (activation removed by a software
+                // update, carplay.ini left on /var) gets none from HMood either (issue #118): there, start it once the
+                // head unit has been up NBT_MMR_BOOT_S (default 60) with no mm-renderer process (mmr::spawnStep).
+                int err0 = errno;
+                const int wait_s = vidEnvInt("NBT_MMR_WAIT_S", 90);
+                const int spawn = vidEnvInt("NBT_MMR_SPAWN", 1);
+                const int boot_s = vidEnvInt("NBT_MMR_BOOT_S", 60);
+                const bool coded = mmr::carPlayCoded();
                 printf("[VideoManager] mm-renderer not reachable yet (mmr_connect failed, errno=%d): waiting up to %d s, overlay hidden.\n",
-                       errno, wait_s);
+                       err0, wait_s);
+                if (spawn == 0) {
+                    printf("[VideoManager] NBT_MMR_SPAWN=0: only waiting for one, never starting it.\n");
+                } else if (coded) {
+                    printf("[VideoManager] CarPlay coded (carplay.ini): the head unit starts mm-renderer with CarPlay. If none "
+                           "runs %d s after boot (head unit up %.0f s now), CarPlay is not active and nbt-aad starts it "
+                           "(NBT_MMR_BOOT_S).\n", boot_s, uptimeS());
+                }
                 fflush(stdout);
+                bool tried = false;    // started one (or tried to) in this run
+                int waited_for = 0;    // the other mm-renderer pid already logged
                 for (int t = 0; !mmr_cnx_ && t < wait_s * 2; ++t) {
+                    mmr_launch_.alive();   // reaps ours if it died (logged, marker removed)
+                    if (spawn != 0 && !tried && t % 4 == 0) {   // every 2 s: a walk over /proc
+                        const int other = mmr::Launcher::findRunning();
+                        if (other > 0 && other != waited_for) {
+                            printf("[VideoManager] mm-renderer pid %d is running but not reachable yet: waiting for it.\n", other);
+                            waited_for = other;
+                        }
+                        const double up = uptimeS();
+                        if (mmr::spawnStep(spawn, coded, other > 0, tried, up, boot_s) == mmr::kSpawnStart) {
+                            if (!coded) {
+                                printf("[VideoManager] CarPlay not coded (no carplay.ini): the head unit never starts mm-renderer, "
+                                       "starting it now.\n");
+                            } else {
+                                const int helper = mmr::Launcher::findCarPlayHelper();
+                                printf("[VideoManager] CarPlay coded, but no mm-renderer %.0f s after boot, and CarPlay's own "
+                                       "processes (acpd, mdnsd) %s: starting mm-renderer ourselves (stopped when nbt-aad exits; "
+                                       "NBT_MMR_SPAWN=0 turns this off).\n", up,
+                                       helper > 0 ? "are running, so only its renderer is gone"
+                                                  : "are not running either: CarPlay is not active on this head unit");
+                            }
+                            tried = true;
+                            if (!mmr_launch_.start()) printf("[VideoManager] Could not start mm-renderer.\n");
+                            fflush(stdout);
+                        }
+                    }
                     usleep(500000);
                     mmr_cnx_ = fn_connect(NULL);
-                    if (mmr_cnx_) printf("[VideoManager] mm-renderer reachable after %d.%d s.\n", (t + 1) / 2, ((t + 1) % 2) * 5);
+                    if (mmr_cnx_)
+                        printf("[VideoManager] mm-renderer reachable after %d.%d s.\n", (t + 1) / 2, ((t + 1) % 2) * 5);
                 }
                 if (!mmr_cnx_) printf("[VideoManager] Error: mm-renderer still unreachable: no hardware decoder, video will stay black.\n");
             }
@@ -435,6 +543,9 @@ void VideoManager::stop() {
         sink_.ctx = NULL;
     }
     sink_.buf = NULL;
+    // Last: the renderer we (or an earlier nbt-aad) started, once nothing of ours uses it any more (context, mdev
+    // and the window group its screen_writer drew into are gone). The head unit's own is left alone.
+    mmr_launch_.stop();
     is_initialized_ = false;
     printf("[VideoManager] Video sink destroyed (iDrive restored).\n");
 }
@@ -591,13 +702,12 @@ bool VideoManager::createDecoder() {
             printf("[VideoManager] Warning: MMR context parameter API unavailable; prefetch_mode not set.\n");
         }
 
-        // Step 1: Attach Output to Screen Window 1280 and the exact
-        // window group registered above, matching factory CarPlay's
-        // libconn_carplay_video_mmr.so behavior.
+        // Step 1: Attach Output to Screen Window aaWindowId() ("1282": Android Auto's own LayerManager surface) and
+        // the exact window group registered above, matching factory CarPlay's libconn_carplay_video_mmr.so behavior.
         char out_url[256];
         snprintf(out_url, sizeof(out_url),
                  "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d&wingrp=%s",
-                 NBT_SCREEN_WINDOW_ID, vidEnvInt("NBT_VID_DST_W", nbt::mmrDstWidth()),
+                 aaWindowId(), vidEnvInt("NBT_VID_DST_W", nbt::mmrDstWidth()),
                  vidEnvInt("NBT_VID_DST_H", nbt::mmrDstHeight()), grp_name_.c_str());
         printf("[VideoManager] MM-Renderer output URL: %s\n", out_url);
         mmr_output_id_ = fn_out_attach(mmr_ctxt_, out_url, "video");
@@ -634,12 +744,12 @@ bool VideoManager::createDecoder() {
         }
 
         // Step 4: Attach Input to Hardware Video Push Engine ('H264' FourCC)
-        // Match the coded stream advertised to the phone, not the physical panel size.
-        // The renderer scales the whole canvas evenly and the panel clips its reserved margins.
+        // Match the coded stream advertised to the phone (the video canvas, NBT_VID_RES), not the physical panel:
+        // the renderer scales the whole canvas evenly and the panel clips its reserved margins (PR #66).
         char in_url[256];
         snprintf(in_url, sizeof(in_url),
                  "mdevpush:/dev/name/local/mdev?fourcc=H264&queue_capacity=60&video.frame_rate=%u&video.depth=16&video.width=%d&video.height=%d",
-                 sink_.config.fps, nbt::videoCanvasWidth(), vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()));
+                 (unsigned)sink_.config.fps, nbt::videoCanvasWidth(), vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()));
         mmr_input_id_ = fn_in_attach(mmr_ctxt_, in_url, "track");
 
         // Re-apply parameters AFTER input_attach creates the track engine.
@@ -681,6 +791,8 @@ bool VideoManager::createDecoder() {
         }
         printf("[VideoManager] Hardware decoder pipeline active (ctxt: '%s', out: %d, in: %d, seed-speed: %d, pre-speed: %d, play: %d, post-speed: %d)!\n",
                ctx_name, mmr_output_id_, mmr_input_id_, seed_speed_res, pre_speed_res, play_res, post_speed_res);
+        frames_in_gen_ = 0;
+        ++decoder_gen_;                  // mm-renderer's video window is new: the volume overlay must follow it
         if ((mmr_input_id_ < 0 || play_res < 0) && fn_err) {
             const void* err_info = fn_err(mmr_ctxt_);
             if (err_info) {
@@ -701,22 +813,26 @@ bool VideoManager::createDecoder() {
     pthread_mutex_lock(&queue_mutex_);
     reset_pending_ = true;
     accepting_ = (mdev_fd_ >= 0);
+    if (parked_) { wait_idr_ = true; idr_dropped_ = 0; }   // rebuilt mid-stream: nothing decodes before an IDR
     pthread_mutex_unlock(&queue_mutex_);
     cp_mode_ = false;
+    parked_ = false;
     return mmr_ctxt_ != NULL && mdev_fd_ >= 0;
 }
 
 bool VideoManager::prepareForSession() {
     if (!is_initialized_) return false;
     if (!window_ready_) {
-        printf("[VideoManager] Android Auto phone connected: creating the screen window '%s' now\n", NBT_SCREEN_WINDOW_ID);
+        printf("[VideoManager] Android Auto phone connected: creating the screen window '%s' now\n", aaWindowId());
         if (!createWindow()) printf("[VideoManager] Error: screen window could not be created: video will stay black\n");
     }
     if (!mmr_cnx_) return false;
     pthread_mutex_lock(&decoder_mutex_);
     bool ok = true;
     if (!mmr_ctxt_) {
-        printf("[VideoManager] Android Auto phone connected: creating the decoder context now\n");
+        if (parked_) printf("[VideoManager] Android Auto back on screen: creating a new decoder context (the old one was "
+                            "closed while iDrive had the screen)\n");
+        else printf("[VideoManager] Android Auto phone connected: creating the decoder context now\n");
         ok = createDecoder();
     } else if (cp_mode_) {
         printf("[VideoManager] Android Auto phone connected: rebuilding the decoder context (it carried CarPlay's settings)\n");
@@ -776,6 +892,8 @@ bool VideoManager::retuneForCarPlay() {
         d = fn_dict_set(d, "prefetch_mode", "0");
         r_ctx = d ? fn_ctx_params(mmr_ctxt_, d) : -1;
     }
+    // CarPlay plays through this context with CarPlay's own window id (carplay.ini WindowName=1280), so iDrive shows
+    // it on surface 1280 as usual - never on Android Auto's surface.
     char out_url[256];
     snprintf(out_url, sizeof(out_url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d&wingrp=%s",
              NBT_SCREEN_WINDOW_ID, w, h, grp_name_.c_str());
@@ -810,6 +928,44 @@ bool VideoManager::retuneForCarPlay() {
     return r_out >= 0 && r_in >= 0;
 }
 
+void VideoManager::parkDecoder() {
+    if (!is_initialized_) return;
+    pthread_mutex_lock(&decoder_mutex_);
+    if (mmr_ctxt_ && !cp_mode_) {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        destroyDecoder();            // stops the worker (accepting_ = false) and closes mm-renderer's window
+        parked_ = true;
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        long ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        printf("[VideoManager] decoder context closed while iDrive has the screen (%ld ms): the Android Auto picture is "
+               "gone; a new context is built when Android Auto comes back\n", ms);
+    }
+    pthread_mutex_unlock(&decoder_mutex_);
+}
+
+bool VideoManager::waitingForKeyframe() {
+    pthread_mutex_lock(&queue_mutex_);
+    bool w = wait_idr_;
+    pthread_mutex_unlock(&queue_mutex_);
+    return w;
+}
+
+void VideoManager::releaseKeyframeWait() {
+    pthread_mutex_lock(&queue_mutex_);
+    if (wait_idr_) printf("[VideoManager] no keyframe after the decoder rebuild (%u frames dropped): passing frames on\n",
+                          idr_dropped_);
+    wait_idr_ = false;
+    pthread_mutex_unlock(&queue_mutex_);
+}
+
+bool VideoManager::decoderParked() {
+    pthread_mutex_lock(&decoder_mutex_);
+    bool p = parked_ && !mmr_ctxt_;
+    pthread_mutex_unlock(&decoder_mutex_);
+    return p;
+}
+
 bool VideoManager::decoderInCarPlayMode() {
     pthread_mutex_lock(&decoder_mutex_);
     bool c = cp_mode_;
@@ -821,6 +977,7 @@ bool VideoManager::decoderInCarPlayMode() {
 // iDrive leaves it at visibility 0 and offset (x=54 y=-46 on the MINI F56): Android Auto then stays black or only
 // covers part of the screen. Not present before the first CarPlay use (the command then just fails).
 void VideoManager::fixCarPlayLayer() {
+    if (!sharesCarPlaySurface()) return;   // on its own surface Android Auto never draws through CarPlay's layer
     const nbt::CarConfig& cc = nbt::carConfig();
     char cmd[160];
     snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x800d0000 source region 0 0 %d %d >/dev/null 2>&1",
@@ -858,10 +1015,91 @@ bool VideoManager::workerRunning() {
     return r;
 }
 
+void VideoManager::pollScreenEvents() {
+    if (!window_ready_ || !sink_.ctx) return;
+    if (!screen_ev_ && screen_create_event(&screen_ev_) != 0) {
+        static bool s_logged = false;
+        if (!s_logged) { s_logged = true; printf("[VideoManager] screen_create_event failed errno=%d: no window events\n", errno); }
+        screen_ev_ = 0;
+        return;
+    }
+    for (int n = 0; n < 32; ++n) {
+        if (screen_get_event(sink_.ctx, screen_ev_, 0) != 0) {
+            static bool s_logged = false;
+            if (!s_logged) { s_logged = true; printf("[VideoManager] screen_get_event failed errno=%d\n", errno); }
+            return;
+        }
+        int type = 0;
+        screen_get_event_property_iv(screen_ev_, SCREEN_PROPERTY_TYPE, &type);
+        if (type == 0) return;                           // SCREEN_EVENT_NONE: queue empty
+        void* w = 0;
+        if (type == SCREEN_EVENT_CREATE || type == SCREEN_EVENT_CLOSE)
+            screen_get_event_property_pv(screen_ev_, SCREEN_PROPERTY_WINDOW, &w);
+        char id[64] = "";
+        int vis = -1, z = 0;
+        if (w && type == SCREEN_EVENT_CREATE) {
+            screen_get_window_property_cv((screen_window_t)w, SCREEN_PROPERTY_ID_STRING, sizeof(id) - 1, id);
+            screen_get_window_property_iv((screen_window_t)w, SCREEN_PROPERTY_VISIBLE, &vis);
+            screen_get_window_property_iv((screen_window_t)w, SCREEN_PROPERTY_ZORDER, &z);
+        }
+        if (screen_events_logged_ < 40 || type == SCREEN_EVENT_CREATE || type == SCREEN_EVENT_CLOSE) {
+            ++screen_events_logged_;
+            printf("[VideoManager] screen event %d%s window %p id '%s' vis %d z %d\n", type,
+                   type == SCREEN_EVENT_CREATE ? " (create)" : type == SCREEN_EVENT_CLOSE ? " (close)" : "", w, id, vis, z);
+        }
+        // Only windows that join our group cpvideogrp<pid> reach this context: mm-renderer's output window. Its id
+        // string may still be empty at join time, so it is not required to be ours (logged above either way); "1280"
+        // is the same context retuned for CarPlay.
+        if (type == SCREEN_EVENT_CREATE && w && w != sink_.win &&
+            (!id[0] || !strcmp(id, aaWindowId()) || !strcmp(id, NBT_SCREEN_WINDOW_ID))) {
+            if (mmr_win_ && mmr_win_ != w) screen_destroy_window((screen_window_t)mmr_win_);   // stale handle
+            mmr_win_ = w;
+            mmr_hidden_ = false;
+            printf("[VideoManager] mm-renderer's video window joined our group (%p): it can be hidden without closing "
+                   "the decoder\n", w);
+        } else if (type == SCREEN_EVENT_CLOSE && w && w == mmr_win_) {
+            printf("[VideoManager] mm-renderer's video window closed (%p)\n", w);
+            screen_destroy_window((screen_window_t)w);   // releases our handle only
+            mmr_win_ = 0;
+            mmr_hidden_ = false;
+        }
+    }
+}
+
+bool VideoManager::hideVideoWindow() {
+    if (!mmr_win_) return false;
+    screen_window_t w = (screen_window_t)mmr_win_;
+    if (!mmr_hidden_) {
+        mmr_saved_vis_ = 1;
+        mmr_saved_z_ = 0;
+        screen_get_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &mmr_saved_vis_);
+        screen_get_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &mmr_saved_z_);
+    }
+    int v = 0, z = NBT_SCREEN_ZORDER_BACKGROUND;
+    int r1 = screen_set_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &v);
+    int e1 = errno;
+    int r2 = screen_set_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &z);
+    int e2 = errno;
+    int rv = -1, rz = 0;
+    screen_get_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &rv);
+    screen_get_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &rz);
+    printf("[VideoManager] video window hidden, decoder kept open: visible rc=%d errno=%d, z rc=%d errno=%d | was vis %d "
+           "z %d, got vis %d z %d\n", r1, e1, r2, e2, mmr_saved_vis_, mmr_saved_z_, rv, rz);
+    mmr_hidden_ = true;
+    return r1 == 0;
+}
+
 void VideoManager::setVisible(bool visible) {
     sink_.is_visible = visible;
-    // No window yet (CarPlay hand-off, no Android Auto phone so far): there is nothing of ours to show or hide, and
-    // every LayerManager call below would act on the factory CarPlay's surface 1280.
+    if (visible && mmr_hidden_ && mmr_win_) {
+        screen_window_t w = (screen_window_t)mmr_win_;
+        int r2 = screen_set_window_property_iv(w, SCREEN_PROPERTY_ZORDER, &mmr_saved_z_);
+        int r1 = screen_set_window_property_iv(w, SCREEN_PROPERTY_VISIBLE, &mmr_saved_vis_);
+        printf("[VideoManager] video window shown again: vis %d rc=%d, z %d rc=%d\n", mmr_saved_vis_, r1, mmr_saved_z_, r2);
+        mmr_hidden_ = false;
+    }
+    // No window yet (CarPlay hand-off, no Android Auto phone so far): there is nothing of ours to show or hide (and
+    // with NBT_AA_SURFACE=1280 every LayerManager call below would act on the factory CarPlay's surface).
     if (!window_ready_) return;
     int32_t z_order = visible ? NBT_SCREEN_ZORDER_ACTIVE : NBT_SCREEN_ZORDER_BACKGROUND;
     int vis = visible ? 1 : 0;
@@ -879,27 +1117,159 @@ void VideoManager::setVisible(bool visible) {
     char cmd[768];
     if (visible) {
         const nbt::CarConfig& cc = nbt::carConfig();
+        // The plain order first (car-proven); with the pill's surface the two-surface order follows at once, so a
+        // LayerManagerControl that refused the list has still put the picture up.
+        const unsigned aa = (unsigned)aaSurface();
+        char pill[160] = "";
+        if (overlay_surface_ > 0)
+            snprintf(pill, sizeof(pill), "%s set layer 0x80000000 render order 0x%x,0x%x 2>/dev/null; ", L,
+                     (unsigned)overlay_surface_, aa);
         snprintf(cmd, sizeof(cmd),
-                 "%s set layer 0x80000000 render order 0x500 2>/dev/null; "
-                 "%s set surface 1280 source region 0 0 %d %d 2>/dev/null; "
-                 "%s set surface 1280 destination region 0 0 %d %d 2>/dev/null; "
+                 "%s set layer 0x80000000 render order 0x%x 2>/dev/null; %s"
+                 "%s set surface %u source region 0 0 %d %d 2>/dev/null; "
+                 "%s set surface %u destination region 0 0 %d %d 2>/dev/null; "
                  "%s set surface 256 visibility 0 2>/dev/null; "
-                 "%s set surface 1280 visibility 1 2>/dev/null",
-                 L, L, cc.screenW, cc.screenH, L, cc.screenW, cc.screenH, L, L);
+                 "%s set surface %u visibility 1 2>/dev/null",
+                 L, aa, pill, L, aa, cc.screenW, cc.screenH, L, aa, cc.screenW, cc.screenH, L, L, aa);
     } else {
         snprintf(cmd, sizeof(cmd),
                  "%s set layer 0x80000000 render order 0x100 2>/dev/null; "
                  "%s set surface 256 visibility 1 2>/dev/null; "
-                 "%s set surface 1280 visibility 0 2>/dev/null",
-                 L, L, L);
+                 "%s set surface %d visibility 0 2>/dev/null",
+                 L, L, L, aaSurface());
     }
     system(cmd);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long ms = (long)(t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
-    printf("[VideoManager] Screen overlay visibility changed: %s (Z-Order: %d, %ld ms)\n",
-           visible ? "VISIBLE" : "HIDDEN", z_order, ms);
-    if (visible) fixCarPlayLayer();
-    else restoreFactoryGeometry();   // the factory CarPlay shares surface 1280: give it its own regions back
+    printf("[VideoManager] Screen overlay visibility changed: %s (Z-Order: %d, %ld ms)%s\n",
+           visible ? "VISIBLE" : "HIDDEN", z_order, ms, (visible && overlay_surface_ > 0) ? " [volume pill on top]" : "");
+    if (visible && overlay_surface_ > 0 && !overlay_verified_) verifyOverlayOrder();
+    if (visible) fixCarPlayLayer();  // both no-ops on Android Auto's own surface
+    else restoreFactoryGeometry();   // NBT_AA_SURFACE=1280 shares CarPlay's surface: give it its own regions back
+}
+
+// Surface ids after "surface render order:" in `LayerManagerControl get layer` output, e.g.
+// "    - surface render order: 1281(0x501), 1280(0x500),". Returns how many, -1 when the line is missing.
+static int parseLayerRenderOrder(const char* dump, int* ids, int max) {
+    const char* k = strstr(dump, "surface render order:");
+    if (!k) return -1;
+    k += strlen("surface render order:");
+    int n = 0;
+    while (*k && *k != '\n' && n < max) {
+        while (*k == ' ' || *k == ',' || *k == '\t') ++k;
+        if (*k < '0' || *k > '9') break;
+        char* e = NULL;
+        ids[n++] = (int)strtol(k, &e, 10);
+        k = e;
+        while (*k && *k != ',' && *k != '\n') ++k;   // skip "(0x501)"
+    }
+    return n;
+}
+
+void VideoManager::verifyOverlayOrder() {
+    overlay_verified_ = true;
+    FILE* p = popen("/opt/sys/bin/LayerManagerControl get layer 0x80000000 2>&1", "r");
+    if (!p) return;
+    char buf[2048];
+    size_t used = 0;
+    buf[0] = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), p)) {
+        size_t n = strlen(line);
+        if (used + n + 1 < sizeof(buf)) {
+            memcpy(buf + used, line, n + 1);
+            used += n;
+        }
+    }
+    pclose(p);
+    int ids[8];
+    const int n = parseLayerRenderOrder(buf, ids, 8);
+    const int aa = aaSurface();
+    if (n >= 2 && ids[0] == overlay_surface_ && ids[1] == aa) {
+        printf("[VolOsd] Android Auto layer render order is now %d, %d: the volume pill is on top of the picture\n",
+               ids[0], ids[1]);
+        return;
+    }
+    bool hasAa = false;
+    for (int i = 0; i < n; ++i)
+        if (ids[i] == aa) hasAa = true;
+    printf("[VolOsd] LayerManagerControl did not take the render order 0x%x,0x%x (layer lists %d surface(s)%s): "
+           "plain order put back, no volume pill this run\n", (unsigned)overlay_surface_, (unsigned)aa, n,
+           hasAa ? "" : ", without the Android Auto surface");
+    overlay_failed_ = true;
+    overlay_surface_ = 0;
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x%x 2>/dev/null",
+             (unsigned)aa);
+    system(cmd);
+}
+
+bool VideoManager::applyOverlayOrder() {
+    if (!window_ready_ || !sink_.is_visible) return false;   // hidden: the hide order holds neither surface
+    char cmd[160];
+    const unsigned aa = (unsigned)aaSurface();
+    if (overlay_surface_ > 0)
+        snprintf(cmd, sizeof(cmd),
+                 "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x%x,0x%x 2>/dev/null",
+                 (unsigned)overlay_surface_, aa);
+    else
+        snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x%x 2>/dev/null",
+                 aa);
+    system(cmd);
+    if (overlay_surface_ > 0 && !overlay_verified_) verifyOverlayOrder();
+    return true;
+}
+
+// Lines of `LayerManagerControl get surface <id>` / `get layer <id>` worth a log line.
+static bool lmLineOfInterest(const char* l) {
+    return strstr(l, "visib") || strstr(l, "region") || strstr(l, "native") || strstr(l, "opacity") ||
+           strstr(l, "render order") || strstr(l, "rror") || strstr(l, "not ") || strstr(l, "unknown");
+}
+
+void VideoManager::serviceAaSurface() {
+    if (sharesCarPlaySurface() || !window_ready_) return;
+    if (aa_surface_seen_ && aa_surface_logged_) return;
+    ++aa_surface_ticks_;
+    if (!aa_surface_seen_) {
+        if (aa_surface_ticks_ % 2) return;                    // every other 250 ms tick until it is there
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl get surface %d 2>&1", aaSurface());
+        FILE* p = popen(cmd, "r");
+        if (!p) return;
+        long long native = -1;
+        char line[256];
+        while (fgets(line, sizeof(line), p)) {
+            const char* k = strstr(line, "native surface:");
+            if (k) native = strtoll(k + 15, NULL, 10);
+        }
+        pclose(p);
+        if (native > 0 && native != 4294967295LL) {
+            aa_surface_seen_ = true;
+            printf("[VideoManager] LayerManager surface %d is there (native surface %lld, ~%u ms after our window '%s' "
+                   "posted)%s\n", aaSurface(), native, aa_surface_ticks_ * 250u, aaWindowId(),
+                   sink_.is_visible ? ": showing Android Auto on it now" : "");
+            if (sink_.is_visible) setVisible(true);           // the show before this found no surface
+        } else if (aa_surface_ticks_ == 40) {
+            printf("[VideoManager] WARNING: LayerManager surface %d still missing 10 s after the window was created: "
+                   "Android Auto cannot be shown. NBT_AA_SURFACE=1280 in nbt-aad.env = the shared CarPlay surface\n",
+                   aaSurface());
+        }
+        return;
+    }
+    // Proof for the car log, once: Android Auto shown and the decoder has sent frames for 2 s.
+    if (!sink_.is_visible || frames_in_gen_ < 120) return;
+    aa_surface_logged_ = true;
+    char cmd[200];
+    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl get surface %d 2>&1; "
+             "/opt/sys/bin/LayerManagerControl get layer 0x80000000 2>&1", aaSurface());
+    FILE* p = popen(cmd, "r");
+    if (!p) return;
+    char line[256];
+    while (fgets(line, sizeof(line), p)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (lmLineOfInterest(line)) printf("[VideoManager] LayerManager while Android Auto is shown:%s\n", line);
+    }
+    pclose(p);
 }
 
 int VideoManager::surface1280Visible() {
@@ -974,10 +1344,10 @@ bool VideoManager::sendMdevFormat(uint32_t width, uint32_t height, uint32_t fps)
     struct FormatPayload {
         uint32_t magic;    // 2
         uint32_t fourcc;   // 'H264' (0x48323634)
-        uint32_t width;    // coded stream width, not panel width
-        uint32_t height;   // coded stream height, including hidden margins
+        uint32_t width;    // coded stream width (the video canvas, not the panel)
+        uint32_t height;   // coded stream height, hidden rows included
         uint32_t depth;    // 16
-        uint32_t fps;      // selected Android Auto frame rate
+        uint32_t fps;      // the decoder rate (NBT_VID_FPS, default 60)
         uint32_t rsvd0;    // 0
         uint32_t rsvd1;    // 0
     } fmt;
@@ -1105,6 +1475,11 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
     // Non-blocking enqueue: network thread pushes frame and returns immediately!
     pthread_mutex_lock(&queue_mutex_);
     if (!accepting_) { pthread_mutex_unlock(&queue_mutex_); return false; }
+    if (wait_idr_) {
+        if (!looksLikeIdr(data, length)) { ++idr_dropped_; pthread_mutex_unlock(&queue_mutex_); return true; }
+        wait_idr_ = false;
+        printf("[VideoManager] keyframe after the decoder rebuild (%u frames without one dropped)\n", idr_dropped_);
+    }
     if (frame_queue_.size() >= 15) {
         bool dropped = false;
         size_t dropped_size = 0;
@@ -1176,7 +1551,7 @@ void VideoManager::workerLoop() {
                 // mdemux_process_packet; the format packet is our only observed trigger
                 // into that dispatcher, even when it is later reported unchanged.
                 bool ok = sendMdevSync() &&
-                          sendMdevFormat(nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps) &&
+                          sendMdevFormat((uint32_t)nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps) &&
                           sendMdevConfig(&item.data[0], item.data.size());
                 mdev_initialized_ = ok;
                 if (!ok) {
@@ -1184,7 +1559,7 @@ void VideoManager::workerLoop() {
                 }
             } else {
                 if (!mdev_initialized_) {
-                    bool ok = sendMdevSync() && sendMdevFormat(nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps);
+                    bool ok = sendMdevSync() && sendMdevFormat((uint32_t)nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps);
                     mdev_initialized_ = ok;
                     if (!ok) {
                         printf("[VideoManager] Warning: mdev format handshake failed; dropping frame until retry.\n");
@@ -1250,6 +1625,7 @@ void VideoManager::workerLoop() {
                 uint64_t elapsed_us = (done_us >= start_us) ? (done_us - start_us) : 0;
 
                 frame_count++;
+                if (ret == 0) ++frames_in_gen_;
                 if (ret != 0 || frame_count <= 35 || (frame_count % 30) == 0) {
                     printf("[VideoManager] mdev frame #%u END (%u bytes%s, raw=%u, cfg=%u, pts=%llu, elapsed=%llu us) -> MsgSendvs_r ret=%d (status: %s)\n",
                            frame_count, static_cast<unsigned int>(item.data.size()),

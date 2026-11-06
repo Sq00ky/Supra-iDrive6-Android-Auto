@@ -81,10 +81,16 @@
 // **Use** means anything you do with the software requiring one of your licenses.
 
 #include "nbt_env.hpp"
+#include "audio/config.hpp"
 #include "car_config.hpp"
 #include "screen_video.h"
-#include "audio_manager.hpp"
-#include "browser_audio.hpp"
+#include "audio/a2i_audio.hpp"
+#include "audio/backend.hpp"
+#include "audio/browser_audio.hpp"
+#include "volume.hpp"
+#include "volume_osd.hpp"
+#include "audio/bt_audio.hpp"
+#include "audio/mic_uplink.hpp"
 #include "video_manager.hpp"
 #include "license_text.hpp"
 #include "tcp_server.hpp"
@@ -95,12 +101,17 @@
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
 #include "touch_probe.hpp"
-#include "ccs_input.hpp"
+#include "aa_keys.hpp"
+#include "car/ccs_config.hpp"
+#include "car/ccs_input.hpp"
+#include "car/volume_input.hpp"
+#include "car/input_activity.hpp"
+#include "car/gps.hpp"
+#include "most/client.hpp"
+#include "most/trace.hpp"
 #include "crash_handler.hpp"
-#include "a2i_stream.hpp"
 #include "a2i_client.h"
-#include "voice_scenario.hpp"
-#include "bt_play.hpp"
+#include "audio/voice_scenario.hpp"
 #include "usb_log.hpp"
 #include "spp_rereg.hpp"
 #include "spp_link_policy.hpp"
@@ -139,6 +150,12 @@ static double upSec() {
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
+static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
+static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
+static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
+static nbt::car::InputActivity g_carInput;   // any car control the driver touched: a consumer of g_most
+static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
+static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -265,6 +282,27 @@ static void onDriveModeMsg(const char* s) {
            upSec(), name, was, v, g_dmShown ? " (still)" : "", g_dmShown || !delay ? "" : " after NBT_DRIVEMODE_DELAY_MS",
            driveModeShowMs());
 }
+// DSC / DTC button ("same as sport mode"): the app sends "dsc <n> <prev>" when CDS driving.DSCActive changes, so
+// iDrive's own DSC/DTC display gets the screen for the same fixed time as a driving-mode change and Android Auto
+// comes back by itself.
+static void onDscMsg(const char* s) {
+    int v = -1, prev = -1;
+    sscanf(s, "%d %d", &v, &prev);
+    if (!showDriveModeOn()) { printf("[DSC] %d (Show driving mode changes is off)\n", v); return; }
+    const uint32_t now = upMs();
+    const uint32_t until = now + (uint32_t)driveModeShowMs();
+    if (g_dmShown) {
+        g_dmPeekUntil = until ? until : 1;
+        printf("[DSC] [%9.3f] %d -> %d: iDrive keeps the screen longer for its DSC display\n", upSec(), prev, v);
+        return;
+    }
+    g_dmPeekFrom = now;
+    g_dmPeekUntil = until ? until : 1;
+    g_mainWake = 1;
+    printf("[DSC] [%9.3f] %d -> %d: iDrive gets the screen for %d ms for its DSC/DTC display\n",
+           upSec(), prev, v, driveModeShowMs());
+}
+
 static const char* const kPdcFile = "/dev/shmem/nbt-aad-pdc";
 // Starts at 0: the first main-loop tick writes the iDrive state file before it computes this, and a 1 here made
 // every daemon start report "Android Auto on screen" for one tick (app log: hold fired, then 'stepped aside: event
@@ -367,6 +405,7 @@ static void* ctlThread(void*) {
             g_dayNight = v;
         }
         else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
+        else if (!strncmp(buf, "dsc ", 4)) onDscMsg(buf + 4);
         else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] [%9.3f] 'quit' received.\n", upSec()); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
         else printf("[Ctl] unknown request '%s' ignored.\n", buf);
@@ -416,7 +455,8 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // /dev/shmem/nbt-aad-state, state = idle | connecting | connected, overlay = 1 while Android Auto is on screen and
 // the knob drives the phone (the plugin then ignores Force Stop / Restart: those presses can only be stray knob
 // input reaching the iDrive menu under the overlay), 3 = same, MENU / COM / MEDIA / NAV / MAP went to the phone in the last 3 s
-// (the plugin re-holds iDrive instead of treating MENU as a hard key), 2 = same, and BACK is being held (hold timer running): iDrive
+// (the plugin re-holds iDrive instead of treating MENU as a hard key), 4 = same, another car control in the last 3 s,
+// 5 = same, only the knob turned or was pushed in the last 3 s (v1.9.19), 2 = same, and BACK is being held (hold timer running): iDrive
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
@@ -427,7 +467,8 @@ static void writeUiState(const char* state, int overlay) {
     // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
     // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
     // tried to bind the control port itself.
-    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key).
+    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key, 4 car
+    // control, 5 knob turn / push only).
     // fscanf("%23s %d %d") still matches.
     char rec[32];
     int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d\n", state ? state : "idle", (int)getpid(), overlay);
@@ -453,165 +494,9 @@ static nbt::SessionOwner g_owner;               // which transport that session 
 static pthread_mutex_t g_connectMutex = PTHREAD_MUTEX_INITIALIZER;   // serializes startSession() (TCP and USB)
 static bool wirelessSessionActive() { return g_owner.get() == nbt::kTransportTcp; }
 static nbt::VideoManager* g_video = NULL;       // for the session callbacks (valid between init and teardown)
-static nbt::AudioManager* g_audio = NULL;       // same lifetime rule as g_video
-// NBT_AUDIO_MODE=browser: AA media + guidance + system audio mixed in the daemon and played through the car's browser
-// audio source (browser_audio.hpp). Same lifetime rule as g_video.
-static nbt::BrowserAudio* g_browser = NULL;
-static bool g_a2iAudio = false;                 // NBT_AUDIO_MODE=a2i (or NBT_AUDIO_BT=0): the staged AudioManager
-// Bluetooth audio mode (default again since v1.8.66; NBT_AUDIO_MODE=browser selects browser audio): AA audio stays on the phone's Bluetooth A2DP link; we only select the car's BT source.
-static bool g_btAudio = false;
-static nbt::AudioRoute g_btRoute;
-static uint32_t g_btSrc = 0x3a;                 // eSRC_A2DP (audioconn -l: ConnId 0xc7 AuxInBTAudio)
-static uint32_t g_btSink = 0x1;                 // eSNK_SPEAKERS
-// NBT_BT_CONN=<connId> (default 0xc7; 0 = old AudioManagement focus form `-b <src> <sink>`): request the car's
-// Bluetooth source through the ConnectionMaster (`audioconn -b <connId>`, BuildHighSyncConnection: the one call the
-// iDrive HMI makes when Bluetooth audio is picked, HmiMain3D RE 2026-10-29). CAR-VERIFIED (MINI F60, v1.8.35, 3 of 3
-// sessions): granted at once and music starts by itself, even from FM radio, where the focus form was refused for all
-// retries. `audioconn -l` lists eSRC_A2DP as ConnId 0xc7 (AuxInBTAudio srcNr 1) on the Supra and the MINI F60.
-static uint32_t g_btConn = 0xc7;
-static nbt::BtPlay g_btPlay;                    // NBT_BT_PLAY experiment: SourceActivity PLAY once the source is granted
-
-static void onBtGranted(void*) { g_btPlay.play("car granted the Bluetooth source"); }   // audioconn worker thread
-// NBT_BT_ROUTE_DELAY_MS (default 1500, 0 = at once): wait this long after the session starts before running
-// audioconn. A phone that says ByeBye right after the ServiceDiscovery and reconnects every ~3 s (tester bootloop log,
-// 2026-10-29) then never starts an audioconn at all: onSessionEnded() cancels the request while it waits.
-static int btRouteDelayMs() {
-    const char* e = getenv("NBT_BT_ROUTE_DELAY_MS");
-    if (!e || !*e) return 1500;
-    int v = atoi(e);
-    return v < 0 ? 0 : (v > 10000 ? 10000 : v);
-}
-static bool btRequestSource() {
-    if (g_btConn) return g_btRoute.build(g_btConn, &onBtGranted, NULL, btRouteDelayMs());
-    return g_btRoute.buildFocus(g_btSrc, g_btSink, &onBtGranted, NULL, btRouteDelayMs());
-}
-static void btReleaseSource() {
-    g_btPlay.stop("session ended");
-    if (g_btConn) g_btRoute.remove(g_btConn);
-    else g_btRoute.removeFocus(g_btSrc, g_btSink);
-}
-static void btDescribe(char* out, size_t n) {
-    if (g_btConn) snprintf(out, n, "connection 0x%x (ConnectionMaster)", g_btConn);
-    else snprintf(out, n, "source 0x%x -> sink 0x%x", g_btSrc, g_btSink);
-}
-
-// NBT_SPEECH=1 (Bluetooth audio mode only, OFF by default, test parked first): play Android Auto guidance / speech
-// (channel 8, 16 kHz mono) on an A2I playback endpoint. In BT mode ch 8 must stay in the ServiceDiscovery (the phone
-// needs >= 1 audio sink), so without this switch every spoken nav prompt is received, acked and dropped.
-//   NBT_SPEECH_EP     endpoint (default /input_stereo_AirPlayAlt, opened at start-up as in the stable Milestone 2)
-//   NBT_SPEECH_SRC    AM source requested with `audioconn -b <src> <sink>` while a prompt plays (default 0 = none
-//                     since v1.6.7: AM refuses 0xba anyway and each request touches AM while BT holds focus),
-//                     released with `-r` when the prompt ends
-//   NBT_SPEECH_SINK   AM sink (default 0x1, speakers)
-// Earlier A2I *write* experiments crashed the head unit; this uses only the factory prime/Start/GetBuffer/Out_Write
-// loop (car-verified for 20k+ writes), opens the endpoint once on its own thread and never closes it mid-run.
-static nbt::A2IPlaybackStream* g_speech = NULL;   // set by the open thread, then never changes
-static volatile bool g_speechReady = false;
-static nbt::PcmResampler g_speechRs;               // used on the session thread only
-static std::vector<uint8_t> g_speechBuf;
-static uint32_t g_speechSrc = 0;
-static uint32_t g_speechSink = 0x1;
-static bool g_speechRouted = false;
-static uint32_t g_speechFrames = 0;
-static uint32_t g_speechBytes = 0;
-static int g_speechPeak = 0;
-static uint32_t g_speechPrompts = 0;
-
-static bool speechEnabled() {
-    const char* e = getenv("NBT_SPEECH");
-    return e && strcmp(e, "1") == 0;
-}
-
-static void* speechOpenThread(void*) {
-    const char* ep = getenv("NBT_SPEECH_EP");
-    if (!ep || !*ep) ep = A2I_ENDPOINT_NAV_ALT;
-    // Ring holds ~12 s at 44.1 kHz stereo: the phone sends a prompt faster than real time (only max_unacked
-    // limits it) and the ring drops the OLDEST bytes when full, which would cut the start of a long prompt.
-    nbt::A2IPlaybackStream* s = new nbt::A2IPlaybackStream("Speech", 44100u * 4u * 12u);
-    uint32_t rates[2] = { A2I_SAMPLE_RATE_44K, A2I_SAMPLE_RATE_48K };
-    bool ok = false;
-    for (int i = 0; i < 2 && !ok; ++i) {
-        nbt::A2IStreamConfig cfg;
-        memset(&cfg, 0, sizeof(cfg));
-        cfg.endpoint          = ep;
-        cfg.fallback_endpoint = NULL;
-        cfg.sample_rate       = rates[i];
-        cfg.channels          = A2I_CHANNELS_STEREO;
-        cfg.buffer_size       = A2I_BUFFER_SIZE_STEREO;
-        cfg.cookie_primary    = A2I_COOKIE_LEGACY_PLAYBACK;
-        cfg.cookie_alternate  = A2I_COOKIE_FACTORY;
-        cfg.timeout_ms        = 2000;
-        ok = s->open(cfg);
-    }
-    if (!ok) {
-        printf("[Speech] could not open %s: spoken prompts stay off\n", ep);
-        delete s;
-        return NULL;
-    }
-    g_speechRs.configure(16000, 1, s->sampleRate(), s->channels());
-    if (!s->start(true)) {
-        printf("[Speech] playback worker did not start on %s: spoken prompts stay off\n", ep);
-        return NULL;   // keep the handle (no close mid-run), just never feed it
-    }
-    g_speech = s;
-    __sync_synchronize();   // resampler + pointer visible before the session thread sees ready
-    g_speechReady = true;
-    printf("[Speech] ready: %s %u Hz x%u, route %s 0x%x -> 0x%x\n", s->endpoint() ? s->endpoint() : ep,
-           s->sampleRate(), s->channels(), g_speechSrc ? "audioconn" : "off", g_speechSrc, g_speechSink);
-    return NULL;
-}
-
-static void speechInit() {
-    if (!g_btAudio || !speechEnabled()) {
-        printf("[Speech] spoken nav prompts: off%s\n", g_btAudio ? " (NBT_SPEECH=1 enables)" : "");
-        return;
-    }
-    g_speechSrc = (uint32_t)nbt::envHex("NBT_SPEECH_SRC", 0);
-    g_speechSink = (uint32_t)nbt::envHex("NBT_SPEECH_SINK", 0x1);
-    printf("[Speech] NBT_SPEECH=1: opening the speech endpoint in the background\n");
-    pthread_t t;
-    if (pthread_create(&t, NULL, &speechOpenThread, NULL) == 0) pthread_detach(t);
-    else printf("[Speech] could not start the open thread\n");
-}
-
-// Session thread: one ch 8 PCM frame (16 kHz mono s16le).
-static void speechFrame(const uint8_t* pcm, size_t len) {
-    if (!g_speechReady || !g_speech) return;
-    for (size_t i = 0; i + 1 < len; i += 2) {
-        int v = (int16_t)(pcm[i] | (pcm[i + 1] << 8));
-        if (v < 0) v = -v;
-        if (v > g_speechPeak) g_speechPeak = v;
-    }
-    ++g_speechFrames;
-    g_speechBytes += (uint32_t)len;
-    g_speechBuf.clear();
-    g_speechRs.processBytes(pcm, len, g_speechBuf);
-    if (!g_speechBuf.empty()) g_speech->write(&g_speechBuf[0], g_speechBuf.size());
-}
-
-// Session thread: ch 8 AV START / STOP indication.
-static void speechState(bool started) {
-    if (!g_speechReady || !g_speech) return;
-    if (started) {
-        ++g_speechPrompts;
-        g_speechFrames = 0;
-        g_speechBytes = 0;
-        g_speechPeak = 0;
-        g_speechRs.reset();
-        printf("[Speech] prompt #%u started\n", g_speechPrompts);
-        if (g_speechSrc && !g_speechRouted && g_btRoute.available())
-            g_speechRouted = g_btRoute.buildFocus(g_speechSrc, g_speechSink);
-    } else {
-        // No flush: the queued tail still plays out (the STOP arrives right after the last frame).
-        printf("[Speech] prompt #%u ended: %u frames, %u ms of audio, peak %d, endpoint writes %u underruns %u\n",
-               g_speechPrompts, g_speechFrames, g_speechBytes / 32u, g_speechPeak, g_speech->writes(),
-               g_speech->underruns());
-        if (g_speechRouted) {
-            g_btRoute.removeFocus(g_speechSrc, g_speechSink);
-            g_speechRouted = false;
-        }
-    }
-}
+// The audio mode (NBT_AUDIO_MODE=bt|browser|a2i, audio/backend.hpp): BtAudio, BrowserAudio or A2iAudio, picked once
+// at start-up. Same lifetime rule as g_video.
+static nbt::AudioBackend* g_audioBackend = NULL;
 
 // Prints the Wi-Fi clients the head unit currently knows on the AP subnet (ARP table), so a log
 // shows whether the phone actually joined the CarPlay network.
@@ -798,6 +683,7 @@ static bool cpLiveRetune() {
 
 static nbt::TcpServer* g_tcp = NULL;           // set once the listener runs (wireless recovery re-creates it)
 static nbt::UsbAccessory* g_usb = NULL;        // set while Android Auto over USB runs (NBT_USB=1)
+static const uint32_t kUsbByeWaitMs = 500;     // of the 3 s before the iDrive app sends SIGTERM after 'quit'
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
@@ -1227,97 +1113,24 @@ static void signalHandler(int sig) {
     g_running = 0;   // session is stopped from main() (joining a thread in a signal handler can hang)
 }
 
-// ---- Car microphone -> phone (Assistant / voice search), AA channel 14 ------------------------------------
-// The phone opens the mic with AVInputOpenRequest; the main loop then starts the factory echo-cancelled uplink
-// (A2I /output_mono_AirPlayUL, 16 kHz mono, the CarPlay Siri path) and the session streams it back. In
-// Bluetooth-audio mode the A2I playback pipeline stays closed, so the capture runs standalone. NBT_MIC=0 or
-// /opt/aa/mic.disable keeps the mic closed (the open request is still answered).
+// ---- Car microphone -> phone (Assistant / voice search), AA channel 14 (audio/mic_uplink.hpp) -------------------
 static void onMicRequest(bool open, void* user) {
     (void)user;
     pushSlot(g_micQ, &g_micN, open ? 1 : 2);
 }
 
-// Level meter (once per ~1 s of audio) and optional raw dump, to tell real speech from a silent / unrouted uplink:
-// NBT_MIC_DUMP=1 writes the first ~30 s of each run to /dev/shmem/nbt-aad-mic.raw (S16LE 16 kHz mono).
+// Echo-cancelled mic chunk (capture thread): to the AA mic channel, then the level meter / dump while the phone has
+// the mic open.
 static void onMicData(const uint8_t* pcm_data, size_t size, void* user_data) {
     (void)user_data;
     g_session.postMicData(pcm_data, size);   // echo-cancelled chunk -> AA mic channel (dropped unless open)
     if (!g_session.micOpen()) return;         // capture keeps running between Assistant requests: meter/dump only while open
-
-    static uint32_t acc_n = 0, acc_peak = 0, zero_chunks = 0, chunks = 0;
-    static double acc_sq = 0;
-    static FILE* dump = NULL;
-    static int dump_state = -1;              // -1 unknown, 0 off, 1 on, 2 full
-    static uint32_t dumped = 0;
-    const int16_t* s = reinterpret_cast<const int16_t*>(pcm_data);
-    size_t n = size / 2;
-    bool all_zero = true;
-    for (size_t i = 0; i < n; ++i) {
-        int v = s[i];
-        if (v) all_zero = false;
-        uint32_t a = (uint32_t)(v < 0 ? -v : v);
-        if (a > acc_peak) acc_peak = a;
-        acc_sq += (double)v * v;
-    }
-    acc_n += (uint32_t)n;
-    ++chunks;
-    if (all_zero) ++zero_chunks;
-    if (acc_n >= 16000) {
-        double rms = 0;
-        { double m = acc_sq / acc_n; double r = m > 0 ? m : 0; /* sqrt without libm dependency issues */
-          double x = r > 1 ? r : 1; for (int k = 0; k < 20; ++k) x = 0.5 * (x + r / x); rms = r > 0 ? x : 0; }
-        printf("[Mic] level: peak %u rms %d (of 32767), %u/%u chunks all-zero, chunk %u bytes\n",
-               acc_peak, (int)rms, zero_chunks, chunks, (unsigned)size);
-        acc_n = acc_peak = zero_chunks = chunks = 0;
-        acc_sq = 0;
-    }
-    if (dump_state < 0) dump_state = getenv("NBT_MIC_DUMP") ? 1 : 0;
-    if (dump_state == 1) {
-        if (!dump) dump = fopen("/dev/shmem/nbt-aad-mic.raw", "wb");
-        if (dump) {
-            fwrite(pcm_data, 1, size, dump);
-            dumped += (uint32_t)size;
-            if (dumped >= 30u * 32000u) { fclose(dump); dump = NULL; dump_state = 2; printf("[Mic] dump complete (/dev/shmem/nbt-aad-mic.raw)\n"); }
-            else fflush(dump);
-        }
-    }
-}
-
-// Default ON since v1.7.7 (car-verified nbt-aad-22-2-2: with it the Assistant's reply is heard).
-// NBT_BT_REFOCUS=0 / off / no / false disables.
-static bool btRefocus() {
-    return nbt::envFlag("NBT_BT_REFOCUS") != 0;   // unset stays on
-}
-
-static bool micEnabled() {
-    if (nbt::envFlag("NBT_MIC") == 0) return false;
-    return access("/opt/aa/mic.disable", F_OK) != 0;
-}
-
-static bool micStart(nbt::A2ICaptureStream& mic) {
-    if (mic.isRunning()) return true;
-    if (!mic.isOpen()) {
-        nbt::A2IStreamConfig cfg;
-        memset(&cfg, 0, sizeof(cfg));
-        cfg.endpoint          = A2I_ENDPOINT_MIC_UL;
-        cfg.fallback_endpoint = NULL;
-        cfg.sample_rate       = 16000;
-        cfg.channels          = A2I_CHANNELS_MONO;
-        cfg.buffer_size       = A2I_BUFFER_SIZE_MONO;
-        cfg.cookie_primary    = A2I_COOKIE_LEGACY_CAPTURE;
-        cfg.cookie_alternate  = A2I_COOKIE_FACTORY;
-        cfg.timeout_ms        = 2000;
-        if (!mic.open(cfg)) {
-            printf("[Mic] could not open %s\n", A2I_ENDPOINT_MIC_UL);
-            return false;
-        }
-    }
-    return mic.start(&onMicData, NULL);
+    nbt::micLevelMeter(pcm_data, size);
 }
 
 static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data) {
-    // Count phone video frames at the AA callback boundary, before queueing. Print one
-    // five-second average
+    // [VideoRate] (PR #66): phone video frames counted at the AA callback boundary, before queueing; one average every
+    // five seconds, next to what the phone was asked for (NBT_VID_FPS, default 30) and the decoder rate.
     struct VideoRateProbe {
         uint64_t frames;
         struct timespec window_start;
@@ -1335,8 +1148,9 @@ static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t n
         const double elapsed = (now.tv_sec - probe.window_start.tv_sec) +
                                (now.tv_nsec - probe.window_start.tv_nsec) / 1000000000.0;
         if (elapsed >= 5.0) {
-            printf("[VideoRate] phone frames=%llu in %.2f s (%.1f fps), requested=%u fps\n",
-                   (unsigned long long)probe.frames, elapsed, probe.frames / elapsed, nbt::videoFps());
+            printf("[VideoRate] phone frames=%llu in %.2f s (%.1f fps), requested=%u fps, decoder %u fps\n",
+                   (unsigned long long)probe.frames, elapsed, probe.frames / elapsed, nbt::videoRequestedFps(),
+                   nbt::videoDecoderFps());
             probe.frames = 0;
             probe.window_start = now;
         }
@@ -1358,22 +1172,32 @@ static void onCodecConfig(const uint8_t* config_data, size_t config_len, void* u
 
 static void onAudioFrame(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data) {
     (void)user_data;
-    if (g_browser) g_browser->onAaAudio(channel, pcm, pcm_len, pts);
-    else if (g_audio) g_audio->onAaAudio(channel, pcm, pcm_len);
-    else if (channel == 8) speechFrame(pcm, pcm_len);
+    if (g_audioBackend) g_audioBackend->onFrame(channel, pcm, pcm_len, pts);
 }
 
-static void onAudioState(uint8_t channel, bool started, void* user_data) {
+static void onAudioConsumed(uint8_t channel, size_t bytes, void* user_data) {
     (void)user_data;
-    if (g_browser) g_browser->onAaStreamState(channel, started);
-    else if (g_audio) g_audio->onAaStreamState(channel, started);
-    else if (channel == 8) speechState(started);
+    g_session.postAudioConsumed(channel, bytes);
+}
+
+static void onAudioUnderflow(uint8_t channel, void* user_data) {
+    (void)user_data;
+    g_session.postAudioUnderflow(channel);
+}
+
+static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data) {
+    (void)user_data;
+    if (g_audioBackend) g_audioBackend->onStreamState(channel, started, rate, channels);
 }
 
 static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
 static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
 static const double kShortSessionS = 15.0;
 static void onSessionEnded(void* user_data) {
+    nbt::UsbAccessory* usb = g_usb;
+    const nbt::AASession::Outcome outcome = g_session.outcome();
+    if (usb && g_owner.get() == nbt::kTransportUsb && outcome != nbt::AASession::kEstablished)
+        usb->noteSessionFailed(outcome == nbt::AASession::kStale);
     g_sessionActive = false;
     g_owner.set(nbt::kTransportNone);
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
@@ -1390,23 +1214,9 @@ static void onSessionEnded(void* user_data) {
     // Runs on the session thread (AASession::start() waits for it): drop stale frames and the
     // cached SPS/PPS. The overlay itself is handled by the main loop.
     if (g_video) g_video->endSession();
-    if (g_audio) g_audio->onSessionEnded();
-    if (g_browser) g_browser->onSessionEnded();   // mixer stopped, browser audio source released
+    // Browser: mixer stopped, source released. Bluetooth: queued audioconn requests dropped, NBT_BT_RELEASE.
+    if (g_audioBackend) g_audioBackend->onSessionEnded();
     g_kombiNav.onSessionEnded();   // the worker clears a cluster/HUD arrow
-    // Drop the Bluetooth-source request (and its retries) this session queued, so a phone that keeps reconnecting
-    // cannot stack audioconn processes until the head unit runs out of memory and resets (tester log 2026-10-29).
-    g_btRoute.cancelPending();
-    if (g_speechRouted) {   // session died mid-prompt: give the speech source back
-        g_btRoute.removeFocus(g_speechSrc, g_speechSink);
-        g_speechRouted = false;
-    }
-    if (g_speechReady && g_speech) g_speech->flush();
-    if (g_btAudio && getenv("NBT_BT_RELEASE") && strcmp(getenv("NBT_BT_RELEASE"), "1") == 0) {
-        char d[64];
-        btDescribe(d, sizeof(d));
-        printf("[BtAudio] session ended: releasing %s\n", d);
-        btReleaseSource();
-    }
 }
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
@@ -1445,12 +1255,7 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
         pthread_mutex_unlock(&g_connectMutex);
         return;
     }
-    if (g_btAudio) {
-        char d[64];
-        btDescribe(d, sizeof(d));
-        printf("[BtAudio] session started: requesting car Bluetooth audio %s\n", d);
-        if (!btRequestSource()) printf("[BtAudio] could not queue audioconn\n");
-    }
+    if (g_audioBackend) g_audioBackend->onSessionStarted();   // Bluetooth mode: request the car's BT source
     pthread_mutex_unlock(&g_connectMutex);
 }
 
@@ -1470,7 +1275,10 @@ static void* diagThread(void*) {
     int me = (int)getpid();
     printf("[Diag] --- LayerManager ---\n");
     fflush(stdout);
-    system("/opt/sys/bin/LayerManagerControl get surface 1280");
+    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl get surface %d", nbt::VideoManager::aaSurface());
+    system(cmd);                                                        // Android Auto's own surface (1282)
+    if (!nbt::VideoManager::sharesCarPlaySurface())
+        system("/opt/sys/bin/LayerManagerControl get surface 1280");   // the factory CarPlay's, read only
     system("/opt/sys/bin/LayerManagerControl get surface 256");
     system("/opt/sys/bin/LayerManagerControl get layer 0x80000000");
     system("/opt/sys/bin/LayerManagerControl get screen 0");
@@ -1502,6 +1310,108 @@ static void* diagThread(void*) {
     printf("[Diag] --- end ---\n");
     fflush(stdout);
     return NULL;
+}
+
+// ---- Volume OSD (NBT_VOL_OSD) ---------------------------------------------------------------------------
+// The AA-side gain stage is the only volume we can actually set (no A2I/amp gain call exists on this unit), so
+// the overlay and the gain belong together: every change goes through volumeApply().
+static nbt::VolumeOsd  g_volumeOsd;
+static nbt::BrowserAudio* g_browserAudio = NULL;
+
+// The level the car reports on FBlock 0x20 is the amplifier's own master volume, which already governs our Android Auto
+// output -- so by default the overlay only mirrors it. Re-applying the same curve on the AA mixer would attenuate twice.
+// NBT_VOL_GAIN=1 also drives the AA mixer (full -40..0 dB curve) for the case where the car's volume turns out not to
+// reach our stream; one flag, so that is decided on the car instead of guessed here.
+static bool volGainEnabled() {
+    static int v = -1;
+    if (v < 0) { const char* e = getenv("NBT_VOL_GAIN"); v = (e && *e) ? atoi(e) : 0; }
+    return v != 0;
+}
+
+static void volumeApply(int pct, bool setGain) {
+    const int p = nbt::volumeClampPct(pct);
+    if (setGain && volGainEnabled() && g_browserAudio) g_browserAudio->setMediaGain(nbt::volumePctToGain(p));
+    g_volumeOsd.setPct(p);
+    printf("[Volume] %d%% (%d dB)%s\n", p, nbt::volumePctToDb(p),
+           (setGain && volGainEnabled()) ? " [mixer]" : "");
+}
+
+// There is no demo sweep. The car's own volume arrives for real (AudioMaster 0x20/0x0C08, car-verified 2026-11-03) and
+// drives the pill; a synthetic sweep only ever fought the driver's input. NBT_VOL_DEMO is gone and ignored.
+
+// The pill reads the panel size from the projection window, so it is created once that window exists (lazily, here)
+// and again only if the projection window is replaced.
+static void* g_volOsdParent = NULL;
+static bool g_volOsdOn = false;
+// The volume pill is on by default (v1.9.13): NBT_VOL_OSD=0 turns it off. Since v1.9.18 it is LayerManager surface 1281
+// of its own (car-verified 2026-11-05, tools/osd1281probe), no longer the Android Auto picture's surface 1280, which is
+// what gave the black screen with only the pill, the reverse camera under Android Auto and the grey picture after the
+// decoder rebuild (v1.9.08-v1.9.17).
+static bool volOsdEnabled() {
+    const char* v = getenv("NBT_VOL_OSD");
+    if (!v || !*v) return true;
+    return !(v[0] == '0' && (v[1] == 0 || v[1] == ' '));
+}
+
+static uint32_t monoMs();
+// monoMs() of the last car control the driver touched (any controller key or turn, steering-wheel volume / voice, a car
+// volume change), from g_carInput / onCarVolume. Overlay 4 tells the iDrive app "iDrive just reacted to the driver";
+// overlay 1 when iDrive leaves the blank state means the car opened a screen of its own (camera, safety, warning).
+static volatile uint32_t g_carInputMs = 0;
+// A knob turn or push alone (overlay 5). iDrive does nothing with either on its blank Android Auto state, so the iDrive
+// app no longer takes them for the driver opening a screen: the safety button pressed 1.4 s after a push left Android
+// Auto over the safety menu (car 2026-11-05). Where iDrive's focus is elsewhere the app still counts them.
+static volatile uint32_t g_knobInputMs = 0;
+static bool knobOnlyInput(const char* what) { return what && (!strcmp(what, "ROTARY") || !strcmp(what, "PUSH")); }
+static void onCarInput(const char* what, void*) {
+    if (knobOnlyInput(what)) g_knobInputMs = monoMs() | 1u;
+    else g_carInputMs = monoMs() | 1u;
+    static uint32_t s_logged = 0;
+    if (monoMs() - s_logged > 2000u) { s_logged = monoMs(); printf("[Input] driver input: %s\n", what); }
+}
+
+// Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03, car/volume_level.hpp): mirror it on
+// the overlay. This is the value the amplifier actually applied, so the pill always matches what the driver hears.
+// From g_carVolume on the DSI callback thread.
+static void onCarVolume(int level, int max, void*) {
+    g_carInputMs = monoMs() | 1u;   // iDrive draws its own volume bar: that is the driver, not the car
+    volumeApply(nbt::car::VolumeLevel::percent(level, max), false);
+}
+
+static uint32_t g_idrWaitMs = 0;   // decoder rebuilt on the way back: waiting for the phone's keyframe since
+static unsigned g_idrAsks = 0;
+// Take the pill's surface out of the Android Auto layer's order first, then remove its window: the order never names a
+// surface whose window is gone.
+static void volOsdDown(nbt::VideoManager& vm) {
+    if (vm.overlaySurface()) {
+        vm.setOverlaySurface(0);
+        vm.applyOverlayOrder();
+    }
+    g_volumeOsd.stop();
+    g_volOsdOn = false;
+}
+// Surface 1281 cannot take the picture's surface, so there is no ordering against mm-renderer's window and no rebuild
+// with the decoder any more (v1.9.14-v1.9.17): one pill window per projection window, for the whole run.
+static void ensureVolOsd(nbt::VideoManager& vm) {
+    if (!volOsdEnabled() || !vm.hasWindow()) return;
+    void* w = (void*)vm.screenWindow();
+    if (w == g_volOsdParent) return;   // up, or already tried for this projection window
+    if (g_volOsdOn) volOsdDown(vm);
+    g_volOsdParent = w;
+    printf("[VolOsd] projection window up: creating the volume pill (LayerManager surface %d)\n",
+           nbt::VolumeOsd::kSurfaceId);
+    g_volOsdOn = g_volumeOsd.start(vm.screenContext(), vm.screenWindow());
+}
+// The pill's surface joins the Android Auto layer's render order (on top of 1280) once LayerManager made it. Only
+// VideoManager writes that order, and only from this thread, so a hide can never race a pill update.
+static void syncVolOsdSurface(nbt::VideoManager& vm) {
+    const int want = (g_volOsdOn && g_volumeOsd.surfaceReady() && !vm.overlayOrderFailed())
+                         ? nbt::VolumeOsd::kSurfaceId : 0;
+    if (want == vm.overlaySurface()) return;
+    vm.setOverlaySurface(want);
+    const bool now = vm.applyOverlayOrder();
+    printf("[VolOsd] pill surface %d %s the Android Auto layer%s\n", nbt::VolumeOsd::kSurfaceId,
+           want ? "added on top of 1280 in" : "taken out of", now ? "" : " (picture hidden: applied when it is shown)");
 }
 
 static void onTouchEvent(const nbt::TouchEventOut& ev, void* user) {
@@ -1550,13 +1460,27 @@ static const char* const kMenuIdriveManual = "/opt/aa/menu-idrive";
 static volatile uint32_t g_keyToPhoneMs = 0;   // monoMs() of the last MENU / COM / MEDIA / NAV / MAP press sent to the phone
 static bool menuOpensIdrive() { return access(kMenuIdriveFlag, F_OK) == 0 || access(kMenuIdriveManual, F_OK) == 0; }
 
-static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
+// The car's GPS fix (DSI callback thread, about 1 Hz) -> AA LOCATION sensor. Kept between sessions, age-checked at sending.
+static void onCarLocation(const nbt::LocationFix& fix, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarLocation(fix);
+}
+
+// The car's satellite count (DSI callback thread) -> AA GPS_SATELLITE sensor. The session sends it on its own timer.
+static void onCarSatellites(const nbt::SatelliteStatus& status, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarSatellites(status);
+}
+
+static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
     if (back_hold && !ev.down) {
         int st = g_backState;
         g_backState = 0;
         if (st == 0) return;   // the press went to iDrive (it owned the screen): no hold timer ran, nothing to report
+        if (ev.cancel) {       // the MOST link went away with BACK held: not a short press, so the phone gets nothing
+            printf("[Knob] BACK hold cancelled: MOST link lost\n");
+            return;
+        }
         printf("[Knob] BACK released after %u ms (%s)\n", (unsigned)(monoMs() - g_backDownMs),
                st == 2 ? "hold already fired" : g_inputToPhone ? "short press -> phone" : "short press, iDrive owns the screen");
         if (st == 1 && g_inputToPhone) {        // short press: deliver it now
@@ -1602,17 +1526,23 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
         }
         return;
     }
-    if (ev.kind == 2) s->postRelativeEvent(ev.keycode, ev.delta);
-    else {
+    if (ev.kind == 2) {
+        g_knobInputMs = monoMs() | 1u;            // a turn: overlay 5, iDrive does nothing with it on the blank state
+        s->postRelativeEvent(ev.keycode, ev.delta);
+    } else {
         // Every key that reaches the phone: iDrive got the same key and may have left the blank state (BACK pops its
         // history, which after a MENU / hard-key re-hold is the iDrive main menu, not our menu: car 2026-10-29 short
-        // BACK minimized Android Auto). Overlay 3 makes the iDrive app put it back instead of minimizing.
-        if (ev.down) g_keyToPhoneMs = monoMs() | 1u;
+        // BACK minimized Android Auto). Overlay 3 makes the iDrive app put it back instead of minimizing. Not the
+        // knob's push: on the blank state iDrive does nothing with it (overlay 5, g_knobInputMs).
+        if (ev.down) {
+            if (ev.keycode == nbt::AAK_DPAD_CENTER) g_knobInputMs = monoMs() | 1u;
+            else g_keyToPhoneMs = monoMs() | 1u;
+        }
         s->postKeyEvent(ev.keycode, ev.down != 0);
     }
 }
 
-#define NBT_AAD_BUILD "v1.8.80-wfdname"
+#define NBT_AAD_BUILD "v1.9.29-pr66"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1783,58 +1713,67 @@ int main(int argc, char* argv[]) {
     nbt::VideoManager video;
     if (!video.init((uint32_t)car.screenW,
                     (uint32_t)car.screenH,
-                    nbt::videoFps())) {
+                    nbt::videoDecoderFps())) {
         printf("[Main] Warning: Video initialization encountered an issue.\n");
     }
     g_video = &video;
 
-    // 2. Initialize Audio Pipeline (A2I Media + Nav + Echo-Cancelled Mic)
-    nbt::AudioManager audio;
+    // 2. Initialize the audio mode (audio/backend.hpp): the only place main depends on which one it is.
+    nbt::A2iAudio a2i;
     nbt::BrowserAudio browser;
+    nbt::BtAudio bt;
     const nbt::AudioMode audio_mode = nbt::audioMode();
     printf("[Main] audio mode: %s (NBT_AUDIO_MODE=bt|browser|a2i)\n", nbt::audioModeName(audio_mode));
-    g_btAudio = (audio_mode == nbt::AUDIO_MODE_BT);
-    g_a2iAudio = (audio_mode == nbt::AUDIO_MODE_A2I);
     if (audio_mode == nbt::AUDIO_MODE_BROWSER) {
         // Media sink (ch 9) and GUIDANCE sink (ch 8) stay in the ServiceDiscovery and a SYSTEM_AUDIO sink (ch 16) is
         // added, so the phone sends all three streams here instead of to A2DP. The A2I pipeline is not opened; the
         // mic runs standalone like in Bluetooth mode.
-        if (!browser.init()) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
-        g_browser = &browser;
-        g_audio = NULL;
-    } else if (g_btAudio) {
-        g_btSrc = (uint32_t)nbt::envHex("NBT_BT_SRC", 0x3a);
-        g_btSink = (uint32_t)nbt::envHex("NBT_BT_SINK", 0x1);
-        printf("[BtAudio] NBT_AUDIO_BT on: AA media sink left out of the ServiceDiscovery (NBT_SDR_DROP=%s),\n"
-               "[BtAudio] phone audio stays on Bluetooth A2DP; A2I pipeline not opened. Source 0x%x -> sink 0x%x.\n",
-               getenv("NBT_SDR_DROP") ? getenv("NBT_SDR_DROP") : "9", g_btSrc, g_btSink);
-        if (!g_btRoute.configure()) printf("[BtAudio] audioconn not found: select Bluetooth audio in iDrive manually.\n");
-        g_btConn = (uint32_t)nbt::envHex("NBT_BT_CONN", 0xc7);
-        if (g_btConn)
-            printf("[BtAudio] Bluetooth source via ConnectionMaster `audioconn -b 0x%x` (NBT_BT_CONN=0: focus form)\n",
-                   g_btConn);
-        else
-            printf("[BtAudio] NBT_BT_CONN=0: Bluetooth source via AudioManagement focus `audioconn -b 0x%x 0x%x`\n",
-                   g_btSrc, g_btSink);
-        g_btPlay.init();
-        g_audio = NULL;
-        speechInit();
+        const nbt::BrowserConfig browser_cfg = nbt::readBrowserConfig();   // audio/config.hpp
+        if (!browser.init(browser_cfg)) printf("[Browser] WARNING: the libasound shim is missing: AA audio will be silent\n");
+        // Deferred acks (NBT_AA_DEFER_ACKS, default on): an AA audio frame is acked once the mixer has taken it, so
+        // the phone is paced by the car's clock instead of running ahead on its own.
+        const bool defer = browser_cfg.defer_acks;
+        if (defer) {
+            browser.setConsumedCallback(&onAudioConsumed, NULL);
+            browser.setAckWindow(nbt::AudioAcks::window());   // the drift loop's target must cover it
+        }
+        g_session.setDeferredAudioAcks(defer);
+        printf("[Browser] audio acks: %s (NBT_AA_DEFER_ACKS)\n", defer ? "once played (deferred)" : "on arrival");
+        // Underflow reports (NBT_AA_UNDERFLOW_REPORT, default on): tell the phone when a stream ran dry (0x800b).
+        const bool underflow = browser_cfg.underflow_reports;
+        if (underflow) browser.setUnderflowCallback(&onAudioUnderflow, NULL);
+        g_session.setUnderflowReports(underflow);
+        printf("[Browser] underflow reports to the phone: %s (NBT_AA_UNDERFLOW_REPORT)\n", underflow ? "on" : "off");
+        g_browserAudio = &browser;
+        g_audioBackend = &browser;
+    } else if (audio_mode == nbt::AUDIO_MODE_BT) {
+        bt.init(nbt::readBtConfig());   // the car's Bluetooth source, NBT_BT_PLAY, NBT_SPEECH
+        g_audioBackend = &bt;
     } else {
-        if (!audio.init()) {
+        if (!a2i.init()) {
             printf("[Main] Warning: Audio initialization encountered an issue.\n");
         }
-        g_audio = &audio;
+        g_audioBackend = &a2i;
     }
 
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
-    //    src/ccs_input.cpp (started below); iDrive keeps receiving every knob event itself.
+    //    g_most and g_ccs (started below); iDrive keeps receiving every knob event itself.
+
+    // 3b. Volume overlay (NBT_VOL_OSD=1). Off by default: it creates an extra Screen window, so it is opt-in until the
+    //     compositing is confirmed on the car. It mirrors the car's own volume (AudioMaster 0x20/0x0C08); there is no
+    //     synthetic sweep and no env var for one.
+    if (volOsdEnabled()) {
+        printf("[VolOsd] will attach to the Android Auto window as a child when a phone connects\n");
+    } else {
+        printf("[VolOsd] off (NBT_VOL_OSD not set): the car's volume is decoded but nothing is drawn\n");
+    }
 
     // Microphone upload is not wired into AA yet; leave callback unset so the
     // A2I uplink reader does not flood slog while debugging video bring-up.
 
     // Start all subsystems
     video.start();
-    if (g_a2iAudio) audio.start();
+    g_audioBackend->start();   // A2I mode: the playback workers
 
     // 4. Start Wireless TCP Server on the stock Android Auto port 5277 (override: NBT_AA_PORT)
     {
@@ -1887,11 +1826,31 @@ int main(int argc, char* argv[]) {
     }
 
     if (nbt::knobEnabled()) {
-        if (!nbt::startCcsInput(&onKnobEvent, &g_session))
+        if (!g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session))
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
     }
+    // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
+    if (!g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL))
+        printf("[Main] driver input tracking failed to start: the iDrive app treats every iDrive screen as the car's.\n");
+    // The car's volume is followed whether or not the knob is: it drives the overlay, not the phone.
+    if (!g_carVolume.attach(g_most, &onCarVolume, NULL))
+        printf("[Main] car volume input failed to start.\n");
+    if (!nbt::carGpsEnabled())
+        printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
+    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &g_session))
+        printf("[Main] car GPS failed to start.\n");
+    // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
+    // logger for everything it sees now, so they turn that on.
+    const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;
+    if (ccsLogCompat && nbt::envFlag("NBT_MOST_LOG") != 1)
+        printf("[Main] NBT_CCS_DEBUG / NBT_CCS_ALL are replaced by NBT_MOST_LOG=1: turning that on.\n");
+    if ((nbt::envFlag("NBT_MOST_LOG") == 1 || ccsLogCompat) && !g_mostTrace.attach(g_most))
+        printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
+    g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
+    if (!g_most.start("NBTAAD_MOST"))
+        printf("[Main] MOST client failed to start: knob/keys and car GPS disabled.\n");
 
     if (nbt::wirelessEnabled()) {
         pthread_t wt;
@@ -1944,12 +1903,12 @@ int main(int argc, char* argv[]) {
     int reassert_ticks = -1;     // >= 0: ticks since the overlay came back up from the iDrive entry / park / reverse
     int active_ticks = 0;
     bool diag_done = false;
-    const bool mic_on = micEnabled();
-    nbt::A2ICaptureStream mic("mic");
+    const bool mic_on = nbt::micEnabled();
+    nbt::MicUplink mic(&onMicData, NULL);   // the standalone uplink (every mode but A2I, which has its own)
     bool mic_live = false;
     unsigned log_sync_ticks = 0;
     printf("[Mic] car microphone for the Assistant: %s\n", mic_on ? "on" : "off (NBT_MIC=0 or /opt/aa/mic.disable)");
-    if (g_audio) g_audio->setMicCallback(&onMicData, NULL);
+    g_audioBackend->setMicCallback(&onMicData, NULL);
     nbt::VoiceScenario voice;   // default on (NBT_VOICE_SCENARIO=0 disables): AudioMatrix mic scenario while the phone has the mic open
     if (mic_on) voice.init();
     const char* ui_state = "";
@@ -1960,10 +1919,16 @@ int main(int argc, char* argv[]) {
     // context first (prepareForSession), so a quick reconnect is safe too. Only once the context exists.
     int cp_idle_ticks = 0;
     unsigned cp_live_ticks = 0;
+    int cp_1280_last = -1;       // surface 1280's visibility at the last CarPlay check while Android Auto was minimized
+    uint32_t most_health_ms = monoMs();
     while (g_running) {
         for (int w = 0; w < 5 && !g_mainWake && g_running && !driveModePeekDue(); ++w)
             usleep(50000);   // 250 ms tick, cut short on a wake or when a driving-mode step-aside is due
         g_mainWake = 0;
+        if (monoMs() - most_health_ms >= 60000u) {
+            most_health_ms = monoMs();
+            g_most.logHealth();
+        }
         bool act = g_session.isActive();
         if (act || g_sessionActive) cp_idle_ticks = 0;
         else if (++cp_idle_ticks == 10 && nbt::VideoManager::cpHandoff()) video.retuneForCarPlay();
@@ -1980,7 +1945,14 @@ int main(int argc, char* argv[]) {
             uint32_t mp = g_keyToPhoneMs;
             bool menuRecent = mp && (uint32_t)(monoMs() - mp) < 3000u;   // a hard key went to the phone
             if (mp && !menuRecent) g_keyToPhoneMs = 0;
-            int ov = g_inputToPhone ? (g_backState == 1 ? 2 : (menuRecent ? 3 : 1)) : 0;
+            uint32_t ci = g_carInputMs;
+            bool inputRecent = ci && (uint32_t)(monoMs() - ci) < 3000u;   // the driver touched a car control
+            if (ci && !inputRecent) g_carInputMs = 0;
+            uint32_t ki = g_knobInputMs;
+            bool knobRecent = ki && (uint32_t)(monoMs() - ki) < 3000u;    // only the knob turned / pushed
+            if (ki && !knobRecent) g_knobInputMs = 0;
+            int ov = g_inputToPhone
+                         ? (g_backState == 1 ? 2 : (menuRecent ? 3 : (inputRecent ? 4 : (knobRecent ? 5 : 1)))) : 0;
             if (strcmp(st, ui_state) != 0 || ov != ui_overlay) {
                 writeUiState(st, ov);
                 if (strcmp(st, ui_state) != 0) printf("[UiState] iDrive menu entry: %s\n", st);
@@ -1997,34 +1969,20 @@ int main(int argc, char* argv[]) {
         // Scenario first: the AudioMatrix routes the processed car mic into the AirPlay uplink our capture reads.
         if (mr == 1 && mic_on && act) voice.activate("phone opened the mic");
         else if (mr == 2) voice.deactivate("phone closed the mic");
-        // Default on (NBT_BT_REFOCUS=0 disables): the Assistant pauses the music before it listens, so its reply restarts a
-        // suspended A2DP stream. Re-request the car's BT audio source when the phone closes the mic, in case the
-        // car does not pick the restarted stream up on its own.
-        // Browser mode: the voice scenario may have moved the car off the browser source; ask for it again.
-        if (mr == 2 && act && g_browser) g_browser->refocus("mic closed");
-        if (mr == 2 && act && g_btAudio && btRefocus()) {
-            char d[64];
-            btDescribe(d, sizeof(d));
-            printf("[BtAudio] mic closed: re-requesting car Bluetooth audio %s for the reply\n", d);
-            btRequestSource();
-        }
-        // Assistant reply loudness (quiet next to music): snapshot the car's audio connections while it listens and
-        // while it replies, to see whether the car ducks the Bluetooth source during voice. Read-only, first 3 turns.
-        static int s_snaps = 0;
-        if ((mr == 1 || mr == 2) && act && g_btAudio && s_snaps < 6) {
-            ++s_snaps;
-            g_btRoute.listConnections(mr == 1 ? "Assistant listening" : "Assistant replying", mr == 1 ? 1000 : 2500);
-        }
+        // Bluetooth: re-request the car's BT source for the reply (NBT_BT_REFOCUS) and snapshot the car's audio
+        // connections. Browser: ask for the browser source again in case the voice scenario moved the car off it.
+        if (mr == 1 && act) g_audioBackend->onMicOpened();
+        if (mr == 2 && act) g_audioBackend->onMicClosed();
         if (!act && voice.active()) voice.deactivate("session ended");
         if (mr == 1 && mic_on && act && !mic_live) {
-            bool ok = g_audio ? g_audio->startMic() : micStart(mic);
+            bool ok = g_audioBackend->startMic(mic);
             printf("[Mic] phone opened the mic: capture %s (kept open until the session ends)\n", ok ? "started" : "FAILED");
             mic_live = ok;
         } else if (mic_ev) {
             printf("[Mic] phone %s the mic (capture %s)\n", mr == 1 ? "opened" : "closed", mic_live ? "running" : "not running");
         }
         if (mic_live && !act) {
-            if (g_audio) g_audio->stopMic(); else mic.stop();
+            g_audioBackend->stopMic(mic);
             printf("[Mic] capture stopped (session ended)\n");
             mic_live = false;
         }
@@ -2108,9 +2066,17 @@ int main(int argc, char* argv[]) {
         // stays connected, MINI tester 2026-10-29): CarPlay plays through our decoder context, so without its factory
         // settings it opens zoomed (the hand-off retune used to run only after the AA session ended). While Android
         // Auto is minimized we keep surface 1280 hidden; when it turns visible anyway, iDrive is showing CarPlay on it.
+        // On Android Auto's own surface (v1.9.20) we never hide 1280, and iDrive may leave it visible after a CarPlay
+        // session: only a change from hidden to visible while Android Auto is minimized counts there.
         // NBT_CP_LIVE_RETUNE=0 disables. Not car-verified.
-        if (act && !overlay_on && cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 &&
-            !video.decoderInCarPlayMode() && nbt::VideoManager::surface1280Visible() == 1) {
+        bool cp_shows = false;
+        if (overlay_on || !act) cp_1280_last = -1;
+        else if (cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 && !video.decoderInCarPlayMode()) {
+            int v = nbt::VideoManager::surface1280Visible();
+            cp_shows = v == 1 && (nbt::VideoManager::sharesCarPlaySurface() || cp_1280_last == 0);
+            cp_1280_last = v;
+        }
+        if (cp_shows) {
             printf("[Main] CarPlay took the screen while Android Auto is still connected: giving the decoder CarPlay's "
                    "settings (the Android Auto entry brings Android Auto back)\n");
             g_userExit = 1;
@@ -2127,16 +2093,44 @@ int main(int argc, char* argv[]) {
                                                                  : "driving-mode display time over: restoring Android Auto");
             was_dm_peek = dm_peek;
         }
+        ensureVolOsd(video);   // the pill reads the panel size from the projection window
+        syncVolOsdSurface(video);
+        video.pollScreenEvents();   // mm-renderer's window joining our group (logged; used by NBT_MMR_WIN_HIDE=1)
+        video.serviceAaSurface();   // Android Auto's own LayerManager surface: shown once LayerManager has made it
+        // Decoder rebuilt on the way back: frames are held until the phone's keyframe. None within 2 s: cycle the video
+        // focus (UNFOCUSED, FOCUSED a tick later), twice; after 6 s pass frames on rather than stay black.
+        if (g_idrWaitMs) {
+            uint32_t w = monoMs() - g_idrWaitMs;
+            if (!video.waitingForKeyframe()) {
+                printf("[Main] picture back after the decoder rebuild (%u ms)\n", w);
+                g_idrWaitMs = 0;
+            } else if (!act || w >= 6000u) {
+                video.releaseKeyframeWait();
+                g_idrWaitMs = 0;
+            } else if (g_idrAsks < 4 && w >= (uint32_t)(2000u + 2000u * (g_idrAsks / 2) + 500u * (g_idrAsks & 1))) {
+                // off 2.0 s, on 2.5 s, off 4.0 s, on 4.5 s: always back on FOCUSED before the 6 s release
+                bool focus = (g_idrAsks & 1) != 0;
+                if (!focus) printf("[Main] no keyframe %u ms after the decoder rebuild: asking the phone again (video focus off/on)\n", w);
+                g_session.postVideoFocus(focus);
+                ++g_idrAsks;
+            }
+        }
         bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !dm_peek;
-        if (want && act && !overlay_on && video.decoderInCarPlayMode()) {
-            printf("[Main] back to Android Auto after CarPlay: rebuilding the decoder context\n");
+        if (want && act && !overlay_on && (video.decoderInCarPlayMode() || video.decoderParked())) {
+            printf("[Main] back to Android Auto after %s: rebuilding the decoder context\n",
+                   video.decoderParked() ? "iDrive (overlay had surface 1280)" : "CarPlay");
+            if (video.decoderParked()) { g_idrWaitMs = monoMs() | 1u; g_idrAsks = 0; }
             video.prepareForSession();
             g_session.postVideoFocus(true);
         }
         g_inputToPhone = (want && act) ? 1 : 0;
         nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen
         if (want != overlay_on || (force_show && want)) {
+            // The pill's surface 1281 leaves with the picture (the hide order holds neither), so the decoder stays
+            // open: no close/rebuild, no keyframe wait, no grey picture (v1.9.15-v1.9.17 needed those only because the
+            // pill was surface 1280). setShown: no pill drawn while iDrive has the screen.
             video.setVisible(want);
+            g_volumeOsd.setShown(want);
             overlay_on = want;
             reassert_ticks = want ? 0 : -1;
         }
@@ -2189,26 +2183,32 @@ int main(int argc, char* argv[]) {
     const double t0 = upSec();
     printf("[Main] [%9.3f] Shutdown requested, stopping subsystems...\n", t0);
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
-    g_btRoute.cancelPending(); // no queued audioconn starts while we tear down
+    g_audioBackend->cancelPending();   // no queued audioconn starts while we tear down
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block
+    g_volumeOsd.setShown(false);
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
-    if (mic_live) { if (g_audio) g_audio->stopMic(); else mic.stop(); }
+    if (mic_live) g_audioBackend->stopMic(mic);
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
     g_kombiNav.stop();              // clears a cluster/HUD arrow (one quick attempt)
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
     printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
+    // Before usb.stop(), which takes the link away. A phone that isn't told keeps streaming into the void and ignores
+    // the next daemon's session. Wireless phones just reconnect, so they are not told to quit.
+    if (g_owner.get() == nbt::kTransportUsb) {
+        const bool answered = g_session.byeAndWait(kUsbByeWaitMs);
+        printf("[Main] [+%.2f s] USB session: %s\n", upSec() - t0,
+               answered ? "ended by the phone" : "no answer to the ByeByeRequest");
+    }
     g_usb = NULL;              // the wireless thread stops asking it
     usb.stop();                // no new USB session either; ends the USB bridge (and with it a USB session)
     printf("[Main] [+%.2f s] USB accessory stopped\n", upSec() - t0);
     g_session.stop();
     printf("[Main] [+%.2f s] session stopped\n", upSec() - t0);
     g_video = NULL;
-    g_audio = NULL;
-    g_browser = NULL;
-    if (g_a2iAudio) audio.stop();
-    browser.stop();
-    if (g_speechReady && g_speech) g_speech->stop();
+    nbt::AudioBackend* audio_backend = g_audioBackend;
+    g_audioBackend = NULL;
+    audio_backend->stop();
     video.stop();
     printf("[Main] [+%.2f s] video stopped\n", upSec() - t0);
 

@@ -9,6 +9,9 @@
 #include <map>
 #include <pthread.h>
 #include "aa_cryptor.hpp"
+#include "aa_sensor_msg.hpp"
+#include "audio/audio_acks.hpp"
+#include "sdr_builder.hpp"
 #include "touch_types.hpp"
 
 namespace nbt {
@@ -18,7 +21,9 @@ typedef void (*VideoFrameCallback)(uint32_t frame_index, const uint8_t* nal_data
 typedef void (*CodecConfigCallback)(const uint8_t* config_data, size_t config_len, void* user_data);
 // Android Auto PCM (ch 8 speech / ch 9 media / ch 16 system audio, message 0x0000 = 8-byte PTS + PCM) and stream state.
 typedef void (*AudioFrameCallback)(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data);
-typedef void (*AudioStateCallback)(uint8_t channel, bool started, void* user_data);
+// started: rate / channels = the AudioConfig the phone chose for this stream (START_INDICATION configuration_index
+// looked up in what our SDR offered), 0 / 0 when it gave no usable index. Stop: 0 / 0.
+typedef void (*AudioStateCallback)(uint8_t channel, bool started, uint32_t rate, uint32_t channels, void* user_data);
 // Phone asked for video focus (VideoFocusRequest 0x8007 on the video channel): projected=false is the
 // "exit to car" icon (focus_mode UNFOCUSED/NATIVE), projected=true asks to come back. reason = focus_reason.
 typedef void (*VideoFocusCallback)(bool projected, uint32_t reason, void* user_data);
@@ -44,6 +49,17 @@ public:
     void setMicRequestCallback(MicRequestCallback cb, void* user_data = NULL);
     void setNavStatusCallback(NavStatusCallback cb, void* user_data = NULL);
     bool isActive() const { return isRunning(); }   // true from start() until the session ended or stop()
+    // How the phone behaved in the session. Written by the session thread: read it in the session-ended callback.
+    enum Outcome {
+        kEstablished,   // a frame from the phone was decrypted
+        kNoAnswer,      // nothing decrypted, and no encrypted frame either: silent, or the handshake never finished
+        kStale          // only encrypted frames we can't decrypt: the phone is still in an earlier session
+    };
+    Outcome outcome() const { return decrypted_any_ ? kEstablished : undecrypted_ ? kStale : kNoAnswer; }
+    // The daemon is stopping: asks the phone to end the session (ByeByeRequest, sent by the session thread) and waits
+    // up to wait_ms for its answer, which ends the session. true: the session has ended. Thread-safe. Call it while
+    // the connection is still up. Before the TLS handshake has finished nothing can be sent, and it just waits.
+    bool byeAndWait(uint32_t wait_ms);
     // Touch forwarding (default on, NBT_TOUCH_FWD=0 disables): thread-safe, called from the touch thread.
     // Events are queued and sent by the session thread.
     void postTouchEvent(const TouchEventOut& ev);
@@ -58,10 +74,31 @@ public:
     // sent to the phone as a NIGHT_MODE sensor event once it has started that sensor. NBT_NIGHT_MODE=0/1 overrides.
     // Thread-safe.
     void postNightMode(bool night);
+    // The newest position, about once a second: sent to the phone as a LOCATION (sensor 1) event once it has started that
+    // sensor, unless older than kLocationMaxAgeMs by then. Thread-safe.
+    void postCarLocation(const LocationFix& fix);
+    // The newest satellite count. The session sends it as a GPS_SATELLITE (sensor 21) event about once a second once the
+    // phone has started that sensor, whether or not anything was posted: with nothing recent the count is 0. Thread-safe.
+    void postCarSatellites(const SatelliteStatus& status);
     // Car microphone PCM (16 kHz mono S16LE) for the phone. Thread-safe (capture thread); queued and sent on
     // ch 14 by the session thread while the phone has the mic open, dropped otherwise.
     void postMicData(const uint8_t* pcm, size_t len);
     bool micOpen();
+
+    // Deferred audio acks (browser audio mode; audio/audio_acks.hpp). On: a PCM frame on ch 8 / 9 / 16 is acked once
+    // the consumer reports its bytes taken (postAudioConsumed), or after NBT_AA_ACK_FORCE_MS (default 1000) unacked.
+    // Off: acked on arrival (the consumer cannot report). Set before start(); applies from the next session. The ack
+    // window audio sinks get is AudioAcks::window() (NBT_AA_MAX_UNACKED).
+    void setDeferredAudioAcks(bool on);
+    // The audio consumer took `bytes` of `channel`'s PCM, oldest first (played, or dropped). Thread-safe (mixer thread);
+    // the acks go out from the session thread, woken through the wake pipe.
+    void postAudioConsumed(uint8_t channel, size_t bytes);
+
+    // Underflow reports (browser audio mode): AudioUnderflowNotification (0x800b) to the phone when the consumer ran
+    // dry on a started stream, as Google's head unit does. Set before start(). postAudioUnderflow is thread-safe
+    // (mixer thread); the message goes out from the session thread.
+    void setUnderflowReports(bool on);
+    void postAudioUnderflow(uint8_t channel);
 
 private:
     static void* sessionThreadStub(void* arg);
@@ -75,8 +112,12 @@ private:
     bool sendChannelOpenRequest(uint8_t channel_id);
     bool sendAvSetupResponse(uint8_t channel);
     bool sendVideoFocusIndication(uint8_t channel, bool focused = true, bool unrequested = false);
-    bool sendAvMediaAck(uint8_t channel, uint32_t count);
+    // One frame acked. rx_wall_ns != 0: also its arrival time (Ack field 3, wall clock in ns), as the DHU's audio
+    // sinks send it; 0 = none (video).
+    bool sendAvMediaAck(uint8_t channel, uint64_t rx_wall_ns = 0);
     bool sendAudioFocusResponse(uint8_t focus_state);
+    bool sendByeRequest();
+    bool pending_bye_;                             // guarded by touch_mutex_: send a ByeByeRequest on next drain
     bool readExact(uint8_t* buffer, size_t length);
     static uint32_t rxTimeoutMs();
     bool isRunning() const;
@@ -94,6 +135,18 @@ private:
     int night_state_;                              // guarded by touch_mutex_: -1 unknown, 0 day, 1 night (car)
     bool night_started_;                           // guarded by touch_mutex_: phone started sensor 10 this session
     bool pending_night_;                           // guarded by touch_mutex_: send a NIGHT_MODE event on next drain
+    LocationFix car_fix_;                          // guarded by touch_mutex_: latest position
+    bool have_fix_;                                // guarded by touch_mutex_: car_fix_ is set (kept across sessions, age-checked)
+    bool location_started_;                        // guarded by touch_mutex_: phone started sensor 1 this session
+    bool pending_location_;                        // guarded by touch_mutex_: send a LOCATION event on next drain
+    uint32_t location_sent_;                       // session thread: LOCATION events this session
+    SatelliteStatus car_satellites_;               // guarded by touch_mutex_: latest count
+    bool have_satellites_;                         // guarded by touch_mutex_: car_satellites_ is set (kept across sessions, age-checked)
+    bool satellites_started_;                      // session thread: phone started sensor 21 this session
+    uint32_t satellites_sent_;                     // session thread: GPS_SATELLITE events this session
+    uint32_t satellites_last_ms_;                  // session thread: when the last one went out
+    uint32_t satellites_last_used_;                // session thread: the count it carried
+    void drainSatellites();                        // session thread: send GPS_SATELLITE when one is due
     VideoFocusCallback focus_cb_;
     void* focus_user_data_;
     MicRequestCallback mic_cb_;
@@ -106,7 +159,7 @@ private:
     bool sendMicFrame(const std::vector<uint8_t>& pcm);   // session thread only
     bool sendMicOpenResponse(uint8_t channel);            // session thread only
     bool sendBindingResponse(uint8_t channel);
-    // Sensor channel (ch 1): answer SensorStartRequest and publish night mode / driving status.
+    // Sensor channel (ch 1): answer SensorStartRequest and publish night mode / driving status / location / satellites.
     bool sendSensorStartResponse(uint8_t channel, bool ok);
     bool sendSensorEvent(uint32_t sensor_type);
     std::vector<TouchEventOut> touch_queue_;
@@ -134,8 +187,21 @@ private:
     void* audio_user_data_;
     AudioStateCallback audio_state_cb_;
     void* audio_state_user_data_;
-    uint32_t audio_frames_[3];   // [0] = ch 8 speech, [1] = ch 9 media, [2] = ch 16 system (session thread only)
+    uint32_t audio_frames_[3];   // per AudioStream (audio/channels.hpp: media, guidance, system); session thread only
+
+    uint16_t aa_minor_;              // protocol minor version this session asked for (NBT_AA_MINOR, default 6)
+
+    // Deferred audio acks and underflow reports (audio/audio_acks.hpp): their state lives in acks_ (thread-safe); the
+    // session thread records frames into it and sends what it releases.
+    AudioAcks acks_;
+    void drainAcks();                // session thread: send the acks acks_ releases
+    void drainUnderflows();          // session thread: send the underflow reports posted since the last drain
+    void wakeSessionThread();        // a byte down the wake pipe (consumer thread)
+    static bool sendAckThunk(uint8_t channel, uint64_t rx_wall_ns, void* self);
+    static bool sendUnderflowThunk(uint8_t channel, void* self);
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
+    // AudioConfigs our ServiceDiscoveryResponse offered per audio sink channel, in order (session thread).
+    std::vector<AaAudioConfig> offered_audio_[32];
 
     std::map<uint8_t, std::vector<uint8_t> > reassembly_;
     std::map<uint8_t, uint32_t> reassembly_total_;   // size the phone announced on the FIRST fragment
@@ -149,6 +215,8 @@ private:
     uint64_t rx_seq_next_;
     bool rx_seq_known_;
     uint32_t rx_records_;
+    bool decrypted_any_;       // session thread: see outcome()
+    uint32_t undecrypted_;     // session thread: frames that failed to decrypt before the first one that didn't
 
     // The last frames from the phone (session thread), printed when the phone goes silent.
     struct RxNote { double t; uint8_t channel; uint8_t flags; uint16_t length; uint16_t msg_id; };

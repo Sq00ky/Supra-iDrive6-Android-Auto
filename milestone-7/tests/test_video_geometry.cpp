@@ -95,14 +95,15 @@ static void check(const Case& c, const char* fps) {
     int w = low ? 800 : high ? 1920 : 1280, h = low ? 480 : high ? 1080 : 720;
     assert(abs(c.dstW * h - c.dstH * w) < w + h);
 
-    std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
-    std::vector<uint8_t> other = message(sdr, 1, 2);
-    assert(patchMainVideo(sdr));
-    assert(patchTouchConfig(sdr));
-    assert(message(sdr, 1, 2) == other);
+    ServiceDiscovery m = referenceManifest(dhuIdentity());
+    const std::vector<uint8_t> before = serializeManifest(m);
+    assert(configureMainVideo(m));
+    assert(configureTouchScreen(m));
+    const std::vector<uint8_t> sdr = serializeManifest(m);
+    assert(message(sdr, 1, 2) == message(before, 1, 2));   // the other channels are untouched
     std::vector<uint8_t> video = message(message(message(sdr, 1, 6), 3), 4);
     assert(scalar(video, 1) == (low ? 1u : high ? 3u : 2u));
-    assert(scalar(video, 2) == (!strcmp(fps, "30") ? 1u : 2u));
+    assert(scalar(video, 2) == (!strcmp(fps, "60") ? 1u : 2u));   // wire: 1 = 60 fps, 2 = 30 fps (unset keeps the DHU's 2)
     assert(scalar(video, 5) == (unsigned)c.dpi);
     assert(scalar(video, 9) == (unsigned)c.dpi);
     std::vector<uint8_t> insets = message(message(video, 11), 1);
@@ -149,7 +150,7 @@ int main() {
         { "1280x480", "4", 1280, 720, 1280, 480, 140, 1.0, false, false },
         { "1280x480", "5", 1280, 720, 1280, 480, 140, 1.0, false, false }
     };
-    const char* rates[] = { "30", "60" };
+    const char* rates[] = { "30", "60", "" };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         for (size_t rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate) {
             pid_t pid = fork();

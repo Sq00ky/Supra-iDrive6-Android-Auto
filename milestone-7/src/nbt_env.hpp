@@ -35,60 +35,38 @@ inline bool knobEnabled() {
     return envFlag("NBT_KNOB") != 0;
 }
 
-// Keep 60 fps for missing or unsupported settings.
-inline unsigned videoFps() {
-    const char* e = getenv("NBT_VID_FPS");
-    return e && strcmp(e, "30") == 0 ? 30u : 60u;
+// The car's GPS fix (MOST 52/00 fkt 440, car/gps), default on. NBT_CAR_GPS=0 / off / no disables it.
+inline bool carGpsEnabled() {
+    return envFlag("NBT_CAR_GPS") != 0;
 }
 
+// Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
+// the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
 inline int videoResolution() {
     const char* e = getenv("NBT_VID_RES");
     if (e && strcmp(e, "1") == 0) return 1;
     if (e && strcmp(e, "3") == 0) return 3;
     return 2;
 }
-
 inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
 inline int videoCanvasHeight() { return videoResolution() == 1 ? 480 : videoResolution() == 3 ? 1080 : 720; }
 
-// Bluetooth audio mode (default ON since v1.7.5; car-verified 2026-10-23): leaves Android Auto media to the
-// phone's Bluetooth A2DP link. The ServiceDiscovery omits the AA media sink (channel 9) so the phone plays
-// media over A2DP, and the daemon asks the AudioManager for the car's Bluetooth audio
-// source (`audioconn -b 0x3a 0x1`, car-verified to work from outside the HMI). The A2I pipeline is not
-// opened in this mode. Overrides: NBT_BT_SRC (default 0x3a eSRC_A2DP), NBT_BT_SINK (default 0x1
-// eSNK_SPEAKERS), NBT_BT_RELEASE=1 (release the source when the phone disconnects), NBT_SDR_DROP.
-// Audio path for Android Auto sound. NBT_AUDIO_MODE picks it; when unset, the older NBT_AUDIO_BT switch decides
-// (on = bt, 0/off = a2i) and with neither set the default is bt again (v1.8.66; browser was the default in
-// v1.8.61..v1.8.65 and stays available with NBT_AUDIO_MODE=browser).
-//   bt       (default) media, nav prompts and Assistant speech stay on the phone's Bluetooth A2DP link
-//   browser  the AA media (ch 9), guidance (ch 8) and system-audio (ch 16) streams are mixed in the
-//            daemon, with media ducked under guidance/system sounds, and played through the car's browser audio
-//            source (dev-libasound -> A2I input_stereo_3, ConnectionMaster connection 0xb8). See browser_audio.hpp.
-//   a2i      the old staged A2I pipeline (audio_manager.cpp, NBT_AUDIO_STAGE); not audible on the car
-enum AudioMode { AUDIO_MODE_BT = 0, AUDIO_MODE_BROWSER = 1, AUDIO_MODE_A2I = 2 };
-
-inline AudioMode audioMode() {
-    const char* m = getenv("NBT_AUDIO_MODE");
-    if (m && *m) {
-        if (strcmp(m, "browser") == 0) return AUDIO_MODE_BROWSER;
-        if (strcmp(m, "a2i") == 0) return AUDIO_MODE_A2I;
-        if (strcmp(m, "bt") == 0) return AUDIO_MODE_BT;
-    }
-    int bt = envFlag("NBT_AUDIO_BT");
-    return bt == 0 ? AUDIO_MODE_A2I : AUDIO_MODE_BT;
+// NBT_VID_FPS (PR #66): "30" or "60"; anything else = 0 (not set). On the wire VideoConfig.fps is 1 = 60 fps and
+// 2 = 30 fps (the phone app's VideoFrameRateType; obd2aa and open-android-auto agree, aasdk has the names swapped), and
+// the DHU manifest we send carries 2: unset, the phone is asked for 30 fps (car logs: ~30 fps delivered) while the
+// decoder is declared at 60, as before.
+inline unsigned videoFpsSetting() {
+    const char* e = getenv("NBT_VID_FPS");
+    if (e && strcmp(e, "30") == 0) return 30u;
+    if (e && strcmp(e, "60") == 0) return 60u;
+    return 0u;
 }
+// What the phone is asked for: NBT_VID_FPS, else the manifest's 30.
+inline unsigned videoRequestedFps() { return videoFpsSetting() ? videoFpsSetting() : 30u; }
+// What the decoder (mdev format packet, MM-Renderer input) is declared with: NBT_VID_FPS, else 60 (unchanged).
+inline unsigned videoDecoderFps() { return videoFpsSetting() ? videoFpsSetting() : 60u; }
 
-inline const char* audioModeName(AudioMode m) {
-    return m == AUDIO_MODE_BROWSER ? "browser" : (m == AUDIO_MODE_A2I ? "a2i" : "bt");
-}
-
-inline bool btAudioEnabled() {
-    return audioMode() == AUDIO_MODE_BT;
-}
-
-inline bool browserAudioEnabled() {
-    return audioMode() == AUDIO_MODE_BROWSER;
-}
+// The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
 // Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified,
 // so off unless NBT_USB=1 / on / yes / true: it switches any Android phone plugged in while the daemon runs into
@@ -121,6 +99,18 @@ inline unsigned long envHex(const char* name, unsigned long def) {
     char* end = NULL;
     unsigned long v = strtoul(e, &end, 0);
     return (end && end != e) ? v : def;
+}
+
+// A whole number setting clamped to [lo, hi]; unset or unparsable returns def.
+inline long envRange(const char* name, long def, long lo, long hi) {
+    const char* e = getenv(name);
+    long v = def;
+    if (e && *e) {
+        char* end = NULL;
+        long x = strtol(e, &end, 0);
+        if (end && end != e) v = x;
+    }
+    return v < lo ? lo : (v > hi ? hi : v);
 }
 
 } // namespace nbt

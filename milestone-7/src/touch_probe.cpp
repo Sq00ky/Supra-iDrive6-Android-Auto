@@ -160,7 +160,13 @@ bool parsePeer(const char* e, sockaddr_in* out) {
 
 // The touch controller's address, learned from a real touch PDU, is kept here so the next daemon start connects at
 // once (before it, gesture camera PDUs are still swallowed until the screen is touched).
+#ifdef NBT_HOST_TEST
+// Host tests: never the real file. test_touch learns its own ephemeral port; kept in /var/opt/aa it made the NEXT run
+// connect to that stale port and miss every frame (test_touch.cpp:90). test_touch removes this one at start.
+const char* const kTouchPeerFile = "/tmp/nbt-test-touch-peer";
+#else
 const char* const kTouchPeerFile = "/var/opt/aa/touch-peer";
+#endif
 
 bool loadPeerFile(sockaddr_in* out) {
     FILE* f = fopen(kTouchPeerFile, "r");

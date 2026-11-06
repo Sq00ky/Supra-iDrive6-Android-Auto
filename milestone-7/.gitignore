@@ -4,8 +4,11 @@ release/
 *.d
 nbt-aad
 wfd_probe
+pf_aa
 test_display
 test_controls
 plugin/libhmiaad.so
 plugin/plugin_check
 rhmiapp/libNbtAad.so
+# Host test builds (make check)
+tests/build/

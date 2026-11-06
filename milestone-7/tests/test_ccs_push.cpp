@@ -2,13 +2,14 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: replays the 2026-10-23 centre-push / tilt / MEDIA-hold car run through CcsDecoder.
 // g++ -std=gnu++98 -Wall -Wextra -Iinclude -Isrc -o /tmp/test_ccs_push tests/test_ccs_push.cpp && /tmp/test_ccs_push tests/fixtures/controls_2026-10-23_push.txt
-#include "ccs_decoder.hpp"
+#include "car/ccs_decoder.hpp"
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
 #include <string>
 #include <vector>
 using namespace nbt;
+using namespace nbt::car;
 
 int main(int argc, char** argv) {
     const char* path = argc > 1 ? argv[1] : "tests/fixtures/controls_2026-10-23_push.txt";
