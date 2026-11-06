@@ -44,7 +44,7 @@ The Daemon sits on your headunit and waits for you to click "Android Auto" and s
 
 ### Bavarian SSH Client
 
-(demo)[https://github.com/user-attachments/assets/e38313fe-8473-4dc8-bfd0-d32993cbc0f9]
+[![demo](https://github.com/user-attachments/assets/e38313fe-8473-4dc8-bfd0-d32993cbc0f9)
 
 Click start and you should be good to go.
 
