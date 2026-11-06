@@ -53,6 +53,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include "../src/car_state.hpp"
 #include "../src/usb_log.hpp"
 #include "cds_parse.hpp"
 #include "boot_guard.hpp"
@@ -204,17 +205,6 @@ const char* const kDisable    = "/opt/aa/app.disable";
 const char* const kDaemonEnv  = "/opt/aa/nbt-aad.env";
 const char* const kDaemonLog  = "/dev/null";               // the daemon opens its own USB log (usb_log.hpp)
 const unsigned    kEntryAction = 2;          // <entryButton action="2"> / <raAction id="2"/> in NbtAad.xml
-const char* const kGearProperty = "driving.gear";   // CDS property (libhmiremoting.so property table)
-const char* const kGearFile    = "/dev/shmem/nbt-aad-gear";
-// Park Distance Control / park assist state (libhmiremoting: CAN ParkingFunctions PDCStatus, published as
-// {"PDCStatus":%d}). It changes when the driver presses the park-assist button as well as in reverse.
-const char* const kPdcProperty = "sensors.PDCStatus";
-// Car day/night for Android Auto's night mode (rhmiapp-15). libhmiremoting CCdsPropertyDayNightChange::onStatus
-// @0x2171e0 formats '{"dayNightChangeOver":%u}' from the vehicle DayNight_ChangeOver signal. Raw value goes to the
-// daemon ("daynight <n>", /dev/shmem/nbt-aad-daynight), which maps it like factory CarPlay does.
-const char* const kDayNightProperty = "vehicle.dayNightChangeOver";
-const char* const kDayNightFile     = "/dev/shmem/nbt-aad-daynight";
-const char* const kPdcFile     = "/dev/shmem/nbt-aad-pdc";
 const uint16_t    kDaemonCtlPort = 52790;    // nbt-aad control port (UDP 127.0.0.1)
 const char* const kStateFile   = "/dev/shmem/nbt-aad-state";   // written by nbt-aad: "<idle|connecting|connected> <pid>"
 const char* const kStatusOff   = "/opt/aa/status.disable";      // keep the entry text static
@@ -295,7 +285,6 @@ const unsigned    kActDriveMode     = 28;
 const unsigned    kDriveModeModel   = 44;
 const char* const kDriveModeFlag    = "/var/opt/aa/show-drivemode";
 const char* const kDriveModeManual  = "/opt/aa/show-drivemode";
-const char* const kDriveModeProps[2] = { "driving.mode", "driving.mode35up" };
 // "Turn arrows in cluster/HUD" checkbox: <checkbox action="29" id="72" model="46" textModel="47">, off by default.
 // Flag file read by nbt-aad once a second (kombi_nav): when on, Android Auto's turn-by-turn shows in the J29 cluster
 // and HUD.
@@ -318,9 +307,6 @@ const char* const kWarnFlag        = "/var/opt/aa/show-warnings";
 const char* const kWarnManual      = "/opt/aa/show-warnings";
 const char* const kGctxProperty    = "hmi.graphicalContext";
 const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
-// DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
-// program, so the daemon steps aside for iDrive's own display for a few seconds, like a driving-mode change.
-const char* const kDscProperty     = "driving.DSCActive";
 
 // PluginApp vtable slots (index from the address point)
 enum { kSlotOnError = 21, kSlotOnInit = 22, kSlotOnFinalize = 23, kVtblSlots = 34 };
@@ -489,12 +475,6 @@ void launchDaemon() {
     else alog("launch: started %s pid %d (%d env overrides, output -> %s)", kDaemon, (int)pid, nb, kDaemonLog);
 }
 
-// ---- car gear -> daemon ---------------------------------------------------------------------------------------
-// The value is published as text (JSON-like, e.g. {"gear":2}); the first integer is the gear code. Every change is
-// logged with the raw text so the code for reverse can be confirmed on the car, written to /dev/shmem/nbt-aad-gear
-// (the daemon reads it at start) and sent to a running daemon as "gear <n>".
-int g_lastGear = -1000;
-
 void sendToDaemon(const char* msg) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return;
@@ -507,23 +487,91 @@ void sendToDaemon(const char* msg) {
     close(fd);
 }
 
-bool onGearChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) {
-    char text[160];
+// ---- car values -> daemon --------------------------------------------------------------------------------------------
+// CDS values arrive as UTF-16 JSON-like text, for example {"gear":2}. A daemon needs them both ways: the file answers
+// "what is it now?" when it starts (src/car_state.hpp), and a message on the control port reports each change. To add a
+// value, add a row here and read its key in the daemon. Every change is logged with the raw text, so a code can be
+// checked on the car.
+enum CarIndex { kCarGear, kCarPdc, kCarDayNight, kCarMode0, kCarMode1, kCarDsc, kCarCount };
+const int kCarNoValue = -1000;   // nothing received yet
+
+bool onCarValue(int index, const bmw::BasicString<unsigned short>& value);
+template <int kIndex>
+bool onCarValueStub(void* /*app*/, const bmw::BasicString<unsigned short>& value) { return onCarValue(kIndex, value); }
+bool onPdcChanged(void*, const bmw::BasicString<unsigned short>&);
+bool onDriveMode0(void*, const bmw::BasicString<unsigned short>&);
+bool onDriveMode1(void*, const bmw::BasicString<unsigned short>&);
+bool onDscChanged(void*, const bmw::BasicString<unsigned short>&);
+
+struct CarValue {
+    const char* property;     // CDS property (libhmiremoting.so property table)
+    const char* key;          // name in the file and in the control message
+    const char* field;        // the JSON field holding the number; NULL = the first number in the text
+    const char* oldFile;      // a daemon from before car_state.hpp reads this at start
+    bool (*handler)(void*, const bmw::BasicString<unsigned short>&);
+    int last;
+};
+
+// Not here: communication.callStatus and hmi.graphicalContext. Only the app uses them, so no daemon needs a file or a
+// message.
+CarValue g_car[kCarCount] = {
+    { "driving.gear", "gear", NULL, "/dev/shmem/nbt-aad-gear", &onCarValueStub<kCarGear>, kCarNoValue },
+    // Park Distance Control / park assist state (libhmiremoting: CAN ParkingFunctions PDCStatus, published as
+    // {"PDCStatus":%d}). It changes when the driver presses the park-assist button as well as in reverse.
+    { "sensors.PDCStatus", "pdc", NULL, "/dev/shmem/nbt-aad-pdc", &onPdcChanged, kCarNoValue },
+    // Car day/night for Android Auto's night mode (rhmiapp-15). libhmiremoting CCdsPropertyDayNightChange::onStatus
+    // @0x2171e0 formats '{"dayNightChangeOver":%u}' from the vehicle DayNight_ChangeOver signal: 1 day, 2 night, 0 no
+    // change, 3 invalid. The daemon maps the raw value like factory CarPlay does.
+    { "vehicle.dayNightChangeOver", "daynight", "dayNightChangeOver", "/dev/shmem/nbt-aad-daynight",
+      &onCarValueStub<kCarDayNight>, kCarNoValue },
+    // Driving mode (rhmiapp-21). Both: only the one the car's variant codes ever reports. See onDriveMode.
+    { "driving.mode", "mode0", "mode", NULL, &onDriveMode0, kCarNoValue },
+    { "driving.mode35up", "mode1", "mode", NULL, &onDriveMode1, kCarNoValue },
+    // DSC / DTC button: "same as sport mode", it flips when the button changes the stability program. See onDscChanged.
+    // Not read at start: the daemon keeps no copy, and each "dsc" message carries the previous value.
+    { "driving.DSCActive", "dsc", "DSCActive", NULL, &onDscChanged, kCarNoValue },
+};
+
+inline int lastGear() { return g_car[kCarGear].last; }
+inline int lastPdc() { return g_car[kCarPdc].last; }
+
+// CDS text narrowed to ASCII.
+template <size_t kSize>
+void cdsText(const bmw::BasicString<unsigned short>& value, char (&text)[kSize]) {
     size_t n = 0;
     const unsigned short* p = value.raw();
-    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
+    while (p && p[n] && n < kSize - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
     text[n] = 0;
-    int gear = -1;
-    for (size_t i = 0; i < n; ++i) {
-        if (text[i] >= '0' && text[i] <= '9') { gear = atoi(text + i); break; }
+}
+
+// Before the control message, so a daemon that hears the message and then reads the file can't see an older value.
+void writeCarFile(const CarValue& changed) {
+    nbt::carstate::Item items[kCarCount];
+    for (int i = 0; i < kCarCount; ++i) {
+        items[i].key = g_car[i].key;
+        items[i].value = g_car[i].last == kCarNoValue ? nbt::carstate::kNoValue : g_car[i].last;
     }
-    if (gear != g_lastGear) {
-        alog("CDS %s = '%s' -> gear %d", kGearProperty, text, gear);
-        g_lastGear = gear;
-        FILE* f = fopen(kGearFile, "w");
-        if (f) { fprintf(f, "gear %d\n", gear); fclose(f); }
+    if (!nbt::carstate::writeFile(nbt::carstate::kPath, items, kCarCount)) {
+        static bool s_warned = false;
+        if (!s_warned) { alog("cannot write %s (errno %d)", nbt::carstate::kPath, errno); s_warned = true; }
+    }
+    if (changed.oldFile) {
+        FILE* f = fopen(changed.oldFile, "w");
+        if (f) { fprintf(f, "%s %d\n", changed.key, changed.last); fclose(f); }
+    }
+}
+
+bool onCarValue(int index, const bmw::BasicString<unsigned short>& value) {
+    CarValue& car = g_car[index];
+    char text[160];
+    cdsText(value, text);
+    int v = car.field ? nbt::cdsIntField(text, car.field, -1) : nbt::cdsFirstInt(text, -1);
+    if (v != car.last) {
+        alog("CDS %s = '%s' -> %s %d", car.property, text, car.key, v);
+        car.last = v;
+        writeCarFile(car);
         char msg[32];
-        snprintf(msg, sizeof(msg), "gear %d", gear);
+        snprintf(msg, sizeof(msg), "%s %d", car.key, v);
         sendToDaemon(msg);
     }
     return true;
@@ -542,10 +590,7 @@ bool callActive() { return g_callLine[0] || g_callLine[1]; }
 
 bool onCallStatus(int line, const bmw::BasicString<unsigned short>& value) {
     char text[200];
-    size_t n = 0;
-    const unsigned short* p = value.raw();
-    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
-    text[n] = 0;
+    cdsText(value, text);
     bool active = nbt::cdsCallActive(text);
     bool was = callActive();
     g_callLine[line] = active;
@@ -556,69 +601,30 @@ bool onCallStatus(int line, const bmw::BasicString<unsigned short>& value) {
 bool onCallStatus0(void*, const bmw::BasicString<unsigned short>& v) { return onCallStatus(0, v); }
 bool onCallStatus1(void*, const bmw::BasicString<unsigned short>& v) { return onCallStatus(1, v); }
 
-int g_lastPdc = -1000;
 // The driver chose Android Auto while park assist was on: the daemon keeps it up until park assist ends ("[Park] Android
 // Auto chosen during park assist: kept until it ends"), so park assist does not own the screen for the app either until
 // PDCStatus changes. Without this, PDCStatus staying 1 for 47 s after reversing made the safety button "during park
 // assist: left to that logic" and Android Auto stayed over the safety menu (car 2026-11-05).
 bool g_pdcDismissed = false;
-bool pdcOwnsScreen() { return g_lastPdc == kPdcActive && !g_pdcDismissed; }
+bool pdcOwnsScreen() { return lastPdc() == kPdcActive && !g_pdcDismissed; }
 
 bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) {
-    char text[160];
-    size_t n = 0;
-    const unsigned short* p = value.raw();
-    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
-    text[n] = 0;
-    int pdc = -1;
-    for (size_t i = 0; i < n; ++i) {
-        if (text[i] >= '0' && text[i] <= '9') { pdc = atoi(text + i); break; }
-    }
-    if (pdc != g_lastPdc) {
-        alog("CDS %s = '%s' -> pdc %d", kPdcProperty, text, pdc);
-        g_lastPdc = pdc;
-        g_pdcDismissed = false;                          // park assist starts or ends: a new episode
-        FILE* f = fopen(kPdcFile, "w");
-        if (f) { fprintf(f, "pdc %d\n", pdc); fclose(f); }
-        char msg[32];
-        snprintf(msg, sizeof(msg), "pdc %d", pdc);
-        sendToDaemon(msg);
-    }
+    const int was = lastPdc();
+    onCarValue(kCarPdc, value);
+    if (lastPdc() != was) g_pdcDismissed = false;        // park assist starts or ends: a new episode
     return true;
 }
 
 // Every "show" goes through here: the daemon takes it as the driver choosing Android Auto, over park assist too.
 void sendShow() {
-    if (g_lastPdc == kPdcActive && !g_pdcDismissed) {
+    if (lastPdc() == kPdcActive && !g_pdcDismissed) {
         g_pdcDismissed = true;
         alog("park assist on: Android Auto chosen over it, so iDrive screens make it step aside again until park assist ends");
     }
     sendToDaemon("show");
 }
 
-int g_lastDayNight = -1000;
-
-bool onDayNightChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) {
-    char text[160];
-    size_t n = 0;
-    const unsigned short* p = value.raw();
-    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
-    text[n] = 0;
-    int v = nbt::cdsIntField(text, "dayNightChangeOver", -1);
-    if (v != g_lastDayNight) {
-        alog("CDS %s = '%s' -> %d (1 day, 2 night, 0 no change, 3 invalid)", kDayNightProperty, text, v);
-        g_lastDayNight = v;
-        FILE* f = fopen(kDayNightFile, "w");
-        if (f) { fprintf(f, "daynight %d\n", v); fclose(f); }
-        char msg[32];
-        snprintf(msg, sizeof(msg), "daynight %d", v);
-        sendToDaemon(msg);
-    }
-    return true;
-}
-
 // ---- driving mode -> daemon (rhmiapp-21) -----------------------------------------------------------------------------
-int g_lastDriveMode[2] = { -1000, -1000 };
 time_t g_driveModeChange = 0;     // last change between two valid modes: the daemon may be stepping aside for it
 long g_driveModeSubAt = -1;       // monotonic s when the CDS handlers were registered
 
@@ -631,27 +637,26 @@ long monoSec() {
 bool driveModeOn() { return fileExists(kDriveModeFlag) || fileExists(kDriveModeManual); }
 
 bool onDriveMode(int prop, const bmw::BasicString<unsigned short>& value) {
+    CarValue& car = g_car[kCarMode0 + prop];
     char text[160];
-    size_t n = 0;
-    const unsigned short* p = value.raw();
-    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
-    text[n] = 0;
-    int v = nbt::cdsIntField(text, "mode", -1);
-    if (v == g_lastDriveMode[prop]) return true;
+    cdsText(value, text);
+    int v = nbt::cdsIntField(text, car.field, -1);
+    if (v == car.last) return true;
     const int invalid = prop == 1 ? 63 : 15;
-    int was = g_lastDriveMode[prop];
-    alog("CDS %s = '%s' -> mode %d%s", kDriveModeProps[prop], text, v, v == invalid || v < 0 ? " (not valid)" : "");
+    int was = car.last;
+    alog("CDS %s = '%s' -> mode %d%s", car.property, text, v, v == invalid || v < 0 ? " (not valid)" : "");
     // The previous value goes to the daemon too: it starts after we got the current mode at subscription and would
     // otherwise take the first change as its baseline. Fallback in case a variant sends no value on subscribing: a
     // first value well after subscribing is the driver changing mode (-2).
     int prev = was >= 0 ? was : -1;
     if (was < 0 && v >= 0 && v != invalid && g_driveModeSubAt >= 0 && monoSec() - g_driveModeSubAt >= 5) {
         prev = -2;
-        alog("CDS %s: first value %lds after subscribing: a change of mode", kDriveModeProps[prop],
+        alog("CDS %s: first value %lds after subscribing: a change of mode", car.property,
              monoSec() - g_driveModeSubAt);
     }
     if ((was >= 0 && was != invalid && v >= 0 && v != invalid) || prev == -2) g_driveModeChange = time(NULL);
-    g_lastDriveMode[prop] = v;
+    car.last = v;
+    writeCarFile(car);
     char msg[40];
     snprintf(msg, sizeof(msg), "drivemode %d %d %d", prop, v, prev);
     sendToDaemon(msg);
@@ -679,32 +684,26 @@ void jsonStr(const char* json, const char* key, char* out, size_t n) {
     out[i] = 0;
 }
 
-int g_lastDsc = -1000;
 time_t g_dscChange = 0;        // last DSC/DTC change: the driver pressed the button (counts as driver input)
 
 // CDS driving.DSCActive -> "dsc <n> <prev>": the daemon steps aside for iDrive's own DSC/DTC display for a few
 // seconds and comes back, exactly like a driving-mode change. Gated by the same "Show driving mode changes" box,
 // because that is the popup family the driver asked to see.
 bool onDscChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) {
+    CarValue& car = g_car[kCarDsc];
     char text[160];
-    size_t n = 0;
-    const unsigned short* p = value.raw();
-    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
-    text[n] = 0;
-    int v = nbt::cdsIntField(text, "DSCActive", -1);
-    if (v < 0) {                                       // a variant may publish a bare number
-        for (size_t i = 0; i < n; ++i) {
-            if (text[i] >= '0' && text[i] <= '9') { v = atoi(text + i); break; }
-        }
-    }
-    if (v == g_lastDsc) return true;
-    const int was = g_lastDsc;
-    g_lastDsc = v;
-    if (was != -1000) g_dscChange = time(NULL);
-    alog("CDS %s = '%s' -> %d%s", kDscProperty, text, v, was == -1000 ? " (initial)" : "");
+    cdsText(value, text);
+    int v = nbt::cdsIntField(text, car.field, -1);
+    if (v < 0) v = nbt::cdsFirstInt(text, -1);         // a variant may publish a bare number
+    if (v == car.last) return true;
+    const int was = car.last;
+    car.last = v;
+    writeCarFile(car);
+    if (was != kCarNoValue) g_dscChange = time(NULL);
+    alog("CDS %s = '%s' -> %d%s", car.property, text, v, was == kCarNoValue ? " (initial)" : "");
     // 15 = not valid (CCdsPropertyDSCStatus::onStatus maps 5 real states, anything else to 15): like the driving-mode
     // filter, a change to or from it is the signal coming and going, not the driver pressing DSC/DTC.
-    if (was == -1000 || was < 0 || v < 0 || was == 15 || v == 15 || !driveModeOn()) return true;
+    if (was == kCarNoValue || was < 0 || v < 0 || was == 15 || v == 15 || !driveModeOn()) return true;
     char msg[40];
     snprintf(msg, sizeof(msg), "dsc %d %d", v, was);
     sendToDaemon(msg);
@@ -725,37 +724,14 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>&);
 
 void runnableRun(void* /*self*/) {
     if (!g_runApp) return;
-    if (!fileExists("/opt/aa/gear.disable")) {
-        bmw::BasicString<char> prop(kGearProperty);
+    for (int i = 0; i < kCarCount; ++i) {
+        if (i == kCarGear && fileExists("/opt/aa/gear.disable")) continue;
+        bmw::BasicString<char> prop(g_car[i].property);
         bmw::CdsDelegate d;
         d.object = g_runApp;
-        d.stub = &onGearChanged;
+        d.stub = g_car[i].handler;
         g_runApp->cdsAddPropertyChangedEventHandler(prop, 0, d);
-        alog("CDS handler for %s registered", kGearProperty);
-    }
-    {
-        bmw::BasicString<char> pprop(kPdcProperty);
-        bmw::CdsDelegate pd;
-        pd.object = g_runApp;
-        pd.stub = &onPdcChanged;
-        g_runApp->cdsAddPropertyChangedEventHandler(pprop, 0, pd);
-        alog("CDS handler for %s registered", kPdcProperty);
-    }
-    {
-        bmw::BasicString<char> dprop(kDayNightProperty);
-        bmw::CdsDelegate dd;
-        dd.object = g_runApp;
-        dd.stub = &onDayNightChanged;
-        g_runApp->cdsAddPropertyChangedEventHandler(dprop, 0, dd);
-        alog("CDS handler for %s registered", kDayNightProperty);
-    }
-    for (int i = 0; i < 2; ++i) {                        // both: only the one the car's variant codes ever reports
-        bmw::BasicString<char> prop(kDriveModeProps[i]);
-        bmw::CdsDelegate d;
-        d.object = g_runApp;
-        d.stub = i == 0 ? &onDriveMode0 : &onDriveMode1;
-        g_runApp->cdsAddPropertyChangedEventHandler(prop, 0, d);
-        alog("CDS handler for %s registered", kDriveModeProps[i]);
+        alog("CDS handler for %s registered", g_car[i].property);
     }
     g_driveModeSubAt = monoSec();
     {
@@ -765,14 +741,6 @@ void runnableRun(void* /*self*/) {
         d.stub = &onGraphicalContext;
         g_runApp->cdsAddPropertyChangedEventHandler(prop, 0, d);
         alog("CDS handler for %s registered%s", kGctxProperty, warningsOn() ? " (Show iDrive warnings is on)" : "");
-    }
-    {
-        bmw::BasicString<char> prop(kDscProperty);
-        bmw::CdsDelegate d;
-        d.object = g_runApp;
-        d.stub = &onDscChanged;
-        g_runApp->cdsAddPropertyChangedEventHandler(prop, 0, d);
-        alog("CDS handler for %s registered", kDscProperty);
     }
     if (holdEnabled()) {                                 // CDS handlers are keyed by property name
         for (int i = 0; i < 2; ++i) {
@@ -978,10 +946,7 @@ void owInit() {
 // LT_ScrollLabel_CCM_Details, so it waited ~25 s for another path - F31 bench, 2026-11-05.)
 bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     char text[300];
-    size_t n = 0;
-    const unsigned short* p = value.raw();
-    while (p && p[n] && n < sizeof(text) - 1) { text[n] = (p[n] < 0x80) ? (char)p[n] : '?'; ++n; }
-    text[n] = 0;
+    cdsText(value, text);
     const int vc = nbt::cdsIntField(text, "visibleContext", -1);
     char widget[48], title[80];
     jsonStr(text, "widgetType", widget, sizeof(widget));
@@ -1064,7 +1029,7 @@ bool onAaVisible(void*, const bmw::Parcel& p) {
     // iDrive came back to our blank state by itself while Android Auto is minimized (BACK in iDrive walks its history
     // back to the Android Auto screen; car 2026-10-29: blank screen for 3 s). That is the driver going back to Android
     // Auto, as with CarPlay: bring it to the front. Not in reverse / park assist / a call.
-    if (v && !g_holding && holdEnabled() && !callActive() && g_lastGear != kReverseGear && !pdcOwnsScreen()) {
+    if (v && !g_holding && holdEnabled() && !callActive() && lastGear() != kReverseGear && !pdcOwnsScreen()) {
         DaemonState d = readDaemonState();
         if (d.pid > 0 && !d.overlay && !strcmp(d.state, "connected")) {
             alog("hold: iDrive went back to the Android Auto screen: asking nbt-aad to come to the front");
@@ -1152,7 +1117,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
     if (warningsOn()) {
         owInit();
         bool aa = overlay && !strcmp(d.state, "connected");
-        bool reverse = g_lastGear == kReverseGear, pdc = pdcOwnsScreen(), call = callActive();
+        bool reverse = lastGear() == kReverseGear, pdc = pdcOwnsScreen(), call = callActive();
         int ctx = g_ow.current();
         switch (g_ow.poll(nowMs(), aa, aa && driverInputNow(d), reverse || pdc || call, aa && knobInputNow(d))) {
         case nbt::OverlayWatch::STEP_ASIDE:
@@ -1190,7 +1155,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         // Android Auto stepped aside by itself (phone's exit icon, BACK hold, signal lost) while iDrive still shows our
         // blank state: give the driver the iDrive main menu. Not in reverse (the camera returns to us, then the
         // overlay comes back) and not when a hard key already took iDrive somewhere else.
-        bool reverse = g_lastGear == kReverseGear, pdc = pdcOwnsScreen();
+        bool reverse = lastGear() == kReverseGear, pdc = pdcOwnsScreen();
         // Driving mode or DSC/DTC just changed with "Show driving mode changes" ticked: the daemon steps aside for
         // iDrive's display and comes back by itself, so stay on the blank state (like reverse). Before rhmiapp-37 a DSC
         // change sent iDrive to its main menu here (car 2026-11-05, twice in one drive).
@@ -1231,7 +1196,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
             s_unfocused = 0;
             bool input = s_unfocusedInput;
             s_unfocusedInput = false;
-            bool blocked = g_lastGear == kReverseGear || pdcOwnsScreen();
+            bool blocked = lastGear() == kReverseGear || pdcOwnsScreen();
             if (carAsideEnabled() && !warningsOn() && !input && !blocked) {
                 stepAsideForCar("took the focus");
                 return;
@@ -1295,7 +1260,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
         // Confirmed on the next poll, so an incoming call's status (CDS) can arrive first.
         // Except MENU by default (daemon overlay 3): it opened Android Auto's own menu, so iDrive goes back to state 13.
         if (d.overlay == 3) { fireHold(app, "a hard key went to Android Auto"); return; }
-        if (g_lastGear == kReverseGear || pdcOwnsScreen()) return;   // camera / PDC view: the daemon steps aside itself
+        if (lastGear() == kReverseGear || pdcOwnsScreen()) return;   // camera / PDC view: the daemon steps aside itself
         // Confirmed over two polls, and only if neither saw driver input (the 3 s input window can run out while iDrive
         // is still on the screen the driver opened).
         static time_t s_carLeft = 0;
