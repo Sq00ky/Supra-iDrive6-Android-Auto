@@ -182,7 +182,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > iDrive lands on it, iDrive is put back on the blank state, and it is never taken for an iDrive warning. Log:
 > `settings state 14 focus -> 1`, `settings: six checkbox models refreshed`.
 >
-> **v1.9.29-pr66 (not car-verified on a Supra; PR #66 by @ryanriccio1, car-verified on his F22 M235i NBTevo_N18032I):
+> **v1.9.32-pr66 (not car-verified on a Supra; PR #66 by @ryanriccio1, car-verified on his F22 M235i NBTevo_N18032I):
 > video profiles and frame rate.** `NBT_VID_RES=1` (800x480) now works: the decoder, insets, DPI and touch all follow
 > the canvas, so the phone keeps its UI in the top 800x300 and the panel shows it evenly at x1.6 (softer, but Google
 > Maps' 3D buildings run more smoothly). `NBT_VID_RES=3` (1080p) is an experiment: it crashed a 2 GB head unit, and the
@@ -591,7 +591,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 |---|---|---|
 | `NBT_LOG_FILE` | (none) | Append the daemon log to this file; it survives a head-unit reset. Same name = appended |
 | `NBT_MENU_RETURN` | home | Where iDrive goes once connected: `media` = Media/Radio list, `off` = stay in our menu |
-| `NBT_RX_TIMEOUT_S` | 5 | Seconds without data from the phone before iDrive gets the screen back; `0` = off (2 before v1.9.29) |
+| `NBT_RX_TIMEOUT_S` | 5 | Seconds without data from the phone before iDrive gets the screen back; `0` = off (2 before v1.9.32) |
 | `NBT_VID_FPS` | (unset) | `30` or `60`: the frame rate asked of the phone and the decoder's rate. Unset: the phone is asked for 30 fps (what it delivers over Wi-Fi anyway) and the decoder is declared at 60, as before. `30` declares the decoder at 30 too (smoother on a slower head unit, car-verified on an F22); `60` asks the phone for 60 |
 | `NBT_BACK_HOLD_MS` | 2500 | BACK hold time to minimize; `0` = off (BACK forwarded at once) |
 | `NBT_KNOB_INVERT` | off | `1` reverses the rotary direction |
