@@ -22,19 +22,20 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          21: "Turn arrows in cluster/HUD",   # 21 = cluster/HUD arrows checkbox (kombi_nav)
          22: "Show iDrive warnings",   # 22 = iDrive warnings checkbox (rhmiapp-32)
          23: "Settings",   # 23 = Settings row (hmiState 10) / page title (hmiState 14), rhmiapp-39
+         24: "Android Auto over USB (beta)",   # 24 = USB checkbox on the Settings page (rhmiapp-40)
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).
 LANG_TEXTS = {
     "de": {22: "iDrive-Warnungen anzeigen", 21: "Abbiegepfeile in Kombi/HUD", 20: "Fahrmodus-Wechsel anzeigen", 19: "MENU-Taste oeffnet iDrive", 2: "Android Auto: Verbinden...", 18: "Protokolle auf USB speichern", 10: "Android Auto starten", 11: "Beenden erzwingen", 12: "Neu starten",
-           13: "Verbinden...", 14: "Android Auto oeffnen", 15: "Automatisch starten", 16: "Info", 23: "Einstellungen"},
+           13: "Verbinden...", 14: "Android Auto oeffnen", 15: "Automatisch starten", 16: "Info", 23: "Einstellungen", 24: "Android Auto per USB (Beta)"},
     "es-ES": {22: "Mostrar avisos de iDrive", 21: "Flechas de giro en cuadro/HUD", 20: "Mostrar cambios de modo de conduccion", 19: "La tecla MENU abre iDrive", 2: "Android Auto: Conectando...", 18: "Guardar registros en USB", 10: "Iniciar Android Auto", 11: "Forzar cierre", 12: "Reiniciar",
-              13: "Conectando...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Acerca de", 23: "Ajustes"},
+              13: "Conectando...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Acerca de", 23: "Ajustes", 24: "Android Auto por USB (beta)"},
     "fr-FR": {22: "Afficher les avertissements iDrive", 21: "Fleches de direction combine/HUD", 20: "Afficher les changements de mode de conduite", 19: "La touche MENU ouvre iDrive", 2: "Android Auto : Connexion...", 18: "Enregistrer les journaux sur USB", 10: "Demarrer Android Auto", 11: "Forcer l'arret", 12: "Redemarrer",
-              13: "Connexion...", 14: "Ouvrir Android Auto", 15: "Demarrage automatique", 16: "A propos", 23: "Parametres"},
+              13: "Connexion...", 14: "Ouvrir Android Auto", 15: "Demarrage automatique", 16: "A propos", 23: "Parametres", 24: "Android Auto par USB (beta)"},
     "it": {22: "Mostra gli avvisi di iDrive", 21: "Frecce di svolta nel quadro/HUD", 20: "Mostra i cambi di modalita di guida", 19: "Il tasto MENU apre iDrive", 2: "Android Auto: Connessione...", 18: "Salva i log su USB", 10: "Avvia Android Auto", 11: "Arresto forzato", 12: "Riavvia",
-           13: "Connessione...", 14: "Apri Android Auto", 15: "Avvio automatico", 16: "Informazioni", 23: "Impostazioni"},
+           13: "Connessione...", 14: "Apri Android Auto", 15: "Avvio automatico", 16: "Informazioni", 23: "Impostazioni", 24: "Android Auto via USB (beta)"},
     "pt": {22: "Mostrar avisos do iDrive", 21: "Setas de viragem no painel/HUD", 20: "Mostrar mudancas de modo de conducao", 19: "A tecla MENU abre o iDrive", 2: "Android Auto: A ligar...", 18: "Guardar registos em USB", 10: "Iniciar Android Auto", 11: "Forcar paragem", 12: "Reiniciar",
-           13: "A ligar...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Sobre", 23: "Definicoes"},
+           13: "A ligar...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Sobre", 23: "Definicoes", 24: "Android Auto por USB (beta)"},
 }
 LANG_TEXTS["es-US"] = LANG_TEXTS["es-ES"]
 LANG_TEXTS["fr-CA"] = LANG_TEXTS["fr-FR"]

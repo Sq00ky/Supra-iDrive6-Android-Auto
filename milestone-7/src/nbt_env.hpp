@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 namespace nbt {
 
@@ -68,14 +69,22 @@ inline unsigned videoDecoderFps() { return videoFpsSetting() ? videoFpsSetting()
 
 // The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
-// Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified,
-// so off unless NBT_USB=1 / on / yes / true: it switches any Android phone plugged in while the daemon runs into
-// accessory mode, which takes it away from iDrive's USB media (MTP) until it is replugged.
-inline bool usbEnabled() {
-    const char* e = getenv("NBT_USB");
-    if (!e || !*e) return false;
-    return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
+// Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified, so
+// off by default: it switches any Android phone plugged in while the daemon runs into accessory mode, which takes it
+// away from iDrive's USB media (MTP) until it is replugged. On with the iDrive Settings checkbox "Android Auto over
+// USB" (flag file kUsbFlagFile; a hand-made kUsbManualFile also counts) or NBT_USB=1 / on / yes / true; any other
+// NBT_USB value (0, off) forces it off whatever the checkbox says. Read once at daemon start: a change applies at the
+// next Start / Restart.
+static const char* const kUsbFlagFile = "/var/opt/aa/usb-aa";
+static const char* const kUsbManualFile = "/opt/aa/usb-aa";
+// Pure part (host-tested): NBT_USB's value (NULL = unset) and whether a flag file exists.
+inline bool usbSettingOn(const char* env, bool flagFile) {
+    if (env && *env)
+        return strcmp(env, "1") == 0 || strcmp(env, "on") == 0 || strcmp(env, "yes") == 0 || strcmp(env, "true") == 0;
+    return flagFile;
 }
+inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
+inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
 
 // NBT_USB_DIRECT=1 (with NBT_USB=1, experimental): read the phone through libusbdi, not devc-serusb-aoap (which it
 // stops for the phone): see usb_direct.hpp.

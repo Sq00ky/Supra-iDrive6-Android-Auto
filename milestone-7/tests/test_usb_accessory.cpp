@@ -6,6 +6,7 @@
 //     tests/test_usb_accessory.cpp src/usb_accessory.cpp src/usb_direct.cpp && /tmp/test_usb_accessory   (~32 s: real retry gaps)
 #include "usb_aoap.hpp"
 #include "usb_accessory.hpp"
+#include "nbt_env.hpp"
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -392,8 +393,21 @@ static void testSwitchRetries() {
     printf("switch retries: ok\n");
 }
 
+// NBT_USB vs the Settings checkbox (rhmiapp-40): a set NBT_USB decides either way, unset the flag file does.
+static void testUsbSetting() {
+    assert(!usbSettingOn(NULL, false) && usbSettingOn(NULL, true));
+    assert(!usbSettingOn("", false) && usbSettingOn("", true));           // empty = unset
+    const char* on[] = { "1", "on", "yes", "true" };
+    for (size_t i = 0; i < sizeof(on) / sizeof(on[0]); ++i) assert(usbSettingOn(on[i], false) && usbSettingOn(on[i], true));
+    const char* off[] = { "0", "off", "no", "false", "2", "ON" };
+    for (size_t i = 0; i < sizeof(off) / sizeof(off[0]); ++i) assert(!usbSettingOn(off[i], true) && !usbSettingOn(off[i], false));
+    assert(strcmp(kUsbFlagFile, "/var/opt/aa/usb-aa") == 0 && strcmp(kUsbManualFile, "/opt/aa/usb-aa") == 0);
+    printf("usb setting OK\n");
+}
+
 int main() {
     setvbuf(stdout, NULL, _IONBF, 0);   // the daemon log lines interleave with the asserts
+    testUsbSetting();
     testHeader();
     testResetBudget();
     testBridge();

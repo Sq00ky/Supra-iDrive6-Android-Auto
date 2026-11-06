@@ -11,7 +11,7 @@
 //                                       the row reads "Connecting..." / "Open Android Auto" with the daemon state
 //   Force Stop          (raAction 22) - "quit", then SIGTERM after 3 s, SIGKILL after 10 s
 //   Restart             (raAction 23) - Force Stop, then Start
-//   Settings            (hmiAction 80 -> hmiState 14) - the six checkboxes (rhmiapp-39: they were rows of hmiState 10
+//   Settings            (hmiAction 80 -> hmiState 14) - the checkboxes (rhmiapp-39: they were rows of hmiState 10
 //                                       before, which kept the menu long); the app refreshes their models on focus
 //   About               (hmiAction 25 -> hmiState 12) - one Richtext text, XML only
 // When the phone connects after Start, the app sends iDrive back to the main menu (focusEvent 50 -> NativeStateID 1,
@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-39-settings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-40-usb (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -227,9 +227,9 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the six checkbox models whenever it is shown.
+// handler here, to refresh the seven checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
-const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the six checkboxes
+const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
 const unsigned    kActStop        = 22;      // <raAction id="22"/> row "Force Stop"
 const unsigned    kActRestart     = 23;      // <raAction id="23"/> row "Restart"
@@ -324,6 +324,13 @@ const unsigned    kActWarnings     = 30;
 const unsigned    kWarnModel       = 48;
 const char* const kWarnFlag        = "/var/opt/aa/show-warnings";
 const char* const kWarnManual      = "/opt/aa/show-warnings";
+// "Android Auto over USB (beta)" checkbox (rhmiapp-40): <checkbox action="83" id="86" model="84" textModel="85"> on the
+// Settings page, off by default. Flag file read by nbt-aad once at start (nbt_env.hpp usbEnabled(); NBT_USB in
+// nbt-aad.env wins either way), so a change applies at the next Start / Restart.
+const unsigned    kActUsbAa        = 83;
+const unsigned    kUsbAaModel      = 84;
+const char* const kUsbAaFlag       = "/var/opt/aa/usb-aa";
+const char* const kUsbAaManual     = "/opt/aa/usb-aa";
 const char* const kGctxProperty    = "hmi.graphicalContext";
 const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
 // DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
@@ -1705,6 +1712,35 @@ bool onKombiNavToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// ---- Android Auto over USB (beta) -------------------------------------------------------------------------------
+bool g_usbAaShown = false;
+bool usbAaOn() { return fileExists(kUsbAaFlag) || fileExists(kUsbAaManual); }
+
+void showUsbAa(bmw::PluginApp* app) {
+    app->updateModel(kUsbAaModel, usbAaOn());
+    g_usbAaShown = true;
+}
+
+bool onUsbAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    bool on = usbAaOn();
+    if (on) {
+        if (fileExists(kUsbAaFlag) && unlink(kUsbAaFlag) != 0)
+            alog("Android Auto over USB: cannot remove %s (errno %d)", kUsbAaFlag, errno);
+        if (fileExists(kUsbAaManual) && unlink(kUsbAaManual) != 0)
+            alog("Android Auto over USB: cannot remove %s (errno %d, read-only?): remove it by hand", kUsbAaManual, errno);
+    } else {
+        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
+        int fd = open(kUsbAaFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) alog("Android Auto over USB: cannot create %s (errno %d)", kUsbAaFlag, errno);
+        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
+    }
+    bool now = usbAaOn();
+    alog("menu: Android Auto over USB %s -> %s (applies at the next Start / Restart; NBT_USB in nbt-aad.env wins)",
+         on ? "on" : "off", now ? "on" : "off");
+    if (g_runApp) showUsbAa(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -1818,6 +1854,7 @@ void statusRun(void* /*self*/) {
     if (!g_driveModeShown) showDriveMode(app);
     if (!g_kombiNavShown) showKombiNav(app);
     if (!g_warningsShown) showWarnings(app);
+    if (!g_usbAaShown) showUsbAa(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -1980,7 +2017,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the six checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the seven checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -1998,7 +2035,8 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showDriveMode(g_app);
         showKombiNav(g_app);
         showWarnings(g_app);
-        alog("settings: six checkbox models refreshed");
+        showUsbAa(g_app);
+        alog("settings: seven checkbox models refreshed");
     }
     return true;
 }
@@ -2033,6 +2071,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActDriveMode, &onDriveModeToggle);
     addAction(self, kActKombiNav, &onKombiNavToggle);
     addAction(self, kActWarnings, &onWarningsToggle);
+    addAction(self, kActUsbAa, &onUsbAaToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;

@@ -19,6 +19,7 @@
       <raAction id="30"/>
       <hmiAction id="25" target="12"/>
       <hmiAction id="80" target="14"/>
+      <raAction id="83"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -67,6 +68,10 @@
       <raIntModel id="40" modelType="NativeStateID" value="1"/>
       <raIntModel id="41" modelType="NativeStateID" value="20"/>
       <textIdModel id="82" textId="23">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="84"/>
+      <textIdModel id="85" textId="24">
         <synonyms/>
       </textIdModel>
     </models>
@@ -145,6 +150,7 @@
           <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
           <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
+          <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
         </components>
       </hmiState>
     </hmiStates>

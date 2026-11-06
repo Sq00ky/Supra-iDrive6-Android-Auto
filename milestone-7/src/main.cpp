@@ -1542,7 +1542,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.32-pr66"
+#define NBT_AAD_BUILD "v1.9.33-usbset"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1803,6 +1803,8 @@ int main(int argc, char* argv[]) {
     // active" state also covers a USB phone and the auto-connector stays quiet; startSession() picks the owner.
     nbt::UsbAccessory usb(&onUsbConnected, &tcp_server, &sessionOwner, NULL);
     if (nbt::usbEnabled()) {
+        const char* usbEnv = getenv("NBT_USB");
+        printf("[Main] Android Auto over USB: on (%s)\n", usbEnv && *usbEnv ? "NBT_USB" : "Settings checkbox");
         if (usb.start()) g_usb = &usb;
         else printf("[Main] Android Auto over USB failed to start.\n");
     }
