@@ -37,6 +37,7 @@ const char* const kBackupDefault = "/opt/aa/pf.bak";
 #define NBT_PFCTL "/bin/pfctl"   // host smoke test: -DNBT_PFCTL=<fake>
 #endif
 const char* const kPfctl = NBT_PFCTL;
+#define PF_AA_VERSION "1.1"   // 1.1: /dev/shmem check copy (fsync ENOSYS) no longer fails the install
 const char* const kMountPoint = "/fs/sda0";
 #ifndef NBT_PF_CHECKFILE
 #define NBT_PF_CHECKFILE "/dev/shmem/pf_aa-check.conf"   // parse-only copy for pfctl -n (RAM)
@@ -73,8 +74,13 @@ bool writeAll(int fd, const std::string& data) {
 bool writeFile(const char* path, const std::string& data, int flags, mode_t mode) {
     int fd = open(path, O_WRONLY | O_CREAT | flags, mode);
     if (fd < 0) return false;
-    bool ok = writeAll(fd, data) && fsync(fd) == 0;
+    bool ok = writeAll(fd, data);
     int e = errno;
+    if (ok) {
+        int r = fsync(fd);
+        e = errno;
+        ok = nbt::pfaa::syncedOk(r, r == 0 ? 0 : e);   // /dev/shmem: ENOSYS, nothing to flush
+    }
     close(fd);
     errno = e;
     return ok;
@@ -118,11 +124,12 @@ int run(const std::string& cmd, std::string& out) {
 // pfctl -n (parse only, nothing loaded) on a file. 0 = it parses; out = pfctl's messages.
 int parses(const char* path, std::string& out) { return run(std::string(kPfctl) + " -n -f " + path, out); }
 
-// Same for text that is not on disk yet: through a RAM copy.
+// Same for text that is not on disk yet: through a RAM copy, removed again whatever happens. < 0: pfctl did not run.
 int parsesText(const std::string& text, std::string& out) {
     if (!writeFile(kCheckFile, text, O_TRUNC, 0644)) {
         out = std::string("cannot write ") + kCheckFile + ": " + strerror(errno) + "\n";
-        return -1;
+        unlink(kCheckFile);
+        return -2;
     }
     int rc = parses(kCheckFile, out);
     unlink(kCheckFile);
@@ -236,6 +243,11 @@ int install(const char* pf, const char* env, const char* backup) {
     // The new file has to parse before anything is written.
     std::string newConf = nbt::pfaa::withRules(conf, have);
     int rc = parsesText(newConf, out);
+    if (rc < 0 || rc == 126 || rc == 127) {   // pfctl did not run (sh: 126 not executable, 127 not found)
+        printf("ERROR: could not run the '%s -n' check of pf.conf with the rules added:\n%sNothing changed.\n", kPfctl,
+               out.empty() ? "(pfctl did not start)\n" : out.c_str());
+        return 2;
+    }
     if (rc != 0) {
         printf("ERROR: '%s -n' rejects pf.conf with the rules added (rc %d):\n%sNothing changed.\n", kPfctl, rc,
                out.c_str());
@@ -393,7 +405,7 @@ int main(int argc, char** argv) {
         struct stat st;
         pf = stat(kPfDefault, &st) == 0 ? kPfDefault : kPfFallback;
     }
-    printf("pf_aa: Android Auto (TCP 5277) in the car's packet filter, %s\n", pf);
+    printf("pf_aa " PF_AA_VERSION ": Android Auto (TCP 5277) in the car's packet filter, %s\n", pf);
     if (mode == INSTALL) return install(pf, env, backup);
     if (mode == CHECK) return check(pf, env, backup);
     return uninstall(pf, env, backup);

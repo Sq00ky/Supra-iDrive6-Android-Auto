@@ -102,6 +102,13 @@ int main() {
     std::string other = "# carplay\npass quick on uap0 proto tcp to port 52770\n";
     assert(nbt::pfaa::stripAaRules(other) == other);
 
+    // 10. fsync on a file system with nothing to flush (QNX /dev/shmem: ENOSYS) counts as written; real errors don't.
+    assert(nbt::pfaa::syncedOk(0, 0));
+    assert(nbt::pfaa::syncedOk(-1, ENOSYS));
+    assert(nbt::pfaa::syncedOk(-1, EINVAL));
+    assert(!nbt::pfaa::syncedOk(-1, EIO));
+    assert(!nbt::pfaa::syncedOk(-1, ENOSPC));
+
     printf("test_pf_aa: all passed\n");
     return 0;
 }

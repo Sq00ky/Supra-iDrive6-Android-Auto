@@ -12,6 +12,7 @@
 //
 // Pure text logic, no I/O: host test tests/test_pf_aa.cpp.
 
+#include <errno.h>
 #include <string>
 #include <string.h>
 
@@ -28,6 +29,18 @@ static const char* const kWfdRules =
     "pass quick on wfd0 proto tcp from 172.16.222.1 to 172.16.222/24 port 5277 keep state\n";
 static const char* const kEnvKey = "NBT_KEEP_PF";
 static const int kMaxEnvSettings = 15;   // the iDrive app passes only the first 15 settings of nbt-aad.env
+
+// fsync()'s answer for a file just written. A file system with nothing to flush may say so with an error instead of 0:
+// QNX's /dev/shmem (RAM) answers ENOSYS - car, 2026-11-06: "cannot write /dev/shmem/pf_aa-check.conf: Function not
+// implemented" although the whole file was there - and POSIX allows EINVAL for files that cannot be synchronised.
+// Those count as written; files that matter (pf.conf, pf.bak) are read back and compared anyway.
+inline bool syncedOk(int rc, int err) {
+    if (rc == 0 || err == ENOSYS || err == EINVAL) return true;
+#ifdef ENOTSUP
+    if (err == ENOTSUP) return true;
+#endif
+    return false;
+}
 
 inline bool isWordChar(char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
