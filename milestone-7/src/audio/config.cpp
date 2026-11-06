@@ -18,7 +18,8 @@ int envInt(const char* name, int def) {
 } // namespace
 
 BrowserConfig::BrowserConfig()
-    : conn(0xb8), want_rate(48000), force_rate(0), idle_s(10), prompt_idle_ms(1000), wait_ms(30), preroll_ms(60),
+    : conn(0xb8), want_rate(48000), force_rate(0), idle_s(10), prompt_idle_ms(1000), hold(false), wait_ms(30),
+      preroll_ms(60),
       drift(true), drift_pi(true), prio(15), resampler_linear(false), speex_q(5), resampler_file("/tmp/nbt_resampler"),
       refocus(true), shim_path("/opt/mm/lib/libasound/libasound.so"), pcm(NULL), frag(4096), frags(5), duck_db(-12),
       duck_attack_ms(80), duck_release_ms(500), duck_hold_ms(600), media_gain_db(0), guidance_gain_db(0),
@@ -34,6 +35,7 @@ BrowserConfig readBrowserConfig() {
     }
     c.idle_s = envInt("NBT_BROWSER_IDLE_S", 10);
     c.prompt_idle_ms = envInt("NBT_BROWSER_PROMPT_IDLE_MS", 1000);
+    c.hold = envFlag("NBT_BROWSER_HOLD") == 1;
     {
         // Above ~60 ms a wait could outlast what the device still holds when the mixer wakes (~92 ms).
         int w = envInt("NBT_BROWSER_WAIT_MS", 30);

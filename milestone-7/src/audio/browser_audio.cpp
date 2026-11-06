@@ -55,7 +55,8 @@ void* mixerThunk(void* self) {
 } // namespace
 
 BrowserAudio::BrowserAudio()
-    : conn_(0xb8), refocus_(true), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
+    : conn_(0xb8), refocus_(true), hold_(false), yield_req_(false), yield_what_(""), focus_loss_fn_(NULL),
+      focus_loss_user_(NULL), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
       last_sound_ms_(0), last_media_ms_(0), blocks_(0), last_stats_ms_(0), was_ducking_(false) {
     consumed_fn_ = NULL;
     consumed_user_ = NULL;
@@ -151,6 +152,8 @@ bool BrowserAudio::init(const BrowserConfig& cfg) {
     RoutePolicy::Config route_cfg;
     route_cfg.idle_s = cfg.idle_s;
     route_cfg.prompt_idle_ms = cfg.prompt_idle_ms;
+    route_cfg.hold = cfg.hold;
+    hold_ = cfg.hold;
     pthread_mutex_lock(&lock_);
     route_policy_.configure(route_cfg);
     pthread_mutex_unlock(&lock_);
@@ -201,6 +204,9 @@ bool BrowserAudio::init(const BrowserConfig& cfg) {
            "ducking %d dB (attack %u / hold %u / release %u ms)\n",
            conn_, conn_ ? "" : " (NBT_BROWSER_CONN=0: not routed)", route_cfg.idle_s, route_cfg.prompt_idle_ms,
            cfg.duck_db, duck_cfg_.attack_ms, duck_cfg_.hold_ms, duck_cfg_.release_ms);
+    if (hold_)
+        printf("[Browser] hold (NBT_BROWSER_HOLD=1): after AA media the source is kept through pauses until the driver "
+               "changes it (steering-wheel MODE); a prompt alone is still released after %d ms\n", route_cfg.prompt_idle_ms);
     bool ok = dev_.load();
     if (conn_ && !route_.configure()) printf("[Browser] audioconn not found: connection 0x%x cannot be built\n", conn_);
     return ok;
@@ -267,6 +273,12 @@ void BrowserAudio::onStreamState(uint8_t channel, bool started, uint32_t rate, u
     } else {
         printf("[Browser] AA %s stream %s%s\n", audioStreamName(s), started ? "started" : "stopped",
                started ? " without a declared format: measuring its rate from the timestamps" : "");
+    }
+    if (started && s == MEDIA && hold_) {
+        pthread_mutex_lock(&lock_);
+        const bool was = route_policy_.endYield();
+        pthread_mutex_unlock(&lock_);
+        if (was) printf("[Browser] AA media started again after the source change: it may take the source back\n");
     }
     if (started) {
         stream_[s].sess.rate.start(rate);
@@ -414,6 +426,49 @@ bool BrowserAudio::routedForPlayback() {
     bool r = route_policy_.routed();
     pthread_mutex_unlock(&lock_);
     return r;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Hold: the driver changes source (NBT_BROWSER_HOLD=1)
+// ---------------------------------------------------------------------------------------------------------------
+
+void BrowserAudio::onSourceChange(const char* what) {
+    if (!hold_) return;
+    pthread_mutex_lock(&lock_);
+    yield_req_ = true;
+    yield_what_ = what ? what : "?";
+    pthread_mutex_unlock(&lock_);
+}
+
+void BrowserAudio::onAudioFocusRequest(uint32_t type) {
+    if (!hold_ || type != 1) return;   // GAIN: the phone wants to play media (transient / navi gains are prompts)
+    pthread_mutex_lock(&lock_);
+    const bool was = route_policy_.endYield();
+    pthread_mutex_unlock(&lock_);
+    if (was) printf("[Browser] the phone asked for audio focus again: AA media may take the source back\n");
+}
+
+void BrowserAudio::applySourceChange(bool other_active) {   // mixer thread
+    pthread_mutex_lock(&lock_);
+    const bool req = yield_req_;
+    const char* what = yield_what_;
+    yield_req_ = false;
+    const bool held = req && route_policy_.holdsMedia(last_media_ms_);
+    if (held) route_policy_.yieldToCar();
+    pthread_mutex_unlock(&lock_);
+    if (!req) return;
+    if (!held) {
+        printf("[Browser] source change (%s): AA media holds no source, nothing to give back\n", what);
+        return;
+    }
+    printf("[Browser] the driver changed the audio source (%s): giving the browser source back to the car and telling "
+           "the phone it lost audio focus\n", what);
+    discard(MEDIA);
+    stream_[MEDIA].mix.pending.clear();
+    last_media_ms_ = 0;   // from now on only prompts hold the source, and the prompt rule releases it
+    // A prompt playing right now finishes first: the prompt rule releases the source after it.
+    if (!other_active) releaseRoute("the driver changed the source");
+    if (focus_loss_fn_) focus_loss_fn_(focus_loss_user_);
 }
 
 void BrowserAudio::setMediaGain(float g) {
@@ -634,16 +689,27 @@ void BrowserAudio::mixerLoop() {
                    dev_.rate(), (unsigned)stream_[MEDIA].in.src_rate, (unsigned)stream_[GUIDANCE].in.src_rate, (unsigned)stream_[SYSTEM].in.src_rate);
         }
         const uint64_t now = nowMs();
-        bool queued = false, any_started = false;
+        bool queued = false, any_started = false, active[NSTREAMS];
         for (int s = 0; s < NSTREAMS; ++s) {
+            const bool q = stream_[s].in.ring->size() > 0 || !stream_[s].mix.pending.empty();
             if (stream_[s].in.started) any_started = true;
-            if (stream_[s].in.ring->size() > 0 || !stream_[s].mix.pending.empty()) queued = true;
+            if (q) queued = true;
+            active[s] = stream_[s].in.started || q;
         }
-        if (any_started || queued) requestRoute(any_started ? "AA stream started" : "AA audio queued");
+        const bool other_active = active[GUIDANCE] || active[SYSTEM];
+        if (hold_) applySourceChange(other_active);
+        pthread_mutex_lock(&lock_);
+        const bool yielded = route_policy_.yielded();
+        const bool need = route_policy_.needsSource(active[MEDIA], other_active);
+        pthread_mutex_unlock(&lock_);
+        // After a source change the phone's last media frames (or a phone that keeps sending) play nowhere: the
+        // car's source has the speakers. Dropped and acked, so the phone is not held up.
+        if (yielded && active[MEDIA]) { discard(MEDIA); stream_[MEDIA].mix.pending.clear(); }
+        if (need) requestRoute(any_started ? "AA stream started" : "AA audio queued");
 
         // Route housekeeping: give up on a grant that never came; drop the source after a quiet spell (RoutePolicy).
         pthread_mutex_lock(&lock_);
-        const RoutePolicy::Action ra = route_policy_.decide(now, any_started || queued, last_sound_ms_, last_media_ms_);
+        const RoutePolicy::Action ra = route_policy_.decide(now, need, last_sound_ms_, last_media_ms_);
         const uint32_t grant_timeout_ms = route_policy_.config().grant_timeout_ms;
         pthread_mutex_unlock(&lock_);
         if (ra == RoutePolicy::GRANT_TIMEOUT) {
@@ -678,6 +744,7 @@ void BrowserAudio::mixerLoop() {
                 const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), stream_[s].mix.pending.size(), stream_[s].in.src_rate, audioSourceChannels(s),
                                                        dev_.rate(), kOutCh);
                 mix[s] = stream_[s].mix.gate.ready(started, avail, now);
+                if (s == MEDIA && yielded) mix[s] = false;   // given back to the car: not pulled, counted or reported
                 live[s] = started && mix[s];
             }
             // A playing stream that is a few ms short of a whole block: wait for it rather than padding a hole into
@@ -747,7 +814,7 @@ void BrowserAudio::mixerLoop() {
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
                    have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck, &out[0]);
         if (loud[MEDIA] || duck) last_sound_ms_ = now;
-        if (loud[MEDIA] || stream_[MEDIA].in.started) last_media_ms_ = now;
+        if ((loud[MEDIA] || stream_[MEDIA].in.started) && !yielded) last_media_ms_ = now;
         const bool ducking = mixer_.ducking();
         if (ducking != was_ducking_) {
             printf("[Browser] media %s\n", ducking ? "ducked under a prompt / system sound" : "back to full level");
@@ -831,6 +898,8 @@ void BrowserAudio::onSessionEnded() {
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);
     route_policy_.clearBackoff();
+    route_policy_.endYield();   // the next session starts holding nothing
+    yield_req_ = false;
     pthread_mutex_unlock(&lock_);
     last_media_ms_ = 0;
     waited_ms_ = waited_blocks_ = 0;

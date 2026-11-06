@@ -655,6 +655,7 @@ Leave these unset unless you are testing.
 | `NBT_RAM_LOG` | `1` | v1.8.67: with no USB log, the daemon and the iDrive app log to RAM (`/dev/shmem/nbt-aad.log`, `/dev/shmem/nbt-aad-app.log`), fresh per run, capped at 5 MB each; at the cap RAM logging stops for that run. `0` = off |
 | `NBT_AUDIO_MODE` | `bt` (default again since v1.8.66), `browser` (car-verified; the default in v1.8.61..v1.8.65) or `a2i`. `browser`: Android Auto sound comes over the Android Auto connection instead of Bluetooth and plays through the car's browser audio source (see [Browser audio mode](#browser-audio-mode)). `bt`: media, prompts and Assistant stay on Bluetooth A2DP. Unset follows `NBT_AUDIO_BT` if that is set (`1` = `bt`, `0` = `a2i`) |
 | `NBT_BROWSER_CONN`, `NBT_BROWSER_IDLE_S`, `NBT_BROWSER_PROMPT_IDLE_MS`, `NBT_BROWSER_REFOCUS`, `NBT_BROWSER_PCM`, `NBT_BROWSER_RATE`, `NBT_BROWSER_FRAG`, `NBT_BROWSER_FRAGS`, `NBT_BROWSER_ASOUND` | Browser mode: connection id (default `0xb8`, `0` = don't route), release the source after N s without sound once AA media has played (default `10`, `0` = keep it until the session ends), release it N ms after a prompt or system sound when no AA media is playing (default `1000`, `0` = use the 10 s rule), ask for it again when the mic closes (default on), `card:device` instead of the preferred device, device rate (default `48000`; this car's browser device takes 22050..44100, so 44100 is used), fragment size in bytes (default `4096`, rounded down to a power of two: A2I refuses any other size), fragment count (default `5`; if the device refuses, the daemon tries twice the count, then 8 fragments of twice the size), shim path (default `/opt/mm/lib/libasound/libasound.so`) |
+| `NBT_BROWSER_HOLD` | Browser mode: `1` = once AA media has played, keep the browser source through pauses until you press the steering-wheel MODE button, then give it back to the car and pause the phone (default `0`: released after `NBT_BROWSER_IDLE_S`). Not car-verified |
 | `NBT_DUCK_DB`, `NBT_DUCK_ATTACK_MS`, `NBT_DUCK_HOLD_MS`, `NBT_DUCK_RELEASE_MS`, `NBT_MEDIA_GAIN_DB`, `NBT_GUIDANCE_GAIN_DB`, `NBT_SYSTEM_GAIN_DB` | Browser mode ducking: media level under a prompt or system sound (default `-12` dB), ramp down / hold / ramp up (default `80` / `600` / `500` ms), fixed per-stream gains (default `0` dB) |
 | `NBT_SYSTEM_SINK` | `1` / `0` forces the SYSTEM_AUDIO sink (ch 16) in / out of service discovery (default: in browser mode only) |
 | `NBT_BROWSER_WAIT_MS` | Browser mode: wait up to this long for a block of a playing stream that arrives a little late instead of padding it with silence (default `30`, max `60`, `0` = pad at once). Only when the device holds enough to cover the wait: the last write blocked, or the mixer is at least the wait + a block + 20 ms ahead of real time (on the car the shim never blocks and the mixer runs ~150 ms ahead). The 10 s stats show `[Browser] wait room: writes that blocked .. of .., lead over real time ..-.. ms`; real gaps fade instead of clicking |
@@ -731,6 +732,14 @@ Car-verified; the default in v1.8.61..v1.8.65. Since v1.8.66 Bluetooth is the de
   prompt or a system sound played (you are listening to the radio) it is released `NBT_BROWSER_PROMPT_IDLE_MS` (1000)
   ms after it, so the radio is cut only for the prompt. Audio that arrives before the car grants the source waits, so
   the start of a prompt is not cut off.
+- When the source is released after a pause, the car goes back to its own main source. If that is Bluetooth audio
+  from the same phone, iDrive tells the phone to play: a paused song starts again by itself and the daemon takes the
+  source back (seen on a BMW F36 with NBT Evo ID5). `NBT_BROWSER_HOLD=1` keeps the source through any pause instead, until you pick another source
+  with the steering-wheel MODE button: then the daemon gives the source back to the car and tells the phone it lost
+  audio focus, so the phone pauses. Pressing play in Android Auto takes the source again (the phone asks for audio
+  focus first). Prompts on the radio are cut in as before. Off by default: a source picked in the iDrive menu is not
+  detected yet, and while the hold is on the car's own sources stay silent until you press MODE. Log:
+  `[Browser] the driver changed the audio source (MODE)`, `[AASession] audio focus -> phone: LOSS`. Not car-verified.
 - Calls are unchanged (Bluetooth hands-free). Whether `0xb8` comes back by itself after a call is not known yet.
 
 What to look for in the log: `[Main] audio mode: browser`, `[SDR] added channel 16`, `[AASession] ch N audio sink
@@ -1154,7 +1163,8 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_media_ack` | Deferred audio acks: acked once consumed, forced acks and skipped bytes, window-full count, a phone held to its window |
 | `test_media_msgs` | AA media-channel messages byte for byte against Google's receiver library (media ack with arrival times, AudioUnderflowNotification) |
 | `test_audio_format` | Offered AudioConfigs read back from the SDR, the phone's choice in AV START_INDICATION, guidance offered at one rate in browser mode |
-| `test_route_policy` | Browser source build / release: grant timeout and 60 s backoff, release after `NBT_BROWSER_IDLE_S` with media and `NBT_BROWSER_PROMPT_IDLE_MS` without, no build while releasing, release timeout |
+| `test_route_policy` | Browser source build / release: grant timeout and 60 s backoff, release after `NBT_BROWSER_IDLE_S` with media and `NBT_BROWSER_PROMPT_IDLE_MS` without, no build while releasing, release timeout, `NBT_BROWSER_HOLD` (held through pauses, given back on a source change, taken again on the phone's focus request) |
+| `test_source_key` | Steering-wheel MODE press (MFL 0x15 fkt 0x513) on the MOST client: both of the car's copies count, the release and other functions do not |
 | `test_resampler` | speexdsp vs linear: passband 1-18 kHz, the 23 kHz alias, output length at 48 / 16 / 44.1 kHz, drift trim, chunked = whole, no click on trim changes, passthrough, engine switch, every trim clean across ±2 % (fixed-point speex needs a ratio denominator below 2^15) (link `src/audio/speex.c` built as C) |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_entry_key` | What one press of the Open Android Auto entry / favourite key does, per daemon state |

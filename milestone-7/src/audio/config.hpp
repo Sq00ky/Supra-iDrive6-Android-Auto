@@ -62,6 +62,7 @@ struct BrowserConfig {
     uint32_t force_rate;        // NBT_BROWSER_FORCE_RATE: experiment, ask for this rate whatever (0 = off)
     int idle_s;                 // NBT_BROWSER_IDLE_S: release after this long without sound once media played (10)
     int prompt_idle_ms;         // NBT_BROWSER_PROMPT_IDLE_MS: release this long after a prompt alone (1000)
+    bool hold;                  // NBT_BROWSER_HOLD=1: keep the source through pauses until the driver changes it (off)
     uint32_t wait_ms;           // NBT_BROWSER_WAIT_MS: late-input wait per block (30, 0..60)
     uint32_t preroll_ms;        // NBT_BROWSER_PREROLL_MS: pre-roll per stream (60, 0..200)
     bool drift;                 // NBT_BROWSER_DRIFT: media clock-drift correction (on)
