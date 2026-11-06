@@ -755,7 +755,7 @@ head unit afterwards. `pf_aa --check` reports (`rules look good`); `pf_aa --unin
 stock file, restores `pf.conf` from it and removes `NBT_KEEP_PF`. A software update brings the stock `pf.conf` back;
 install again then. Car-verified on the Supra (the same four lines added by hand). pf_aa 1.0 stopped before changing
 anything with `cannot write /dev/shmem/pf_aa-check.conf: Function not implemented` (QNX's RAM disk has no `fsync`);
-1.1 (first line `pf_aa 1.1: ...`) fixes that.
+1.1 (first line `pf_aa 1.1: ...`) fixes that; `--install` and `--check` car-verified on the Supra 2026-11-06.
 
 ### Assistant doesn't hear you / reply is silent or quiet
 
