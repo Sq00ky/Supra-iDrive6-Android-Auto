@@ -43,7 +43,9 @@ The Daemon sits on your headunit and waits for you to click "Android Auto" and s
 3. A prepared Flash Drive
 
 ### Bavarian SSH Client
-https://github.com/user-attachments/assets/4a2647f7-915d-4a10-8dcd-f914aef9b308
+
+(demo)[https://github.com/user-attachments/assets/e38313fe-8473-4dc8-bfd0-d32993cbc0f9]
+
 Click start and you should be good to go.
 
 ### TurboCode Proxy
