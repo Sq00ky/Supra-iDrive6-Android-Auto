@@ -43,7 +43,7 @@ The Daemon sits on your headunit and waits for you to click "Android Auto" and s
 3. A prepared Flash Drive
 
 ### Bavarian SSH Client
-[!(video)](https://ssh.bavarian-aa.uk/demo.webm)
+[demo.webm](https://github.com/user-attachments/assets/748a5e50-f6e3-45f7-bfe6-d170d2698856)
 Click start and you should be good to go.
 ### TurboCode Proxy
 It's super easy, press "Search ZGW", you should see your VIN number pop up as long as your ODB -> ENet cable is successfully connected.
