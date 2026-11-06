@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -555,10 +556,7 @@ void AASession::postTouchEvent(const TouchEventOut& ev) {
     (void)w;
 }
 
-static void putVar(std::vector<uint8_t>& o, uint64_t v) {
-    while (v >= 0x80) { o.push_back((uint8_t)(v | 0x80)); v >>= 7; }
-    o.push_back((uint8_t)v);
-}
+static void putVar(std::vector<uint8_t>& o, uint64_t v) { proto::putVarint(o, v); }
 
 void AASession::postKeyEvent(uint32_t keycode, bool down) {
     KeyOut k; k.keycode = keycode; k.down = down ? 1 : 0; k.delta = 0; k.rel = false;
@@ -866,24 +864,7 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // DrivingStatus driving_status=13 {status=1}.
 // LocationData location_data=1 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
-static uint32_t pbFirstVarint(const std::vector<uint8_t>& d, size_t off, uint32_t field) {
-    size_t i = off;
-    while (i < d.size()) {
-        uint32_t tag = 0; int sh = 0;
-        while (i < d.size()) { uint8_t b = d[i++]; tag |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-        uint32_t f = tag >> 3, w = tag & 7;
-        if (w == 0) {
-            uint32_t v = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; v |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            if (f == field) return v;
-        } else if (w == 2) {
-            uint32_t len = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; len |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            i += len;
-        } else if (w == 1) { i += 8; } else if (w == 5) { i += 4; } else { break; }
-    }
-    return 0xFFFFFFFFu;
-}
+using proto::pbFirstVarint;
 
 // SensorStartRequest min_update_period (field 2, int64). DHU r2.1 treats -1 as "do not send", and otherwise sends each
 // report as it comes. Here it is only logged, to see what the phone asks for. False: the field is absent.
@@ -1422,7 +1403,8 @@ void AASession::sessionLoop() {
                     printf("[AASession] >>> Received ServiceDiscoveryRequest from phone! Sending ServiceDiscoveryResponse...\n");
                     sendServiceDiscoveryResponse();
                 } else if (msg_id == 0x0012) { // AudioFocusRequest
-                    uint8_t requested_focus = (frame_data.size() >= 4) ? frame_data[3] : 0;
+                    const uint32_t focus_field = pbFirstVarint(frame_data, 2, 1);   // AudioFocusRequest {type=1}
+                    uint8_t requested_focus = focus_field == 0xFFFFFFFFu ? 0 : (uint8_t)focus_field;
                     // AudioFocusType 1 GAIN, 2 GAIN_TRANSIENT, 3 GAIN_NAVI (guidance prompts), 4 RELEASE. Like openauto, answer
                     // RELEASE with LOSS (3) and everything else with GAIN (1); answering RELEASE with NONE (0) left the
                     // phone without a clean end of each guidance prompt.
@@ -1458,20 +1440,12 @@ void AASession::sessionLoop() {
                     break;
                 } else if (msg_id == 11) { // PingRequest
                     printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");
-                    // PingResponse {timestamp = field 1}: echo the request's timestamp varint.
-                    std::vector<uint8_t> ping_resp;
-                    ping_resp.push_back(0x00);
-                    ping_resp.push_back(0x0C); // Msg ID 12 (PingResponse)
-                    if (frame_data.size() > 3 && frame_data[2] == 0x08) {
-                        size_t i = 3;
-                        ping_resp.push_back(0x08);
-                        while (i < frame_data.size() && ping_resp.size() < 16) {
-                            uint8_t b = frame_data[i++];
-                            ping_resp.push_back(b);
-                            if (!(b & 0x80)) break;
-                        }
-                    }
-                    sendFrame(0x00, 0x03, &ping_resp[0], ping_resp.size()); // Pings are unencrypted
+                    enum { MSG_PING_RESPONSE = 0x000C, F_TIMESTAMP = 1 };
+                    proto::ProtoWriter ping_resp(MSG_PING_RESPONSE);   // echoes the request's timestamp
+                    uint64_t timestamp;
+                    if (frame_data.size() > 2 && proto::pbFindVarint(&frame_data[2], frame_data.size() - 2, F_TIMESTAMP, timestamp))
+                        ping_resp.unsignedInteger(F_TIMESTAMP, timestamp);
+                    sendFrame(0x00, 0x03, &ping_resp.bytes()[0], ping_resp.bytes().size()); // Pings are unencrypted
                 } else {
                     printf("[AASession] Control Message RX: ID=0x%04X, Len=%u\n",
                            msg_id, static_cast<unsigned int>(frame_data.size()));

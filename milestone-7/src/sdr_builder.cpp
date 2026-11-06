@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "sdr_builder.hpp"
+#include "aa_proto.hpp"
 #include "nbt_env.hpp"
 #include "audio/config.hpp"
 #include "car_config.hpp"
@@ -116,15 +117,15 @@ AaChannel keysOnlyInputChannel(int id, int displayId) {
 
 AaChannel mainInputChannel() {
     static const int kKeycodes[] = {
-        AA_KEYCODE_SOFT_LEFT, AA_KEYCODE_SOFT_RIGHT, AA_KEYCODE_HOME, AA_KEYCODE_BACK, AA_KEYCODE_CALL, AA_KEYCODE_ENDCALL,
-        AA_KEYCODE_0, AA_KEYCODE_1, AA_KEYCODE_2, AA_KEYCODE_3, AA_KEYCODE_4, AA_KEYCODE_5, AA_KEYCODE_6, AA_KEYCODE_7, AA_KEYCODE_8, AA_KEYCODE_9,
-        AA_KEYCODE_STAR, AA_KEYCODE_POUND,
-        AA_KEYCODE_DPAD_UP, AA_KEYCODE_DPAD_DOWN, AA_KEYCODE_DPAD_LEFT, AA_KEYCODE_DPAD_RIGHT, AA_KEYCODE_DPAD_CENTER,
-        AA_KEYCODE_PLUS, AA_KEYCODE_SEARCH,
-        AA_KEYCODE_MEDIA_PLAY_PAUSE, AA_KEYCODE_MEDIA_NEXT, AA_KEYCODE_MEDIA_PREVIOUS, AA_KEYCODE_MEDIA_PLAY, AA_KEYCODE_MEDIA_PAUSE,
-        AA_KEYCODE_DPAD_UP_LEFT, AA_KEYCODE_DPAD_DOWN_LEFT, AA_KEYCODE_DPAD_UP_RIGHT, AA_KEYCODE_DPAD_DOWN_RIGHT,
-        AA_KEYCODE_ROTARY_CONTROLLER, AA_KEYCODE_MEDIA, AA_KEYCODE_NAVIGATION, AA_KEYCODE_TEL,
-        AA_KEYCODE_UNKNOWN_65541, AA_KEYCODE_UNKNOWN_65542, AA_KEYCODE_UNKNOWN_65543
+        AAK_SOFT_LEFT, AAK_SOFT_RIGHT, AAK_HOME, AAK_BACK, AAK_CALL, AAK_ENDCALL,
+        AAK_0, AAK_1, AAK_2, AAK_3, AAK_4, AAK_5, AAK_6, AAK_7, AAK_8, AAK_9,
+        AAK_STAR, AAK_POUND,
+        AAK_DPAD_UP, AAK_DPAD_DOWN, AAK_DPAD_LEFT, AAK_DPAD_RIGHT, AAK_DPAD_CENTER,
+        AAK_PLUS, AAK_SEARCH,
+        AAK_MEDIA_PLAY_PAUSE, AAK_MEDIA_NEXT, AAK_MEDIA_PREVIOUS, AAK_MEDIA_PLAY, AAK_MEDIA_PAUSE,
+        AAK_DPAD_UP_LEFT, AAK_DPAD_DOWN_LEFT, AAK_DPAD_UP_RIGHT, AAK_DPAD_DOWN_RIGHT,
+        AAK_ROTARY_CONTROLLER, AAK_MEDIA, AAK_NAVIGATION, AAK_TEL,
+        AAK_UNKNOWN_65541, AAK_UNKNOWN_65542, AAK_UNKNOWN_65543
     };
     AaChannel c(AA_CH_MAIN_INPUT, AaChannel::INPUT_SOURCE);
     c.input.keycodes = listOf(kKeycodes);
@@ -164,57 +165,7 @@ AaChannel navStatusChannel() {
 
 // ---- protobuf ---------------------------------------------------------------------------------------------------
 
-enum { WIRE_VARINT = 0, WIRE_FIXED64 = 1, WIRE_LENGTH = 2, WIRE_FIXED32 = 5 };
-
-void putVarint(std::vector<uint8_t>& o, uint64_t v) {
-    while (v >= 0x80) { o.push_back((uint8_t)(v | 0x80)); v >>= 7; }
-    o.push_back((uint8_t)v);
-}
-
-bool getVarint(const uint8_t* p, size_t n, size_t& pos, uint64_t& v) {
-    v = 0; int sh = 0;
-    while (pos < n && sh < 64) {
-        uint8_t b = p[pos++];
-        v |= (uint64_t)(b & 0x7f) << sh;
-        if (!(b & 0x80)) return true;
-        sh += 7;
-    }
-    return false;
-}
-
-class ProtoWriter {
-public:
-    // Negative values go out sign-extended to 64 bits, as protobuf does for int32.
-    void integer(unsigned field, int value) {
-        putVarint(out_, (field << 3) | WIRE_VARINT);
-        putVarint(out_, (uint64_t)(int64_t)value);
-    }
-    void unsignedInteger(unsigned field, uint32_t value) {
-        putVarint(out_, (field << 3) | WIRE_VARINT);
-        putVarint(out_, value);
-    }
-    void string(unsigned field, const std::string& value) {
-        putVarint(out_, (field << 3) | WIRE_LENGTH);
-        putVarint(out_, value.size());
-        out_.insert(out_.end(), value.begin(), value.end());
-    }
-    void message(unsigned field, const ProtoWriter& value) {
-        putVarint(out_, (field << 3) | WIRE_LENGTH);
-        putVarint(out_, value.out_.size());
-        out_.insert(out_.end(), value.out_.begin(), value.out_.end());
-    }
-    void repeated(unsigned field, const std::vector<int>& values) {
-        for (size_t i = 0; i < values.size(); ++i) integer(field, values[i]);
-    }
-    void packed(unsigned field, const std::vector<int>& values) {
-        ProtoWriter list;
-        for (size_t i = 0; i < values.size(); ++i) putVarint(list.out_, (uint64_t)(int64_t)values[i]);
-        message(field, list);
-    }
-    const std::vector<uint8_t>& bytes() const { return out_; }
-private:
-    std::vector<uint8_t> out_;
-};
+using proto::ProtoWriter;
 
 ProtoWriter encode(const AaAudioConfig& c) {
     enum { F_SAMPLE_RATE = 1, F_BIT_DEPTH = 2, F_CHANNEL_COUNT = 3 };
@@ -432,7 +383,7 @@ AaChannel* findChannel(ServiceDiscovery& m, unsigned id) {
 } // namespace
 
 ServiceDiscovery referenceManifest(const SdrIdentity& id) {
-    static const int kClusterKeycodes[] = { AA_KEYCODE_DPAD_CENTER, AA_KEYCODE_ROTARY_CONTROLLER };
+    static const int kClusterKeycodes[] = { AAK_DPAD_CENTER, AAK_ROTARY_CONTROLLER };
     enum { CLUSTER_VIDEO_MARGIN_WIDTH = 400, CLUSTER_VIDEO_MARGIN_HEIGHT = 80, AUX_VIDEO_MARGIN_WIDTH = 442,
            MAIN_VIDEO_MARGIN_WIDTH = 1280, MAIN_VIDEO_MARGIN_HEIGHT = 480 };
 
@@ -454,7 +405,7 @@ ServiceDiscovery referenceManifest(const SdrIdentity& id) {
     AaChannel auxVideo = videoChannel(AA_CH_AUX_VIDEO, VIDEO_800X480, AUX_VIDEO_MARGIN_WIDTH, 0,
                                       VideoInsets(0, 0, 221, 221), DISPLAY_ID_AUX, DISPLAY_AUXILIARY);
     auxVideo.videoSink.hasUnknown8 = true;
-    auxVideo.videoSink.unknown8 = AA_KEYCODE_NAVIGATION;
+    auxVideo.videoSink.unknown8 = AAK_NAVIGATION;
     m.channels.push_back(auxVideo);
     m.channels.push_back(keysOnlyInputChannel(AA_CH_AUX_INPUT, DISPLAY_ID_AUX));
     m.channels.push_back(videoChannel(AA_CH_MAIN_VIDEO, VIDEO_1280X720, MAIN_VIDEO_MARGIN_WIDTH,
@@ -738,27 +689,12 @@ namespace {
 // AV START_INDICATION: { session = 1, configuration_index = 2 }.
 void readAudioStart(const uint8_t* p, size_t n, uint32_t& session, uint32_t& index) {
     enum { F_SESSION = 1, F_CONFIGURATION_INDEX = 2 };
-    size_t pos = 0;
-    while (pos < n) {
-        uint64_t key, v = 0, l = 0;
-        if (!getVarint(p, n, pos, key)) return;
-        const unsigned f = (unsigned)(key >> 3), wt = (unsigned)(key & 7);
-        if (wt == WIRE_VARINT) {
-            if (!getVarint(p, n, pos, v)) return;
-            if (f == F_SESSION) session = (uint32_t)v;
-            else if (f == F_CONFIGURATION_INDEX) index = (uint32_t)v;
-        } else if (wt == WIRE_LENGTH) {
-            if (!getVarint(p, n, pos, l) || l > n - pos) return;
-            pos += (size_t)l;
-        } else if (wt == WIRE_FIXED64) {
-            if (n - pos < 8) return;
-            pos += 8;
-        } else if (wt == WIRE_FIXED32) {
-            if (n - pos < 4) return;
-            pos += 4;
-        } else {
-            return;
-        }
+    proto::PbReader r(p, n);
+    proto::PbField f;
+    while (r.next(f)) {
+        if (f.wire != proto::WIRE_VARINT) continue;
+        if (f.num == F_SESSION) session = (uint32_t)f.value;
+        else if (f.num == F_CONFIGURATION_INDEX) index = (uint32_t)f.value;
     }
 }
 

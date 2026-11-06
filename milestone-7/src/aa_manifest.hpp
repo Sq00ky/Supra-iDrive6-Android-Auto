@@ -9,6 +9,7 @@
 // strings. Their values match what Google's Desktop Head Unit sends. A value with no confirmed meaning stays visibly
 // unnamed: "unknown" fields and *_DHU constants hold the number the DHU sends, not a claim about what it means.
 
+#include "aa_keys.hpp"
 #include "audio/channels.hpp"
 #include <stdint.h>
 #include <string>
@@ -62,51 +63,6 @@ enum AaVideoFps { VIDEO_FPS_60 = 1, VIDEO_FPS_30 = 2 };
 enum AaDisplayType { DISPLAY_MAIN = 0, DISPLAY_CLUSTER = 1, DISPLAY_AUXILIARY = 2 };
 enum AaUiTheme { UI_THEME_AUTOMATIC = 0 };
 
-// Android key codes, plus Android Auto's own above 65535.
-enum AaKeyCode {
-    AA_KEYCODE_SOFT_LEFT = 1,
-    AA_KEYCODE_SOFT_RIGHT = 2,
-    AA_KEYCODE_HOME = 3,
-    AA_KEYCODE_BACK = 4,
-    AA_KEYCODE_CALL = 5,
-    AA_KEYCODE_ENDCALL = 6,
-    AA_KEYCODE_0 = 7,
-    AA_KEYCODE_1 = 8,
-    AA_KEYCODE_2 = 9,
-    AA_KEYCODE_3 = 10,
-    AA_KEYCODE_4 = 11,
-    AA_KEYCODE_5 = 12,
-    AA_KEYCODE_6 = 13,
-    AA_KEYCODE_7 = 14,
-    AA_KEYCODE_8 = 15,
-    AA_KEYCODE_9 = 16,
-    AA_KEYCODE_STAR = 17,
-    AA_KEYCODE_POUND = 18,
-    AA_KEYCODE_DPAD_UP = 19,
-    AA_KEYCODE_DPAD_DOWN = 20,
-    AA_KEYCODE_DPAD_LEFT = 21,
-    AA_KEYCODE_DPAD_RIGHT = 22,
-    AA_KEYCODE_DPAD_CENTER = 23,
-    AA_KEYCODE_PLUS = 81,
-    AA_KEYCODE_SEARCH = 84,
-    AA_KEYCODE_MEDIA_PLAY_PAUSE = 85,
-    AA_KEYCODE_MEDIA_NEXT = 87,
-    AA_KEYCODE_MEDIA_PREVIOUS = 88,
-    AA_KEYCODE_MEDIA_PLAY = 126,
-    AA_KEYCODE_MEDIA_PAUSE = 127,
-    AA_KEYCODE_DPAD_UP_LEFT = 268,
-    AA_KEYCODE_DPAD_DOWN_LEFT = 269,
-    AA_KEYCODE_DPAD_UP_RIGHT = 270,
-    AA_KEYCODE_DPAD_DOWN_RIGHT = 271,
-    AA_KEYCODE_ROTARY_CONTROLLER = 65536,
-    AA_KEYCODE_MEDIA = 65537,
-    AA_KEYCODE_NAVIGATION = 65538,
-    AA_KEYCODE_TEL = 65540,
-    AA_KEYCODE_UNKNOWN_65541 = 65541,
-    AA_KEYCODE_UNKNOWN_65542 = 65542,
-    AA_KEYCODE_UNKNOWN_65543 = 65543
-};
-
 // Values the DHU sends where the meaning is not confirmed.
 enum { TOUCH_SCREEN_TYPE_DHU = 2, NAV_STATUS_TYPE_DHU = 1 };
 
@@ -158,7 +114,7 @@ struct VideoSinkService {
     int displayId;
     int displayType;
     bool hasUnknown8;
-    int unknown8;               // sent on the auxiliary display only, with the value of AA_KEYCODE_NAVIGATION
+    int unknown8;               // sent on the auxiliary display only, with the value of AAK_NAVIGATION
     VideoSinkService() : displayId(0), displayType(0), hasUnknown8(false), unknown8(0) {}
 };
 
