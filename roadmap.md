@@ -2,26 +2,35 @@
 This document is going to contain a list of "What's missing", "What's left", and "What do we need to do to get there".
 
 ## Roadmap
+Android Auto Improvements
+- Driver side detection
+- Toggle which side of the road roundabout directions have
+- GPS
+
 Audio Improvements
 - Moving over to WiFi instead of Bluetooth
-- Volume Slider
+~~- Volume Slider~~
 
 HUD/KOMBI Integration
-- Working towards this, proof of concept is working, navigation arrows are being shown on the HUD/KOMBI.
+~~- Working towards this, proof of concept is working, navigation arrows are being shown on the HUD/KOMBI.~~
+- Port to F Series
 
 Main Menu Entry
-- I've done some research and have been able to make
+- I've done some research and have been able to make some headway, community has a release
+    - looking for some non destructive, compatible method that doesn't involve modifying system files.
 
 Parking Assistant
 - There's still a bit more work that needs to be done in terms of state checking
 
 Carplay Parity Improvements
 - There may be a few bugs remaining that need to be worked out re: Session creation & Session teardown
+- Looking to get off of layer 1280, and put AA on its own dedicated layer.
 
 Resolution Upscaling
 - Proposed solution to request higher resolution from the phone, and drop a few rows to improve res.
     - This seems restricted to 5GHz networks, the cars only operate on 2.4GHz, leading only option to be USB.
     - We may be able to raise to 60FPS though?
+    - 
 USB Support
 ~~- Currently everything relies on Carplay's WiFi network~~
 - There's three possible solutions, a free FSC installer to enable Carplay (possibly WIP), Move to WiFi Direct hotspot,  USB

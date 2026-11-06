@@ -101,7 +101,14 @@
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
 #include "touch_probe.hpp"
-#include "ccs_input.hpp"
+#include "aa_keys.hpp"
+#include "car/ccs_config.hpp"
+#include "car/ccs_input.hpp"
+#include "car/volume_input.hpp"
+#include "car/input_activity.hpp"
+#include "car/gps.hpp"
+#include "most/client.hpp"
+#include "most/trace.hpp"
 #include "crash_handler.hpp"
 #include "a2i_client.h"
 #include "audio/voice_scenario.hpp"
@@ -143,6 +150,12 @@ static double upSec() {
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
+static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
+static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
+static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
+static nbt::car::InputActivity g_carInput;   // any car control the driver touched: a consumer of g_most
+static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
+static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -269,6 +282,27 @@ static void onDriveModeMsg(const char* s) {
            upSec(), name, was, v, g_dmShown ? " (still)" : "", g_dmShown || !delay ? "" : " after NBT_DRIVEMODE_DELAY_MS",
            driveModeShowMs());
 }
+// DSC / DTC button ("same as sport mode"): the app sends "dsc <n> <prev>" when CDS driving.DSCActive changes, so
+// iDrive's own DSC/DTC display gets the screen for the same fixed time as a driving-mode change and Android Auto
+// comes back by itself.
+static void onDscMsg(const char* s) {
+    int v = -1, prev = -1;
+    sscanf(s, "%d %d", &v, &prev);
+    if (!showDriveModeOn()) { printf("[DSC] %d (Show driving mode changes is off)\n", v); return; }
+    const uint32_t now = upMs();
+    const uint32_t until = now + (uint32_t)driveModeShowMs();
+    if (g_dmShown) {
+        g_dmPeekUntil = until ? until : 1;
+        printf("[DSC] [%9.3f] %d -> %d: iDrive keeps the screen longer for its DSC display\n", upSec(), prev, v);
+        return;
+    }
+    g_dmPeekFrom = now;
+    g_dmPeekUntil = until ? until : 1;
+    g_mainWake = 1;
+    printf("[DSC] [%9.3f] %d -> %d: iDrive gets the screen for %d ms for its DSC/DTC display\n",
+           upSec(), prev, v, driveModeShowMs());
+}
+
 static const char* const kPdcFile = "/dev/shmem/nbt-aad-pdc";
 // Starts at 0: the first main-loop tick writes the iDrive state file before it computes this, and a 1 here made
 // every daemon start report "Android Auto on screen" for one tick (app log: hold fired, then 'stepped aside: event
@@ -371,6 +405,7 @@ static void* ctlThread(void*) {
             g_dayNight = v;
         }
         else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
+        else if (!strncmp(buf, "dsc ", 4)) onDscMsg(buf + 4);
         else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] [%9.3f] 'quit' received.\n", upSec()); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
         else printf("[Ctl] unknown request '%s' ignored.\n", buf);
@@ -420,7 +455,8 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // /dev/shmem/nbt-aad-state, state = idle | connecting | connected, overlay = 1 while Android Auto is on screen and
 // the knob drives the phone (the plugin then ignores Force Stop / Restart: those presses can only be stray knob
 // input reaching the iDrive menu under the overlay), 3 = same, MENU / COM / MEDIA / NAV / MAP went to the phone in the last 3 s
-// (the plugin re-holds iDrive instead of treating MENU as a hard key), 2 = same, and BACK is being held (hold timer running): iDrive
+// (the plugin re-holds iDrive instead of treating MENU as a hard key), 4 = same, another car control in the last 3 s,
+// 5 = same, only the knob turned or was pushed in the last 3 s (v1.9.19), 2 = same, and BACK is being held (hold timer running): iDrive
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
@@ -431,7 +467,8 @@ static void writeUiState(const char* state, int overlay) {
     // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
     // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
     // tried to bind the control port itself.
-    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key).
+    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key, 4 car
+    // control, 5 knob turn / push only).
     // fscanf("%23s %d %d") still matches.
     char rec[32];
     int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d\n", state ? state : "idle", (int)getpid(), overlay);
@@ -1207,7 +1244,10 @@ static void* diagThread(void*) {
     int me = (int)getpid();
     printf("[Diag] --- LayerManager ---\n");
     fflush(stdout);
-    system("/opt/sys/bin/LayerManagerControl get surface 1280");
+    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl get surface %d", nbt::VideoManager::aaSurface());
+    system(cmd);                                                        // Android Auto's own surface (1282)
+    if (!nbt::VideoManager::sharesCarPlaySurface())
+        system("/opt/sys/bin/LayerManagerControl get surface 1280");   // the factory CarPlay's, read only
     system("/opt/sys/bin/LayerManagerControl get surface 256");
     system("/opt/sys/bin/LayerManagerControl get layer 0x80000000");
     system("/opt/sys/bin/LayerManagerControl get screen 0");
@@ -1268,25 +1308,79 @@ static void volumeApply(int pct, bool setGain) {
 // There is no demo sweep. The car's own volume arrives for real (AudioMaster 0x20/0x0C08, car-verified 2026-11-03) and
 // drives the pill; a synthetic sweep only ever fought the driver's input. NBT_VOL_DEMO is gone and ignored.
 
-// The pill is a CHILD of the projection window (see volume_osd.cpp), so it can only exist once that window does, and it
-// has to be recreated if the projection window is. Attached lazily here instead of at start-up.
+// The pill reads the panel size from the projection window, so it is created once that window exists (lazily, here)
+// and again only if the projection window is replaced.
 static void* g_volOsdParent = NULL;
 static bool g_volOsdOn = false;
-// The volume pill is on by default now that it is car-verified (see the VolOsd block below): NBT_VOL_OSD=0
-// turns it off, and any other value keeps it on, so an existing env file with =1 still works untouched.
+// The volume pill is on by default (v1.9.13): NBT_VOL_OSD=0 turns it off. Since v1.9.18 it is LayerManager surface 1281
+// of its own (car-verified 2026-11-05, tools/osd1281probe), no longer the Android Auto picture's surface 1280, which is
+// what gave the black screen with only the pill, the reverse camera under Android Auto and the grey picture after the
+// decoder rebuild (v1.9.08-v1.9.17).
 static bool volOsdEnabled() {
     const char* v = getenv("NBT_VOL_OSD");
     if (!v || !*v) return true;
-    return !(v[0] == '0' && v[1] == 0);   // "0" (optionally trailing space) turns it off
+    return !(v[0] == '0' && (v[1] == 0 || v[1] == ' '));
 }
 
+static uint32_t monoMs();
+// monoMs() of the last car control the driver touched (any controller key or turn, steering-wheel volume / voice, a car
+// volume change), from g_carInput / onCarVolume. Overlay 4 tells the iDrive app "iDrive just reacted to the driver";
+// overlay 1 when iDrive leaves the blank state means the car opened a screen of its own (camera, safety, warning).
+static volatile uint32_t g_carInputMs = 0;
+// A knob turn or push alone (overlay 5). iDrive does nothing with either on its blank Android Auto state, so the iDrive
+// app no longer takes them for the driver opening a screen: the safety button pressed 1.4 s after a push left Android
+// Auto over the safety menu (car 2026-11-05). Where iDrive's focus is elsewhere the app still counts them.
+static volatile uint32_t g_knobInputMs = 0;
+static bool knobOnlyInput(const char* what) { return what && (!strcmp(what, "ROTARY") || !strcmp(what, "PUSH")); }
+static void onCarInput(const char* what, void*) {
+    if (knobOnlyInput(what)) g_knobInputMs = monoMs() | 1u;
+    else g_carInputMs = monoMs() | 1u;
+    static uint32_t s_logged = 0;
+    if (monoMs() - s_logged > 2000u) { s_logged = monoMs(); printf("[Input] driver input: %s\n", what); }
+}
+
+// Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03, car/volume_level.hpp): mirror it on
+// the overlay. This is the value the amplifier actually applied, so the pill always matches what the driver hears.
+// From g_carVolume on the DSI callback thread.
+static void onCarVolume(int level, int max, void*) {
+    g_carInputMs = monoMs() | 1u;   // iDrive draws its own volume bar: that is the driver, not the car
+    volumeApply(nbt::car::VolumeLevel::percent(level, max), false);
+}
+
+static uint32_t g_idrWaitMs = 0;   // decoder rebuilt on the way back: waiting for the phone's keyframe since
+static unsigned g_idrAsks = 0;
+// Take the pill's surface out of the Android Auto layer's order first, then remove its window: the order never names a
+// surface whose window is gone.
+static void volOsdDown(nbt::VideoManager& vm) {
+    if (vm.overlaySurface()) {
+        vm.setOverlaySurface(0);
+        vm.applyOverlayOrder();
+    }
+    g_volumeOsd.stop();
+    g_volOsdOn = false;
+}
+// Surface 1281 cannot take the picture's surface, so there is no ordering against mm-renderer's window and no rebuild
+// with the decoder any more (v1.9.14-v1.9.17): one pill window per projection window, for the whole run.
 static void ensureVolOsd(nbt::VideoManager& vm) {
     if (!volOsdEnabled() || !vm.hasWindow()) return;
     void* w = (void*)vm.screenWindow();
-    if (w == g_volOsdParent) return;
-    if (g_volOsdOn) { g_volumeOsd.stop(); g_volOsdOn = false; }
+    if (w == g_volOsdParent) return;   // up, or already tried for this projection window
+    if (g_volOsdOn) volOsdDown(vm);
     g_volOsdParent = w;
+    printf("[VolOsd] projection window up: creating the volume pill (LayerManager surface %d)\n",
+           nbt::VolumeOsd::kSurfaceId);
     g_volOsdOn = g_volumeOsd.start(vm.screenContext(), vm.screenWindow());
+}
+// The pill's surface joins the Android Auto layer's render order (on top of 1280) once LayerManager made it. Only
+// VideoManager writes that order, and only from this thread, so a hide can never race a pill update.
+static void syncVolOsdSurface(nbt::VideoManager& vm) {
+    const int want = (g_volOsdOn && g_volumeOsd.surfaceReady() && !vm.overlayOrderFailed())
+                         ? nbt::VolumeOsd::kSurfaceId : 0;
+    if (want == vm.overlaySurface()) return;
+    vm.setOverlaySurface(want);
+    const bool now = vm.applyOverlayOrder();
+    printf("[VolOsd] pill surface %d %s the Android Auto layer%s\n", nbt::VolumeOsd::kSurfaceId,
+           want ? "added on top of 1280 in" : "taken out of", now ? "" : " (picture hidden: applied when it is shown)");
 }
 
 static void onTouchEvent(const nbt::TouchEventOut& ev, void* user) {
@@ -1335,23 +1429,27 @@ static const char* const kMenuIdriveManual = "/opt/aa/menu-idrive";
 static volatile uint32_t g_keyToPhoneMs = 0;   // monoMs() of the last MENU / COM / MEDIA / NAV / MAP press sent to the phone
 static bool menuOpensIdrive() { return access(kMenuIdriveFlag, F_OK) == 0 || access(kMenuIdriveManual, F_OK) == 0; }
 
-static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
+// The car's GPS fix (DSI callback thread, about 1 Hz) -> AA LOCATION sensor. Kept between sessions, age-checked at sending.
+static void onCarLocation(const nbt::LocationFix& fix, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarLocation(fix);
+}
+
+// The car's satellite count (DSI callback thread) -> AA GPS_SATELLITE sensor. The session sends it on its own timer.
+static void onCarSatellites(const nbt::SatelliteStatus& status, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarSatellites(status);
+}
+
+static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
-    // Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03): mirror it on the overlay. This is
-    // the value the amplifier actually applied, so the pill always matches what the driver hears.
-    if (ev.kind == 3) {
-        int mx = (int)ev.keycode;
-        if (mx <= 0) mx = 100;
-        int pct = ev.delta * 100 / mx;
-        if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
-        volumeApply(pct, false);
-        return;
-    }
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
     if (back_hold && !ev.down) {
         int st = g_backState;
         g_backState = 0;
         if (st == 0) return;   // the press went to iDrive (it owned the screen): no hold timer ran, nothing to report
+        if (ev.cancel) {       // the MOST link went away with BACK held: not a short press, so the phone gets nothing
+            printf("[Knob] BACK hold cancelled: MOST link lost\n");
+            return;
+        }
         printf("[Knob] BACK released after %u ms (%s)\n", (unsigned)(monoMs() - g_backDownMs),
                st == 2 ? "hold already fired" : g_inputToPhone ? "short press -> phone" : "short press, iDrive owns the screen");
         if (st == 1 && g_inputToPhone) {        // short press: deliver it now
@@ -1397,17 +1495,23 @@ static void onKnobEvent(const nbt::CcsEvent& ev, void* user) {
         }
         return;
     }
-    if (ev.kind == 2) s->postRelativeEvent(ev.keycode, ev.delta);
-    else {
+    if (ev.kind == 2) {
+        g_knobInputMs = monoMs() | 1u;            // a turn: overlay 5, iDrive does nothing with it on the blank state
+        s->postRelativeEvent(ev.keycode, ev.delta);
+    } else {
         // Every key that reaches the phone: iDrive got the same key and may have left the blank state (BACK pops its
         // history, which after a MENU / hard-key re-hold is the iDrive main menu, not our menu: car 2026-10-29 short
-        // BACK minimized Android Auto). Overlay 3 makes the iDrive app put it back instead of minimizing.
-        if (ev.down) g_keyToPhoneMs = monoMs() | 1u;
+        // BACK minimized Android Auto). Overlay 3 makes the iDrive app put it back instead of minimizing. Not the
+        // knob's push: on the blank state iDrive does nothing with it (overlay 5, g_knobInputMs).
+        if (ev.down) {
+            if (ev.keycode == nbt::AAK_DPAD_CENTER) g_knobInputMs = monoMs() | 1u;
+            else g_keyToPhoneMs = monoMs() | 1u;
+        }
         s->postKeyEvent(ev.keycode, ev.down != 0);
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.08-relative"
+#define NBT_AAD_BUILD "v1.9.26-cargps"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1622,7 +1726,7 @@ int main(int argc, char* argv[]) {
     }
 
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
-    //    src/ccs_input.cpp (started below); iDrive keeps receiving every knob event itself.
+    //    g_most and g_ccs (started below); iDrive keeps receiving every knob event itself.
 
     // 3b. Volume overlay (NBT_VOL_OSD=1). Off by default: it creates an extra Screen window, so it is opt-in until the
     //     compositing is confirmed on the car. It mirrors the car's own volume (AudioMaster 0x20/0x0C08); there is no
@@ -1691,11 +1795,31 @@ int main(int argc, char* argv[]) {
     }
 
     if (nbt::knobEnabled()) {
-        if (!nbt::startCcsInput(&onKnobEvent, &g_session))
+        if (!g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session))
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
     }
+    // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
+    if (!g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL))
+        printf("[Main] driver input tracking failed to start: the iDrive app treats every iDrive screen as the car's.\n");
+    // The car's volume is followed whether or not the knob is: it drives the overlay, not the phone.
+    if (!g_carVolume.attach(g_most, &onCarVolume, NULL))
+        printf("[Main] car volume input failed to start.\n");
+    if (!nbt::carGpsEnabled())
+        printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
+    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &g_session))
+        printf("[Main] car GPS failed to start.\n");
+    // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
+    // logger for everything it sees now, so they turn that on.
+    const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;
+    if (ccsLogCompat && nbt::envFlag("NBT_MOST_LOG") != 1)
+        printf("[Main] NBT_CCS_DEBUG / NBT_CCS_ALL are replaced by NBT_MOST_LOG=1: turning that on.\n");
+    if ((nbt::envFlag("NBT_MOST_LOG") == 1 || ccsLogCompat) && !g_mostTrace.attach(g_most))
+        printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
+    g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
+    if (!g_most.start("NBTAAD_MOST"))
+        printf("[Main] MOST client failed to start: knob/keys and car GPS disabled.\n");
 
     if (nbt::wirelessEnabled()) {
         pthread_t wt;
@@ -1764,10 +1888,16 @@ int main(int argc, char* argv[]) {
     // context first (prepareForSession), so a quick reconnect is safe too. Only once the context exists.
     int cp_idle_ticks = 0;
     unsigned cp_live_ticks = 0;
+    int cp_1280_last = -1;       // surface 1280's visibility at the last CarPlay check while Android Auto was minimized
+    uint32_t most_health_ms = monoMs();
     while (g_running) {
         for (int w = 0; w < 5 && !g_mainWake && g_running && !driveModePeekDue(); ++w)
             usleep(50000);   // 250 ms tick, cut short on a wake or when a driving-mode step-aside is due
         g_mainWake = 0;
+        if (monoMs() - most_health_ms >= 60000u) {
+            most_health_ms = monoMs();
+            g_most.logHealth();
+        }
         bool act = g_session.isActive();
         if (act || g_sessionActive) cp_idle_ticks = 0;
         else if (++cp_idle_ticks == 10 && nbt::VideoManager::cpHandoff()) video.retuneForCarPlay();
@@ -1784,7 +1914,14 @@ int main(int argc, char* argv[]) {
             uint32_t mp = g_keyToPhoneMs;
             bool menuRecent = mp && (uint32_t)(monoMs() - mp) < 3000u;   // a hard key went to the phone
             if (mp && !menuRecent) g_keyToPhoneMs = 0;
-            int ov = g_inputToPhone ? (g_backState == 1 ? 2 : (menuRecent ? 3 : 1)) : 0;
+            uint32_t ci = g_carInputMs;
+            bool inputRecent = ci && (uint32_t)(monoMs() - ci) < 3000u;   // the driver touched a car control
+            if (ci && !inputRecent) g_carInputMs = 0;
+            uint32_t ki = g_knobInputMs;
+            bool knobRecent = ki && (uint32_t)(monoMs() - ki) < 3000u;    // only the knob turned / pushed
+            if (ki && !knobRecent) g_knobInputMs = 0;
+            int ov = g_inputToPhone
+                         ? (g_backState == 1 ? 2 : (menuRecent ? 3 : (inputRecent ? 4 : (knobRecent ? 5 : 1)))) : 0;
             if (strcmp(st, ui_state) != 0 || ov != ui_overlay) {
                 writeUiState(st, ov);
                 if (strcmp(st, ui_state) != 0) printf("[UiState] iDrive menu entry: %s\n", st);
@@ -1898,9 +2035,17 @@ int main(int argc, char* argv[]) {
         // stays connected, MINI tester 2026-10-29): CarPlay plays through our decoder context, so without its factory
         // settings it opens zoomed (the hand-off retune used to run only after the AA session ended). While Android
         // Auto is minimized we keep surface 1280 hidden; when it turns visible anyway, iDrive is showing CarPlay on it.
+        // On Android Auto's own surface (v1.9.20) we never hide 1280, and iDrive may leave it visible after a CarPlay
+        // session: only a change from hidden to visible while Android Auto is minimized counts there.
         // NBT_CP_LIVE_RETUNE=0 disables. Not car-verified.
-        if (act && !overlay_on && cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 &&
-            !video.decoderInCarPlayMode() && nbt::VideoManager::surface1280Visible() == 1) {
+        bool cp_shows = false;
+        if (overlay_on || !act) cp_1280_last = -1;
+        else if (cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 && !video.decoderInCarPlayMode()) {
+            int v = nbt::VideoManager::surface1280Visible();
+            cp_shows = v == 1 && (nbt::VideoManager::sharesCarPlaySurface() || cp_1280_last == 0);
+            cp_1280_last = v;
+        }
+        if (cp_shows) {
             printf("[Main] CarPlay took the screen while Android Auto is still connected: giving the decoder CarPlay's "
                    "settings (the Android Auto entry brings Android Auto back)\n");
             g_userExit = 1;
@@ -1917,17 +2062,44 @@ int main(int argc, char* argv[]) {
                                                                  : "driving-mode display time over: restoring Android Auto");
             was_dm_peek = dm_peek;
         }
-        ensureVolOsd(video);   // the pill needs the projection window as its parent
+        ensureVolOsd(video);   // the pill reads the panel size from the projection window
+        syncVolOsdSurface(video);
+        video.pollScreenEvents();   // mm-renderer's window joining our group (logged; used by NBT_MMR_WIN_HIDE=1)
+        video.serviceAaSurface();   // Android Auto's own LayerManager surface: shown once LayerManager has made it
+        // Decoder rebuilt on the way back: frames are held until the phone's keyframe. None within 2 s: cycle the video
+        // focus (UNFOCUSED, FOCUSED a tick later), twice; after 6 s pass frames on rather than stay black.
+        if (g_idrWaitMs) {
+            uint32_t w = monoMs() - g_idrWaitMs;
+            if (!video.waitingForKeyframe()) {
+                printf("[Main] picture back after the decoder rebuild (%u ms)\n", w);
+                g_idrWaitMs = 0;
+            } else if (!act || w >= 6000u) {
+                video.releaseKeyframeWait();
+                g_idrWaitMs = 0;
+            } else if (g_idrAsks < 4 && w >= (uint32_t)(2000u + 2000u * (g_idrAsks / 2) + 500u * (g_idrAsks & 1))) {
+                // off 2.0 s, on 2.5 s, off 4.0 s, on 4.5 s: always back on FOCUSED before the 6 s release
+                bool focus = (g_idrAsks & 1) != 0;
+                if (!focus) printf("[Main] no keyframe %u ms after the decoder rebuild: asking the phone again (video focus off/on)\n", w);
+                g_session.postVideoFocus(focus);
+                ++g_idrAsks;
+            }
+        }
         bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !dm_peek;
-        if (want && act && !overlay_on && video.decoderInCarPlayMode()) {
-            printf("[Main] back to Android Auto after CarPlay: rebuilding the decoder context\n");
+        if (want && act && !overlay_on && (video.decoderInCarPlayMode() || video.decoderParked())) {
+            printf("[Main] back to Android Auto after %s: rebuilding the decoder context\n",
+                   video.decoderParked() ? "iDrive (overlay had surface 1280)" : "CarPlay");
+            if (video.decoderParked()) { g_idrWaitMs = monoMs() | 1u; g_idrAsks = 0; }
             video.prepareForSession();
             g_session.postVideoFocus(true);
         }
         g_inputToPhone = (want && act) ? 1 : 0;
         nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen
         if (want != overlay_on || (force_show && want)) {
+            // The pill's surface 1281 leaves with the picture (the hide order holds neither), so the decoder stays
+            // open: no close/rebuild, no keyframe wait, no grey picture (v1.9.15-v1.9.17 needed those only because the
+            // pill was surface 1280). setShown: no pill drawn while iDrive has the screen.
             video.setVisible(want);
+            g_volumeOsd.setShown(want);
             overlay_on = want;
             reassert_ticks = want ? 0 : -1;
         }
@@ -1982,6 +2154,7 @@ int main(int argc, char* argv[]) {
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
     g_audioBackend->cancelPending();   // no queued audioconn starts while we tear down
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block
+    g_volumeOsd.setShown(false);
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
     if (mic_live) g_audioBackend->stopMic(mic);
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us

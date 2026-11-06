@@ -35,6 +35,11 @@ inline bool knobEnabled() {
     return envFlag("NBT_KNOB") != 0;
 }
 
+// The car's GPS fix (MOST 52/00 fkt 440, car/gps), default on. NBT_CAR_GPS=0 / off / no disables it.
+inline bool carGpsEnabled() {
+    return envFlag("NBT_CAR_GPS") != 0;
+}
+
 // The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
 // Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified,

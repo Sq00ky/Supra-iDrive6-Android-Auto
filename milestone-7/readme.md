@@ -36,6 +36,122 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > autostarts within 15 minutes (cold boots, so only when something resets the unit) the next boot skips the autostart
 > (`start with the car: SKIPPED by the bootloop guard`); menu Start, a clean daemon exit or 10 minutes of uptime reset
 > it (`/var/opt/aa/bootguard`).
+>
+> **rhmiapp-32-bootguard:** the guard also counts boots while the head unit's clock is unset (1980 at boot on many
+> cars, issue #84); before, those boots were never counted and the guard could not trip. The iDrive app also resets it
+> once it has stayed up 5 minutes after starting with the car.
+>
+> **v1.9.11-cameras / rhmiapp-35-cameras (not car-verified):** the volume overlay steps aside with Android Auto (in
+> v1.9.08 it kept surface 1280 up, so the reverse camera stayed under the picture). iDrive screens the car opens by
+> itself - the camera button, Side View / Top View / 360, the safety and driver-assistance button, Check Control - now
+> make Android Auto step aside and stay aside until the Android Auto entry is chosen: when iDrive leaves the blank state
+> or takes its focus and the daemon saw no driver input (knob, controller keys, steering-wheel volume / voice, a
+> driving-mode or DSC change) in that time, the car did it. `NBT_AA_CAR_ASIDE=0` turns that off. The DSC / DTC button
+> (`driving.DSCActive`) steps aside for iDrive's own display and comes back, like a driving-mode change, with the same
+> "Show driving mode changes" box. Every `hmi.graphicalContext` change is logged, so the camera and safety screens'
+> ids can be learned from a car log.
+>
+> **v1.9.12-osdoff:** the volume overlay is OFF by default again; `NBT_VOL_OSD=1` turns it on. To be drawn at all its
+> window has to be LayerManager surface 1280, the Android Auto picture's own surface, and on some cars it takes that
+> surface over: a black screen with only the volume pill, and the PDC / camera view stays under Android Auto.
+>
+> **v1.9.13-osdon:** the volume overlay is on by default again; `NBT_VOL_OSD=0` turns it off (needed on cars where it
+> takes surface 1280 over, e.g. the G30 above).
+>
+> **v1.9.14-osdorder (not car-verified):** the volume overlay window is created only after the current decoder context
+> has sent 30 frames, so mm-renderer's own `winid=1280` window always exists first, and it is taken down and recreated
+> whenever the decoder context is rebuilt (reconnects). A volume level from before the overlay existed no longer shows
+> it at once. Log: `[VolOsd] video running (decoder context N, M frames): creating the overlay after it`.
+>
+> **v1.9.15-osdcam (not car-verified):** reverse camera broken after the volume pill had been shown once (G30, log 3:
+> reverse fine for a whole drive, broken right after the first volume change). LayerManager gives surface 1280 to the
+> newest window with that id that has drawn, so the pill's window took the surface over and `LayerManagerControl set
+> surface 1280 visibility 0` hid the pill instead of the picture. Now, once the pill has been drawn, stepping aside
+> (reverse, park assist, camera views, MENU, ...) also closes the decoder context (the picture goes with mm-renderer's
+> window) and removes the overlay window; coming back builds a new context and asks the phone for a keyframe, the same
+> path as coming back from CarPlay. Sessions where the pill never appeared are unchanged. Log:
+> `[VolOsd] overlay was drawn, so it holds surface 1280: closing the video ...` and
+> `[Main] back to Android Auto after iDrive (overlay had surface 1280): rebuilding the decoder context`.
+>
+> **v1.9.16-idr (not car-verified):** v1.9.15 fixed the reverse camera on the G30, but the picture came back grey,
+> jittery and in wrong colours: the rebuilt decoder got the phone's running stream of P-frames with no keyframe. Now the
+> phone is told it lost the screen (video focus UNFOCUSED) when the decoder is closed, FOCUSED on the way back makes it
+> restart with SPS/PPS + IDR, and frames are held until that IDR arrives. No keyframe within 2 s: focus off/on again
+> (twice); after 6 s frames pass anyway. Log: `[VideoManager] keyframe after the decoder rebuild (N frames ... dropped)`,
+> `[Main] picture back after the decoder rebuild (N ms)`.
+>
+> **v1.9.17-mmrwin (experiment, opt-in `NBT_MMR_WIN_HIDE=1`):** keeps the decoder open when Android Auto steps aside after
+> the pill was drawn. mm-renderer's output window joins our window group `cpvideogrp<pid>`, so our Screen context gets
+> its handle in a SCREEN_EVENT_CREATE (event numbers read from the unit's libscreen.so); stepping aside sets that window
+> VISIBLE 0 at z -1000 and coming back restores the values read before. Without the flag, or when no window was seen, the
+> v1.9.16 close-and-rebuild runs. The events are logged either way: `[VideoManager] screen event 1 (create) window ...
+> id '1280'`. Open question for the car run: whether Screen visibility on that window clears the camera (on this unit the
+> video may be drawn by LayerManager, which only follows surface 1280).
+>
+> **v1.9.18-osd1281 (car-verified on the Supra 2026-11-05; first probed with `tools/osd1281probe`):** the volume
+> pill is LayerManager surface **1281** of its own instead of sharing the picture's surface 1280. LayerManagerService
+> creates the surface for a window whose id string is a number on its first post and binds the window to it (decompiled
+> 2026-11-05, probe on the Supra the same day). While Android Auto is shown the layer's order is `0x501,0x500`: on this
+> unit the FIRST surface of a layer's list is drawn on top (`1280,1281` left the pill under the video). The hide order
+> `0x100` holds neither, so the pill always leaves with the picture: the decoder stays open on every step-aside, and the
+> v1.9.14-v1.9.17 workarounds are gone (overlay created after 30 frames and rebuilt with the decoder, decoder
+> close/rebuild + keyframe wait, `NBT_MMR_WIN_HIDE`, which is now ignored). This removes the black screen with only the
+> pill, Android Auto staying over the reverse camera, and the grey picture after reverse. The first two-surface order is
+> read back; if LayerManagerControl did not take it, the plain order is put back and the pill stays off for that run.
+> Log: `[VolOsd] LayerManager surface 1281 ready`, `[VolOsd] Android Auto layer render order is now 1281, 1280`.
+> Also new: after 5 refused Bluetooth link requests in a row (`ServiceRequestError`) the daemon says why the car refuses
+> them (it only accepts the phone's link while that phone's Bluetooth audio is connected) and logs the phone's services.
+>
+> **rhmiapp-36-overlays (not car-verified): "Show iDrive warnings" rebuilt on hmi.graphicalContext.** Any iDrive screen
+> that comes up on its own over Android Auto (no knob / key / volume / touch input behind it) makes Android Auto step
+> aside on the next status poll (about 0.3-1.3 s), whether or not iDrive took our state 13. Check Control (context 681,
+> `LT_ScrollLabel_CCM_Details`), collision warnings, climate, 360 camera, safety menus, driver profile, notices all count;
+> no per-model list. While it is up nothing re-holds state 13. When iDrive has been back on the screen it showed under
+> Android Auto (or on our state 13 / menu 10) for 2 s, Android Auto comes back once; a 681/20 flip-flop does not count.
+> If it closes onto another screen, the driver went on in iDrive and the Android Auto entry brings it back.
+> `NBT_AA_WARN_IGNORE=<ctx>,<ctx>` in nbt-aad.env lists contexts that never cause a step-aside (screens Android Auto
+> already shows: messages, calls, now playing). Previously only widgets named `*popup*` counted, and only while state 13
+> was visible, so a CCM waited ~25 s (F31 bench, 2026-11-05). With the box unticked, nothing changes.
+> Log: `warnings: iDrive context N came up on its own ...` / `... closed (back on M for 2 s): Android Auto comes back`.
+>
+> **v1.9.19-safety + rhmiapp-37-safety (not car-verified): the safety button makes Android Auto step aside.** In the
+> v1.9.18 test none of four presses did (Supra, 2026-11-05), each for its own reason, all fixed:
+> - PDCStatus stays 1 for a while after reversing, and a screen during park assist was left to the park logic although
+>   the driver had chosen Android Auto over it (the daemon keeps it up until park assist ends). Once Android Auto is
+>   chosen during park assist, park assist no longer owns the screen for the app either, until PDCStatus changes.
+> - iDrive's return to our blank state reaches hmi.graphicalContext only as `GFXIDENTIFIER_INVALID` context 50002 (our
+>   menu is 50000), so the watch never saw it, and the same safety menu opened a second time looked like no change. Our
+>   states now come from their focus notifications. This also makes "back on our state 13 for 2 s: Android Auto comes
+>   back" work for the first time: before, a step-aside over the blank state usually ended only through the entry.
+> - A knob push 1.4 s earlier counted as the driver opening the screen. The daemon now reports a knob turn or push alone
+>   as overlay 5 (MENU / BACK / COM / MEDIA / NAV / MAP / tilt stay 3, other car controls 4), and the app ignores it
+>   while iDrive's focus is on our blank state, where iDrive does nothing with either.
+> - A screen that holds iDrive's focus over Android Auto for two polls with no driver input now makes it step aside even
+>   when the watch let it through (opened while Android Auto was down for park assist, or within 2 s of our own event
+>   52). Before, event 52 was re-fired instead; the safety menu refused it for 34 s while the knob drove it unseen.
+> - A DSC/DTC step-aside no longer sends iDrive to its main menu (only driving-mode changes were recognised).
+>
+> Log: `warnings: iDrive context 745 came up on its own ...`, `warnings: iDrive context N holds the focus over Android
+> Auto ...`, `park assist on: Android Auto chosen over it ...`.
+>
+> **v1.9.20-aa1282 + rhmiapp-38-aa1282 (car-verified 2026-11-05 on a GR Supra, Pixel 9 Pro over Wi-Fi): Android Auto
+> on a LayerManager surface of its own.** On the car, surface 1282 appeared ~500 ms after the first post, the layer's
+> render order read `1281(0x501), 1282(0x502)`, and the driving-mode, park-assist and Toyota Supra Safety screens each
+> took the screen and handed it back. CarPlay itself was not used in that run.
+> Until v1.9.19 the picture used surface 1280, the factory CarPlay window's (carplay.ini
+> `WindowName=1280`): every hide handed CarPlay its regions back, every show re-showed and resized CarPlay's layer
+> `0x800d0000`. Now our window and mm-renderer's output window are named **"1282"**, so LayerManager makes surface 1282
+> on their first post (the same mechanism as the volume pill's 1281, car-verified 2026-11-05). Shown: layer
+> `0x80000000` order `0x502` (`0x501,0x502` with the pill); hidden: `0x100` as before. Surface 1280 and layer
+> `0x800d0000` are never written; 1280's visibility is still read to notice CarPlay taking the screen (on the own
+> surface only a hidden -> visible change counts, since iDrive may leave it visible after a CarPlay session). The
+> context retuned for CarPlay keeps CarPlay's window id `1280`. A show that runs before LayerManager has made 1282 is
+> applied again once it exists. The iDrive app's cleanup after a killed daemon hides the daemon's surface (from
+> `/dev/shmem/nbt-aad-surface`) and restores CarPlay's regions only for a daemon that shared 1280.
+> `NBT_AA_SURFACE=1280` in nbt-aad.env = the shared path of v1.9.19 for a run. Log: `[VideoManager] Android Auto uses
+> its own LayerManager surface 1282`, `LayerManager surface 1282 is there (native surface N, ~M ms after ...)`, then
+> once, a few seconds into the picture, `LayerManager while Android Auto is shown: ...` with the surface's visibility,
+> regions and the layer's render order.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -204,6 +320,8 @@ no settings file.
 | "Hey Google" / Assistant using the car's microphone (`Carplay_Siri_1mic` speech scenario) | Car-verified |
 | Assistant replies audible (the car's Bluetooth source is requested again when the mic closes) | Car-verified |
 | Driving status, night mode | Works; night mode follows the car's day/night (like CarPlay) since v1.8.30 / rhmiapp-15 |
+| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP, the GPS speed, the direction of travel above 2 m/s, and the altitude converted from sea level to the WGS84 ellipsoid. This speed is always positive and is not the Mechanical Speed sensor, which is not sent |
+| Car GPS satellites | Sent as the GPS_SATELLITE sensor (satellites used, about once a second, 0 with no fix) |
 | iDrive menu entry with its own icon and a "Connecting..." text | Car-verified |
 | Menu: **Start** | Car-verified |
 | Menu: **Force Stop**, **Restart** | Fixed in v1.8.3 (state file), not yet car-verified |
@@ -448,11 +566,12 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_BT_REFOCUS` | `0` | Request the car's Bluetooth source again after the Assistant closes the mic, so the reply is heard |
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
+| `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor) |
 | `NBT_TOUCH_FWD` | `0` | Touch to the phone |
 | `NBT_HIDE_IDLE` | `0` | iDrive gets the screen while no phone is connected. Off = overlay stays up for the whole run |
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |
 | `NBT_CTL` | `0` | Single-instance control port (UDP 127.0.0.1:52790) |
-| `NBT_KEEP_PF` | set to `1` | Don't run `pfctl -d` at start (see [Troubleshooting](#troubleshooting)) |
+| `NBT_KEEP_PF` | set to `1` | Don't run `pfctl -d` at start. Only with the Android Auto rules in `pf.conf`: `pf_aa --install` adds both (see [Troubleshooting](#troubleshooting)) |
 
 ### Advanced / experimental
 
@@ -461,6 +580,7 @@ Leave these unset unless you are testing.
 | Setting | Effect |
 |---|---|
 | `NBT_AA_PORT` | TCP port the phone is told to use (default 5277). Port 52770 has been tried and failed on one car; under investigation |
+| `NBT_AA_SURFACE` | LayerManager surface for the Android Auto picture (default `1282`, its own; `1280` = shared with the factory CarPlay as before v1.9.20) |
 | `NBT_USB` | **Experiment, off.** `1` = Android Auto over USB through the head unit's own Android Open Accessory drivers, next to wireless. Not car-verified. With it on, an Android phone plugged in while the daemon runs is switched to accessory mode (`aoap-switch`, `/dev/android<bus><dev>`) as `Android` / `Android Auto`, and the session runs over `/dev/oap<bus><dev>` (`devc-serusb-aoap`). The phone then stays in accessory mode, so iDrive's USB media (MTP) doesn't see it until it is replugged; after 3 sessions on one plug-in, replug it (a node that can't be opened or switched yet is retried every second and doesn't count as a session). USB and wireless share the one session: while a phone is on the cable the wireless thread leaves the Bluetooth links alone (`[Wireless] phone on the USB cable ...`, the same idle state as a car without a hotspot config); once USB gives up on the phone (out of tries or sessions, or switched by another client such as BMW's A4A) wireless is available again without unplugging it (`[Wireless] no phone for USB any more ...`) and a wireless connection that arrives anyway is refused (`USB Android Auto session running: refusing the wireless connection`); a phone plugged in during a wireless session waits until that session ends. Log: `[UsbAccessory] ...`. If the phone never answers, `NBT_USB_MANUFACTURER` / `NBT_USB_MODEL` change the identity sent |
 | `NBT_USB_DIRECT` | **Experiment, off.** With `NBT_USB=1`: `1` = read the phone through libusbdi (io-usb) instead of `/dev/oap*`. `devc-serusb-aoap` lets any client read the node (the media app's A4A handler opens it too) and a transfer that arrives while our read is not waiting can go to the other reader or be lost in the driver's queue: TLS records went missing in bursts and the phone dropped the session (car logs 2026-10-31). With it on, once the phone is in accessory mode the daemon stops `devc-serusb-aoap` (`[UsbDirect] stopped devc-serusb-aoap`), attaches to the accessory itself and keeps 8 reads queued. It also switches phones itself: the head unit asks a new USB device whether it speaks Android accessory only once, at plug-in, so a phone still set to "charging only" got no `/dev/android*` node and nothing happened until a replug. A device that has no node half a second after it appears is asked again through io-usb every second for up to 2 minutes (`[UsbDirect] usb0.N.0: AOA protocol 2: switch to accessory mode sent`); a device that leaves the request unanswered for a second is not a phone and is not asked again, and the head unit's own Microchip/SMSC devices (vendor 0424) are never asked. And it keeps `devc-serusb-aoap` from starting in the first place: it claims `/opt/mm/bin/devc-serusb-aoap` in the QNX path space and refuses every open of it, so the head unit's start of the driver fails (it logs that and leaves the phone alone, no retry) and the phone is opened as soon as it appears (`[UsbDirect] claimed /opt/mm/bin/devc-serusb-aoap`). QNX drops the claim when nbt-aad exits; `NBT_USB_CLAIM_DRIVER=0` goes back to stopping the driver after it has started. Falls back to `/dev/oap*` if io-usb can't be reached. Log: `[UsbDirect] ...` |
 | `NBT_BTSPP_DEV` | Use only this SPP node (default: scan `/dev/btspp0..7`) |
@@ -511,12 +631,14 @@ Leave these unset unless you are testing.
 | `NBT_TOUCH_SX/SY/OX/OY`, `NBT_TOUCH_W/H`, `NBT_TOUCH_IDLE_MS`, `NBT_TOUCH_CFG_H`, `NBT_TOUCH_PORT` | Touch scale/offset, clamp (1280x720), stuck-finger release (400 ms), declared height (720), UDP port (30567) |
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |
 | `NBT_KNOB_RAW=1` | Log every raw controller message |
+| `NBT_MOST_LOG=1` | Log what the MOST client sees, tagged `[MOSTLOG]`: the registry, then for each message type the first 3 and then payload changes, at most 200 lines per type. For working out the car's signals from a drive. With `NBT_KNOB=0` too, the client still starts, for the log alone. The old `NBT_CCS_DEBUG=1` / `NBT_CCS_ALL=1` switch this on |
 | `NBT_GEAR_REVERSE` | Gear value for R (default 2; car codes 3 P, 1 N, 2 R, 5 D) |
 | `NBT_NEUTRAL_RESUME_S`, `NBT_GEAR_NEUTRAL` | Manual gearbox: seconds in neutral straight after reverse before Android Auto comes back over the park-assist view (default `5`; `0` = off). Leaving neutral or going back into reverse cancels it; not after you exited Android Auto. Gear value for N (default 1). Log: `[Gear] ... reverse -> neutral`. Not car-verified |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
 | `NBT_CP_HANDOFF=0` | Turns off the CarPlay hand-off (screen window and decoder created at start and never retuned for CarPlay, as before v1.8.32) |
 | `NBT_CP_LIVE_RETUNE=0` | Do not give the decoder CarPlay's settings when CarPlay takes the screen during a live Android Auto session (v1.8.37) |
 | `NBT_PTT_ASSISTANT=1` | Experimental: long press of the steering-wheel voice button starts the Google Assistant. Off by default (the button is only logged) |
+| `NBT_GPS_ACCURACY_M` | A fixed accuracy for every car GPS fix, in metres, 2 to 499 (default: HDOP x 5 m, at least 2 m; 10 m when a fix has no usable HDOP) |
 | `NBT_NIGHT_MODE=0/1`, `NBT_DRIVING_STATUS=0` | Sensor values. Night mode follows the car by default (`vehicle.dayNightChangeOver` via the iDrive app); `NBT_NIGHT_MODE` forces day (0) or night (1) |
 | `NBT_CAR_MAKE/MODEL/YEAR`, `NBT_VEHICLE_ID`, `NBT_HU_MAKE/MODEL`, `NBT_SW_VERSION`, `NBT_BT_ADDR` | Single identity fields |
 | `NBT_CARPLAY_INI` | Read a different `carplay.ini` (never the factory template in `/opt/conn/data/carplay/`) |
@@ -616,10 +738,28 @@ follow the list above.
 
 ### Phone joins the Wi-Fi but no picture
 
-The phone connects to TCP 5277 on `uap0` (172.16.224.1). The car's packet filter blocks that port, so the daemon
-runs `pfctl -d` at start. The log shows `'pfctl -d' ... returned 0` when it worked. If the return value isn't 0
-(one car returned 256), post the log. A single allow rule for the port, instead of disabling the filter, is being
-worked on.
+The phone connects to TCP 5277 on `uap0` (172.16.224.1), or on `wfd0` (172.16.222.1) over Wi-Fi Direct. The car's
+packet filter blocks that port, so the daemon runs `pfctl -d` at start. The log shows `'pfctl -d' ... returned 0` when
+it worked. If the return value isn't 0 (one car returned 256), post the log.
+
+**Keeping the packet filter on (`pf_aa`, one time):** instead of switching the whole filter off, let the port through
+it. Copy `pf_aa` from the release next to the daemon and install the rules once:
+
+```
+cp /mnt/umass01200t7/pf_aa /opt/aa/pf_aa
+chmod 755 /opt/aa/pf_aa
+/opt/aa/pf_aa --install
+```
+
+`--install` works on `/fs/sda0/etc/pf.conf` (the car's `/etc/pf.conf`; `/fs/sda0` is remounted read-write only for
+the edit). If the Android Auto rules are not there yet it backs the stock file up to `/opt/aa/pf.bak`, appends four
+lines (TCP 5277 both ways on `uap0` and `wfd0`) and adds `NBT_KEEP_PF=1` to `/opt/aa/nbt-aad.env`. The new file is
+checked with `pfctl -n` before and after writing; if it does not parse, `pf.conf` is put back as it was. Restart the
+head unit afterwards. `pf_aa --check` reports (`rules look good`); `pf_aa --uninstall` checks that `pf.bak` is the
+stock file, restores `pf.conf` from it and removes `NBT_KEEP_PF`. A software update brings the stock `pf.conf` back;
+install again then. Car-verified on the Supra (the same four lines added by hand). pf_aa 1.0 stopped before changing
+anything with `cannot write /dev/shmem/pf_aa-check.conf: Function not implemented` (QNX's RAM disk has no `fsync`);
+1.1 (first line `pf_aa 1.1: ...`) fixes that; `--install` and `--check` car-verified on the Supra 2026-11-06.
 
 ### Assistant doesn't hear you / reply is silent or quiet
 
@@ -775,8 +915,22 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    the daemon binds the port only while Android Auto is on screen (one socket gets each datagram). One 112-byte
    datagram per touch on the Supra, 2-4 shorter datagrams (24..64 bytes) on 1440x540 BMW units.
    They are forwarded to the phone as input events on channel 7; the touchscreen is declared as 1280x720.
-7. **Controller (`ccs_input`, `ccs_decoder.hpp`).** Observe-only MOST client on `DSYSMOSTServer` 4.5 that receives
-   copies of the controller's FBlock 0xE5 status messages.
+7. **Controller (`most/client`, `car/ccs_input`, `car/ccs_decoder.hpp`).** `most::Client` is the one observe-only MOST
+   client on `DSYSMOSTServer` 4.5. `CcsInput` is its consumer here: it receives copies of the controller's FBlock 0xE5
+   status messages. Handlers get whole messages: the client joins segments and leaves out transmit status, and counts
+   both. It logs one `[MOST]` line a minute with its message counts by class and its link state, so
+   a silent client still shows. When the link stops being up, keys still held are released on the phone and the knob
+   position re-bases. Messages are routed whatever the link state says. A second consumer, `VolumeInput`
+   (`car/volume_input`, `car/volume_level.hpp`), follows the car's master volume on AudioMaster FBlock 0x20 fkt 0x0C08
+   for the volume overlay; it adds no device-controller keys and runs with `NBT_KNOB=0` too.
+8. **Car GPS (`car/gps`).** `CarGps` is another consumer of the MOST client: it receives copies of the navigation's GNSS fix
+   (FBlock 0x52 inst 00, fkt 0x440, about once a second, one copy per HMI receiver) and of its receiver status (FBlock 0xCD
+   inst 01, fkt 0xC00), decodes them and logs them under `[GPS]`. It adds no device-controller keys. With `NBT_KNOB=0` the
+   client still starts, for the GPS alone. A new fix goes to `aa_session` in Android Auto units (`aa_sensor_msg.hpp`) only if
+   the newest status changed within 5 s and reports a 3D fix; the session sends it as sensor 1 once the phone has started that
+   sensor, and a fix older than 5 s counts as no fix. The satellite count goes the same way. The session sends it as sensor 21
+   on its own timer, about once a second once the phone has started that sensor, with 0 when the status is older than 5 s or
+   the receiver has no fix.
 
 ### Cluster and HUD arrows (`kombi_nav`)
 
@@ -922,11 +1076,19 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_bcl_detect` | Companion-app (BCL/Etch) link detection, incl. the BCL startup magic `12 34 56 78` |
 | `test_spp_link_policy` | Silent links (MyBMW / AAIdrive) put on hold, Android Auto links never |
 | `test_spp_direction` | Phone-opened (Android Auto) vs car-opened (BMW Apps) links, learning and switch-off |
-| `test_session_lifecycle` | 400 session cycles (TSAN) |
+| `test_session_lifecycle` | 400 session cycles with a position posted throughout (TSAN) |
 | `test_session_owner` | Which transport (wireless / USB) may take the session from which |
 | `test_usb_accessory` | USB accessory: devctl layout, frame lengths, bridge over a fake `/dev/oap` (pty), session limit, unplug, stop, a writer stuck on a phone that stopped reading, open / switch retries |
 | `test_touch`, `test_touch_frame` | Touch decode against real captures (Supra pinch, 1440x540 split frames) |
-| `test_ccs_decoder`, `test_ccs_push`, `test_most_msg` | Controller decode (CCS35up + old CCS) against car captures |
+| `test_ccs_decoder`, `test_ccs_push` | Controller decode (CCS35up + old CCS) against car captures |
+| `test_most_msg`, `test_most_router`, `test_most_reassembler`, `test_most_registry` | MOST message parse and build, message classes, routing, joining segments, the registry |
+| `test_most_trace` | `NBT_MOST_LOG` filter and the client's taps |
+| `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
+| `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
+| `test_volume_level`, `test_volume_input` | Car volume level against the car capture (AudioMaster 0x20/0x0C08), and from DSI frame to the overlay callback beside the controller |
+| `test_car_gps` | Car GPS decode (MOST 52/00 fkt 440 and CD/01 fkt C00, car captures), repeats and log cadence, the 3D fix check, from DSI frame to `LocationFix` and satellite count on the fake `DsiClient` |
+| `test_aa_sensor_msg` | LOCATION (incl. 10-byte negative varints and the optional altitude, speed and bearing, which nothing sets yet) and GPS_SATELLITE event encodings, their age limits |
+| `test_session_sensors` | Sensor channel in `aa_session` over a socket with the stub cryptor: SensorStartRequest, the events it starts, the satellite timer, old data |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
 | `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
@@ -954,7 +1116,13 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     `session_owner.hpp` (wireless vs USB: who owns the session, used by `startSession()` in `main`);
   - Bluetooth and Wi-Fi: `wireless_setup`, `bluetooth_manager`, `spp_rereg.hpp`, `dsi_client`;
   - video and touch: `video_manager`, `touch_probe` (+ `touch_frame.hpp`, `touch_types.hpp`);
-  - controller: `ccs_input` (+ `ccs_decoder.hpp`, `most_msg.hpp`, `ctl_wizard.hpp`);
+  - MOST, in `src/most/` (the library: no Android Auto code, no environment reads, no consumer names): `most/client`
+    (+ `most/msg.hpp`, `most/ids.hpp`, `most/router.hpp`, `most/reassembler.hpp`), and the `NBT_MOST_LOG` logger
+    `most/trace` (+ `most/registry.hpp`);
+  - consumers of the MOST client, in `src/car/`: `car/ccs_input` (+ `car/ccs_decoder.hpp`, `car/ccs_config.hpp`,
+    `car/ptt.hpp`, `car/ctl_wizard.hpp`), with the keycodes in `aa_keys.hpp`, `car/volume_input`
+    (+ `car/volume_level.hpp`) for the volume overlay, and `car/gps`, with the LOCATION event in
+    `aa_sensor_msg.hpp`;
   - audio, in `src/audio/` (included as `"audio/<name>.hpp"`): `backend.hpp` (the `AudioBackend` interface main
     drives) with its three modes `bt_audio` (+ `bt_play`, `speech_out`), `browser_audio` and `a2i_audio`
     (+ `a2i_stream`); browser mode's parts: `stream_input.hpp` (one stream's state, by thread), `asound_device`
@@ -977,7 +1145,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 - Force Stop / Restart: the v1.8.3 state-file fix needs a car test.
 - iDrive still reacts to touches while Android Auto is shown (the UDP touch stream goes to both).
 - CarPlay after Android Auto (v1.8.6): confirm the CarPlay picture is no longer zoomed on a `1180_480` car.
-- Firewall: replace `pfctl -d` with one allow rule for the AA port (needs the car's live `pfctl` rules first).
+- Firewall: `pf_aa --install` (one-time pf.conf rule + `NBT_KEEP_PF=1`) is the opt-in; making it the install default is open.
 - The older CCS controller: knob rotation (v1.8.4) needs a car confirmation, including the turn direction.
 - `carplay.ini` screen codings such as `1180_480` or `900_540` are the CarPlay picture size, not always the panel: set
   `NBT_SCREEN` to the real panel size (e.g. `1280x480`, `1440x540`) if Android Auto doesn't fill the screen.
@@ -1038,6 +1206,37 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
 LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
 A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR
 CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+The sea-level table in `src/car/geoid.cpp` is copied unchanged from gpsd (`gpsd/geoid.c`), where it is generated from
+EGM2008 with GeographicLib. It is under gpsd's BSD-2-Clause license, which applies to that table and is reproduced here, as
+it requires for binary distributions:
+
+```
+Copyright by the GPSD project.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER
+OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
 EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
 PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
 PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF

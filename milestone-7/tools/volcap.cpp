@@ -16,7 +16,8 @@
 // "<<" so they stand out.
 
 #include "dsi_client.hpp"
-#include "most_msg.hpp"
+#include "most/ids.hpp"
+#include "most/msg.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,10 +28,12 @@
 
 namespace nbt {
 
+using namespace nbt::most;
+
 namespace {
 
 FILE* g_log = NULL;
-uint32_t g_client = 0xffffffffu;
+uint32_t g_client = kClientRefused;
 int g_stage = 0;              // 0 name sent, 1 registered, 2 dev ctrls sent (connection thread only)
 unsigned g_msgs = 0;
 volatile bool g_armed = false;
@@ -63,37 +66,35 @@ void onAttached(DsiClient* c, void*) {
     std::vector<uint8_t> p;
     DsiClient::putString(p, "NBTAAD_VOLCAP");
     g_stage = 1;
-    c->sendRequest(0xF, p);
-    static const uint32_t kAttrs[] = { 0xC0000002u, 0xC0000003u, 0xC0000001u, 0x80000001u, 0x80000002u,
-                                       0x80000003u, 0x80000004u, 0x80000005u, 0x80000006u, 0x80000007u };
-    for (size_t i = 0; i < sizeof(kAttrs) / sizeof(kAttrs[0]); ++i) c->setNotification(kAttrs[i]);
+    c->sendRequest(kReqRegisterClient, p);
+    for (size_t i = 0; i < (size_t)kClientSubscriptionCount; ++i) c->setNotification(kClientSubscriptions[i]);
 }
 
 void onData(DsiClient* c, uint32_t, uint32_t id, uint32_t, const uint8_t* pl, uint32_t len, void*) {
-    if (id == 0x80000000u && len >= 6) {
-        g_client = mostRdU32(pl);
-        unsigned dev = mostRdU16(pl + 4);
+    if (id == kInfoClientResponse && len >= 6) {
+        g_client = rdLe32(pl);
+        unsigned dev = rdLe16(pl + 4);
         say("[volcap] registered: clientId=%u deviceId=0x%04X%s\n", g_client, dev,
-            g_client == 0xffffffffu ? "  (REGISTRATION REFUSED)" : "");
-        if (g_client != 0xffffffffu && g_stage < 2) {
-            c->setNotification(0xC0000000u);
+            g_client == kClientRefused ? "  (REGISTRATION REFUSED)" : "");
+        if (g_client != kClientRefused && g_stage < 2) {
+            c->setNotification(kAttrCommState);
             // The keys nbt-aad already registers, plus the two volume-bearing FBlock instances and AudioMaster, so the
             // server's own filtering cannot hide them from us any more than it already does.
             static const uint16_t kKeys[] = { 0xE510, 0xE503, 0xE505, 0xE512, 0xE514, 0xE501, 0xE502,
                                               0x1502, 0x150C, 0x2000, 0x2001 };
             std::vector<uint16_t> keys(kKeys, kKeys + sizeof(kKeys) / sizeof(kKeys[0]));
             g_stage = 2;
-            c->sendRequest(1, buildRegisterDevCtrls(g_client, keys));
+            c->sendRequest(kReqRegisterDevCtrls, buildRegisterDevCtrls(g_client, keys));
             say("[volcap] registerDevCtrls sent (%u keys: 10x iDrive/MFL + 1502/150C + AudioMaster 2000/2001)\n",
                 (unsigned)keys.size());
             g_armed = true;
         }
         return;
     }
-    if (id != 0x80000001u) return;
+    if (id != kInfoMessage) return;
 
-    MostMsg m;
-    if (!parseMostMessage(pl, len, m)) return;
+    Msg m;
+    if (!parseMessage(pl, len, m)) return;
     ++g_msgs;
 
     char hex[64] = "";
