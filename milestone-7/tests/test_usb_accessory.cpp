@@ -76,6 +76,22 @@ static void testHeader() {
     printf("header: ok\n");
 }
 
+static void testResetBudget() {
+    aoap::ResetBudget b;
+    assert(!b.within(1000.0, 10.0));    // never reset yet
+    assert(b.take(1000.0));
+    assert(b.within(1005.0, 10.0));
+    assert(!b.within(1010.0, 10.0));
+    assert(b.take(1010.0));
+    assert(!b.take(1020.0));            // used up: a phone that keeps failing is left alone
+    assert(!b.within(1020.0, 10.0));    // and a refused reset did not count as one
+    assert(!b.take(1129.0));
+    assert(b.take(1130.0));             // long enough after the last one: a new problem
+    assert(b.take(1131.0));
+    assert(!b.take(1132.0));
+    printf("reset budget: ok\n");
+}
+
 // ---- bridge test ----
 
 // Set by the watch thread (onConnect), read by the test thread.
@@ -218,7 +234,9 @@ static void testBridge() {
     printf("bridge data: ok\n");
 
     // The session ends (ByeBye): the bridge is reaped (reader interrupted) and a new session starts on the same
-    // accessory connection after the retry gap, up to 3 in total.
+    // accessory connection after the retry gap, up to 3 in total. A failed session changes nothing through /dev/oap*:
+    // there is no way to reset the phone from there.
+    usb.noteSessionFailed(true);
     endSession();
     assert(waitSessions(2, 5.0));
     endSession();
@@ -377,6 +395,7 @@ static void testSwitchRetries() {
 int main() {
     setvbuf(stdout, NULL, _IONBF, 0);   // the daemon log lines interleave with the asserts
     testHeader();
+    testResetBudget();
     testBridge();
     testStalledWriter();
     testOpenRetries();

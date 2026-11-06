@@ -20,6 +20,9 @@
 // open of it, so medialauncher's spawn fails. vdev-medialaunch then logs "spawnning devc-serusb-aoap driver failed",
 // sends its clients an ADD_USB_OAP_IGN notice and leaves that accessory alone, with no retry (firmware disassembly,
 // 2026-11-01). QNX drops the claim when this process exits, so the stock driver is back as soon as nbt-aad is gone.
+//
+// And it can reset a phone. A phone stays in accessory mode with its session running when the daemon stops or a session
+// fails: it keeps streaming that session and ignores a new one until the USB connection goes away.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -61,6 +64,14 @@ public:
     // Attaches to accessory `key` and opens its bulk pipes. NULL on failure (logged).
     UsbDirectLink* open(const std::string& key);
 
+    // USB reset of accessory `key`, which must not be open (close its link first). Blocks for the reset. false: not
+    // reset (logged). The phone may stay under the same key or come back as a new device: both are normal.
+    bool resetDevice(const std::string& key);
+
+    // True once for an accessory that was already plugged in when start() connected: it went into accessory mode
+    // before this daemon ran, so a session of an earlier one may still be running on it.
+    bool takePresentAtStart(const std::string& key);
+
     // Devices other than accessories that have been plugged in for at least min_age_s: asks each one for its AOA
     // protocol (again every second while it does not answer, for up to 2 minutes) and switches the ones that answer to
     // accessory mode with `id`. Blocks for the control transfers (1 s timeout each). Returns how many it switched.
@@ -86,6 +97,7 @@ private:
         std::vector<uint8_t> instance;   // usbd_device_instance_t
         double seen_s;                    // monotonic time of the insertion
         UsbDirectLink* link;              // attached, or NULL
+        bool present_at_start;            // see takePresentAtStart()
     };
     struct Candidate {                    // a device that may be a phone not yet in accessory mode
         std::string key;
@@ -107,6 +119,7 @@ private:
 
     pthread_mutex_t mu_;
     struct usbd_connection* conn_;
+    double connected_s_;                 // guarded by mu_: when usbd_connect returned, 0 until then
     std::vector<Accessory> accs_;
     std::vector<Candidate> cands_;
     std::vector<Signalled> signalled_;   // watch thread only

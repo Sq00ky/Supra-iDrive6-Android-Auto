@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_control_msgs.hpp"
 #include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
@@ -34,6 +35,10 @@ static uint32_t monoMs() {
     return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
 }
 
+// Under a second of video from a phone in an earlier session. A few are let through in case the first frames of a
+// session are ever not application data.
+static const uint32_t kMaxUndecrypted = 16;
+
 AASession::AASession()
     : client_fd_(-1),
       running_(0),
@@ -52,6 +57,8 @@ AASession::AASession()
       rx_seq_next_(0),
       rx_seq_known_(false),
       rx_records_(0),
+      decrypted_any_(false),
+      undecrypted_(0),
       rx_note_count_(0),
       rx_start_s_(0) {
     pthread_mutex_init(&lifecycle_mutex_, NULL);
@@ -73,6 +80,7 @@ AASession::AASession()
     satellites_sent_ = 0;
     satellites_last_ms_ = 0;
     satellites_last_used_ = 0;
+    pending_bye_ = false;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
@@ -358,6 +366,7 @@ bool AASession::start(int client_fd) {
     pending_night_ = false;
     location_started_ = false;
     pending_location_ = false;
+    pending_bye_ = false;
     mic_open_ = false;
     mic_queue_.clear();
     pthread_mutex_unlock(&touch_mutex_);
@@ -369,6 +378,8 @@ bool AASession::start(int client_fd) {
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
     rx_records_ = 0;
+    decrypted_any_ = false;
+    undecrypted_ = 0;
     rx_note_count_ = 0;
     rx_start_s_ = monoS();
     memset(av_session_, 0, sizeof(av_session_));
@@ -402,6 +413,22 @@ void AASession::stop() {
     }
     releaseSocket();
     pthread_mutex_unlock(&lifecycle_mutex_);
+}
+
+bool AASession::byeAndWait(uint32_t wait_ms) {
+    if (!isRunning()) return true;
+    pthread_mutex_lock(&touch_mutex_);
+    pending_bye_ = true;
+    pthread_mutex_unlock(&touch_mutex_);
+    wakeSessionThread();
+    for (uint32_t waited = 0; waited < wait_ms && isRunning(); waited += 10) usleep(10000);
+    return !isRunning();
+}
+
+bool AASession::sendByeRequest() {
+    const std::vector<uint8_t> plain = aaByeByeRequest(AA_BYE_REASON_QUIT);
+    std::vector<uint8_t> enc;
+    return cryptor_.encrypt(&plain[0], plain.size(), enc) && sendFrame(0x00, 0x0B, &enc[0], enc.size());
 }
 
 void AASession::noteRx(uint8_t channel, uint8_t flags, uint16_t length) {
@@ -663,9 +690,15 @@ void AASession::drainTouch() {
     pending_night_ = false;
     bool location = pending_location_ && location_started_;
     pending_location_ = false;
+    bool bye = pending_bye_;
+    pending_bye_ = false;
     std::vector<std::vector<uint8_t> > mic;
     mic.swap(mic_queue_);
     pthread_mutex_unlock(&touch_mutex_);
+    if (bye) {   // nothing queued matters any more
+        printf("[AASession] >>> ByeByeRequest to the phone: %s\n", sendByeRequest() ? "sent" : "not sent");
+        return;
+    }
     for (size_t i = 0; i < mic.size(); ++i) {
         if (!sendMicFrame(mic[i])) { printf("[AASession] mic -> phone: SEND FAILED\n"); break; }
         if ((mic_sent_++ % 250) == 0) printf("[AASession] mic -> phone: %u chunks sent (%u bytes each)\n", mic_sent_, (unsigned)mic[i].size());
@@ -1061,8 +1094,16 @@ void AASession::sessionLoop() {
                     reassembly_[channel].clear();
                     reassembly_total_.erase(channel);
                     reassembly_wire_.erase(channel);
+                    // A phone still streaming an earlier session never answers this one, and its frames keep the
+                    // no-data timeout from firing: without this the session would sit here for as long as it streams.
+                    if (!decrypted_any_ && ++undecrypted_ >= kMaxUndecrypted) {
+                        printf("[AASession] none of the first %u encrypted frames could be decrypted: the phone is "
+                               "still in an earlier session, ending this one\n", (unsigned)undecrypted_);
+                        break;
+                    }
                     continue;
                 }
+                decrypted_any_ = true;
             } else {
                 decrypted_chunk = payload;
             }
@@ -1437,6 +1478,9 @@ void AASession::sessionLoop() {
                            "ByeByeResponse %s, ending the session\n",
                            reason == 0xFFFFFFFFu ? -1 : (int)reason, reason == 1 ? " = quit" : "",
                            (unsigned)media_frames_, ok ? "sent" : "SEND FAILED");
+                    break;
+                } else if (msg_id == 0x0010) { // ByeByeResponse: the phone has ended the session we asked it to
+                    printf("[AASession] >>> ByeByeResponse from the phone: ending the session\n");
                     break;
                 } else if (msg_id == 11) { // PingRequest
                     printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");
