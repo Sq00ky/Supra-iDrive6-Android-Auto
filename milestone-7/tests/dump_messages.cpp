@@ -5,6 +5,7 @@
 // The marker tells these from the log lines the manifest code prints. The manifest follows the NBT_ settings in the
 // environment, so the test runs this once per setting.
 #include "aa_control_msgs.hpp"
+#include "aa_sensor_msg.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include "kombi_nav_test_util.hpp"
 #include "sdr_builder.hpp"
@@ -61,6 +62,25 @@ static void mediaPlayback() {
     show(kFile, "nbt.session.MediaPlaybackMetadata", "metadata", std::vector<uint8_t>(kMetadata, kMetadata + sizeof(kMetadata)), 0);
 }
 
+static void sensors() {
+    static const char* const kFile = "aa_session.proto";
+    static const char* const kType = "nbt.session.SensorEvent";
+    enum { MESSAGE_ID_BYTES = 2 };
+    std::vector<uint8_t> event;
+    LocationFix f;
+    f.lat_e7 = 525000000; f.lon_e7 = -45000000; f.accuracy_e3 = 10000;
+    buildLocationEvent(f, event);
+    show(kFile, kType, "position", event, MESSAGE_ID_BYTES);
+    f.has_altitude = f.has_speed = f.has_bearing = true;
+    f.altitude_e2 = -2300; f.speed_e3 = 13889; f.bearing_e6 = 359999999;
+    buildLocationEvent(f, event);
+    show(kFile, kType, "position, all fields", event, MESSAGE_ID_BYTES);
+    buildSatelliteEvent(0, event);
+    show(kFile, kType, "no satellites", event, MESSAGE_ID_BYTES);
+    buildSatelliteEvent(7, event);
+    show(kFile, kType, "satellites", event, MESSAGE_ID_BYTES);
+}
+
 static void wireless() {
     static const char* const kFile = "aa_wireless.proto";
     enum { FRAME_HEADER_BYTES = 4 };
@@ -108,6 +128,7 @@ int main() {
     control();
     media();
     mediaPlayback();
+    sensors();
     wireless();
     nav();
     return 0;

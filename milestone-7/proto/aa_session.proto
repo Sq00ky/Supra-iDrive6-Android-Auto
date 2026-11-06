@@ -4,9 +4,9 @@
 // The session's protobuf messages apart from the manifest, as src/aa_session.cpp reads and writes them. Documentation
 // and a test only: nothing is generated from this. Each message starts with a 2-byte big-endian id, shown here.
 //
-// tests/test_schema.py checks MediaAck, AudioUnderflow and samples of the two media playback messages. The others are
-// built inline in aa_session.cpp, where no test can reach them, so their entries are only as good as the reading of
-// that code.
+// tests/test_schema.py checks MediaAck, AudioUnderflow, samples of the two media playback messages, and the LOCATION and
+// GPS_SATELLITE sensor events. The others are built inline in aa_session.cpp, where no test can reach them, so their
+// entries are only as good as the reading of that code.
 //
 // Not protobuf: VersionRequest, VersionResponse, the TLS handshake and media frames.
 syntax = "proto2";
@@ -73,16 +73,30 @@ message AudioUnderflow {
   optional uint32 session = 1;
 }
 
-// 0x8003 on the sensor channel, with one of these at a time. Both are repeated on the phone's side.
+// 0x8003 on the sensor channel, with one of these at a time. Night mode and driving status are repeated on the phone's
+// side. Location and satellites are written the same way, with one entry; whether field 21 repeats is not confirmed.
 message NightMode {
   optional bool is_night = 1;
 }
 message DrivingStatus {
   optional int32 status = 1;
 }
+message LocationData {
+  optional int32 latitude_e7 = 2;
+  optional int32 longitude_e7 = 3;
+  optional uint32 accuracy_e3 = 4;
+  optional int32 altitude_e2 = 5;
+  optional int32 speed_e3 = 6;
+  optional int32 bearing_e6 = 7;
+}
+message GpsSatelliteData {
+  optional uint32 used = 1;
+}
 message SensorEvent {
+  repeated LocationData location = 1;
   repeated NightMode night_mode = 10;
   repeated DrivingStatus driving_status = 13;
+  repeated GpsSatelliteData gps_satellite = 21;
 }
 
 // 0x8001 on the input channel, with one of touch, buttons or relative.
