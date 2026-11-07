@@ -3,7 +3,7 @@
 // Host test: car::CcsInput on most::Client with the fake DsiClient. Replays a car capture from DSI frame to CcsEvent, then
 // checks the routes, the registered keys and the voice button.
 #include "car/ccs_input.hpp"
-#include "fake_dsi_client.hpp"
+#include "most_fixture.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -43,12 +43,7 @@ static void start(Client& c, CcsInput& in, const CcsConfig& cfg) {
     g_seq.clear();
     g_rot = 0;
     assert(in.attach(c, cfg, &onEvent, &g_seq));
-    assert(c.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    std::vector<uint8_t> resp;
-    putLe32(resp, 93);
-    putLe16(resp, 0x205D);
-    fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+    most_fixture::startClient(c);
 }
 
 int main(int argc, char** argv) {
@@ -157,10 +152,7 @@ int main(int argc, char** argv) {
         g_seq.clear();
         fake_dsi::attach();                         // re-registering: nothing more to release
         assert(g_seq.empty());
-        std::vector<uint8_t> resp;
-        putLe32(resp, 94);
-        putLe16(resp, 0x205E);
-        fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+        most_fixture::registered(94, 0x205E);
         assert(g_seq.empty());
         // The knob moved 256 detents while the link was down: no jump.
         const uint8_t b[8] = { 2, 0x81, 0x01, 0, 0, 0, 0, 0xff };

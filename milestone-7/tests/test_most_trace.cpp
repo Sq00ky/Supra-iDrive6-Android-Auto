@@ -3,7 +3,7 @@
 // Host test: the NBT_MOST_LOG filter (first lines, changes only, the line cap, the type table), and Trace on the client.
 #include "most/trace.hpp"
 #include "most/client.hpp"
-#include "fake_dsi_client.hpp"
+#include "most_fixture.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -135,10 +135,7 @@ static void testTrace() {
     assert(!second.attach(c));                              // the client has its tap
     assert(c.start("X"));
     fake_dsi::attach();
-    std::vector<uint8_t> resp;
-    putLe32(resp, 93);
-    putLe16(resp, 0x205D);
-    fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+    most_fixture::registered();
     assert(c.state() == kUp);
     assert(fake_dsi::calls.back().kind == fake_dsi::Call::kNotify);    // no keys of its own: request 1 is skipped
 
