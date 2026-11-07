@@ -210,6 +210,43 @@ void AASession::postCarSpeed(const CarSpeedSample& speed) {
     }
 }
 
+void AASession::postCarState(CarState& state, int value) {
+    pthread_mutex_lock(&touch_mutex_);
+    state.value = value;
+    state.have = true;
+    if (state.started) state.pending = true;
+    bool wake = state.pending;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake && wake_pipe_[1] >= 0) {
+        char b = 1;
+        ssize_t w = write(wake_pipe_[1], &b, 1);
+        (void)w;
+    }
+}
+
+void AASession::postCarGear(int aaGear) { postCarState(gear_, aaGear); }
+
+void AASession::postCarParkingBrake(bool on) { postCarState(parking_brake_, on ? 1 : 0); }
+
+void AASession::startCarState(CarState& state) {
+    pthread_mutex_lock(&touch_mutex_);
+    state.started = true;
+    state.pending = false;      // the event that goes with the start carries the newest
+    pthread_mutex_unlock(&touch_mutex_);
+}
+
+void AASession::resetCarState(CarState& state) {
+    state.started = false;
+    state.pending = false;
+    state.sent = 0;
+}
+
+bool AASession::takeCarStatePending(CarState& state) {
+    const bool due = state.pending && state.started;
+    state.pending = false;
+    return due;
+}
+
 void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
     mic_cb_ = cb;
     mic_user_data_ = user_data;
@@ -390,6 +427,8 @@ bool AASession::start(int client_fd) {
     pending_location_ = false;
     speed_started_ = false;
     pending_speed_ = false;
+    resetCarState(gear_);
+    resetCarState(parking_brake_);
     pending_bye_ = false;
     mic_open_ = false;
     mic_queue_.clear();
@@ -716,6 +755,8 @@ void AASession::drainTouch() {
     pending_location_ = false;
     bool speed = pending_speed_ && speed_started_;
     pending_speed_ = false;
+    bool gear = takeCarStatePending(gear_);
+    bool parking_brake = takeCarStatePending(parking_brake_);
     bool bye = pending_bye_;
     pending_bye_ = false;
     std::vector<std::vector<uint8_t> > mic;
@@ -732,6 +773,8 @@ void AASession::drainTouch() {
     if (night && !sendSensorEvent(10)) printf("[AASession] NIGHT_MODE event: SEND FAILED\n");
     if (location && !sendSensorEvent(1)) printf("[AASession] LOCATION event: SEND FAILED\n");
     if (speed && !sendSensorEvent(3)) printf("[AASession] CAR_SPEED event: SEND FAILED\n");
+    if (gear && !sendSensorEvent(8)) printf("[AASession] GEAR event: SEND FAILED\n");
+    if (parking_brake && !sendSensorEvent(7)) printf("[AASession] PARKING_BRAKE event: SEND FAILED\n");
     if (focus) {
         bool ok = sendVideoFocusIndication(6, focus == 1, true);
         printf("[AASession] video focus -> phone: %s (unrequested) %s\n", focus == 1 ? "FOCUSED/projected" : "UNFOCUSED/native", ok ? "sent" : "SEND FAILED");
@@ -922,8 +965,8 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // SensorStartResponse 0x8002 {status=1}, SensorEventIndication 0x8003 with repeated
 // LocationData location_data=1 (aa_sensor_msg.hpp), NightMode night_mode=10 {is_night=1} and
 // DrivingStatus driving_status=13 {status=1}.
-// LocationData location_data=1, CarSpeedData car_speed=3 and GpsSatelliteData gps_satellite=21 are built in
-// aa_sensor_msg.hpp.
+// LocationData location_data=1, CarSpeedData car_speed=3, ParkingBrakeData parking_brake=7, GearData gear=8 and
+// GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
 using proto::pbFirstVarint;
 
@@ -1014,6 +1057,21 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         speed_last_zero_ = s.speed_e3 == 0;
         if (speed_sent_++ % 60 == 0)
             printf("[AASession] >>> Sensor CAR_SPEED event #%u (%.2f m/s)\n", speed_sent_, s.speed_e3 / 1000.0);
+    } else if (sensor_type == 8 || sensor_type == 7) { // GEAR, PARKING_BRAKE: the newest state (postCarGear, postCarParkingBrake)
+        CarState& state = sensor_type == 8 ? gear_ : parking_brake_;
+        const char* name = sensor_type == 8 ? "GEAR" : "PARKING_BRAKE";
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = state.have;
+        int value = state.value;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have) {
+            printf("[AASession] >>> Sensor %s: nothing from the car yet (sent when it reports)\n", name);
+            return true;
+        }
+        if (sensor_type == 8) buildGearEvent(value, plain);
+        else buildParkingBrakeEvent(value != 0, plain);
+        // Only on a change or a start, so every one is logged.
+        printf("[AASession] >>> Sensor %s event #%u (%d)\n", name, ++state.sent, value);
     } else {
         return true; // no data source for other sensors: ack only
     }
@@ -1271,6 +1329,8 @@ void AASession::sessionLoop() {
                     pending_speed_ = false;
                     pthread_mutex_unlock(&touch_mutex_);
                 }
+                if (st == 8) startCarState(gear_);
+                if (st == 7) startCarState(parking_brake_);
                 if (st != 0xFFFFFFFFu) sendSensorEvent(st);
             } else if (channel == 14 && msg_id == 0x8005) { // AVInputOpenRequest {open=1, anc=2, ec=3, max_unacked=4}
                 uint32_t open = pbFirstVarint(frame_data, 2, 1);

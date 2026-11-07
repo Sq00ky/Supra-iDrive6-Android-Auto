@@ -213,6 +213,15 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > **v1.9.36-sensortick (not car-verified): GPS_SATELLITE and a repeated CAR_SPEED of 0 keep to once a second while the phone
 > is sending.** A phone frame just before one was due put it off by a whole select tick, so with frames about once a second
 > the rate fell to 0.55-0.65 Hz in a host test. select now sleeps no longer than the next one is due.
+>
+> **v1.9.37-cargear (not car-verified): the car's gear and parking brake reach the phone.** The phone starts both sensors
+> and used to get nothing. Both come from the car's own MOST traffic (nothing is sent on MOST), and go out when they change
+> and whenever the phone starts the sensor. Gear is `NEUTRAL`, `DRIVE`, `PARK` or `REVERSE`; the iDrive app supplies it until
+> the car first reports one. Nothing is assumed before that, so the parking brake is unknown until its first report. Expect
+> the phone to stop counting as parked while stopped in D, and Google Maps may end guidance near a destination when you shift
+> to P or pull the handbrake. `DRIVING_STATUS` still stays 0. `NBT_CAR_GEAR=0` and `NBT_CAR_PARKING_BRAKE=0` turn them off.
+> Daemon log: `[Vehicle] gear: PARK (raw 3, from MOST)`, `[Vehicle] parking brake: on (raw 2)`, `[AASession] >>> Sensor GEAR
+> event #N`, `[AASession] >>> Sensor PARKING_BRAKE event #N`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -383,7 +392,9 @@ no settings file.
 | Driving status, night mode | Works; night mode follows the car's day/night (like CarPlay) since v1.8.30 / rhmiapp-15 |
 | Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP, the GPS speed, the direction of travel above 2 m/s, and the altitude converted from sea level to the WGS84 ellipsoid. This speed is always positive and is not the wheel speed below |
 | Car GPS satellites | Sent as the GPS_SATELLITE sensor (satellites used, about once a second, 0 with no fix) |
-| Car wheel speed | Sent as the CAR_SPEED sensor from MOST 05/00 fkt 621 (about twice a second while moving, negative in reverse, 0 repeated once a second while stopped). Not car-verified. Gear and parking brake are still not sent |
+| Car wheel speed | Sent as the CAR_SPEED sensor from MOST 05/00 fkt 621 (about twice a second while moving, negative in reverse, 0 repeated once a second while stopped). Not car-verified |
+| Car gear | Sent as the GEAR sensor from MOST 05/00 fkt 228, or from the iDrive app until the car first reports it: `NEUTRAL`, `DRIVE`, `PARK` or `REVERSE`, on change and when the phone starts the sensor. Not car-verified. A manual gearbox's values are not known |
+| Car parking brake | Sent as the PARKING_BRAKE sensor from MOST 05/00 fkt CB5, on change and when the phone starts the sensor, unknown until the car first reports it. Not car-verified, and not sent on a car that does not report this function |
 | iDrive menu entry with its own icon and a "Connecting..." text | Car-verified |
 | Menu: **Start** | Car-verified |
 | Menu: **Force Stop**, **Restart** | Fixed in v1.8.3 (state file), not yet car-verified |
@@ -639,6 +650,8 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
 | `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor) |
 | `NBT_CAR_SPEED` | `0` | The car's wheel speed to the phone (CAR_SPEED sensor) |
+| `NBT_CAR_GEAR` | `0` | The car's gear to the phone (GEAR sensor). Reverse-gear handling is `NBT_GEAR_ACTION` |
+| `NBT_CAR_PARKING_BRAKE` | `0` | The car's parking brake to the phone (PARKING_BRAKE sensor) |
 | `NBT_TOUCH_FWD` | `0` | Touch to the phone |
 | `NBT_HIDE_IDLE` | `0` | iDrive gets the screen while no phone is connected. Off = overlay stays up for the whole run |
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |

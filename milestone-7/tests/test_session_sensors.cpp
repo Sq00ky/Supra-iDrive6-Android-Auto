@@ -279,6 +279,99 @@ static void testSpeedNewSession() {
     endSession(s, sv);
 }
 
+static std::vector<uint8_t> gearEvent(int gear) {
+    std::vector<uint8_t> want;
+    buildGearEvent(gear, want);
+    return want;
+}
+
+static std::vector<uint8_t> brakeEvent(bool on) {
+    std::vector<uint8_t> want;
+    buildParkingBrakeEvent(on, want);
+    return want;
+}
+
+// Sensors 7 and 8 with nothing from the car: answered, and silent. No state is made up. That also covers the env switches.
+static void testStatesNoData() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 8, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    sendStart(sv[1], 7, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    s->postCarGear(AA_GEAR_PARK);               // and the first report goes out as usual
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_PARK));
+    s->postCarParkingBrake(true);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(true));
+    endSession(s, sv);
+}
+
+// Nothing until the phone starts it. Then the newest on start and each post, with no repeat, as the guide wants on change. An
+// old state still goes out: the car only reports changes, so it stays true.
+static void testStatesPosted() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarGear(AA_GEAR_REVERSE);
+    s->postCarGear(AA_GEAR_PARK);
+    s->postCarParkingBrake(false);
+    s->postCarParkingBrake(true);
+    assert(!nextSensorFrame(sv[1], 300, p));
+    sendStart(sv[1], 8, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_PARK));
+    assert(!nextSensorFrame(sv[1], 300, p));    // one started sensor does not bring out the other
+    sendStart(sv[1], 7, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(true));
+    s->postCarGear(AA_GEAR_NEUTRAL);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_NEUTRAL));
+    s->postCarGear(AA_GEAR_DRIVE);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_DRIVE));
+    s->postCarParkingBrake(false);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(false));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    endSession(s, sv);
+}
+
+// A phone reconnecting while parked hears both again, as the car will not report them until they change. It must start the
+// sensors first, and nothing pending from the last session goes out.
+static void testStatesNewSession() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 8, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    sendStart(sv[1], 7, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    s->postCarGear(AA_GEAR_DRIVE);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_DRIVE));
+    s->postCarParkingBrake(false);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(false));
+    s->stop();
+    close(sv[1]);
+    s->postCarGear(AA_GEAR_PARK);               // between sessions
+    s->postCarParkingBrake(true);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    assert(s->start(sv[0]));
+    uint8_t ch = 0xFF;
+    assert(readFrame(sv[1], 2000, ch, p));      // the VersionRequest
+    assert(!nextSensorFrame(sv[1], 500, p));
+    // In the new session, before the phone has started them: it has not asked yet, whatever it asked for last time.
+    s->postCarGear(AA_GEAR_REVERSE);
+    s->postCarParkingBrake(false);
+    assert(!nextSensorFrame(sv[1], 500, p));
+    sendStart(sv[1], 8, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_REVERSE));
+    sendStart(sv[1], 7, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(false));
+    endSession(s, sv);
+}
+
 // Satellites keep their timer while speed posts keep waking the session and the phone says nothing.
 static void testSatellitesWhileSpeedWakes() {
     int sv[2];
@@ -437,6 +530,9 @@ int main() {
     testSpeedStaleAtStart();
     testSpeedZeroRepeats();
     testSpeedNewSession();
+    testStatesNoData();
+    testStatesPosted();
+    testStatesNewSession();
     testSatellitesWhileSpeedWakes();
     testRepeatsOnTimeWhilePhoneTalks();
     testRepeatsWhilePhoneBytesAlwaysWaiting();
