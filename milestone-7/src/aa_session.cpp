@@ -80,6 +80,13 @@ AASession::AASession()
     satellites_sent_ = 0;
     satellites_last_ms_ = 0;
     satellites_last_used_ = 0;
+    memset(&car_speed_, 0, sizeof(car_speed_));
+    have_speed_ = false;
+    speed_started_ = false;
+    pending_speed_ = false;
+    speed_sent_ = 0;
+    speed_last_ms_ = 0;
+    speed_last_zero_ = false;
     pending_bye_ = false;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
@@ -186,6 +193,20 @@ void AASession::postCarSatellites(const SatelliteStatus& status) {
     car_satellites_ = status;
     have_satellites_ = true;
     pthread_mutex_unlock(&touch_mutex_);
+}
+
+void AASession::postCarSpeed(const CarSpeedSample& speed) {
+    pthread_mutex_lock(&touch_mutex_);
+    car_speed_ = speed;
+    have_speed_ = true;
+    if (speed_started_) pending_speed_ = true;
+    bool wake = pending_speed_;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake && wake_pipe_[1] >= 0) {
+        char b = 1;
+        ssize_t w = write(wake_pipe_[1], &b, 1);
+        (void)w;
+    }
 }
 
 void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
@@ -366,6 +387,8 @@ bool AASession::start(int client_fd) {
     pending_night_ = false;
     location_started_ = false;
     pending_location_ = false;
+    speed_started_ = false;
+    pending_speed_ = false;
     pending_bye_ = false;
     mic_open_ = false;
     mic_queue_.clear();
@@ -374,6 +397,8 @@ bool AASession::start(int client_fd) {
     location_sent_ = 0;
     satellites_started_ = false;
     satellites_sent_ = 0;
+    speed_sent_ = 0;
+    speed_last_zero_ = false;
     media_frames_ = 0;
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
@@ -537,6 +562,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
             if (r == 0) {
                 drainAcks();
                 drainSatellites();
+                drainSpeed();
                 if (limit_ms) {
                     idle_ms += tick_ms;
                     if (idle_ms >= limit_ms) {
@@ -691,6 +717,8 @@ void AASession::drainTouch() {
     pending_night_ = false;
     bool location = pending_location_ && location_started_;
     pending_location_ = false;
+    bool speed = pending_speed_ && speed_started_;
+    pending_speed_ = false;
     bool bye = pending_bye_;
     pending_bye_ = false;
     std::vector<std::vector<uint8_t> > mic;
@@ -706,6 +734,7 @@ void AASession::drainTouch() {
     }
     if (night && !sendSensorEvent(10)) printf("[AASession] NIGHT_MODE event: SEND FAILED\n");
     if (location && !sendSensorEvent(1)) printf("[AASession] LOCATION event: SEND FAILED\n");
+    if (speed && !sendSensorEvent(3)) printf("[AASession] CAR_SPEED event: SEND FAILED\n");
     if (focus) {
         bool ok = sendVideoFocusIndication(6, focus == 1, true);
         printf("[AASession] video focus -> phone: %s (unrequested) %s\n", focus == 1 ? "FOCUSED/projected" : "UNFOCUSED/native", ok ? "sent" : "SEND FAILED");
@@ -896,7 +925,8 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // SensorStartResponse 0x8002 {status=1}, SensorEventIndication 0x8003 with repeated
 // LocationData location_data=1 (aa_sensor_msg.hpp), NightMode night_mode=10 {is_night=1} and
 // DrivingStatus driving_status=13 {status=1}.
-// LocationData location_data=1 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
+// LocationData location_data=1, CarSpeedData car_speed=3 and GpsSatelliteData gps_satellite=21 are built in
+// aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
 using proto::pbFirstVarint;
 
@@ -970,6 +1000,23 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         if (satellites_sent_++ % 60 == 0 || used != satellites_last_used_)
             printf("[AASession] >>> Sensor GPS_SATELLITE event #%u (used=%u)\n", satellites_sent_, used);
         satellites_last_used_ = used;
+    } else if (sensor_type == 3) { // CAR_SPEED: the newest wheel speed (postCarSpeed)
+        const uint32_t now = monoMs();
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = have_speed_;
+        CarSpeedSample s = car_speed_;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have || !carSpeedSendable(s, now)) {
+            printf("[AASession] >>> Sensor CAR_SPEED: no recent wheel speed (sent when one arrives)\n");
+            speed_last_zero_ = false;
+            return true;
+        }
+        buildCarSpeedEvent(s.speed_e3, plain);
+        // Set before sending: a failing send must not run again on every pass of the session loop.
+        speed_last_ms_ = now;
+        speed_last_zero_ = s.speed_e3 == 0;
+        if (speed_sent_++ % 60 == 0)
+            printf("[AASession] >>> Sensor CAR_SPEED event #%u (%.2f m/s)\n", speed_sent_, s.speed_e3 / 1000.0);
     } else {
         return true; // no data source for other sensors: ack only
     }
@@ -983,6 +1030,11 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
 void AASession::drainSatellites() {
     if (!satellites_started_ || monoMs() - satellites_last_ms_ < kSatelliteSendEveryMs) return;
     if (!sendSensorEvent(21)) printf("[AASession] GPS_SATELLITE event: SEND FAILED\n");
+}
+
+void AASession::drainSpeed() {
+    if (!speed_last_zero_ || monoMs() - speed_last_ms_ < kCarSpeedRepeatZeroEveryMs) return;
+    if (!sendSensorEvent(3)) printf("[AASession] CAR_SPEED event: SEND FAILED\n");
 }
 
 void AASession::sessionLoop() {
@@ -1015,6 +1067,7 @@ void AASession::sessionLoop() {
         drainAcks();
         drainUnderflows();
         drainSatellites();
+        drainSpeed();
         uint8_t header[4];
         if (!readExact(header, 4)) {
             if (isRunning()) {
@@ -1188,6 +1241,12 @@ void AASession::sessionLoop() {
                     pthread_mutex_unlock(&touch_mutex_);
                 }
                 if (st == 21) satellites_started_ = true;
+                if (st == 3) {
+                    pthread_mutex_lock(&touch_mutex_);
+                    speed_started_ = true;
+                    pending_speed_ = false;
+                    pthread_mutex_unlock(&touch_mutex_);
+                }
                 if (st != 0xFFFFFFFFu) sendSensorEvent(st);
             } else if (channel == 14 && msg_id == 0x8005) { // AVInputOpenRequest {open=1, anc=2, ec=3, max_unacked=4}
                 uint32_t open = pbFirstVarint(frame_data, 2, 1);
