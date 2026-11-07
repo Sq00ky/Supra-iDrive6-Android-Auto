@@ -149,6 +149,30 @@ int main() {
         assert(satellitesUsedNow(true, s, 100) == 7);
         assert(satellitesUsedNow(true, s, 10000) == 0);
     }
+    // COMPASS: field 2 of the batch, {1: bearing_e6}. Exact bytes for 90 degrees, and the buffer's old content goes.
+    {
+        std::vector<uint8_t> ev(100, 0xEE);
+        buildCompassEvent(90000000, ev);
+        const uint8_t want[] = { 0x80, 0x03, 0x12, 0x05, 0x08, 0x80, 0x95, 0xF5, 0x2A };
+        assert(ev.size() == sizeof(want));
+        for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+        // North is written, not left out: the field is required.
+        buildCompassEvent(0, ev);
+        const uint8_t north[] = { 0x80, 0x03, 0x12, 0x02, 0x08, 0x00 };
+        assert(ev.size() == sizeof(north));
+        for (size_t i = 0; i < sizeof(north); ++i) assert(ev[i] == north[i]);
+    }
+    // When a compass repeat is due: not on the car's own 1 s beat, from the limit on, and across the 32-bit wrap.
+    {
+        assert(!compassRepeatDue(1000, 1000));
+        assert(!compassRepeatDue(1000, 2010));                       // a message late by 10 ms is not beaten to it
+        assert(!compassRepeatDue(1000, 1000 + kCompassRepeatMs - 1));
+        assert(compassRepeatDue(1000, 1000 + kCompassRepeatMs));
+        assert(!compassRepeatDue(0xFFFFFF00u, 100));                 // wrapped, 356 ms
+        assert(compassRepeatDue(0xFFFFFF00u, 2000));                 // wrapped, past the limit
+        // The car's beat must not reach the limit, and a repeat must stay inside what Google Maps counts as current.
+        assert(kCompassRepeatMs > 1000 && kCompassRepeatMs < 1500);
+    }
     printf("test_aa_sensor_msg OK\n");
     return 0;
 }

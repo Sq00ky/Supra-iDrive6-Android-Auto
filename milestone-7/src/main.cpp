@@ -1470,6 +1470,11 @@ static void onCarSatellites(const nbt::SatelliteStatus& status, void* user) {
     static_cast<nbt::AASession*>(user)->postCarSatellites(status);
 }
 
+// The car's heading (DSI callback thread, about 1 Hz) -> AA COMPASS sensor. Kept between sessions.
+static void onCarCompass(int32_t bearing_e6, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarCompass(bearing_e6);
+}
+
 static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
@@ -1542,7 +1547,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.33-usbset"
+#define NBT_AAD_BUILD "v1.9.35-cargps"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1841,7 +1846,8 @@ int main(int argc, char* argv[]) {
         printf("[Main] car volume input failed to start.\n");
     if (!nbt::carGpsEnabled())
         printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
-    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &g_session))
+    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &onCarCompass,
+                           &g_session))
         printf("[Main] car GPS failed to start.\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.

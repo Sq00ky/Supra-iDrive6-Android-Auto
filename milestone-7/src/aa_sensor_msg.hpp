@@ -3,7 +3,7 @@
 #ifndef AA_SENSOR_MSG_HPP
 #define AA_SENSOR_MSG_HPP
 
-// Android Auto sensor channel: the LOCATION and GPS_SATELLITE events, in Android Auto units. It knows nothing about where
+// Android Auto sensor channel: the LOCATION, COMPASS and GPS_SATELLITE events, in Android Auto units. It knows nothing about where
 // the data came from. Pure: host-tested in tests/test_aa_sensor_msg.cpp.
 
 #include "aa_proto.hpp"
@@ -53,6 +53,16 @@ inline uint32_t satellitesUsedNow(bool have, const SatelliteStatus& s, uint32_t 
     return have && now_ms - s.rx_ms <= kSatelliteMaxAgeMs ? s.used : 0;
 }
 
+// The compass goes out as each new heading arrives. With nothing new it repeats the last one, as the car's value stays true
+// while the car stands still and the integration guide wants about 1 Hz. The car sends once a second, give or take 10 ms, so
+// this does not fire between messages, and it stays inside the 1.5 s Google Maps 26.44 seems to allow for a current compass.
+const uint32_t kCompassRepeatMs = 1100;
+
+// Whether a repeat is due. Holds across the 32-bit wrap.
+inline bool compassRepeatDue(uint32_t last_sent_ms, uint32_t now_ms) {
+    return now_ms - last_sent_ms >= kCompassRepeatMs;
+}
+
 enum { AA_MSG_SENSOR_EVENT = 0x8003 };
 
 // Plain SensorEventIndication (0x8003) with one LocationData (SensorBatch field 1):
@@ -85,6 +95,19 @@ inline void buildSatelliteEvent(uint32_t used, std::vector<uint8_t>& out) {
     satellites.unsignedInteger(F_USED, used);
     proto::ProtoWriter event(AA_MSG_SENSOR_EVENT);
     event.message(F_GPS_SATELLITE, satellites);
+    out = event.bytes();
+}
+
+// Plain SensorEventIndication (0x8003) with one CompassData (SensorBatch field 2): {1: bearing_e6}, degrees * 1e6, clockwise
+// from north. Field and scale are from DHU r2.1, and Android Auto 17.9 has the same scale. Pitch (2) and roll (3) are optional
+// and left out, as the car's value has neither.
+inline void buildCompassEvent(int32_t bearing_e6, std::vector<uint8_t>& out) {
+    enum { F_COMPASS = 2 };
+    enum { F_BEARING = 1 };
+    proto::ProtoWriter compass;
+    compass.integer(F_BEARING, bearing_e6);
+    proto::ProtoWriter event(AA_MSG_SENSOR_EVENT);
+    event.message(F_COMPASS, compass);
     out = event.bytes();
 }
 

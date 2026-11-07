@@ -81,6 +81,12 @@ AASession::AASession()
     satellites_last_ms_ = 0;
     satellites_last_used_ = 0;
     pending_bye_ = false;
+    car_bearing_e6_ = 0;
+    have_compass_ = false;
+    compass_started_ = false;
+    pending_compass_ = false;
+    compass_sent_ = 0;
+    compass_last_ms_ = 0;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
@@ -186,6 +192,16 @@ void AASession::postCarSatellites(const SatelliteStatus& status) {
     car_satellites_ = status;
     have_satellites_ = true;
     pthread_mutex_unlock(&touch_mutex_);
+}
+
+void AASession::postCarCompass(int32_t bearing_e6) {
+    pthread_mutex_lock(&touch_mutex_);
+    car_bearing_e6_ = bearing_e6;
+    have_compass_ = true;
+    if (compass_started_) pending_compass_ = true;
+    bool wake = pending_compass_;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake) wakeSessionThread();
 }
 
 void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
@@ -367,6 +383,8 @@ bool AASession::start(int client_fd) {
     location_started_ = false;
     pending_location_ = false;
     pending_bye_ = false;
+    compass_started_ = false;
+    pending_compass_ = false;
     mic_open_ = false;
     mic_queue_.clear();
     pthread_mutex_unlock(&touch_mutex_);
@@ -374,6 +392,8 @@ bool AASession::start(int client_fd) {
     location_sent_ = 0;
     satellites_started_ = false;
     satellites_sent_ = 0;
+    compass_sent_ = 0;
+    compass_last_ms_ = 0;
     media_frames_ = 0;
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
@@ -499,7 +519,7 @@ uint32_t AASession::rxTimeoutMs() {
         // sessions on brief wireless gaps. The phone pings exactly once a second (car log 2026-10-24: 78 pings, max gap
         // 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence still means the
         // Wi-Fi link is gone: without a timeout a sudden drop never ended the session (no RST arrives) and the last
-        // frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 5-6 s.
+        // frame stayed on screen. The check runs on select ticks of 1 s or 250 ms, so the real cut-off is 5-6 s.
         // NBT_RX_TIMEOUT_S=0 disables.
         cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 5000u;
     }
@@ -524,8 +544,9 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 FD_SET(wake_pipe_[0], &rf);
                 if (wake_pipe_[0] > maxfd) maxfd = wake_pipe_[0];
             }
-            // 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time.
-            const uint32_t tick_ms = acks_.hasPending() ? 250u : 1000u;
+            // 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time, and while a compass
+            // repeat may be needed: at 1 s ticks a quiet phone would stretch it to 2 s.
+            const uint32_t tick_ms = (acks_.hasPending() || compassRunning()) ? 250u : 1000u;
             struct timeval tv;
             tv.tv_sec = tick_ms / 1000u;
             tv.tv_usec = (tick_ms % 1000u) * 1000u;
@@ -537,6 +558,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
             if (r == 0) {
                 drainAcks();
                 drainSatellites();
+                drainCompass();
                 if (limit_ms) {
                     idle_ms += tick_ms;
                     if (idle_ms >= limit_ms) {
@@ -554,6 +576,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 drainTouch();
                 drainAcks();
                 drainUnderflows();
+                drainCompass();     // wakes restart the tick, so frequent ones would otherwise hold a repeat back
                 if (!FD_ISSET(fd, &rf)) continue;
             }
             idle_ms = 0;
@@ -693,6 +716,8 @@ void AASession::drainTouch() {
     pending_location_ = false;
     bool bye = pending_bye_;
     pending_bye_ = false;
+    bool compass = pending_compass_ && compass_started_;
+    pending_compass_ = false;
     std::vector<std::vector<uint8_t> > mic;
     mic.swap(mic_queue_);
     pthread_mutex_unlock(&touch_mutex_);
@@ -706,6 +731,7 @@ void AASession::drainTouch() {
     }
     if (night && !sendSensorEvent(10)) printf("[AASession] NIGHT_MODE event: SEND FAILED\n");
     if (location && !sendSensorEvent(1)) printf("[AASession] LOCATION event: SEND FAILED\n");
+    if (compass && !sendSensorEvent(2)) printf("[AASession] COMPASS event: SEND FAILED\n");
     if (focus) {
         bool ok = sendVideoFocusIndication(6, focus == 1, true);
         printf("[AASession] video focus -> phone: %s (unrequested) %s\n", focus == 1 ? "FOCUSED/projected" : "UNFOCUSED/native", ok ? "sent" : "SEND FAILED");
@@ -896,7 +922,7 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // SensorStartResponse 0x8002 {status=1}, SensorEventIndication 0x8003 with repeated
 // LocationData location_data=1 (aa_sensor_msg.hpp), NightMode night_mode=10 {is_night=1} and
 // DrivingStatus driving_status=13 {status=1}.
-// LocationData location_data=1 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
+// LocationData location_data=1, CompassData compass_data=2 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
 using proto::pbFirstVarint;
 
@@ -957,6 +983,20 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
                    location_sent_, f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.accuracy_e3 / 1000.0, f.speed_e3 / 1000.0,
                    f.has_speed ? "" : " not sent", f.bearing_e6 / 1e6, f.has_bearing ? "" : " not sent",
                    f.altitude_e2 / 100.0, f.has_altitude ? "" : " not sent");
+    } else if (sensor_type == 2) { // COMPASS: the newest heading (postCarCompass)
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = have_compass_;
+        int32_t bearing_e6 = car_bearing_e6_;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have) {
+            printf("[AASession] >>> Sensor COMPASS: no heading from the car yet (sent when one arrives)\n");
+            return true;
+        }
+        buildCompassEvent(bearing_e6, plain);
+        // Set before sending: a failing send must not run again on every pass of the session loop.
+        compass_last_ms_ = monoMs();
+        if (compass_sent_++ % 60 == 0)
+            printf("[AASession] >>> Sensor COMPASS event #%u (bearing %.1f)\n", compass_sent_, bearing_e6 / 1e6);
     } else if (sensor_type == 21) { // GPS_SATELLITE: the newest count (postCarSatellites), 0 with nothing recent
         const uint32_t now = monoMs();
         pthread_mutex_lock(&touch_mutex_);
@@ -983,6 +1023,18 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
 void AASession::drainSatellites() {
     if (!satellites_started_ || monoMs() - satellites_last_ms_ < kSatelliteSendEveryMs) return;
     if (!sendSensorEvent(21)) printf("[AASession] GPS_SATELLITE event: SEND FAILED\n");
+}
+
+bool AASession::compassRunning() {
+    pthread_mutex_lock(&touch_mutex_);
+    const bool running = compass_started_ && have_compass_;
+    pthread_mutex_unlock(&touch_mutex_);
+    return running;
+}
+
+void AASession::drainCompass() {
+    if (!compassRepeatDue(compass_last_ms_, monoMs()) || !compassRunning()) return;
+    if (!sendSensorEvent(2)) printf("[AASession] COMPASS event: SEND FAILED\n");
 }
 
 void AASession::sessionLoop() {
@@ -1015,6 +1067,7 @@ void AASession::sessionLoop() {
         drainAcks();
         drainUnderflows();
         drainSatellites();
+        drainCompass();
         uint8_t header[4];
         if (!readExact(header, 4)) {
             if (isRunning()) {
@@ -1185,6 +1238,12 @@ void AASession::sessionLoop() {
                     pthread_mutex_lock(&touch_mutex_);
                     location_started_ = true;
                     pending_location_ = false;
+                    pthread_mutex_unlock(&touch_mutex_);
+                }
+                if (st == 2) {
+                    pthread_mutex_lock(&touch_mutex_);
+                    compass_started_ = true;
+                    pending_compass_ = false;
                     pthread_mutex_unlock(&touch_mutex_);
                 }
                 if (st == 21) satellites_started_ = true;
@@ -1503,6 +1562,11 @@ void AASession::finishSession() {
     // asked it to, release the fd here, then tell the owner if nobody requested the stop.
     bool ended_on_its_own = exchangeRunningOff();
     releaseSocket();
+    // The heading keeps coming with no phone connected: with this set, each one would write to a wake pipe nobody reads.
+    pthread_mutex_lock(&touch_mutex_);
+    compass_started_ = false;
+    pending_compass_ = false;
+    pthread_mutex_unlock(&touch_mutex_);
     if (ended_on_its_own && disconnect_cb_) {
         disconnect_cb_(disconnect_user_data_);
     }

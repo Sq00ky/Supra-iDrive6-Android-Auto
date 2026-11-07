@@ -25,9 +25,10 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id);
 // The manifest as ServiceDiscoveryResponse protobuf, without the message id.
 std::vector<uint8_t> serializeManifest(const ServiceDiscovery& manifest);
 
-// Corrects the sensor channel for a real car: no compass, gyroscope or toll card, which have no source in the car, and
-// unleaded with no EV connector in place of the DHU's unleaded + electric and supercharger. Returns true if anything
-// was changed (prints the result).
+// Corrects the sensor channel for a real car: drops the gyroscope and toll card, and has unleaded with no EV connector in
+// place of the DHU's unleaded + electric and supercharger. This is what the phone is offered, not what it gets: of these,
+// AASession sends only location, compass, night mode, driving status and GPS satellites, and only acknowledges the others.
+// Returns true if anything was changed (prints the result).
 bool configureSensors(ServiceDiscovery& manifest);
 
 // The main display's VideoConfig. Environment (all optional):
