@@ -394,8 +394,10 @@ inline bool decodeCarHeading(const uint8_t* p, size_t n, CarHeading& out) {
     return true;
 }
 
-// Decides what one received fkt 0x203 message means. Copies are told apart by time, not by content: the heading on a straight
-// road stays the same from one second to the next, and that is still a new message for the phone.
+// Decides what one received fkt 0x203 message means. A copy has the same bytes inside the time window, and it takes both: the
+// heading on a straight road stays the same from one second to the next, which is still a new message for the phone, and
+// after a stall two real messages can run closer together than the window, when the newer one must not be lost. rxMs is when
+// the callback ran, so a copy held up past the window counts as new: one extra event with the same value.
 class CarHeadingFilter {
 public:
     enum { kLogEvery = 60 };    // log the fields every 60th message, about once a minute
@@ -409,7 +411,7 @@ public:
         uint32_t gapMs;         // longest time between two messages since the last log
     };
 
-    CarHeadingFilter() : seen_(false), lastMs_(0), messages_(0), maxGapMs_(0), haveQuality_(false), lastQuality_(0),
+    CarHeadingFilter() : seen_(false), lastLen_(0), lastMs_(0), messages_(0), maxGapMs_(0), haveQuality_(false), lastQuality_(0),
                          badLogged_(false) {}
 
     Result feed(const uint8_t* p, size_t n, uint32_t rxMs, CarHeading& out) {
@@ -421,15 +423,19 @@ public:
         r.logFields = false;
         r.messageNo = messages_;
         r.gapMs = 0;
+        if (!p) n = 0;
+        const size_t keep = n < (size_t)kKeep ? n : (size_t)kKeep;
         if (seen_) {
             const uint32_t gap = rxMs - lastMs_;
-            if (gap < kHeadingCopyWindowMs) {
+            if (gap < kHeadingCopyWindowMs && n == lastLen_ && (keep == 0 || memcmp(p, last_, keep) == 0)) {
                 r.copy = true;
                 return r;
             }
             if (gap > maxGapMs_) maxGapMs_ = gap;
         }
         seen_ = true;
+        if (keep) memcpy(last_, p, keep);
+        lastLen_ = n;
         lastMs_ = rxMs;
         r.messageNo = ++messages_;
         r.ok = decodeCarHeading(p, n, out);
@@ -450,7 +456,10 @@ public:
     }
 
 private:
+    enum { kKeep = 16 };
     bool seen_;
+    uint8_t last_[kKeep];
+    size_t lastLen_;
     uint32_t lastMs_;
     unsigned messages_;
     uint32_t maxGapMs_;

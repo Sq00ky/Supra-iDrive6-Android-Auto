@@ -718,7 +718,7 @@ static void testHeadingFilter() {
         CarHeadingFilter flt;
         CarHeadingFilter::Result r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000, h);
         assert(!r.copy && r.ok && r.qualityChanged && r.logFields && r.messageNo == 1 && r.gapMs == 0);
-        // The other receivers' copies, whatever they hold, up to the window.
+        // The other receivers' copies: the same bytes, up to the window.
         r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1010, h);
         assert(r.copy && !r.ok);
         r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000 + kHeadingCopyWindowMs - 1, h);
@@ -729,6 +729,21 @@ static void testHeadingFilter() {
         // The window restarts from the newest message, not the first.
         r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 2010, h);
         assert(r.copy);
+    }
+    // After a stall two real messages can run inside the window: different bytes are not a copy, so the newer heading wins.
+    {
+        CarHeadingFilter flt;
+        std::vector<uint8_t> newer(kHeadingMsg, kHeadingMsg + sizeof(kHeadingMsg));
+        newer[0] = 64;
+        flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000, h);
+        CarHeadingFilter::Result r = flt.feed(&newer[0], newer.size(), 1005, h);
+        assert(!r.copy && r.ok && h.raw == 64 && r.messageNo == 2);
+        // Its own copies are copies, and the window is measured from it.
+        r = flt.feed(&newer[0], newer.size(), 1010, h);
+        assert(r.copy);
+        // A different length counts as different too.
+        r = flt.feed(&newer[0], newer.size() - 1, 1015, h);
+        assert(!r.copy && !r.ok);
     }
     // Exactly at the window: new.
     {

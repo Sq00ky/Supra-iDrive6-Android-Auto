@@ -201,11 +201,7 @@ void AASession::postCarCompass(int32_t bearing_e6) {
     if (compass_started_) pending_compass_ = true;
     bool wake = pending_compass_;
     pthread_mutex_unlock(&touch_mutex_);
-    if (wake && wake_pipe_[1] >= 0) {
-        char b = 1;
-        ssize_t w = write(wake_pipe_[1], &b, 1);
-        (void)w;
-    }
+    if (wake) wakeSessionThread();
 }
 
 void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
@@ -523,7 +519,7 @@ uint32_t AASession::rxTimeoutMs() {
         // sessions on brief wireless gaps. The phone pings exactly once a second (car log 2026-10-24: 78 pings, max gap
         // 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence still means the
         // Wi-Fi link is gone: without a timeout a sudden drop never ended the session (no RST arrives) and the last
-        // frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 5-6 s.
+        // frame stayed on screen. The check runs on select ticks of 1 s or 250 ms, so the real cut-off is 5-6 s.
         // NBT_RX_TIMEOUT_S=0 disables.
         cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 5000u;
     }
@@ -580,6 +576,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 drainTouch();
                 drainAcks();
                 drainUnderflows();
+                drainCompass();     // wakes restart the tick, so frequent ones would otherwise hold a repeat back
                 if (!FD_ISSET(fd, &rf)) continue;
             }
             idle_ms = 0;
@@ -1565,6 +1562,11 @@ void AASession::finishSession() {
     // asked it to, release the fd here, then tell the owner if nobody requested the stop.
     bool ended_on_its_own = exchangeRunningOff();
     releaseSocket();
+    // The heading keeps coming with no phone connected: with this set, each one would write to a wake pipe nobody reads.
+    pthread_mutex_lock(&touch_mutex_);
+    compass_started_ = false;
+    pending_compass_ = false;
+    pthread_mutex_unlock(&touch_mutex_);
     if (ended_on_its_own && disconnect_cb_) {
         disconnect_cb_(disconnect_user_data_);
     }
