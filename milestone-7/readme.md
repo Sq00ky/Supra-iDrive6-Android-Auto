@@ -196,6 +196,10 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > `nbt-aad.env`. It writes `/var/opt/aa/usb-aa`, which the daemon reads when it starts, so press **Restart** after
 > changing it. A set `NBT_USB` in `nbt-aad.env` wins either way (`NBT_USB=0` keeps it off). Daemon log at start:
 > `[Main] Android Auto over USB: on (Settings checkbox)`; app log: `menu: Android Auto over USB off -> on ...`.
+>
+> **v1.9.34-driverside (not car-verified): `NBT_DRIVER_SIDE` tells Android Auto which side the driver sits on.** It was
+> always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
+> per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -697,6 +701,7 @@ Leave these unset unless you are testing.
 | `NBT_GPS_ACCURACY_M` | A fixed accuracy for every car GPS fix, in metres, 2 to 499 (default: HDOP x 5 m, at least 2 m; 10 m when a fix has no usable HDOP) |
 | `NBT_NIGHT_MODE=0/1`, `NBT_DRIVING_STATUS=0` | Sensor values. Night mode follows the car by default (`vehicle.dayNightChangeOver` via the iDrive app); `NBT_NIGHT_MODE` forces day (0) or night (1) |
 | `NBT_CAR_MAKE/MODEL/YEAR`, `NBT_VEHICLE_ID`, `NBT_HU_MAKE/MODEL`, `NBT_SW_VERSION`, `NBT_BT_ADDR` | Single identity fields |
+| `NBT_DRIVER_SIDE` | `left` or `right`: the driver's side Android Auto is told (default: left; nothing reads it from the car) |
 | `NBT_CARPLAY_INI` | Read a different `carplay.ini` (never the factory template in `/opt/conn/data/carplay/`) |
 | `NBT_CTL_PORT` | Control port (default 52790) |
 | `NBT_KOMBI_NAV` | `1` / `0` forces the cluster/HUD arrows on / off, whatever the menu checkbox says (default: the checkbox) |
@@ -1144,7 +1149,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_session_sensors` | Sensor channel in `aa_session` over a socket with the stub cryptor: SensorStartRequest, the events it starts, the satellite timer, old data |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
-| `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE |
+| `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE, driver's side |
 | `test_video_geometry` (+ `src/sdr_builder.cpp`) | 480p, 720p and 1080p at 30 / 60 fps / unset across screen sizes: aspect ratio, phone insets, DPI, MINI calibration and touch coordinates |
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates); drift loops P and PI in a one-hour closed loop at -300..+300 ppm |

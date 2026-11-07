@@ -86,6 +86,10 @@ int keepAudioSinkRate(ServiceDiscovery& manifest, unsigned channel, uint32_t rat
 // leaves no doubt about the rate. Other modes unchanged. Returns the number of offers removed.
 int limitGuidanceOffers(ServiceDiscovery& manifest);
 
+// The side the phone is told the driver sits on: NBT_DRIVER_SIDE = left or right. Unset or anything else is left, what the
+// phone always heard before. Returns true if the manifest changed. Logs the side.
+bool configureDriverPosition(ServiceDiscovery& manifest);
+
 // Pure helper used by dropSdrChannels (host-tested): parses "8, 9,14" into ids (max 16).
 size_t parseChannelList(const char* s, int* ids, size_t max_ids);
 

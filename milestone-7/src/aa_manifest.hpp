@@ -53,7 +53,7 @@ enum AaSensorType {
 enum AaLocationCharacterization { LOCATION_RAW_GPS_ONLY = 256 };
 enum AaFuelType { FUEL_UNLEADED = 1, FUEL_ELECTRIC = 10 };
 enum AaEvConnector { EV_CONNECTOR_SUPERCHARGER = 8 };
-enum AaDriverPosition { DRIVER_POSITION_LEFT = 0 };
+enum AaDriverPosition { DRIVER_POSITION_LEFT = 0, DRIVER_POSITION_RIGHT = 1 };
 
 enum AaMediaCodec { CODEC_AUDIO_PCM = 1, CODEC_VIDEO_H264 = 3 };
 enum AaAudioType { AUDIO_TYPE_GUIDANCE = 1, AUDIO_TYPE_SYSTEM = 2, AUDIO_TYPE_MEDIA = 3 };
