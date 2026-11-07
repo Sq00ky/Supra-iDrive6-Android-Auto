@@ -196,6 +196,23 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > `nbt-aad.env`. It writes `/var/opt/aa/usb-aa`, which the daemon reads when it starts, so press **Restart** after
 > changing it. A set `NBT_USB` in `nbt-aad.env` wins either way (`NBT_USB=0` keeps it off). Daemon log at start:
 > `[Main] Android Auto over USB: on (Settings checkbox)`; app log: `menu: Android Auto over USB off -> on ...`.
+>
+> **v1.9.34-carspeed (not car-verified): the car's wheel speed reaches the phone.** The phone starts this sensor and
+> used to get nothing, so it probably read "parked" all the time. It now gets the speed from the car's own MOST traffic
+> (nothing is sent on MOST), so parked-only features should close when moving and come back when stopped. `DRIVING_STATUS`
+> still stays 0. `NBT_CAR_SPEED=0` turns it off. Daemon log: `[Vehicle] car speed: MOST 05/00 fkt 621 ...` at start,
+> `[AASession] >>> Sensor CAR_SPEED event #N` while sending, and `[Vehicle] speed: moving again after ...` with the number
+> of zero frames seen, which shows whether the car goes quiet while stopped.
+>
+> **v1.9.35-rxdeadline (not car-verified): a phone that drops off is noticed on time while the car is moving.** The
+> `NBT_RX_TIMEOUT_S` limit is now timed from the last byte the phone sent. Before, anything that woke the session restarted
+> the count: car GPS stretched 5 s to about 7-17 s, and car speed stopped it altogether while moving, leaving the last frame on
+> screen and refusing reconnects. So a wireless gap that used to survive by accident now ends the session at 5-6 s; raise
+> `NBT_RX_TIMEOUT_S` if that happens on a good link. GPS_SATELLITE also keeps its once-a-second timer through those wakes.
+>
+> **v1.9.36-sensortick (not car-verified): GPS_SATELLITE and a repeated CAR_SPEED of 0 keep to once a second while the phone
+> is sending.** A phone frame just before one was due put it off by a whole select tick, so with frames about once a second
+> the rate fell to 0.55-0.65 Hz in a host test. select now sleeps no longer than the next one is due.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -364,8 +381,9 @@ no settings file.
 | "Hey Google" / Assistant using the car's microphone (`Carplay_Siri_1mic` speech scenario) | Car-verified |
 | Assistant replies audible (the car's Bluetooth source is requested again when the mic closes) | Car-verified |
 | Driving status, night mode | Works; night mode follows the car's day/night (like CarPlay) since v1.8.30 / rhmiapp-15 |
-| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP, the GPS speed, the direction of travel above 2 m/s, and the altitude converted from sea level to the WGS84 ellipsoid. This speed is always positive and is not the Mechanical Speed sensor, which is not sent |
+| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP, the GPS speed, the direction of travel above 2 m/s, and the altitude converted from sea level to the WGS84 ellipsoid. This speed is always positive and is not the wheel speed below |
 | Car GPS satellites | Sent as the GPS_SATELLITE sensor (satellites used, about once a second, 0 with no fix) |
+| Car wheel speed | Sent as the CAR_SPEED sensor from MOST 05/00 fkt 621 (about twice a second while moving, negative in reverse, 0 repeated once a second while stopped). Not car-verified. Gear and parking brake are still not sent |
 | iDrive menu entry with its own icon and a "Connecting..." text | Car-verified |
 | Menu: **Start** | Car-verified |
 | Menu: **Force Stop**, **Restart** | Fixed in v1.8.3 (state file), not yet car-verified |
@@ -620,6 +638,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
 | `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor) |
+| `NBT_CAR_SPEED` | `0` | The car's wheel speed to the phone (CAR_SPEED sensor) |
 | `NBT_TOUCH_FWD` | `0` | Touch to the phone |
 | `NBT_HIDE_IDLE` | `0` | iDrive gets the screen while no phone is connected. Off = overlay stays up for the whole run |
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |

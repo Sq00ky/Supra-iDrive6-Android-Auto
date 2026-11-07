@@ -41,6 +41,11 @@ inline bool carGpsEnabled() {
     return envFlag("NBT_CAR_GPS") != 0;
 }
 
+// The car's wheel speed (MOST 05/00 fkt 621, car/vehicle), default on. NBT_CAR_SPEED=0 / off / no disables it.
+inline bool carSpeedEnabled() {
+    return envFlag("NBT_CAR_SPEED") != 0;
+}
+
 // Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
 // the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
 inline int videoResolution() {

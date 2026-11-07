@@ -75,6 +75,12 @@ static void sensors() {
     f.altitude_e2 = -2300; f.speed_e3 = 13889; f.bearing_e6 = 359999999;
     buildLocationEvent(f, event);
     show(kFile, kType, "position, all fields", event, MESSAGE_ID_BYTES);
+    buildCarSpeedEvent(0, event);
+    show(kFile, kType, "car stopped", event, MESSAGE_ID_BYTES);
+    buildCarSpeedEvent(6944, event);
+    show(kFile, kType, "car forward", event, MESSAGE_ID_BYTES);
+    buildCarSpeedEvent(-1389, event);
+    show(kFile, kType, "car in reverse", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(0, event);
     show(kFile, kType, "no satellites", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(7, event);
