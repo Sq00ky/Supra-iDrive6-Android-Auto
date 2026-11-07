@@ -14,7 +14,7 @@ namespace nbt {
 
 namespace {
 
-// AA formats (service discovery, include/dhu_sdp.h + addSystemAudioSink). Media offers 48 kHz stereo, system audio
+// AA formats (service discovery, referenceManifest + addSystemAudioSink). Media offers 48 kHz stereo, system audio
 // 16 kHz mono, guidance 16 kHz and 48 kHz mono. The phone picks one without saying which, so these are only the
 // starting rates: PtsRateMeter measures each stream from its timestamps (car 2026-11-01: guidance came at 48 kHz).
 const uint32_t kSrcRate[BrowserAudio::NSTREAMS] = { 48000, 48000, 16000 };   // channel counts: audioSourceChannels()

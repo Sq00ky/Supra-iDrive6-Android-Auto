@@ -11,6 +11,7 @@
 
 #include "session_owner.hpp"
 #include "tcp_server.hpp"
+#include "usb_aoap.hpp"
 #include <stddef.h>
 #include <stdint.h>
 #include <pthread.h>
@@ -42,6 +43,11 @@ public:
     // this is true. Updated every scan (500 ms).
     bool phonePresent() const { return flag(phone_present_); }
 
+    // Any thread: a USB session ended without a frame from the phone being decrypted. stale: it sent frames we could
+    // not decrypt, so it is still in an earlier session; else it stayed silent, which a phone that is still starting
+    // Android Auto does too. The phone is reset (NBT_USB_DIRECT; through /dev/oap* it can only be tried again).
+    void noteSessionFailed(bool stale);
+
 private:
     struct SwitchNode {         // a /dev/android* node
         std::string name;
@@ -56,6 +62,7 @@ private:
         int sessions;           // sessions actually started on this plug-in
         int open_fails;         // in a row
         double next_try_s;
+        int silent_sessions;    // sessions the phone did not answer, on this plug-in
     };
     enum TriggerResult { kTriggerSwitched, kTriggerOtherClient, kTriggerFailed };
     enum BridgeResult { kBridgeStarted, kBridgeOpenFailed, kBridgeFailed, kBridgeLeaked };
@@ -68,6 +75,8 @@ private:
     AccessoryNode* findNode(const std::string& name);
     bool usbWantsPhone(const std::vector<std::string>& androids, const std::vector<std::string>& accs,
                        bool accessory_waiting, double now);
+    void handleFailedSession();
+    bool resetPhone(const std::string& key, const char* why);   // false: not reset (logged), carry on without it
 
     bool flag(const bool& f) const;
     void setFlag(bool& f, bool v);
@@ -78,13 +87,17 @@ private:
     OwnerCallback owner_;
     void* owner_data_;
 
-    pthread_mutex_t flag_mutex_;   // guards is_running_ and phone_present_
+    pthread_mutex_t flag_mutex_;   // guards is_running_, phone_present_, session_failed_ and session_stale_
     pthread_t watch_thread_;
     bool is_running_;
     bool phone_present_;
+    bool session_failed_;          // noteSessionFailed(): for the watch thread
+    bool session_stale_;
 
     // Owned by the watch thread (stop() takes them over after joining it).
     UsbBridge* bridge_;            // NULL while no bridge runs
+    std::string last_node_;        // the node of the last bridge: the session that failed ran on it
+    aoap::ResetBudget resets_;
     int not_ours_ticks_;           // scans in a row the session owner was not USB while the bridge was up
     UsbDirect* direct_;            // set from start() to stop() when NBT_USB_DIRECT is on and io-usb answered
     double next_driver_stop_s_;    // NBT_USB_DIRECT: devc-serusb-aoap is signalled at most once a second

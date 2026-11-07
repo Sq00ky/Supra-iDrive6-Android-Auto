@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include "nbt_env.hpp"
 namespace nbt {
 
 enum CarMake { MAKE_TOYOTA = 0, MAKE_BMW, MAKE_MINI, MAKE_ROLLS_ROYCE };
@@ -238,37 +239,57 @@ inline const CarConfig& carConfig() {
     return c;
 }
 
-// The phone always renders a 1280x720 canvas (crop mode). Two ways to put it on the panel:
-//   scaled (default): the canvas is scaled to the panel width; the panel shows the top rows that fit
-//     (1280x480: 1:1, 1440x540: x1.125, 1180x480: x0.922 -> 520 rows).
-//   native (NBT_VID_NATIVE=1, panels up to 1280x720 only, EXPERIMENTAL): the canvas is shown 1:1 from its top-left
-//     corner and the phone is told (insets) to keep its UI in the top-left panel-sized area. Pixel-exact on a
-//     narrower panel such as 1180x480 (no scaling blur, touch 1:1). On 1280x480 both modes are identical.
+// Scale both axes equally. Insets keep the phone's UI out of the clipped rows or columns.
+// On a 1280x480 panel, 720p shows the top 1280x480 at 1:1 (car-verified in w7).
+// At 720p, 1440x540 scales by 1.125 and shows 480 rows. 1180x480 scales by 0.922 and shows 520 rows.
+// 480p shows the top 800x300 at 1.6x. A 1440x540 panel shows those same rows at 1.8x.
+// Taller panels fill the height instead and reserve the hidden columns on the right.
+// NBT_VID_NATIVE=1 (experimental) keeps a 1:1 picture when the panel fits inside the video canvas.
+// A narrower 1180x480 panel can show 720p this way without scaling blur or touch scaling.
 inline bool vidNative() {
     const char* e = getenv("NBT_VID_NATIVE");
     const CarConfig& c = carConfig();
-    return e && e[0] == '1' && c.screenW <= 1280 && c.screenH <= 720;
+    return e && e[0] == '1' && c.screenW <= videoCanvasWidth() && c.screenH <= videoCanvasHeight();
 }
-// Canvas rows / columns the panel displays.
+inline bool videoFitHeight() {
+    const CarConfig& c = carConfig();
+    return c.screenW * videoCanvasHeight() < c.screenH * videoCanvasWidth();
+}
+
 inline int canvasRowsShown() {
     const CarConfig& c = carConfig();
     if (vidNative()) return c.screenH;
-    int rows = c.screenH * 1280 / c.screenW;
-    return rows > 720 ? 720 : rows;
+    return videoFitHeight() ? videoCanvasHeight() : c.screenH * videoCanvasWidth() / c.screenW;
 }
-inline int canvasColsShown() { return vidNative() ? carConfig().screenW : 1280; }
-// MM-Renderer destination rectangle (the part beyond the panel is clipped, like the bottom rows on the Supra).
-inline int mmrDstWidth() { return vidNative() ? 1280 : carConfig().screenW; }
-inline int mmrDstHeight() { return vidNative() ? 720 : 720 * carConfig().screenW / 1280; }
+inline int canvasColsShown() {
+    const CarConfig& c = carConfig();
+    if (vidNative()) return c.screenW;
+    return videoFitHeight() ? c.screenW * videoCanvasHeight() / c.screenH : videoCanvasWidth();
+}
+inline int mmrDstWidth() {
+    if (vidNative()) return videoCanvasWidth();
+    const CarConfig& c = carConfig();
+    return videoFitHeight() ? c.screenH * videoCanvasWidth() / videoCanvasHeight() : c.screenW;
+}
+inline int mmrDstHeight() {
+    if (vidNative()) return videoCanvasHeight();
+    const CarConfig& c = carConfig();
+    return videoFitHeight() ? c.screenH : videoCanvasHeight() * c.screenW / videoCanvasWidth();
+}
 // Panel pixels -> canvas pixels.
-inline double touchScale() { return vidNative() ? 1.0 : 1280.0 / (double)carConfig().screenW; }
+inline double touchScale() {
+    if (vidNative()) return 1.0;
+    return videoFitHeight() ? (double)videoCanvasHeight() / carConfig().screenH
+                            : (double)videoCanvasWidth() / carConfig().screenW;
+}
 // MINI round central display = carplay.ini 1180_480 coding on a MINI. The round bezel covers about 40 px at each side
 // of the 1280x480 panel (MINI F60 tester 2026-10-28: NBT_VID_DPI=152 + NBT_VID_INSETS=0,240,40,40 fit, 60 was too much).
 inline bool miniRoundPanel(const CarConfig& c) { return c.make == MAKE_MINI && c.iniW == 1180 && c.iniH == 480; }
 inline bool miniRoundPanel() { return miniRoundPanel(carConfig()); }
 // Default touch x offset in canvas pixels (NBT_TOUCH_OX overrides). MINI F60 round display (1180_480 coding): touches
-// landed ~20-30 px right of the finger; -20 fixed it (tester, v1.8.35, 2026-10-29). 0 on every other car.
-inline double defaultTouchOffsetX(const CarConfig& c) { return miniRoundPanel(c) ? -20.0 : 0.0; }
+// landed ~20-30 px right of the finger. -20 fixed it at 720p (tester, v1.8.35, 2026-10-29).
+// Scale that calibration for other canvases. Other cars keep a zero offset.
+inline double defaultTouchOffsetX(const CarConfig& c) { return miniRoundPanel(c) ? -20.0 * videoCanvasWidth() / 1280 : 0.0; }
 
 } // namespace nbt
 

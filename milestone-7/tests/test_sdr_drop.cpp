@@ -4,7 +4,6 @@
 #include "sdr_builder.hpp"
 #include "nbt_env.hpp"
 #include "audio/config.hpp"
-#include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,6 +36,12 @@ static bool channels(const std::vector<uint8_t>& p, std::vector<int>& ids) {
     return pos == p.size();
 }
 
+static bool channels(const ServiceDiscovery& m, std::vector<int>& ids) { return channels(serializeManifest(m), ids); }
+
+static bool same(const ServiceDiscovery& a, const ServiceDiscovery& b) {
+    return serializeManifest(a) == serializeManifest(b);
+}
+
 static bool has(const std::vector<int>& v, int x) { for (size_t i = 0; i < v.size(); ++i) if (v[i] == x) return true; return false; }
 
 int main() {
@@ -46,24 +51,24 @@ int main() {
     CHECK(parseChannelList("", ids, 16) == 0);
     CHECK(parseChannelList("x", ids, 16) == 0);
 
-    std::vector<uint8_t> base(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
+    const ServiceDiscovery base = referenceManifest(dhuIdentity());
     std::vector<int> before;
     CHECK(channels(base, before));
     CHECK(has(before, 8) && has(before, 9) && has(before, 14) && has(before, 7));
 
     // NBT_AUDIO_BT=0 (A2I mode): nothing changes
     unsetenv("NBT_SDR_DROP"); setenv("NBT_AUDIO_BT", "0", 1);
-    std::vector<uint8_t> a = base;
-    CHECK(dropSdrChannels(a) == 0 && a == base);
+    ServiceDiscovery a = base;
+    CHECK(dropSdrChannels(a) == 0 && same(a, base));
 
     // unset = Bluetooth audio mode (default again since v1.8.66): channel 9 dropped
     unsetenv("NBT_AUDIO_BT");
-    std::vector<uint8_t> a2 = base;
+    ServiceDiscovery a2 = base;
     CHECK(dropSdrChannels(a2) == 1);
 
     // NBT_AUDIO_BT=1 -> only 9 removed (8 + 14 are required by the phone), rest intact and parseable
     setenv("NBT_AUDIO_BT", "1", 1);
-    std::vector<uint8_t> b = base;
+    ServiceDiscovery b = base;
     CHECK(dropSdrChannels(b) == 1);
     std::vector<int> after;
     CHECK(channels(b, after));
@@ -73,22 +78,22 @@ int main() {
 
     // explicit full drop still possible
     setenv("NBT_SDR_DROP", "8,9,14", 1);
-    std::vector<uint8_t> f = base;
+    ServiceDiscovery f = base;
     CHECK(dropSdrChannels(f) == 3);
     unsetenv("NBT_SDR_DROP");
 
     // explicit list wins; "none" keeps everything even with BT on
     setenv("NBT_SDR_DROP", "9", 1);
-    std::vector<uint8_t> c = base;
+    ServiceDiscovery c = base;
     CHECK(dropSdrChannels(c) == 1);
     setenv("NBT_SDR_DROP", "none", 1);
-    std::vector<uint8_t> d = base;
-    CHECK(dropSdrChannels(d) == 0 && d == base);
+    ServiceDiscovery d = base;
+    CHECK(dropSdrChannels(d) == 0 && same(d, base));
     unsetenv("NBT_SDR_DROP"); unsetenv("NBT_AUDIO_BT");
 
     // identity rewrite + drop compose
     SdrIdentity id;
-    std::vector<uint8_t> e = buildServiceDiscovery(base.empty() ? NULL : &base[0], base.size(), id);
+    ServiceDiscovery e = referenceManifest(id);
     setenv("NBT_AUDIO_BT", "on", 1);
     CHECK(dropSdrChannels(e) == 1);
     std::vector<int> ce; CHECK(channels(e, ce));
@@ -97,12 +102,12 @@ int main() {
     // NBT_AUDIO_MODE=browser: nothing dropped, ch 8 stays GUIDANCE, a SYSTEM_AUDIO sink (ch 16) is added once
     setenv("NBT_AUDIO_MODE", "browser", 1);
     CHECK(audioMode() == AUDIO_MODE_BROWSER && !btAudioEnabled() && browserAudioEnabled());
-    std::vector<uint8_t> g = base;
-    CHECK(dropSdrChannels(g) == 0 && g == base);
-    CHECK(retypeGuidanceSink(g) == 0 && g == base);
+    ServiceDiscovery g = base;
+    CHECK(dropSdrChannels(g) == 0 && same(g, base));
+    CHECK(retypeGuidanceSink(g) == 0 && same(g, base));
     // a leftover NBT_GUIDANCE_BT=1 must not turn ch 8 into a second SYSTEM_AUDIO sink next to ch 16
     setenv("NBT_GUIDANCE_BT", "1", 1);
-    CHECK(retypeGuidanceSink(g) == 0 && g == base);
+    CHECK(retypeGuidanceSink(g) == 0 && same(g, base));
     unsetenv("NBT_GUIDANCE_BT");
     CHECK(addSystemAudioSink(g) == 1);
     std::vector<int> cg; CHECK(channels(g, cg));
@@ -111,14 +116,15 @@ int main() {
     // the new descriptor: { 1: 16, 3: { 1: 1 PCM, 2: 2 SYSTEM_AUDIO, 3: { 1: 16000, 2: 16, 3: 1 } } }
     const uint8_t want[] = { 0x0a, 0x11, 0x08, 0x10, 0x1a, 0x0d, 0x08, 0x01, 0x10, 0x02,
                              0x1a, 0x07, 0x08, 0x80, 0x7d, 0x10, 0x10, 0x18, 0x01 };
-    CHECK(g.size() == base.size() + sizeof(want) && memcmp(&g[base.size()], want, sizeof(want)) == 0);
+    const std::vector<uint8_t> gb = serializeManifest(g), bb = serializeManifest(base);
+    CHECK(gb.size() == bb.size() + sizeof(want) && memcmp(&gb[bb.size()], want, sizeof(want)) == 0);
     setenv("NBT_SYSTEM_SINK", "0", 1);                       // switch off
-    std::vector<uint8_t> h = base;
-    CHECK(addSystemAudioSink(h) == 0 && h == base);
+    ServiceDiscovery h = base;
+    CHECK(addSystemAudioSink(h) == 0 && same(h, base));
     unsetenv("NBT_SYSTEM_SINK");
     // other modes: no system sink unless forced
     setenv("NBT_AUDIO_MODE", "bt", 1);
-    std::vector<uint8_t> i2 = base;
+    ServiceDiscovery i2 = base;
     CHECK(addSystemAudioSink(i2) == 0);
     setenv("NBT_SYSTEM_SINK", "1", 1);
     CHECK(addSystemAudioSink(i2) == 1);

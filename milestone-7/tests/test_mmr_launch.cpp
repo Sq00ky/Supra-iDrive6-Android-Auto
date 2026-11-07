@@ -66,6 +66,35 @@ int main() {
     // the default list is car_config's
     assert(nbt::kCarPlayIniPaths[0] && strcmp(nbt::kCarPlayIniPaths[0], "/var/opt/conn/carplay/carplay.ini") == 0);
 
+    // CONN_CARPLAY's other processes (acpd, mdnsd) and the generic tail match
+    assert(exePathIsCarPlayHelper("/opt/conn/bin/carplay/acpd"));
+    assert(exePathIsCarPlayHelper("/fs/sda0/repository/istep/opt/conn/bin/carplay/mdnsd\n"));
+    assert(!exePathIsCarPlayHelper("/opt/conn/bin/carplay/mm-renderer"));
+    assert(!exePathIsCarPlayHelper("/usr/sbin/mdnsd"));               // not CarPlay's
+    assert(!exePathIsCarPlayHelper(NULL));
+    assert(!exePathEndsWith("/x/acpd", ""));
+    assert(!exePathEndsWith("acpd", "/conn/bin/carplay/acpd"));
+
+    // spawnStep (issue #118): start mm-renderer, or keep waiting?
+    //   not coded, none running: at once, whatever the uptime
+    assert(spawnStep(1, false, false, false, 5.0, 60) == kSpawnStart);
+    //   NBT_MMR_SPAWN=0: never
+    assert(spawnStep(0, false, false, false, 500.0, 60) == kSpawnWait);
+    assert(spawnStep(0, true, false, false, 500.0, 60) == kSpawnWait);
+    //   one is running (the head unit's or an earlier one): wait for it, never a second one
+    assert(spawnStep(1, false, true, false, 500.0, 60) == kSpawnWait);
+    assert(spawnStep(1, true, true, false, 500.0, 60) == kSpawnWait);
+    //   already started (or tried) in this run: not again
+    assert(spawnStep(1, false, false, true, 500.0, 60) == kSpawnWait);
+    assert(spawnStep(1, true, false, true, 500.0, 60) == kSpawnWait);
+    //   coded: leave it to the head unit until boot_s after boot, then start (carplay.ini without active CarPlay)
+    assert(spawnStep(1, true, false, false, 20.0, 60) == kSpawnWait);
+    assert(spawnStep(1, true, false, false, 59.9, 60) == kSpawnWait);
+    assert(spawnStep(1, true, false, false, 60.0, 60) == kSpawnStart);
+    assert(spawnStep(1, true, false, false, 900.0, 60) == kSpawnStart);
+    //   NBT_MMR_BOOT_S=0: at once on a coded car too
+    assert(spawnStep(1, true, false, false, 3.0, 0) == kSpawnStart);
+
     printf("test_mmr_launch OK\n");
     return 0;
 }

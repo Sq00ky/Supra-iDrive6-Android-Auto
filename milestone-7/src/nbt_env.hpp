@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 namespace nbt {
 
@@ -40,16 +41,50 @@ inline bool carGpsEnabled() {
     return envFlag("NBT_CAR_GPS") != 0;
 }
 
+// Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
+// the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
+inline int videoResolution() {
+    const char* e = getenv("NBT_VID_RES");
+    if (e && strcmp(e, "1") == 0) return 1;
+    if (e && strcmp(e, "3") == 0) return 3;
+    return 2;
+}
+inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
+inline int videoCanvasHeight() { return videoResolution() == 1 ? 480 : videoResolution() == 3 ? 1080 : 720; }
+
+// NBT_VID_FPS (PR #66): "30" or "60"; anything else = 0 (not set). On the wire VideoConfig.fps is 1 = 60 fps and
+// 2 = 30 fps (the phone app's VideoFrameRateType; obd2aa and open-android-auto agree, aasdk has the names swapped), and
+// the DHU manifest we send carries 2: unset, the phone is asked for 30 fps (car logs: ~30 fps delivered) while the
+// decoder is declared at 60, as before.
+inline unsigned videoFpsSetting() {
+    const char* e = getenv("NBT_VID_FPS");
+    if (e && strcmp(e, "30") == 0) return 30u;
+    if (e && strcmp(e, "60") == 0) return 60u;
+    return 0u;
+}
+// What the phone is asked for: NBT_VID_FPS, else the manifest's 30.
+inline unsigned videoRequestedFps() { return videoFpsSetting() ? videoFpsSetting() : 30u; }
+// What the decoder (mdev format packet, MM-Renderer input) is declared with: NBT_VID_FPS, else 60 (unchanged).
+inline unsigned videoDecoderFps() { return videoFpsSetting() ? videoFpsSetting() : 60u; }
+
 // The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
-// Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified,
-// so off unless NBT_USB=1 / on / yes / true: it switches any Android phone plugged in while the daemon runs into
-// accessory mode, which takes it away from iDrive's USB media (MTP) until it is replugged.
-inline bool usbEnabled() {
-    const char* e = getenv("NBT_USB");
-    if (!e || !*e) return false;
-    return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
+// Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified, so
+// off by default: it switches any Android phone plugged in while the daemon runs into accessory mode, which takes it
+// away from iDrive's USB media (MTP) until it is replugged. On with the iDrive Settings checkbox "Android Auto over
+// USB" (flag file kUsbFlagFile; a hand-made kUsbManualFile also counts) or NBT_USB=1 / on / yes / true; any other
+// NBT_USB value (0, off) forces it off whatever the checkbox says. Read once at daemon start: a change applies at the
+// next Start / Restart.
+static const char* const kUsbFlagFile = "/var/opt/aa/usb-aa";
+static const char* const kUsbManualFile = "/opt/aa/usb-aa";
+// Pure part (host-tested): NBT_USB's value (NULL = unset) and whether a flag file exists.
+inline bool usbSettingOn(const char* env, bool flagFile) {
+    if (env && *env)
+        return strcmp(env, "1") == 0 || strcmp(env, "on") == 0 || strcmp(env, "yes") == 0 || strcmp(env, "true") == 0;
+    return flagFile;
 }
+inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
+inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
 
 // NBT_USB_DIRECT=1 (with NBT_USB=1, experimental): read the phone through libusbdi, not devc-serusb-aoap (which it
 // stops for the phone): see usb_direct.hpp.

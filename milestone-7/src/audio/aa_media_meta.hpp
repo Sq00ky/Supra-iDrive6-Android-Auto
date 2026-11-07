@@ -22,6 +22,8 @@
 
 #include <string>
 
+#include "aa_proto.hpp"
+
 namespace nbt {
 
 struct AaMediaStatus {
@@ -44,95 +46,34 @@ struct AaMediaMetadata {
     AaMediaMetadata() : duration(0), albumArtBytes(0) {}
 };
 
-// One protobuf field of a message body.
-struct PbField {
-    unsigned number;
-    unsigned wire;              // 0 varint, 1 fixed64, 2 length-delimited, 5 fixed32
-    uint64_t varint;
-    const uint8_t* data;        // length-delimited payload (may be NULL for an empty one)
-    size_t len;
-};
-
-// Minimal varint reader: returns false on truncation or a >32-bit key.
-inline bool pbReadVarint(const uint8_t* p, size_t n, size_t& pos, uint64_t& v) {
-    v = 0;
-    unsigned shift = 0;
-    while (pos < n) {
-        uint8_t b = p[pos++];
-        v |= (uint64_t)(b & 0x7Fu) << shift;
-        if (!(b & 0x80u)) return true;
-        shift += 7;
-        if (shift > 63) return false;
-    }
-    return false;
-}
-
-// Next field of the body; advances `pos`. False at the end or on a malformed message.
-inline bool pbNextField(const uint8_t* p, size_t n, size_t& pos, PbField& f) {
-    if (pos >= n) return false;
-    uint64_t key;
-    if (!pbReadVarint(p, n, pos, key)) return false;
-    f.number = (unsigned)(key >> 3);
-    f.wire = (unsigned)(key & 7u);
-    f.varint = 0;
-    f.data = NULL;
-    f.len = 0;
-    if (f.number == 0) return false;
-    switch (f.wire) {
-        case 0:
-            return pbReadVarint(p, n, pos, f.varint);
-        case 1:
-            if (pos + 8 > n) return false;
-            pos += 8;
-            return true;
-        case 2: {
-            uint64_t len;
-            if (!pbReadVarint(p, n, pos, len)) return false;
-            if (len > (uint64_t)(n - pos)) return false;
-            f.data = p + pos;
-            f.len = (size_t)len;
-            pos += (size_t)len;
-            return true;
-        }
-        case 5:
-            if (pos + 4 > n) return false;
-            pos += 4;
-            return true;
-        default:
-            return false;       // groups (3/4) never appear in these messages
-    }
-}
-
-inline std::string pbAsString(const PbField& f) {
-    return f.data ? std::string((const char*)f.data, f.len) : std::string();
-}
+inline std::string aaMediaText(const proto::PbField& f) { return std::string((const char*)f.data, f.len); }
 
 // 0x8001 MediaPlaybackStatus. Returns false when the body is not parseable (a partial message still fills what it
 // got - the phone sends this once a second and a truncated one must not poison the last known state).
 inline bool aaParseMediaStatus(const uint8_t* p, size_t n, AaMediaStatus& out) {
     if (!p) return false;
     bool any = false;
-    size_t pos = 0;
-    PbField f;
-    while (pbNextField(p, n, pos, f)) {
-        switch (f.number) {
+    proto::PbReader r(p, n);
+    proto::PbField f;
+    while (r.next(f)) {
+        switch (f.num) {
             case 1:
-                if (f.wire == 0) { out.state = (unsigned)f.varint; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.state = (unsigned)f.value; any = true; }
                 break;
             case 2:
-                if (f.wire == 2) { out.source = pbAsString(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.source = aaMediaText(f); any = true; }
                 break;
             case 3:
-                if (f.wire == 0) { out.position = (unsigned)f.varint; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.position = (unsigned)f.value; any = true; }
                 break;
             case 4:
-                if (f.wire == 0) { out.shuffle = f.varint != 0; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.shuffle = f.value != 0; any = true; }
                 break;
             case 5:
-                if (f.wire == 0) { out.repeat = f.varint != 0; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.repeat = f.value != 0; any = true; }
                 break;
             case 6:
-                if (f.wire == 0) { out.repeatOne = f.varint != 0; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.repeatOne = f.value != 0; any = true; }
                 break;
             default:
                 break;
@@ -145,27 +86,27 @@ inline bool aaParseMediaStatus(const uint8_t* p, size_t n, AaMediaStatus& out) {
 inline bool aaParseMediaMetadata(const uint8_t* p, size_t n, AaMediaMetadata& out) {
     if (!p) return false;
     bool any = false;
-    size_t pos = 0;
-    PbField f;
-    while (pbNextField(p, n, pos, f)) {
-        switch (f.number) {
+    proto::PbReader r(p, n);
+    proto::PbField f;
+    while (r.next(f)) {
+        switch (f.num) {
             case 1:
-                if (f.wire == 2) { out.song = pbAsString(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.song = aaMediaText(f); any = true; }
                 break;
             case 2:
-                if (f.wire == 2) { out.artist = pbAsString(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.artist = aaMediaText(f); any = true; }
                 break;
             case 3:
-                if (f.wire == 2) { out.album = pbAsString(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.album = aaMediaText(f); any = true; }
                 break;
             case 4:
-                if (f.wire == 2) { out.albumArtBytes = f.len; any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.albumArtBytes = f.len; any = true; }
                 break;
             case 5:
-                if (f.wire == 2) { out.playlist = pbAsString(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.playlist = aaMediaText(f); any = true; }
                 break;
             case 6:
-                if (f.wire == 0) { out.duration = (unsigned)f.varint; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.duration = (unsigned)f.value; any = true; }
                 break;
             default:
                 break;          // rating (7) is not shown anywhere

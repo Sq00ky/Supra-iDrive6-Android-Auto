@@ -683,6 +683,7 @@ static bool cpLiveRetune() {
 
 static nbt::TcpServer* g_tcp = NULL;           // set once the listener runs (wireless recovery re-creates it)
 static nbt::UsbAccessory* g_usb = NULL;        // set while Android Auto over USB runs (NBT_USB=1)
+static const uint32_t kUsbByeWaitMs = 500;     // of the 3 s before the iDrive app sends SIGTERM after 'quit'
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
@@ -1128,6 +1129,32 @@ static void onMicData(const uint8_t* pcm_data, size_t size, void* user_data) {
 }
 
 static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data) {
+    // [VideoRate] (PR #66): phone video frames counted at the AA callback boundary, before queueing; one average every
+    // five seconds, next to what the phone was asked for (NBT_VID_FPS, default 30) and the decoder rate.
+    struct VideoRateProbe {
+        uint64_t frames;
+        struct timespec window_start;
+        bool started;
+        VideoRateProbe() : frames(0), started(false) {}
+    };
+    static VideoRateProbe probe;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    ++probe.frames;
+    if (!probe.started) {
+        probe.window_start = now;
+        probe.started = true;
+    } else {
+        const double elapsed = (now.tv_sec - probe.window_start.tv_sec) +
+                               (now.tv_nsec - probe.window_start.tv_nsec) / 1000000000.0;
+        if (elapsed >= 5.0) {
+            printf("[VideoRate] phone frames=%llu in %.2f s (%.1f fps), requested=%u fps, decoder %u fps\n",
+                   (unsigned long long)probe.frames, elapsed, probe.frames / elapsed, nbt::videoRequestedFps(),
+                   nbt::videoDecoderFps());
+            probe.frames = 0;
+            probe.window_start = now;
+        }
+    }
     nbt::VideoManager* video = reinterpret_cast<nbt::VideoManager*>(user_data);
     if (video) {
         // Feed raw H.264 slice straight into the car's hardware video decoder (/dev/name/local/mdev)
@@ -1167,6 +1194,10 @@ static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
 static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
 static const double kShortSessionS = 15.0;
 static void onSessionEnded(void* user_data) {
+    nbt::UsbAccessory* usb = g_usb;
+    const nbt::AASession::Outcome outcome = g_session.outcome();
+    if (usb && g_owner.get() == nbt::kTransportUsb && outcome != nbt::AASession::kEstablished)
+        usb->noteSessionFailed(outcome == nbt::AASession::kStale);
     g_sessionActive = false;
     g_owner.set(nbt::kTransportNone);
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
@@ -1511,7 +1542,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.26-cargps"
+#define NBT_AAD_BUILD "v1.9.33-usbset"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1672,17 +1703,17 @@ int main(int argc, char* argv[]) {
     printf("[Car] display (LayerManager screen 0): %dx%d, CarPlay picture coded %dx%d\n",
            car.dispW, car.dispH, car.iniW, car.iniH);
     if (nbt::vidNative())
-        printf("[Car] phone canvas 1280x720 shown 1:1 (NBT_VID_NATIVE): top-left %dx%d visible, MMR dst %dx%d, touch scale 1.000\n",
-               nbt::canvasColsShown(), nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight());
+        printf("[Car] phone canvas %dx%d shown 1:1 (NBT_VID_NATIVE): top-left %dx%d visible, MMR dst %dx%d, touch scale 1.000\n",
+               nbt::videoCanvasWidth(), nbt::videoCanvasHeight(), nbt::canvasColsShown(), nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight());
     else
-        printf("[Car] phone canvas 1280x720 shown at panel width: %d rows visible, MMR dst %dx%d, touch scale %.3f\n",
-               nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight(), nbt::touchScale());
+        printf("[Car] phone canvas %dx%d scaled to fill the panel: top-left %dx%d visible, MMR dst %dx%d, touch scale %.3f\n",
+               nbt::videoCanvasWidth(), nbt::videoCanvasHeight(), nbt::canvasColsShown(), nbt::canvasRowsShown(), nbt::mmrDstWidth(), nbt::mmrDstHeight(), nbt::touchScale());
 
     // 1. Initialize Video Pipeline (libscreen.so window at the panel size)
     nbt::VideoManager video;
     if (!video.init((uint32_t)car.screenW,
                     (uint32_t)car.screenH,
-                    NBT_SCREEN_MAX_FPS)) {
+                    nbt::videoDecoderFps())) {
         printf("[Main] Warning: Video initialization encountered an issue.\n");
     }
     g_video = &video;
@@ -1772,6 +1803,8 @@ int main(int argc, char* argv[]) {
     // active" state also covers a USB phone and the auto-connector stays quiet; startSession() picks the owner.
     nbt::UsbAccessory usb(&onUsbConnected, &tcp_server, &sessionOwner, NULL);
     if (nbt::usbEnabled()) {
+        const char* usbEnv = getenv("NBT_USB");
+        printf("[Main] Android Auto over USB: on (%s)\n", usbEnv && *usbEnv ? "NBT_USB" : "Settings checkbox");
         if (usb.start()) g_usb = &usb;
         else printf("[Main] Android Auto over USB failed to start.\n");
     }
@@ -2162,6 +2195,13 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
     printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
+    // Before usb.stop(), which takes the link away. A phone that isn't told keeps streaming into the void and ignores
+    // the next daemon's session. Wireless phones just reconnect, so they are not told to quit.
+    if (g_owner.get() == nbt::kTransportUsb) {
+        const bool answered = g_session.byeAndWait(kUsbByeWaitMs);
+        printf("[Main] [+%.2f s] USB session: %s\n", upSec() - t0,
+               answered ? "ended by the phone" : "no answer to the ByeByeRequest");
+    }
     g_usb = NULL;              // the wireless thread stops asking it
     usb.stop();                // no new USB session either; ends the USB bridge (and with it a USB session)
     printf("[Main] [+%.2f s] USB accessory stopped\n", upSec() - t0);

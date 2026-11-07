@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+//
+// Wireless setup over RFCOMM, as src/wireless_setup.cpp reads and writes it. Documentation and a test only: nothing is
+// generated from this. Frame: [u16 payload length][u16 message id][protobuf]; the id is shown here.
+syntax = "proto2";
+package nbt.wireless;
+
+// 1, sent by us
+message WifiStartRequest {
+  optional string ip = 1;
+  optional int32 port = 2;
+}
+
+// 3, sent by us
+message WifiInfoResponse {
+  optional string ssid = 1;
+  optional string key = 2;
+  optional string bssid = 3;
+  optional int32 security = 4;
+  optional int32 ap_type = 5;
+}
+
+// 6, from the phone
+message WifiConnectStatus {
+  optional int32 status = 1;
+}
+
+// 7, from the phone. A phone that sends only field 3 means it as a status; with field 4 present, field 3 is the port.
+message WifiStartResponse {
+  optional string ip = 2;
+  optional int32 port = 3;
+  optional int32 status = 4;
+}
+
+// 7, sent by us when the phone starts the exchange. Its numbers differ from the phone's own response.
+message WifiStartResponseFromHeadUnit {
+  optional string ip = 1;
+  optional int32 port = 2;
+  optional int32 status = 3;
+}

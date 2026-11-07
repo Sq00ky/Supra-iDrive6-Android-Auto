@@ -9,8 +9,9 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_control_msgs.hpp"
+#include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
-#include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,10 @@ static uint32_t monoMs() {
     return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
 }
 
+// Under a second of video from a phone in an earlier session. A few are let through in case the first frames of a
+// session are ever not application data.
+static const uint32_t kMaxUndecrypted = 16;
+
 AASession::AASession()
     : client_fd_(-1),
       running_(0),
@@ -52,6 +57,8 @@ AASession::AASession()
       rx_seq_next_(0),
       rx_seq_known_(false),
       rx_records_(0),
+      decrypted_any_(false),
+      undecrypted_(0),
       rx_note_count_(0),
       rx_start_s_(0) {
     pthread_mutex_init(&lifecycle_mutex_, NULL);
@@ -73,6 +80,7 @@ AASession::AASession()
     satellites_sent_ = 0;
     satellites_last_ms_ = 0;
     satellites_last_used_ = 0;
+    pending_bye_ = false;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
@@ -358,6 +366,7 @@ bool AASession::start(int client_fd) {
     pending_night_ = false;
     location_started_ = false;
     pending_location_ = false;
+    pending_bye_ = false;
     mic_open_ = false;
     mic_queue_.clear();
     pthread_mutex_unlock(&touch_mutex_);
@@ -369,6 +378,8 @@ bool AASession::start(int client_fd) {
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
     rx_records_ = 0;
+    decrypted_any_ = false;
+    undecrypted_ = 0;
     rx_note_count_ = 0;
     rx_start_s_ = monoS();
     memset(av_session_, 0, sizeof(av_session_));
@@ -402,6 +413,22 @@ void AASession::stop() {
     }
     releaseSocket();
     pthread_mutex_unlock(&lifecycle_mutex_);
+}
+
+bool AASession::byeAndWait(uint32_t wait_ms) {
+    if (!isRunning()) return true;
+    pthread_mutex_lock(&touch_mutex_);
+    pending_bye_ = true;
+    pthread_mutex_unlock(&touch_mutex_);
+    wakeSessionThread();
+    for (uint32_t waited = 0; waited < wait_ms && isRunning(); waited += 10) usleep(10000);
+    return !isRunning();
+}
+
+bool AASession::sendByeRequest() {
+    const std::vector<uint8_t> plain = aaByeByeRequest(AA_BYE_REASON_QUIT);
+    std::vector<uint8_t> enc;
+    return cryptor_.encrypt(&plain[0], plain.size(), enc) && sendFrame(0x00, 0x0B, &enc[0], enc.size());
 }
 
 void AASession::noteRx(uint8_t channel, uint8_t flags, uint16_t length) {
@@ -468,12 +495,13 @@ uint32_t AASession::rxTimeoutMs() {
     static uint32_t cached = 0xFFFFFFFFu;
     if (cached == 0xFFFFFFFFu) {
         const char* e = getenv("NBT_RX_TIMEOUT_S");
-        // Default 2 s (v1.6.6, was 6 s in v1.6.5): the phone pings exactly once a second (car log 2026-10-24: 78
-        // pings, max gap 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence
-        // means the Wi-Fi link is gone. Without it a sudden drop never ended the session (no RST arrives) and the
-        // last frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 2-3 s.
+        // Default 5 s (PR #66; 2 s since v1.6.6, 6 s before): on a slower head unit (F22, NBTevo_N18032I) 2 s ended
+        // sessions on brief wireless gaps. The phone pings exactly once a second (car log 2026-10-24: 78 pings, max gap
+        // 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence still means the
+        // Wi-Fi link is gone: without a timeout a sudden drop never ended the session (no RST arrives) and the last
+        // frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 5-6 s.
         // NBT_RX_TIMEOUT_S=0 disables.
-        cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 2000u;
+        cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 5000u;
     }
     return cached;
 }
@@ -556,10 +584,7 @@ void AASession::postTouchEvent(const TouchEventOut& ev) {
     (void)w;
 }
 
-static void putVar(std::vector<uint8_t>& o, uint64_t v) {
-    while (v >= 0x80) { o.push_back((uint8_t)(v | 0x80)); v >>= 7; }
-    o.push_back((uint8_t)v);
-}
+static void putVar(std::vector<uint8_t>& o, uint64_t v) { proto::putVarint(o, v); }
 
 void AASession::postKeyEvent(uint32_t keycode, bool down) {
     KeyOut k; k.keycode = keycode; k.down = down ? 1 : 0; k.delta = 0; k.rel = false;
@@ -666,9 +691,15 @@ void AASession::drainTouch() {
     pending_night_ = false;
     bool location = pending_location_ && location_started_;
     pending_location_ = false;
+    bool bye = pending_bye_;
+    pending_bye_ = false;
     std::vector<std::vector<uint8_t> > mic;
     mic.swap(mic_queue_);
     pthread_mutex_unlock(&touch_mutex_);
+    if (bye) {   // nothing queued matters any more
+        printf("[AASession] >>> ByeByeRequest to the phone: %s\n", sendByeRequest() ? "sent" : "not sent");
+        return;
+    }
     for (size_t i = 0; i < mic.size(); ++i) {
         if (!sendMicFrame(mic[i])) { printf("[AASession] mic -> phone: SEND FAILED\n"); break; }
         if ((mic_sent_++ % 250) == 0) printf("[AASession] mic -> phone: %u chunks sent (%u bytes each)\n", mic_sent_, (unsigned)mic[i].size());
@@ -763,44 +794,26 @@ bool AASession::sendAuthComplete() {
 
 bool AASession::sendServiceDiscoveryResponse() {
     // Control Message ID 0x0006 (MESSAGE_SERVICE_DISCOVERY_RESPONSE)
-    // Uses Google's canonical reference Desktop Head Unit (DHU) capability manifest
-    // including all 9 mandatory channels: Video, Media Audio, Speech, System Audio,
-    // Input (touch/rotary), Sensors (Driving Status, Night Mode), Mic, and Nav.
+    // Starts from the manifest Google's reference Desktop Head Unit (DHU) advertises, including all 9 mandatory
+    // channels: Video, Media Audio, Speech, System Audio, Input (touch/rotary), Sensors, Mic, and Nav.
+    // The head unit identifies as the car on every transport (override with NBT_CAR_* / NBT_HU_* env).
+    SdrIdentity ident;
+    ident.loadEnv();
+    printf("[AASession] ServiceDiscovery identity: %s %s %s (BT channel: %s)\n",
+           ident.carMake.c_str(), ident.carModel.c_str(), ident.carYear.c_str(),
+           ident.btAdapterAddress.empty() ? "none" : ident.btAdapterAddress.c_str());
+    const ServiceDiscovery manifest = sessionManifest(ident);
+    const std::vector<uint8_t> sdr = serializeManifest(manifest);
     std::vector<uint8_t> plain_sdr;
     plain_sdr.push_back(0x00);
     plain_sdr.push_back(0x06); // Message ID: 6 (ServiceDiscoveryResponse)
-    if (nbt::wirelessEnabled() || getenv("NBT_SDR_IDENTITY")) {
-        // Wireless / real-car identity: same channels as the DHU manifest, but the
-        // head unit identifies as the Toyota (override with NBT_CAR_* / NBT_HU_* env).
-        SdrIdentity ident;
-        ident.loadEnv();
-        std::vector<uint8_t> sdr = buildServiceDiscovery(kDhuSdpProtobuf, kDhuSdpProtobufLen, ident);
-        printf("[AASession] ServiceDiscovery identity: %s %s %s (BT channel: %s)\n",
-               ident.carMake.c_str(), ident.carModel.c_str(), ident.carYear.c_str(),
-               ident.btAdapterAddress.empty() ? "none" : ident.btAdapterAddress.c_str());
-        patchMainVideo(sdr);
-        patchTouchConfig(sdr);
-        dropSdrChannels(sdr);
-        retypeGuidanceSink(sdr);
-        addSystemAudioSink(sdr);
-        limitGuidanceOffers(sdr);
-        plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
-    } else {
-        std::vector<uint8_t> sdr(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
-        patchMainVideo(sdr);
-        patchTouchConfig(sdr);
-        dropSdrChannels(sdr);
-        retypeGuidanceSink(sdr);
-        addSystemAudioSink(sdr);
-        limitGuidanceOffers(sdr);
-        plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
-    }
+    plain_sdr.insert(plain_sdr.end(), sdr.begin(), sdr.end());
 
     // Remember what each audio sink offered: the phone names its choice by position in START_INDICATION.
     for (int i = 0; i < AUDIO_NSTREAMS; ++i) {
         const uint8_t ch = audioChannelForStream(kAudioLogOrder[i]);
         std::vector<AaAudioConfig>& o = offered_audio_[ch];
-        o = sdrAudioConfigs(&plain_sdr[2], plain_sdr.size() - 2, ch);
+        o = sdrAudioConfigs(manifest, ch);
         if (o.empty()) continue;
         printf("[AASession] ch %u audio sink offers:", ch);
         for (size_t k = 0; k < o.size(); ++k)
@@ -885,43 +898,16 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // DrivingStatus driving_status=13 {status=1}.
 // LocationData location_data=1 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
-static uint32_t pbFirstVarint(const std::vector<uint8_t>& d, size_t off, uint32_t field) {
-    size_t i = off;
-    while (i < d.size()) {
-        uint32_t tag = 0; int sh = 0;
-        while (i < d.size()) { uint8_t b = d[i++]; tag |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-        uint32_t f = tag >> 3, w = tag & 7;
-        if (w == 0) {
-            uint32_t v = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; v |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            if (f == field) return v;
-        } else if (w == 2) {
-            uint32_t len = 0; sh = 0;
-            while (i < d.size()) { uint8_t b = d[i++]; len |= (uint32_t)(b & 0x7F) << sh; sh += 7; if (!(b & 0x80)) break; }
-            i += len;
-        } else if (w == 1) { i += 8; } else if (w == 5) { i += 4; } else { break; }
-    }
-    return 0xFFFFFFFFu;
-}
+using proto::pbFirstVarint;
 
 // SensorStartRequest min_update_period (field 2, int64). DHU r2.1 treats -1 as "do not send", and otherwise sends each
 // report as it comes. Here it is only logged, to see what the phone asks for. False: the field is absent.
 static bool pbSensorPeriod(const std::vector<uint8_t>& d, size_t off, int64_t& out) {
-    size_t i = off;
-    while (i < d.size()) {
-        uint8_t tag = d[i++];
-        if ((tag & 7) != 0 || (tag & 0x80)) return false;   // this message is short varints: stop at anything else
-        uint64_t v = 0;
-        int sh = 0;
-        while (i < d.size() && sh < 70) {
-            uint8_t b = d[i++];
-            if (sh < 64) v |= (uint64_t)(b & 0x7F) << sh;
-            sh += 7;
-            if (!(b & 0x80)) break;
-        }
-        if ((tag >> 3) == 2) { out = (int64_t)v; return true; }
-    }
-    return false;
+    enum { F_MIN_PERIOD = 2 };
+    uint64_t v;
+    if (off >= d.size() || !proto::pbFindVarint(&d[off], d.size() - off, F_MIN_PERIOD, v)) return false;
+    out = (int64_t)v;
+    return true;
 }
 
 bool AASession::sendSensorStartResponse(uint8_t channel, bool ok) {
@@ -1099,8 +1085,16 @@ void AASession::sessionLoop() {
                     reassembly_[channel].clear();
                     reassembly_total_.erase(channel);
                     reassembly_wire_.erase(channel);
+                    // A phone still streaming an earlier session never answers this one, and its frames keep the
+                    // no-data timeout from firing: without this the session would sit here for as long as it streams.
+                    if (!decrypted_any_ && ++undecrypted_ >= kMaxUndecrypted) {
+                        printf("[AASession] none of the first %u encrypted frames could be decrypted: the phone is "
+                               "still in an earlier session, ending this one\n", (unsigned)undecrypted_);
+                        break;
+                    }
                     continue;
                 }
+                decrypted_any_ = true;
             } else {
                 decrypted_chunk = payload;
             }
@@ -1441,7 +1435,8 @@ void AASession::sessionLoop() {
                     printf("[AASession] >>> Received ServiceDiscoveryRequest from phone! Sending ServiceDiscoveryResponse...\n");
                     sendServiceDiscoveryResponse();
                 } else if (msg_id == 0x0012) { // AudioFocusRequest
-                    uint8_t requested_focus = (frame_data.size() >= 4) ? frame_data[3] : 0;
+                    const uint32_t focus_field = pbFirstVarint(frame_data, 2, 1);   // AudioFocusRequest {type=1}
+                    uint8_t requested_focus = focus_field == 0xFFFFFFFFu ? 0 : (uint8_t)focus_field;
                     // AudioFocusType 1 GAIN, 2 GAIN_TRANSIENT, 3 GAIN_NAVI (guidance prompts), 4 RELEASE. Like openauto, answer
                     // RELEASE with LOSS (3) and everything else with GAIN (1); answering RELEASE with NONE (0) left the
                     // phone without a clean end of each guidance prompt.
@@ -1475,22 +1470,17 @@ void AASession::sessionLoop() {
                            reason == 0xFFFFFFFFu ? -1 : (int)reason, reason == 1 ? " = quit" : "",
                            (unsigned)media_frames_, ok ? "sent" : "SEND FAILED");
                     break;
+                } else if (msg_id == 0x0010) { // ByeByeResponse: the phone has ended the session we asked it to
+                    printf("[AASession] >>> ByeByeResponse from the phone: ending the session\n");
+                    break;
                 } else if (msg_id == 11) { // PingRequest
                     printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");
-                    // PingResponse {timestamp = field 1}: echo the request's timestamp varint.
-                    std::vector<uint8_t> ping_resp;
-                    ping_resp.push_back(0x00);
-                    ping_resp.push_back(0x0C); // Msg ID 12 (PingResponse)
-                    if (frame_data.size() > 3 && frame_data[2] == 0x08) {
-                        size_t i = 3;
-                        ping_resp.push_back(0x08);
-                        while (i < frame_data.size() && ping_resp.size() < 16) {
-                            uint8_t b = frame_data[i++];
-                            ping_resp.push_back(b);
-                            if (!(b & 0x80)) break;
-                        }
-                    }
-                    sendFrame(0x00, 0x03, &ping_resp[0], ping_resp.size()); // Pings are unencrypted
+                    enum { MSG_PING_RESPONSE = 0x000C, F_TIMESTAMP = 1 };
+                    proto::ProtoWriter ping_resp(MSG_PING_RESPONSE);   // echoes the request's timestamp
+                    uint64_t timestamp;
+                    if (frame_data.size() > 2 && proto::pbFindVarint(&frame_data[2], frame_data.size() - 2, F_TIMESTAMP, timestamp))
+                        ping_resp.unsignedInteger(F_TIMESTAMP, timestamp);
+                    sendFrame(0x00, 0x03, &ping_resp.bytes()[0], ping_resp.bytes().size()); // Pings are unencrypted
                 } else {
                     printf("[AASession] Control Message RX: ID=0x%04X, Len=%u\n",
                            msg_id, static_cast<unsigned int>(frame_data.size()));

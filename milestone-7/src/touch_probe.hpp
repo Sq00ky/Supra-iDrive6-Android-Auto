@@ -17,7 +17,7 @@ bool startTouchProbe(uint16_t port, int seconds);
 // Frame (112 B): ident B0048002, len 0x68, 16 B header, then 8-byte entries; finger k uses (stride 16 is a hypothesis for k>0; entries are 8 B = [00 c1 40 idx][4 data bytes])
 //   x word at byte 52+16k = [ctr, id, x_hi, x_lo]       y word at byte 60+16k = [y_hi, y_lo, size, state<<4]
 // state 1 = down, 2 = move, 3 = up. Calibration env: NBT_TOUCH_SX/SY (scale), NBT_TOUCH_OX/OY (offset),
-// NBT_TOUCH_W/H (clamp range, default 1280x480).
+// NBT_TOUCH_W/H (clamp range, defaults to the selected video canvas).
 typedef void (*TouchEventCb)(const TouchEventOut& ev, void* user);
 bool startTouchForward(uint16_t port, TouchEventCb cb, void* user);
 

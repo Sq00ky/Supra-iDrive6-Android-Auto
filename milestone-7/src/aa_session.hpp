@@ -49,6 +49,17 @@ public:
     void setMicRequestCallback(MicRequestCallback cb, void* user_data = NULL);
     void setNavStatusCallback(NavStatusCallback cb, void* user_data = NULL);
     bool isActive() const { return isRunning(); }   // true from start() until the session ended or stop()
+    // How the phone behaved in the session. Written by the session thread: read it in the session-ended callback.
+    enum Outcome {
+        kEstablished,   // a frame from the phone was decrypted
+        kNoAnswer,      // nothing decrypted, and no encrypted frame either: silent, or the handshake never finished
+        kStale          // only encrypted frames we can't decrypt: the phone is still in an earlier session
+    };
+    Outcome outcome() const { return decrypted_any_ ? kEstablished : undecrypted_ ? kStale : kNoAnswer; }
+    // The daemon is stopping: asks the phone to end the session (ByeByeRequest, sent by the session thread) and waits
+    // up to wait_ms for its answer, which ends the session. true: the session has ended. Thread-safe. Call it while
+    // the connection is still up. Before the TLS handshake has finished nothing can be sent, and it just waits.
+    bool byeAndWait(uint32_t wait_ms);
     // Touch forwarding (default on, NBT_TOUCH_FWD=0 disables): thread-safe, called from the touch thread.
     // Events are queued and sent by the session thread.
     void postTouchEvent(const TouchEventOut& ev);
@@ -105,6 +116,8 @@ private:
     // sinks send it; 0 = none (video).
     bool sendAvMediaAck(uint8_t channel, uint64_t rx_wall_ns = 0);
     bool sendAudioFocusResponse(uint8_t focus_state);
+    bool sendByeRequest();
+    bool pending_bye_;                             // guarded by touch_mutex_: send a ByeByeRequest on next drain
     bool readExact(uint8_t* buffer, size_t length);
     static uint32_t rxTimeoutMs();
     bool isRunning() const;
@@ -202,6 +215,8 @@ private:
     uint64_t rx_seq_next_;
     bool rx_seq_known_;
     uint32_t rx_records_;
+    bool decrypted_any_;       // session thread: see outcome()
+    uint32_t undecrypted_;     // session thread: frames that failed to decrypt before the first one that didn't
 
     // The last frames from the phone (session thread), printed when the phone goes silent.
     struct RxNote { double t; uint8_t channel; uint8_t flags; uint16_t length; uint16_t msg_id; };

@@ -39,6 +39,9 @@ static const double kSwitchRetryS = 1.0;              // a device that does not 
 static const double kSwitchGiveUpS = 120.0;           // after this long plugged in without an answer, stop asking
 static const unsigned kCtrlTimeoutMs = 1000;
 static const size_t kCtrlBuf = 256;
+// io-usb reports the devices already plugged in right after usbd_connect. A phone plugged in within this time counts
+// too: it only gets a reset it didn't need.
+static const double kPresentAtStartS = 1.0;
 
 // Where medialauncher starts the accessory driver from (umass-enum.cfg), and what /opt/mm resolves to on the car.
 static const char* const kAoapDriverPaths[] = { "/opt/mm/bin/devc-serusb-aoap",
@@ -97,7 +100,7 @@ static void deadline(struct timespec& ts, unsigned ms) {
     }
 }
 
-UsbDirect::UsbDirect() : conn_(NULL), claim_(NULL) {
+UsbDirect::UsbDirect() : conn_(NULL), connected_s_(0), claim_(NULL) {
     pthread_mutex_init(&mu_, NULL);
 }
 
@@ -128,6 +131,9 @@ bool UsbDirect::start() {
         g_direct = NULL;
         return false;
     }
+    pthread_mutex_lock(&mu_);
+    connected_s_ = monoS();
+    pthread_mutex_unlock(&mu_);
     printf("[UsbDirect] connected to io-usb: phones are switched and read through libusbdi (NBT_USB_DIRECT)\n");
     return true;
 }
@@ -180,6 +186,7 @@ void UsbDirect::inserted(const void* p) {
                           reinterpret_cast<const uint8_t*>(inst) + sizeof(*inst));
         a.seen_s = monoS();
         a.link = NULL;
+        a.present_at_start = connected_s_ == 0 || a.seen_s - connected_s_ < kPresentAtStartS;
         accs_.push_back(a);
     }
     pthread_mutex_unlock(&mu_);
@@ -264,6 +271,52 @@ void UsbDirect::released(UsbDirectLink* link) {
         if (accs_[i].link == link) accs_[i].link = NULL;
     }
     pthread_mutex_unlock(&mu_);
+}
+
+bool UsbDirect::takePresentAtStart(const std::string& key) {
+    bool present = false;
+    pthread_mutex_lock(&mu_);
+    for (size_t i = 0; i < accs_.size(); ++i) {
+        if (accs_[i].key != key) continue;
+        present = accs_[i].present_at_start;
+        accs_[i].present_at_start = false;
+    }
+    pthread_mutex_unlock(&mu_);
+    return present;
+}
+
+bool UsbDirect::resetDevice(const std::string& key) {
+    if (!conn_) return false;
+    usbd_device_instance_t inst;
+    bool found = false;
+    pthread_mutex_lock(&mu_);
+    for (size_t i = 0; i < accs_.size() && !found; ++i) {
+        if (accs_[i].key == key && !accs_[i].link) {
+            memcpy(&inst, &accs_[i].instance[0], sizeof(inst));
+            found = true;
+        }
+    }
+    pthread_mutex_unlock(&mu_);
+    if (!found) {
+        printf("[UsbDirect] %s: not reset: unplugged, or a link is still open on it\n", key.c_str());
+        return false;
+    }
+
+    // Not under mu_: the reset can make io-usb's callback thread report the phone removed, which needs it.
+    struct usbd_device* dev = NULL;
+    int r = usbd_attach(conn_, &inst, 0, &dev);
+    if (r != EOK) {
+        printf("[UsbDirect] %s: not reset: usbd_attach failed: %s\n", key.c_str(), strerror(r));
+        return false;
+    }
+    r = usbd_reset_device(dev);
+    usbd_detach(dev);
+    if (r != EOK) {
+        printf("[UsbDirect] %s: usbd_reset_device failed: %s\n", key.c_str(), strerror(r));
+        return false;
+    }
+    printf("[UsbDirect] %s: USB reset done\n", key.c_str());
+    return true;
 }
 
 // The control pipe of a device we attached to for the AOA requests.
@@ -908,7 +961,7 @@ void UsbDirectLink::close() {
 
 #else   // host builds (tests): there is no io-usb
 
-UsbDirect::UsbDirect() : conn_(NULL), claim_(NULL) { pthread_mutex_init(&mu_, NULL); }
+UsbDirect::UsbDirect() : conn_(NULL), connected_s_(0), claim_(NULL) { pthread_mutex_init(&mu_, NULL); }
 UsbDirect::~UsbDirect() { pthread_mutex_destroy(&mu_); }
 bool UsbDirect::start() {
     printf("[UsbDirect] needs QNX io-usb: not available here\n");
@@ -917,6 +970,8 @@ bool UsbDirect::start() {
 void UsbDirect::stop() {}
 std::vector<std::string> UsbDirect::accessories(double) { return std::vector<std::string>(); }
 UsbDirectLink* UsbDirect::open(const std::string&) { return NULL; }
+bool UsbDirect::resetDevice(const std::string&) { return false; }
+bool UsbDirect::takePresentAtStart(const std::string&) { return false; }
 int UsbDirect::switchPhones(const aoap::Identity&, double) { return 0; }
 bool UsbDirect::claimAoapDriver() { return false; }
 void UsbDirect::releaseAoapDriver() {}

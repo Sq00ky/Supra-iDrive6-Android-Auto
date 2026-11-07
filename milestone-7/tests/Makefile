@@ -21,6 +21,7 @@ LDLIBS   := -lpthread -lssl -lcrypto -lm
 SPEEX := $(ROOT)/src/audio/speex.c
 
 # Each test and the daemon sources it links (beyond its own .cpp).
+SRC_test_aa_proto          := src/wireless_setup.cpp
 SRC_test_aa_sensor_msg     :=
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
@@ -66,7 +67,10 @@ SRC_test_ptt               :=
 SRC_test_route_policy      :=
 SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
-SRC_test_session_lifecycle := src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
+SRC_test_video_geometry    := src/sdr_builder.cpp
+SRC_test_session_control   := src/aa_cryptor.cpp src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
+SRC_test_session_lifecycle := src/aa_cryptor.cpp src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
+SRC_test_session_bye       := src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_owner     :=
 SRC_test_session_sensors   := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_touch             := src/touch_probe.cpp
@@ -85,7 +89,7 @@ ARGS_test_ccs_push    := tests/fixtures/controls_2026-10-23_push.txt
 ARGS_test_ccs_input   := tests/fixtures/controls_2026-10-23_push.txt
 
 TESTS := $(basename $(notdir $(wildcard test_*.cpp)))
-PY_TESTS := $(basename $(notdir $(wildcard test_*.py)))
+PY_TESTS := $(filter-out test_schema,$(basename $(notdir $(wildcard test_*.py))))
 MISSING_SRCS := $(foreach t,$(TESTS),$(if $(filter undefined,$(origin SRC_$(t))),$(t)))
 ifneq ($(strip $(MISSING_SRCS)),)
 $(error Define SRC_<test> for: $(MISSING_SRCS))
@@ -110,10 +114,10 @@ else ifneq ($(NBT_HOST_TSAN),0)
 $(error NBT_HOST_TSAN must be 0 or 1)
 endif
 
-.PHONY: all check tsan clean host-sources $(TESTS) $(addprefix run-,$(TESTS) $(PY_TESTS)) run-test_touch_split
+.PHONY: all check tsan clean host-sources $(TESTS) $(addprefix run-,$(TESTS) $(PY_TESTS)) run-test_touch_split run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: host-sources $(OUT)/libNbtAad.so $(addprefix run-,$(TESTS) $(PY_TESTS)) run-test_touch_split $(TSAN_CHECK)
+check: host-sources $(OUT)/libNbtAad.so $(addprefix run-,$(TESTS) $(PY_TESTS)) run-test_touch_split run-test_aa_proto32 run-test_schema $(TSAN_CHECK)
 	@echo "[CHECK] all host tests passed"
 
 $(OUT):
@@ -138,7 +142,7 @@ $(OUT)/libNbtAad.so: $(ROOT)/rhmiapp/nbt_aad_app.cpp | $(OUT)
 
 srcs = $(addprefix $(ROOT)/,$(filter-out $(SPEEX),$(SRC_$(1))))
 objs = $(if $(filter $(SPEEX),$(SRC_$(1))),$(OUT)/speex.o)
-FLAGS_test_session_lifecycle := -include $(CURDIR)/stub_cryptor.hpp
+FLAGS_test_session_bye := -include $(CURDIR)/stub_cryptor.hpp
 WORKDIR_test_wpp := $(CURDIR)/$(OUT)/wpp
 ENV_test_touch := NBT_TOUCH_CONNECT=0
 
@@ -159,7 +163,7 @@ run-test_touch_split: run-test_touch
 	  && echo "[PASS] test_touch_split" || { echo "[FAIL] test_touch_split"; tail -20 tests/$(OUT)/test_touch_split.log; exit 1; }
 
 # This test includes aa_session.cpp rather than listing it among its sources.
-$(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp stub_cryptor.hpp
+$(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
 
 # Not here: rhmiapp_host_test, which dlopens a host build of rhmiapp/libNbtAad.so linked against
 # rhmiapp_fake_appframework.cpp.
@@ -167,6 +171,24 @@ $(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.h
 $(addprefix run-,$(PY_TESTS)): run-%: | $(OUT)
 	@cd $(ROOT) && timeout 120s python3 tests/$*.py > tests/$(OUT)/$*.log 2>&1 \
 	  && echo "[PASS] $*.py" || { echo "[FAIL] $*.py"; tail -20 tests/$(OUT)/$*.log; exit 1; }
+
+# The messages our code builds, decoded by protoc against proto/. Host only: the daemon's build doesn't use protoc.
+DUMP_SRCS := dump_messages.cpp $(ROOT)/src/sdr_builder.cpp $(ROOT)/src/wireless_setup.cpp
+$(OUT)/dump_messages: $(DUMP_SRCS) | $(OUT)
+	$(HOST_CXX) $(CXXFLAGS) -MMD -MP -MF $@.d -o $@ $(DUMP_SRCS) $(LDLIBS)
+run-test_schema: $(OUT)/dump_messages
+	@if command -v protoc > /dev/null 2>&1; then \
+	  cd $(ROOT) && python3 tests/test_schema.py tests/$(OUT)/dump_messages > tests/$(OUT)/test_schema.log 2>&1 \
+	  && echo "[PASS] test_schema.py" || { echo "[FAIL] test_schema.py"; tail -20 tests/$(OUT)/test_schema.log; exit 1; }; \
+	else echo "[SKIP] test_schema.py: protoc not installed"; fi
+
+# The car's size_t is 32 bits, and some length bugs only show there. Skipped without a 32-bit toolchain.
+run-test_aa_proto32: | $(OUT)
+	@if echo 'int main(){std::string s;return (int)s.size();}' | $(HOST_CXX) -m32 -include string -x c++ -o /dev/null - 2>/dev/null; then \
+	  $(HOST_CXX) -m32 $(CXXFLAGS) -o $(OUT)/test_aa_proto32 test_aa_proto.cpp $(call srcs,test_aa_proto) -lpthread \
+	  && cd $(ROOT) && tests/$(OUT)/test_aa_proto32 > tests/$(OUT)/test_aa_proto32.log 2>&1 \
+	  && echo "[PASS] test_aa_proto (32-bit)" || { echo "[FAIL] test_aa_proto (32-bit) (tests/$(OUT)/test_aa_proto32.log)"; exit 1; }; \
+	else echo "[SKIP] test_aa_proto (32-bit): no -m32 toolchain"; fi
 
 # 400 session cycles under ThreadSanitizer.
 TSAN_SRCS := test_session_lifecycle.cpp $(call srcs,test_session_lifecycle)

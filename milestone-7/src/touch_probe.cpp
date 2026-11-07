@@ -160,7 +160,13 @@ bool parsePeer(const char* e, sockaddr_in* out) {
 
 // The touch controller's address, learned from a real touch PDU, is kept here so the next daemon start connects at
 // once (before it, gesture camera PDUs are still swallowed until the screen is touched).
+#ifdef NBT_HOST_TEST
+// Host tests: never the real file. test_touch learns its own ephemeral port; kept in /var/opt/aa it made the NEXT run
+// connect to that stale port and miss every frame (test_touch.cpp:90). test_touch removes this one at start.
+const char* const kTouchPeerFile = "/tmp/nbt-test-touch-peer";
+#else
 const char* const kTouchPeerFile = "/var/opt/aa/touch-peer";
+#endif
 
 bool loadPeerFile(sockaddr_in* out) {
     FILE* f = fopen(kTouchPeerFile, "r");
@@ -227,15 +233,15 @@ void* forwardMain(void* p) {
     delete static_cast<FwdArgs*>(p);
     int s = -1;
     int bindFails = 0;
-    // Panel pixels -> the phone's 1280x720 canvas: the canvas is shown scaled to the panel width
-    // (1.0 on the 1280x480 panel, 0.889 on a 1440x540 one; 1.0 with NBT_VID_NATIVE=1). NBT_TOUCH_SX/SY override.
+    // Panel pixels -> the selected phone canvas. On 1280x480 this is 1.0 at 720p and 0.625 at 480p.
+    // A 1440x540 panel uses 0.889 at 720p. Native mode stays at 1.0. NBT_TOUCH_SX/SY override.
     const double panel = touchScale();
     const double sx = envNum("NBT_TOUCH_SX", panel), sy = envNum("NBT_TOUCH_SY", panel);
     const double oxDef = defaultTouchOffsetX(carConfig());
     const double ox = envNum("NBT_TOUCH_OX", oxDef), oy = envNum("NBT_TOUCH_OY", 0.0);
     if (oxDef != 0.0 && !getenv("NBT_TOUCH_OX"))
         printf("[TouchFwd] MINI round display: touch x offset %.0f by default (NBT_TOUCH_OX overrides)\n", oxDef);
-    const int maxX = (int)envNum("NBT_TOUCH_W", 1280) - 1, maxY = (int)envNum("NBT_TOUCH_H", 720) - 1;
+    const int maxX = (int)envNum("NBT_TOUCH_W", videoCanvasWidth()) - 1, maxY = (int)envNum("NBT_TOUCH_H", videoCanvasHeight()) - 1;
     printf("[TouchFwd] UDP %u, forwarding decoded multi-touch while Android Auto is on screen (scale %.3f/%.3f offset %.0f/%.0f range 0..%d x 0..%d)\n",
            a.port, sx, sy, ox, oy, maxX, maxY);
 
