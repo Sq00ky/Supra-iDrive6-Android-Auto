@@ -3,7 +3,7 @@
 // Host test for car/vehicle: the wheel speed scale, copies, invalid frames and direction, the gear and parking brake codes and
 // their changes, then CarVehicle on most::Client with the fake DsiClient, from DSI frame to the callback. All values are made up.
 #include "car/vehicle.hpp"
-#include "fake_dsi_client.hpp"
+#include "most_fixture.hpp"
 #include "most/ids.hpp"
 #include "most/msg.hpp"
 
@@ -14,6 +14,7 @@
 using namespace nbt;
 using namespace nbt::car;
 using namespace nbt::most;
+using most_fixture::startClient;
 
 typedef CarSpeedFilter::Result Result;
 
@@ -270,12 +271,7 @@ static void send(uint16_t fkt, uint8_t op, const uint8_t* p, size_t n, uint8_t f
     fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
 }
 
-static void respond() {
-    std::vector<uint8_t> resp;
-    putLe32(resp, 93);
-    putLe16(resp, 0x205D);
-    fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
-}
+static void noHandler(const View&, void*) {}
 
 static void testConsumer() {
     resetCaptured();
@@ -285,9 +281,7 @@ static void testConsumer() {
     speedOnly.speed = &onSpeed;
     speedOnly.user = &g_speeds;
     assert(v.attach(c, speedOnly));
-    assert(c.start("NBTAAD_MOST"));     // speed alone is enough for the client to start
-    fake_dsi::attach();
-    respond();
+    startClient(c);                     // speed alone is enough for the client to start
     // Observe only: no keys, so nothing but the client's own subscriptions and setup goes out.
     for (size_t i = 0; i < fake_dsi::calls.size(); ++i)
         assert(!(fake_dsi::calls[i].kind == fake_dsi::Call::kRequest && fake_dsi::calls[i].id == kReqRegisterDevCtrls));
@@ -336,9 +330,7 @@ static void testGearAndBrake() {
     Client c;
     CarVehicle v;
     assert(v.attach(c, allCallbacks()));
-    assert(c.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    respond();
+    startClient(c);
 
     // Nothing is made up before the car has reported.
     assert(g_gears.empty() && g_brakes.empty());
@@ -392,9 +384,7 @@ static void testGearFromApp() {
     v.gearFromApp(3);                                   // before attach: the app's file is read again after it
     assert(g_gears.empty());
     assert(v.attach(c, allCallbacks()));
-    assert(c.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    respond();
+    startClient(c);
 
     v.gearFromApp(3);
     assert(g_gears.size() == 1 && g_gears[0] == AA_GEAR_PARK);
@@ -432,9 +422,7 @@ static void testSignalsOff() {
     cb.gear = NULL;
     cb.parkingBrake = NULL;
     assert(v.attach(c, cb));
-    assert(c.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    respond();
+    startClient(c);
     v.gearFromApp(3);
     sendByte(kVehicleGearFkt, kVehicleGearReverse);
     sendByte(kParkingBrakeFkt, 2);
@@ -451,9 +439,7 @@ static void testSignalsOff() {
     cb = allCallbacks();
     cb.speed = NULL;
     assert(v2.attach(c2, cb));
-    assert(c2.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    respond();
+    startClient(c2);
     send(kCarSpeedFkt, kOpStatus, moving, 2);
     assert(g_speeds.empty());
     sendByte(kVehicleGearFkt, 3);
@@ -476,16 +462,13 @@ static void checkNoRoom(int freeRoutes) {
     resetCaptured();
     Client c;
     int added = 0;
-    struct H { static void none(const View&, void*) {} };
     while (added < Router::kMaxRoutes - freeRoutes) {
-        assert(c.addRoute(0x77, kAny, kAny, kAny, &H::none, NULL));
+        assert(c.addRoute(0x77, kAny, kAny, kAny, &noHandler, NULL));
         ++added;
     }
     CarVehicle v;
     assert(!v.attach(c, allCallbacks()));
-    assert(c.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    respond();
+    startClient(c);
     const uint8_t forward[2] = { 0x06, 0x40 };
     send(kCarSpeedFkt, kOpStatus, forward, 2);
     sendByte(kVehicleGearFkt, 3);
@@ -503,8 +486,7 @@ static void testNoRoom() {
 static void testExactRoom() {
     resetCaptured();
     Client c;
-    struct H { static void none(const View&, void*) {} };
-    for (int i = 0; i < Router::kMaxRoutes - kVehicleRoutes; ++i) assert(c.addRoute(0x77, kAny, kAny, kAny, &H::none, NULL));
+    for (int i = 0; i < Router::kMaxRoutes - kVehicleRoutes; ++i) assert(c.addRoute(0x77, kAny, kAny, kAny, &noHandler, NULL));
     CarVehicle v;
     assert(v.attach(c, allCallbacks()));
 }
