@@ -435,11 +435,11 @@ bool fileExists(const char* p) {
 // ---- launching the daemon (same as plugin/nbt_aad_plugin.cpp) ---------------------------------------------------
 time_t g_lastLaunch = 0;
 
-void launchDaemon() {
+pid_t launchDaemon() {
     time_t now = time(NULL);
-    if (g_lastLaunch && now - g_lastLaunch < 3) { alog("launch ignored (pressed again within 3 s)"); return; }
+    if (g_lastLaunch && now - g_lastLaunch < 3) { alog("launch ignored (pressed again within 3 s)"); return -1; }
     g_lastLaunch = now;
-    if (!fileExists(kDaemon)) { alog("launch: %s not found", kDaemon); return; }
+    if (!fileExists(kDaemon)) { alog("launch: %s not found", kDaemon); return -1; }
 
     static char envbuf[16][160];
     char* envp[16 + 64];
@@ -476,7 +476,7 @@ void launchDaemon() {
         alog("launch: cannot open /dev/null or %s (errno %d)", kDaemonLog, errno);
         if (in >= 0) close(in);
         if (out >= 0) close(out);
-        return;
+        return -1;
     }
 #ifdef __QNX__
     int fdmap[3] = { in, out, out };
@@ -502,6 +502,7 @@ void launchDaemon() {
     close(out);
     if (pid < 0) alog("launch: spawn %s failed (errno %d)", kDaemon, e);
     else alog("launch: started %s pid %d (%d env overrides, output -> %s)", kDaemon, (int)pid, nb, kDaemonLog);
+    return pid;
 }
 
 // ---- car gear -> daemon ---------------------------------------------------------------------------------------
@@ -904,6 +905,8 @@ bool g_settingsFocused = false; // focus notification of hmiState 14 (the Settin
 bool inOurMenu() { return g_menuFocused || g_settingsFocused; }
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
 bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
+pid_t g_autostartPid = 0;     // automatic launch waiting for its first projection handoff
+unsigned g_autostartMenuTries = 0;
 time_t g_startTime = 0;
 char g_prevState[24] = "idle";
 // Stop / restart in progress.
@@ -1350,6 +1353,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
 }
 
 void startDaemonOrShow() {
+    g_autostartPid = 0;                               // the driver is taking over the automatic handoff
     g_popupAside = false;                            // the driver asked for Android Auto: clear a warning step-aside
     g_ow.reset(nowMs());
     DaemonState d = readDaemonState();
@@ -1372,6 +1376,7 @@ void startDaemonOrShow() {
 }
 
 void beginStop(bool restart) {
+    g_autostartPid = 0;
     DaemonState d = readDaemonState();
     g_restartAfterStop = restart;
     if (d.pid == 0) {
@@ -1840,9 +1845,38 @@ void serviceAutostart() {
     if (d.pid != 0) { alog("start with the car: nbt-aad already running (pid %d)", d.pid); return; }
     if (!bootGuardAllows()) return;
     alog("start with the car: launching nbt-aad (%s)", fileExists(kAutostartFile) ? kAutostartFile : kAutostartManual);
-    launchDaemon();                                      // no "show", no menu navigation: it waits for the phone
+    pid_t pid = launchDaemon();
+    if (pid > 0) {
+        g_autostartPid = pid;                             // wait for this daemon's first projection
+        g_autostartMenuTries = 0;
+    }
     g_autostartMono = monoSec();
     if (!g_autostartMono) g_autostartMono = 1;
+}
+
+// Return true while the automatic launch is waiting to hand focus to the regular state-13 hold.
+bool serviceAutostartHandoff(bmw::PluginApp* app, const DaemonState& d, bool connected) {
+    if (!g_autostartPid) return false;
+    if (!holdEnabled() || (d.pid > 0 && d.pid != g_autostartPid) || !pidAlive(g_autostartPid)) {
+        g_autostartPid = 0;
+        return false;
+    }
+    if (d.pid != g_autostartPid || !connected || !d.overlay ||
+        g_lastGear == kReverseGear || pdcOwnsScreen() || callActive()) return true;
+
+    if (!inOurMenu() && !g_aaFocused) {
+        // Event 53 opens our app. Give iDrive a poll to report menu focus before asking for state 13.
+        if (g_autostartMenuTries < 3) {
+            ++g_autostartMenuTries;
+            app->triggerEvent(kEvOpenMenu);
+            alog("autostart: connected, event %u -> our menu (try %u)", kEvOpenMenu, g_autostartMenuTries);
+            return true;
+        }
+        alog("autostart: menu focus unconfirmed, trying state %u directly", kAaState);
+    }
+    g_autostartPid = 0;
+    g_prevOverlay = 0;                                   // run the normal initial hold and its retries
+    return false;
 }
 
 void statusRun(void* /*self*/) {
@@ -1877,7 +1911,7 @@ void statusRun(void* /*self*/) {
         alog("start row text -> %u (%s)", row, d.state);
         g_shownRow = row;
     }
-    serviceHold(app, d);
+    if (!serviceAutostartHandoff(app, d, connected)) serviceHold(app, d);
     if (connected && strcmp(g_prevState, "connected") != 0 && g_entryStart) {
         g_entryStart = false;                            // one shot, before the return-to-menu step below moves iDrive
         if (time(NULL) - g_startTime <= kHomeWindowS &&
