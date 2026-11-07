@@ -24,9 +24,10 @@
 // to the phone (toLocationFix). VDOP is decoded and logged but not sent. Speed and position arrive about 2 s behind the
 // vehicle speed on 05/00 fkt 621.
 // The same FBlock also sends fkt 0x243 and FBlock 0xCD/01 fkt 0x20B with a second position: 19 m away while parked in one
-// capture, within about 0.5 m of this track while moving, and not known to be map-matched. The service discovery says
-// location_characterization RAW_GPS_ONLY (256), so the raw GNSS fix (0x440) is the one to send. It is not snapped to the
-// road: on a road driven both ways, the two passes keep to their own side.
+// capture, within about 0.5 m of this track while moving. It looks map-matched: at walking pace it moves along straight lines
+// while the car turns, and it can jump about 20 m. The service discovery says location_characterization RAW_GPS_ONLY (256), so
+// the raw GNSS fix (0x440) is the one to send. It is not snapped to the road: on a road driven both ways, the two passes keep
+// to their own side.
 //
 // Second source: MOST FBlock 0xCD inst 01, fkt 0xC00, OpType Status, NavigationInfo.GPS_RawDataCAN in the firmware (sender in
 // NavNBTEvoController, its setters in this order). Payload (10 bytes, big-endian):
@@ -37,6 +38,18 @@
 //   [6]      Satellites  UINT8   used in the fix; over 12 is sent as 14
 //   [7]      HDOP        UINT8   same source as fkt 0x440; over 25 is sent as 254
 //   [8..9]   Time        UINT16  (hh * 3600 + mm * 60 + ss) mod 4095: the car capture matches the UTC time of fkt 0x440
+//
+// Third source: MOST FBlock 0xCD inst 01, fkt 0x203, OpType Status, read by libhmiremoting as navigation.GPSExtendedInfo
+// (CCdsPropertyGPSExtendedInfo::onStatus gives the fields and the invalid value). Payload (7 bytes, big-endian):
+//   [0]      Heading     UINT8   the way the car faces, 360/256 deg per unit, ANTICLOCKWISE from north; 255 = invalid
+//   [1..2]   Altitude    UINT16  metres + 32768: not used
+//   [3..4]   Quality     UINT16  flags, meaning unknown: logged only
+//   [5..6]   Speed       UINT16  0.01 m/s + 32768: not used
+// This feeds the compass sensor. Unlike the heading in fkt 0x440 it is not the direction of travel: in reverse it stays 172 to
+// 180 deg from the direction of motion and follows the turn, and it moves at walking pace, where fkt 0x440 holds its last value.
+// Driving forward it is within 0.5 deg of the track. It looks like navigation's dead reckoning, snapped to the road at speed.
+// There is no magnetometer behind it, so north here is true north, not the magnetic north the integration guide prefers.
+// Sent once a second while moving, a copy per receiver.
 //
 // The decode and the filters are pure: host-tested in tests/test_car_gps.cpp.
 //   NBT_GPS_ACCURACY_M=n   a fixed accuracy for every fix, in metres, 2..499, instead of the one from HDOP
@@ -363,11 +376,96 @@ inline uint32_t satellitesUsed(const CarGpsStatus& s) {
     return s.receiver == kReceiverNoFix || s.satsUsed > 14 ? 0 : s.satsUsed;
 }
 
+struct CarHeading {
+    uint8_t raw;                // see the layout above: headingToBearingE6() converts it
+    uint16_t quality;           // raw
+};
+
+const uint16_t kCarHeadingFkt = 0x203;      // on kCarStatusFBlock, kCarStatusInst
+const uint8_t kHeadingInvalid = 255;
+const size_t kCarHeadingLen = 7;
+const uint32_t kHeadingCopyWindowMs = 500;  // the copies of one message arrive within about 10 ms, and messages 1 s apart
+
+// Decode a fkt 0x203 Status payload. False when it is too short or says the heading is invalid.
+inline bool decodeCarHeading(const uint8_t* p, size_t n, CarHeading& out) {
+    if (!p || n < kCarHeadingLen || p[0] == kHeadingInvalid) return false;
+    out.raw = p[0];
+    out.quality = (uint16_t)((p[3] << 8) | p[4]);
+    return true;
+}
+
+// Decides what one received fkt 0x203 message means. Copies are told apart by time, not by content: the heading on a straight
+// road stays the same from one second to the next, and that is still a new message for the phone.
+class CarHeadingFilter {
+public:
+    enum { kLogEvery = 60 };    // log the fields every 60th message, about once a minute
+    struct Result {
+        bool copy;              // another receiver's copy of the last message: the other fields are not set, ignore it
+        bool ok;                // the CarHeading is valid
+        bool logBad;            // not ok, and not said yet
+        bool qualityChanged;    // differs from the last valid message; the first one counts
+        bool logFields;         // time to log this message
+        unsigned messageNo;     // messages so far, valid or not, this one included
+        uint32_t gapMs;         // longest time between two messages since the last log
+    };
+
+    CarHeadingFilter() : seen_(false), lastMs_(0), messages_(0), maxGapMs_(0), haveQuality_(false), lastQuality_(0),
+                         badLogged_(false) {}
+
+    Result feed(const uint8_t* p, size_t n, uint32_t rxMs, CarHeading& out) {
+        Result r;
+        r.copy = false;
+        r.ok = false;
+        r.logBad = false;
+        r.qualityChanged = false;
+        r.logFields = false;
+        r.messageNo = messages_;
+        r.gapMs = 0;
+        if (seen_) {
+            const uint32_t gap = rxMs - lastMs_;
+            if (gap < kHeadingCopyWindowMs) {
+                r.copy = true;
+                return r;
+            }
+            if (gap > maxGapMs_) maxGapMs_ = gap;
+        }
+        seen_ = true;
+        lastMs_ = rxMs;
+        r.messageNo = ++messages_;
+        r.ok = decodeCarHeading(p, n, out);
+        if (!r.ok) {
+            r.logBad = !badLogged_;
+            badLogged_ = true;
+            return r;
+        }
+        r.qualityChanged = !haveQuality_ || out.quality != lastQuality_;
+        haveQuality_ = true;
+        lastQuality_ = out.quality;
+        r.logFields = r.qualityChanged || messages_ % kLogEvery == 0;
+        if (r.logFields) {
+            r.gapMs = maxGapMs_;
+            maxGapMs_ = 0;
+        }
+        return r;
+    }
+
+private:
+    bool seen_;
+    uint32_t lastMs_;
+    unsigned messages_;
+    uint32_t maxGapMs_;
+    bool haveQuality_;
+    uint16_t lastQuality_;
+    bool badLogged_;
+};
+
 typedef void (*LocationCb)(const LocationFix& fix, void* user);
 typedef void (*SatellitesCb)(const SatelliteStatus& status, void* user);
+typedef void (*CompassCb)(int32_t bearingE6, void* user);
 
-// A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 and CD/01 fkt 0xC00 Status, logs them under [GPS] and
-// hands on each new status, and each new fix that positionUsable() lets through. It adds no device-controller keys: the
+// A consumer of the observe-only MOST client: routes 52/00 fkt 0x440 and CD/01 fkts 0xC00 and 0x203 Status, logs them under
+// [GPS] and hands on each new status, each new fix that positionUsable() lets through, and each new heading. The heading does
+// not depend on a fix: it keeps coming where the position stops, as in a tunnel. It adds no device-controller keys: the
 // client's subscriptions switch delivery on, and GPS arrives with no key.
 // The callbacks run on the DSI callback thread: see the handler rules in most/client.hpp.
 class CarGps {
@@ -376,17 +474,21 @@ public:
 
     // Before the client's start(). accuracyOverrideE3 0: the accuracy comes from each fix's HDOP. False: the client has no
     // room for the route.
-    bool attach(most::Client& client, uint32_t accuracyOverrideE3, LocationCb cb, SatellitesCb satCb, void* user);
+    bool attach(most::Client& client, uint32_t accuracyOverrideE3, LocationCb cb, SatellitesCb satCb, CompassCb compassCb,
+                void* user);
 
 private:
     static void fixTramp(const most::View& m, void* self);
     static void statusTramp(const most::View& m, void* self);
+    static void headingTramp(const most::View& m, void* self);
     void onFix(const most::View& m);
     void onStatus(const most::View& m);
+    void onHeading(const most::View& m);
 
     CarGpsFilter filter_;
     CarGpsStatusFilter statusFilter_;
-    // Both handlers run on the DSI callback thread, so these need no lock.
+    CarHeadingFilter headingFilter_;
+    // All the handlers run on the DSI callback thread, so these need no lock.
     bool haveStatus_;
     CarGpsStatus status_;
     uint32_t statusMs_;         // when the newest status changed
@@ -394,6 +496,7 @@ private:
     uint32_t accuracyOverrideE3_;
     LocationCb cb_;
     SatellitesCb satCb_;
+    CompassCb compassCb_;
     void* user_;
 };
 

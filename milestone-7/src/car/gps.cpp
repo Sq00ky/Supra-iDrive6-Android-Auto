@@ -10,20 +10,25 @@ namespace nbt {
 namespace car {
 
 CarGps::CarGps()
-    : haveStatus_(false), statusMs_(0), usableLogged_(-1), accuracyOverrideE3_(0), cb_(NULL), satCb_(NULL), user_(NULL) {
+    : haveStatus_(false), statusMs_(0), usableLogged_(-1), accuracyOverrideE3_(0), cb_(NULL), satCb_(NULL), compassCb_(NULL),
+      user_(NULL) {
     memset(&status_, 0, sizeof(status_));
 }
 
-bool CarGps::attach(most::Client& client, uint32_t accuracyOverrideE3, LocationCb cb, SatellitesCb satCb, void* user) {
+bool CarGps::attach(most::Client& client, uint32_t accuracyOverrideE3, LocationCb cb, SatellitesCb satCb, CompassCb compassCb,
+                    void* user) {
     accuracyOverrideE3_ = accuracyOverrideE3;
     cb_ = cb;
     satCb_ = satCb;
+    compassCb_ = compassCb;
     user_ = user;
     if (!client.addRoute(kCarGpsFBlock, kCarGpsInst, kCarGpsFkt, most::kOpStatus, &CarGps::fixTramp, this) ||
-        !client.addRoute(kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, most::kOpStatus, &CarGps::statusTramp, this)) {
+        !client.addRoute(kCarStatusFBlock, kCarStatusInst, kCarStatusFkt, most::kOpStatus, &CarGps::statusTramp, this) ||
+        !client.addRoute(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, most::kOpStatus, &CarGps::headingTramp, this)) {
         printf("[GPS] no room on the MOST client: car GPS disabled\n");
-        cb_ = NULL;     // one route may have fitted
+        cb_ = NULL;     // some of the routes may have fitted
         satCb_ = NULL;
+        compassCb_ = NULL;
         return false;
     }
     if (accuracyOverrideE3)
@@ -34,11 +39,29 @@ bool CarGps::attach(most::Client& client, uint32_t accuracyOverrideE3, LocationC
                kCarGpsInst, kCarGpsFkt);
     printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto GPS_SATELLITE\n", kCarStatusFBlock, kCarStatusInst,
            kCarStatusFkt);
+    printf("[GPS] car GPS: MOST %02X/%02X fkt %03X -> Android Auto COMPASS\n", kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt);
     return true;
 }
 
 void CarGps::fixTramp(const most::View& m, void* self) { static_cast<CarGps*>(self)->onFix(m); }
 void CarGps::statusTramp(const most::View& m, void* self) { static_cast<CarGps*>(self)->onStatus(m); }
+void CarGps::headingTramp(const most::View& m, void* self) { static_cast<CarGps*>(self)->onHeading(m); }
+
+void CarGps::onHeading(const most::View& m) {
+    CarHeading h;
+    memset(&h, 0, sizeof(h));
+    CarHeadingFilter::Result r = headingFilter_.feed(m.data, m.len, m.rxMs, h);
+    if (r.copy) return;
+    if (r.logBad)
+        printf("[GPS] heading: ignored a %u-byte payload on %02X/%02X fkt %03X, first byte %u (expected %u bytes, not %u)\n",
+               (unsigned)m.len, m.fblock, m.inst, m.fkt, m.len ? m.data[0] : 0u, (unsigned)kCarHeadingLen, kHeadingInvalid);
+    if (!r.ok) return;  // the session keeps sending the last good value
+    // The message count against the time, and the longest gap, show how often the car really sends this while parked.
+    if (r.logFields)
+        printf("[GPS] heading message #%u raw=%u quality=0x%04X, longest gap %u ms%s\n", r.messageNo, h.raw, h.quality,
+               (unsigned)r.gapMs, r.qualityChanged ? " (quality changed)" : "");
+    if (compassCb_) compassCb_(headingToBearingE6(h.raw), user_);
+}
 
 void CarGps::onStatus(const most::View& m) {
     CarGpsStatus s;

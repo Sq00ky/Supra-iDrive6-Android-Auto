@@ -25,7 +25,7 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id);
 // The manifest as ServiceDiscoveryResponse protobuf, without the message id.
 std::vector<uint8_t> serializeManifest(const ServiceDiscovery& manifest);
 
-// Corrects the sensor channel for a real car: no compass, gyroscope or toll card, which have no source in the car, and
+// Corrects the sensor channel for a real car: no gyroscope or toll card, which nothing here sends, and
 // unleaded with no EV connector in place of the DHU's unleaded + electric and supercharger. Returns true if anything
 // was changed (prints the result).
 bool configureSensors(ServiceDiscovery& manifest);

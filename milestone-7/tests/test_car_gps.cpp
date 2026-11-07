@@ -299,6 +299,12 @@ static void onSats(const SatelliteStatus& s, void* user) {
     g_sats.push_back(s);
 }
 
+static std::vector<int32_t> g_compass;
+static void onCompass(int32_t bearingE6, void* user) {
+    assert(user == &g_fixes);
+    g_compass.push_back(bearingE6);
+}
+
 static uint32_t nowMs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -315,7 +321,7 @@ static void testConsumer() {
     g_sats.clear();
     Client c;
     CarGps gps;
-    assert(gps.attach(c, 25000, &onFix, &onSats, &g_fixes));
+    assert(gps.attach(c, 25000, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));     // GPS alone is enough for the client to start (NBT_KNOB=0)
     assert(fake_dsi::opened());
     fake_dsi::attach();
@@ -482,7 +488,7 @@ static void testAccuracyOnEachFix() {
     g_sats.clear();
     Client c;
     CarGps gps;
-    assert(gps.attach(c, 0, &onFix, &onSats, &g_fixes));
+    assert(gps.attach(c, 0, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
     respond();
@@ -638,7 +644,7 @@ static void testSpeedOnEachFix() {
     g_sats.clear();
     Client c;
     CarGps gps;
-    assert(gps.attach(c, 0, &onFix, &onSats, &g_fixes));
+    assert(gps.attach(c, 0, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
     respond();
@@ -660,7 +666,7 @@ static void testFull() {
     Client c;
     while (c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) {}
     CarGps gps;
-    assert(!gps.attach(c, 10000, &onFix, &onSats, &g_fixes));
+    assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
 }
 
 // Room for one route only: attach() fails, and what got through stays silent.
@@ -672,12 +678,180 @@ static void testOneRouteFits() {
     while (added < Router::kMaxRoutes - 1 && c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) ++added;
     assert(added == Router::kMaxRoutes - 1);
     CarGps gps;
-    assert(!gps.attach(c, 10000, &onFix, &onSats, &g_fixes));
+    assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
     respond();
     sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
     assert(g_fixes.empty());
+}
+
+// fkt 0x203. Made up: only the layout is real. Heading raw 192 is 90 degrees, altitude 100 m, speed 0.
+static const uint8_t kHeadingMsg[] = { 192, 0x80, 0x64, 0x01, 0xAA, 0x80, 0x00 };
+
+static void testHeadingDecode() {
+    CarHeading h;
+    assert(decodeCarHeading(kHeadingMsg, sizeof(kHeadingMsg), h));
+    assert(h.raw == 192 && h.quality == 0x01AA);
+    // The same anticlockwise encoding as the heading in fkt 0x440.
+    assert(headingToBearingE6(h.raw) == 90000000);
+    assert(headingToBearingE6(128) == 180000000);
+    assert(headingToBearingE6(64) == 270000000);
+
+    std::vector<uint8_t> p(kHeadingMsg, kHeadingMsg + sizeof(kHeadingMsg));
+    p[0] = 0;                                   // north is a real value
+    assert(decodeCarHeading(&p[0], p.size(), h) && h.raw == 0);
+    p[0] = 254;
+    assert(decodeCarHeading(&p[0], p.size(), h) && h.raw == 254);
+    p[0] = kHeadingInvalid;
+    assert(!decodeCarHeading(&p[0], p.size(), h));
+    assert(!decodeCarHeading(kHeadingMsg, sizeof(kHeadingMsg) - 1, h));
+    assert(!decodeCarHeading(NULL, 7, h));
+    p[0] = 192;
+    p.push_back(0);                             // longer: the fields it knows are still where they were
+    assert(decodeCarHeading(&p[0], p.size(), h) && h.raw == 192);
+}
+
+static void testHeadingFilter() {
+    CarHeading h;
+    {
+        CarHeadingFilter flt;
+        CarHeadingFilter::Result r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000, h);
+        assert(!r.copy && r.ok && r.qualityChanged && r.logFields && r.messageNo == 1 && r.gapMs == 0);
+        // The other receivers' copies, whatever they hold, up to the window.
+        r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1010, h);
+        assert(r.copy && !r.ok);
+        r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000 + kHeadingCopyWindowMs - 1, h);
+        assert(r.copy);
+        // An unchanged payload a second later is a new message, not a repeat, and it is not logged.
+        r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 2000, h);
+        assert(!r.copy && r.ok && !r.qualityChanged && !r.logFields && r.messageNo == 2);
+        // The window restarts from the newest message, not the first.
+        r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 2010, h);
+        assert(r.copy);
+    }
+    // Exactly at the window: new.
+    {
+        CarHeadingFilter flt;
+        flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000, h);
+        assert(!flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000 + kHeadingCopyWindowMs, h).copy);
+    }
+    // Across the 32-bit wrap.
+    {
+        CarHeadingFilter flt;
+        flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 0xFFFFFF00u, h);
+        assert(flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 100, h).copy);     // 356 ms
+        assert(!flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000, h).copy);
+    }
+    // Invalid or short: not ok, said once, and still counted as a message.
+    {
+        CarHeadingFilter flt;
+        std::vector<uint8_t> bad(kHeadingMsg, kHeadingMsg + sizeof(kHeadingMsg));
+        bad[0] = kHeadingInvalid;
+        CarHeadingFilter::Result r = flt.feed(&bad[0], bad.size(), 1000, h);
+        assert(!r.copy && !r.ok && r.logBad && r.messageNo == 1);
+        r = flt.feed(kHeadingMsg, 3, 2000, h);
+        assert(!r.copy && !r.ok && !r.logBad && r.messageNo == 2);
+        r = flt.feed(NULL, 0, 3000, h);
+        assert(!r.copy && !r.ok && !r.logBad && r.messageNo == 3);
+        r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 4000, h);
+        assert(r.ok && r.logFields && r.messageNo == 4);
+    }
+    // Quality: a change is logged, with the longest gap since the last log.
+    {
+        CarHeadingFilter flt;
+        flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 1000, h);
+        flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 2000, h);
+        flt.feed(kHeadingMsg, sizeof(kHeadingMsg), 9000, h);                 // 7 s of nothing
+        std::vector<uint8_t> q(kHeadingMsg, kHeadingMsg + sizeof(kHeadingMsg));
+        q[4] = 0xAB;
+        CarHeadingFilter::Result r = flt.feed(&q[0], q.size(), 10000, h);
+        assert(r.ok && r.qualityChanged && r.logFields && r.gapMs == 7000);
+        r = flt.feed(&q[0], q.size(), 11000, h);
+        assert(r.ok && !r.qualityChanged && !r.logFields);
+    }
+    // Otherwise every kLogEvery messages.
+    {
+        CarHeadingFilter flt;
+        uint32_t t = 1000;
+        for (int i = 1; i <= CarHeadingFilter::kLogEvery; ++i, t += 1000) {
+            CarHeadingFilter::Result r = flt.feed(kHeadingMsg, sizeof(kHeadingMsg), t, h);
+            assert((unsigned)i == r.messageNo);
+            if (i == CarHeadingFilter::kLogEvery) assert(r.logFields && r.gapMs == 1000);
+            else if (i > 1) assert(!r.logFields);
+        }
+    }
+}
+
+static void sleepMs(long ms) {
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
+// From DSI frame to bearing. The wait lets the next message count as new: the client stamps real time.
+static void testHeadingConsumer() {
+    fake_dsi::reset();
+    g_fixes.clear();
+    g_compass.clear();
+    Client c;
+    CarGps gps;
+    assert(gps.attach(c, 0, &onFix, &onSats, &onCompass, &g_fixes));
+    assert(c.start("NBTAAD_MOST"));
+    fake_dsi::attach();
+    respond();
+
+    // One message per receiver, the car's two tags among them: one bearing, with no position or status seen at all.
+    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);
+    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x202D);
+    sendStatusTag(1, kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x5000);
+    assert(c.stats().routed == 3);
+    assert(g_compass.size() == 1 && g_compass[0] == 90000000);
+    assert(g_fixes.empty());
+
+    // Other function, instance or op: not routed.
+    sendStatus(kCarStatusFBlock, kCarStatusInst, 0x20B, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);
+    sendStatus(kCarStatusFBlock, 0x02, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);
+    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpGet, kHeadingMsg, 0, 0x200B);
+    assert(c.stats().routed == 3);
+
+    // Invalid: nothing goes on, so the session keeps the last good value.
+    sleepMs(kHeadingCopyWindowMs + 20);
+    std::vector<uint8_t> p(kHeadingMsg, kHeadingMsg + sizeof(kHeadingMsg));
+    p[0] = kHeadingInvalid;
+    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, &p[0], p.size(), 0x200B);
+    assert(g_compass.size() == 1);
+
+    // The same heading again is news for the phone, and so is a new one.
+    sleepMs(kHeadingCopyWindowMs + 20);
+    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);
+    assert(g_compass.size() == 2 && g_compass[1] == 90000000);
+    sleepMs(kHeadingCopyWindowMs + 20);
+    p[0] = 64;
+    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, &p[0], p.size(), 0x200B);
+    assert(g_compass.size() == 3 && g_compass[2] == 270000000);
+}
+
+// Room for the first two routes only: attach() fails, and none of the three callbacks ever runs.
+static void testTwoRoutesFit() {
+    fake_dsi::reset();
+    g_fixes.clear();
+    g_sats.clear();
+    g_compass.clear();
+    Client c;
+    int added = 0;
+    while (added < Router::kMaxRoutes - 2 && c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) ++added;
+    assert(added == Router::kMaxRoutes - 2);
+    CarGps gps;
+    assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
+    assert(c.start("NBTAAD_MOST"));
+    fake_dsi::attach();
+    respond();
+    sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
+    sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
+    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);
+    assert(g_fixes.empty() && g_sats.empty() && g_compass.empty());
 }
 
 int main() {
@@ -697,6 +871,10 @@ int main() {
     testSpeedOnEachFix();
     testFull();
     testOneRouteFits();
+    testHeadingDecode();
+    testHeadingFilter();
+    testHeadingConsumer();
+    testTwoRoutesFit();
     printf("test_car_gps OK\n");
     return 0;
 }
