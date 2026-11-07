@@ -159,6 +159,7 @@ private:
     bool speed_last_zero_;                         // session thread: it carried 0, so another is due on the timer
     void drainSpeed();                             // session thread: repeat a CAR_SPEED of 0 when one is due
     void drainPeriodic();                          // session thread: everything that is due on time, whatever woke it
+    uint32_t periodicTickMs();                     // session thread: how long select may sleep before something is due
     uint32_t last_rx_ms_;                          // session thread: when the last byte from the phone arrived
     VideoFocusCallback focus_cb_;
     void* focus_user_data_;

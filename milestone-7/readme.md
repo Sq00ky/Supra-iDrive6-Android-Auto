@@ -209,6 +209,10 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > the count: car GPS stretched 5 s to about 7-17 s, and car speed stopped it altogether while moving, leaving the last frame on
 > screen and refusing reconnects. So a wireless gap that used to survive by accident now ends the session at 5-6 s; raise
 > `NBT_RX_TIMEOUT_S` if that happens on a good link. GPS_SATELLITE also keeps its once-a-second timer through those wakes.
+>
+> **v1.9.36-sensortick (not car-verified): GPS_SATELLITE and a repeated CAR_SPEED of 0 keep to once a second while the phone
+> is sending.** A phone frame just before one was due put it off by a whole select tick, so with frames about once a second
+> the rate fell to 0.55-0.65 Hz in a host test. select now sleeps no longer than the next one is due.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
