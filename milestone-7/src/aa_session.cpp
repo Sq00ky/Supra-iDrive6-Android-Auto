@@ -87,6 +87,7 @@ AASession::AASession()
     speed_sent_ = 0;
     speed_last_ms_ = 0;
     speed_last_zero_ = false;
+    last_rx_ms_ = 0;
     pending_bye_ = false;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
@@ -524,7 +525,8 @@ uint32_t AASession::rxTimeoutMs() {
         // sessions on brief wireless gaps. The phone pings exactly once a second (car log 2026-10-24: 78 pings, max gap
         // 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence still means the
         // Wi-Fi link is gone: without a timeout a sudden drop never ended the session (no RST arrives) and the last
-        // frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 5-6 s.
+        // frame stayed on screen. It is checked each time select returns, at least once a second, so the real cut-off
+        // is 5-6 s.
         // NBT_RX_TIMEOUT_S=0 disables.
         cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 5000u;
     }
@@ -533,7 +535,6 @@ uint32_t AASession::rxTimeoutMs() {
 
 bool AASession::readExact(uint8_t* buffer, size_t length) {
     size_t total = 0;
-    uint32_t idle_ms = 0;
     const uint32_t limit_ms = rxTimeoutMs();
     const bool have_wake = wake_pipe_[0] >= 0;
     const bool need_select = (limit_ms != 0) || have_wake;
@@ -559,30 +560,26 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 if (errno == EINTR) continue;
                 return false;
             }
-            if (r == 0) {
-                drainAcks();
-                drainSatellites();
-                drainSpeed();
-                if (limit_ms) {
-                    idle_ms += tick_ms;
-                    if (idle_ms >= limit_ms) {
-                        printf("[AASession] No data from phone for %u s: treating session as dead.\n",
-                               (unsigned)(idle_ms / 1000));
-                        dumpRxNotes();
-                        return false;
-                    }
+            const bool readable = r > 0 && FD_ISSET(fd, &rf);
+            const bool woke = r > 0 && have_wake && FD_ISSET(wake_pipe_[0], &rf);
+            // Timed from the last byte and not counted in select timeouts, because other threads wake this one at any
+            // rate. Only with nothing waiting: after a stall on this thread, the phone's bytes may be queued unread.
+            if (!readable && limit_ms) {
+                const uint32_t silent_ms = monoMs() - last_rx_ms_;
+                if (silent_ms >= limit_ms) {
+                    printf("[AASession] No data from phone for %u s: treating session as dead.\n",
+                           (unsigned)(silent_ms / 1000));
+                    dumpRxNotes();
+                    return false;
                 }
-                continue;
             }
-            if (have_wake && FD_ISSET(wake_pipe_[0], &rf)) {
+            if (woke) {
                 char junk[64];
                 while (read(wake_pipe_[0], junk, sizeof(junk)) > 0) { }
                 drainTouch();
-                drainAcks();
-                drainUnderflows();
-                if (!FD_ISSET(fd, &rf)) continue;
             }
-            idle_ms = 0;
+            if (r == 0 || woke) drainPeriodic();
+            if (!readable) continue;
         }
         ssize_t n = recv(fd, buffer + total, length - total, 0);
         if (n < 0 && errno == EINTR) continue;
@@ -590,6 +587,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
             return false;
         }
         total += static_cast<size_t>(n);
+        last_rx_ms_ = monoMs();
     }
     return total == length;
 }
@@ -1037,8 +1035,16 @@ void AASession::drainSpeed() {
     if (!sendSensorEvent(3)) printf("[AASession] CAR_SPEED event: SEND FAILED\n");
 }
 
+void AASession::drainPeriodic() {
+    drainAcks();
+    drainUnderflows();
+    drainSatellites();
+    drainSpeed();
+}
+
 void AASession::sessionLoop() {
     printf("[AASession] Protocol thread active on fd %d.\n", client_fd_);
+    last_rx_ms_ = monoMs();     // the phone's silence counts from here
 
     // Step 1: Send Android Auto VersionRequest (Major 1, Minor NBT_AA_MINOR = 6 by default)
     // Frame: Channel 0 (Control), Flags 0x03 (First | Last, Unencrypted)
@@ -1064,10 +1070,7 @@ void AASession::sessionLoop() {
     // Step 2: Read incoming frames from the phone
     while (isRunning()) {
         // Forced acks are due on time even while video keeps select() from ever timing out.
-        drainAcks();
-        drainUnderflows();
-        drainSatellites();
-        drainSpeed();
+        drainPeriodic();
         uint8_t header[4];
         if (!readExact(header, 4)) {
             if (isRunning()) {

@@ -276,6 +276,32 @@ static void testSpeedNewSession() {
     endSession(s, sv);
 }
 
+// Satellites keep their timer while speed posts keep waking the session and the phone says nothing.
+static void testSatellitesWhileSpeedWakes() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 21, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == satEvent(0));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    int sats = 0, speeds = 0;
+    const uint32_t start = testNowMs();
+    while (testNowMs() - start < 3500) {
+        s->postCarSpeed(speedNow(6944));
+        const uint32_t until = testNowMs() + 300;
+        while ((int)(until - testNowMs()) > 0 && nextSensorFrame(sv[1], (int)(until - testNowMs()), p)) {
+            if (p == satEvent(0)) ++sats;
+            else if (p == speedEvent(6944)) ++speeds;
+        }
+    }
+    printf("satellites while speed wakes: %d satellite and %d speed events in 3.5 s\n", sats, speeds);
+    assert(sats >= 2 && sats <= 5);             // about once a second, not once per wake
+    assert(speeds >= 8);
+    endSession(s, sv);
+}
+
 // The period parser: present, the -1 of a 10-byte varint, absent, and a message it should stop on.
 static void testPeriod() {
     const uint8_t a[] = { 0x80, 0x01, 0x08, 0x01, 0x10, 0xE8, 0x07 };
@@ -318,6 +344,7 @@ int main() {
     testSpeedStaleAtStart();
     testSpeedZeroRepeats();
     testSpeedNewSession();
+    testSatellitesWhileSpeedWakes();
     printf("test_session_sensors OK\n");
     return 0;
 }

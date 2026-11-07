@@ -203,6 +203,12 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > still stays 0. `NBT_CAR_SPEED=0` turns it off. Daemon log: `[Vehicle] car speed: MOST 05/00 fkt 621 ...` at start,
 > `[AASession] >>> Sensor CAR_SPEED event #N` while sending, and `[Vehicle] speed: moving again after ...` with the number
 > of zero frames seen, which shows whether the car goes quiet while stopped.
+>
+> **v1.9.35-rxdeadline (not car-verified): a phone that drops off is noticed on time while the car is moving.** The
+> `NBT_RX_TIMEOUT_S` limit is now timed from the last byte the phone sent. Before, anything that woke the session restarted
+> the count: car GPS stretched 5 s to about 7-17 s, and car speed stopped it altogether while moving, leaving the last frame on
+> screen and refusing reconnects. So a wireless gap that used to survive by accident now ends the session at 5-6 s; raise
+> `NBT_RX_TIMEOUT_S` if that happens on a good link. GPS_SATELLITE also keeps its once-a-second timer through those wakes.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
