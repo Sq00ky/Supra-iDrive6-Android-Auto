@@ -41,6 +41,22 @@ inline bool carGpsEnabled() {
     return envFlag("NBT_CAR_GPS") != 0;
 }
 
+// The car's wheel speed (MOST 05/00 fkt 621, car/vehicle), default on. NBT_CAR_SPEED=0 / off / no disables it.
+inline bool carSpeedEnabled() {
+    return envFlag("NBT_CAR_SPEED") != 0;
+}
+
+// The car's gear (MOST 05/00 fkt 228, or the iDrive app until that reports, car/vehicle), default on. NBT_CAR_GEAR=0 / off / no
+// disables the sensor. The reverse-gear handling has its own switch, NBT_GEAR_ACTION.
+inline bool carGearEnabled() {
+    return envFlag("NBT_CAR_GEAR") != 0;
+}
+
+// The car's parking brake (MOST 05/00 fkt CB5, car/vehicle), default on. NBT_CAR_PARKING_BRAKE=0 / off / no disables it.
+inline bool carParkingBrakeEnabled() {
+    return envFlag("NBT_CAR_PARKING_BRAKE") != 0;
+}
+
 // Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
 // the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
 inline int videoResolution() {

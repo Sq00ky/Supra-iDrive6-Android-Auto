@@ -4,9 +4,9 @@
 // The session's protobuf messages apart from the manifest, as src/aa_session.cpp reads and writes them. Documentation
 // and a test only: nothing is generated from this. Each message starts with a 2-byte big-endian id, shown here.
 //
-// tests/test_schema.py checks MediaAck, AudioUnderflow, samples of the two media playback messages, and the LOCATION and
-// GPS_SATELLITE sensor events. The others are built inline in aa_session.cpp, where no test can reach them, so their
-// entries are only as good as the reading of that code.
+// tests/test_schema.py checks MediaAck, AudioUnderflow, samples of the two media playback messages, and the LOCATION,
+// CAR_SPEED, PARKING_BRAKE, GEAR and GPS_SATELLITE sensor events. The others are built inline in aa_session.cpp, where no test can
+// reach them, so their entries are only as good as the reading of that code.
 //
 // Not protobuf: VersionRequest, VersionResponse, the TLS handshake and media frames.
 syntax = "proto2";
@@ -74,7 +74,8 @@ message AudioUnderflow {
 }
 
 // 0x8003 on the sensor channel, with one of these at a time. Night mode and driving status are repeated on the phone's
-// side. Location and satellites are written the same way, with one entry; whether field 21 repeats is not confirmed.
+// side. Location, speed, parking brake, gear and satellites are written the same way, with one entry; whether field 21 repeats
+// is not confirmed.
 message NightMode {
   optional bool is_night = 1;
 }
@@ -89,11 +90,24 @@ message LocationData {
   optional int32 speed_e3 = 6;
   optional int32 bearing_e6 = 7;
 }
+message CarSpeedData {
+  optional int32 speed_e3 = 1;
+}
+message ParkingBrakeData {
+  optional bool on = 1;
+}
+// 0 neutral, 100 drive, 101 park, 102 reverse. DHU r2.1 also takes 1 to 10 for a selected gear, which we do not send.
+message GearData {
+  optional int32 gear = 1;
+}
 message GpsSatelliteData {
   optional uint32 used = 1;
 }
 message SensorEvent {
   repeated LocationData location = 1;
+  repeated CarSpeedData car_speed = 3;
+  repeated ParkingBrakeData parking_brake = 7;
+  repeated GearData gear = 8;
   repeated NightMode night_mode = 10;
   repeated DrivingStatus driving_status = 13;
   repeated GpsSatelliteData gps_satellite = 21;

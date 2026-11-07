@@ -107,6 +107,7 @@
 #include "car/volume_input.hpp"
 #include "car/input_activity.hpp"
 #include "car/gps.hpp"
+#include "car/vehicle.hpp"
 #include "most/client.hpp"
 #include "most/trace.hpp"
 #include "crash_handler.hpp"
@@ -155,6 +156,7 @@ static nbt::car::CcsInput g_ccs;             // iDrive controller and voice butt
 static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
 static nbt::car::InputActivity g_carInput;   // any car control the driver touched: a consumer of g_most
 static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
+static nbt::car::CarVehicle g_vehicle;       // the car's wheel speed, gear and parking brake: a consumer of g_most
 static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
@@ -365,6 +367,7 @@ static void readGearFile() {
     if (fscanf(f, "gear %d", &g) == 1) {
         g_gear = g;
         printf("[Gear] initial gear %d (from %s)\n", g, kGearFile);
+        g_vehicle.gearFromApp(g);
     }
     fclose(f);
 }
@@ -393,6 +396,7 @@ static void* ctlThread(void*) {
             int g = atoi(buf + 5);
             if (g != g_gear) printf("[Gear] gear %d -> %d (from iDrive app)\n", (int)g_gear, g);
             g_gear = g;
+            g_vehicle.gearFromApp(g);
         }
         else if (!strncmp(buf, "pdc ", 4)) {
             int v = atoi(buf + 4);
@@ -1470,6 +1474,21 @@ static void onCarSatellites(const nbt::SatelliteStatus& status, void* user) {
     static_cast<nbt::AASession*>(user)->postCarSatellites(status);
 }
 
+// The car's wheel speed (DSI callback thread, about 2 Hz while moving) -> AA CAR_SPEED sensor.
+static void onCarSpeed(const nbt::CarSpeedSample& speed, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarSpeed(speed);
+}
+
+// The car's gear when it changes (DSI callback thread, or the control thread from the iDrive app) -> AA GEAR sensor.
+static void onCarGear(int aaGear, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarGear(aaGear);
+}
+
+// The car's parking brake when it changes (DSI callback thread) -> AA PARKING_BRAKE sensor.
+static void onCarParkingBrake(bool on, void* user) {
+    static_cast<nbt::AASession*>(user)->postCarParkingBrake(on);
+}
+
 static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     nbt::AASession* s = static_cast<nbt::AASession*>(user);
     const bool back_hold = (ev.kind == 1 && ev.keycode == nbt::AAK_BACK && backHoldMs() > 0);
@@ -1542,7 +1561,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.33-usbset"
+#define NBT_AAD_BUILD "v1.9.37-cargear"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1843,6 +1862,16 @@ int main(int argc, char* argv[]) {
         printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
     else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &g_session))
         printf("[Main] car GPS failed to start.\n");
+    nbt::car::CarVehicleCallbacks vehicle;
+    vehicle.user = &g_session;
+    if (nbt::carSpeedEnabled()) vehicle.speed = &onCarSpeed;
+    else printf("[Main] car speed -> Android Auto off (NBT_CAR_SPEED=0).\n");
+    if (nbt::carGearEnabled()) vehicle.gear = &onCarGear;
+    else printf("[Main] car gear -> Android Auto off (NBT_CAR_GEAR=0).\n");
+    if (nbt::carParkingBrakeEnabled()) vehicle.parkingBrake = &onCarParkingBrake;
+    else printf("[Main] car parking brake -> Android Auto off (NBT_CAR_PARKING_BRAKE=0).\n");
+    if (!g_vehicle.attach(g_most, vehicle))
+        printf("[Main] car speed, gear and parking brake failed to start.\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.
     const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;
@@ -1852,7 +1881,7 @@ int main(int argc, char* argv[]) {
         printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
     g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
     if (!g_most.start("NBTAAD_MOST"))
-        printf("[Main] MOST client failed to start: knob/keys and car GPS disabled.\n");
+        printf("[Main] MOST client failed to start: knob/keys, car GPS, car speed and parking brake disabled.\n");
 
     if (nbt::wirelessEnabled()) {
         pthread_t wt;
