@@ -405,9 +405,20 @@ static void testUsbSetting() {
     printf("usb setting OK\n");
 }
 
+// NBT_USB_DIRECT: on unless it is set to one of the off words (issue 132: the checkbox left it off).
+static void testUsbDirectSetting() {
+    assert(usbDirectSettingOn(NULL) && usbDirectSettingOn(""));          // unset / empty = on
+    const char* on[] = { "1", "on", "yes", "true", "2" };
+    for (size_t i = 0; i < sizeof(on) / sizeof(on[0]); ++i) assert(usbDirectSettingOn(on[i]));
+    const char* off[] = { "0", "off", "no", "false" };
+    for (size_t i = 0; i < sizeof(off) / sizeof(off[0]); ++i) assert(!usbDirectSettingOn(off[i]));
+    printf("usb direct setting OK\n");
+}
+
 int main() {
     setvbuf(stdout, NULL, _IONBF, 0);   // the daemon log lines interleave with the asserts
     testUsbSetting();
+    testUsbDirectSetting();
     testHeader();
     testResetBudget();
     testBridge();
