@@ -218,6 +218,29 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > **`NBT_ALT_WIFI=BOTH` is gone**: the default is the CarPlay hotspot only again, with no Wi-Fi Direct fallback.
 > Cars without the CarPlay hotspot (no CarPlay licence), which got the DIRECT group automatically through BOTH,
 > now need **Use WiFi Direct Network** ticked (or `NBT_ALT_WIFI=DIRECT`); the daemon says so in the log.
+>
+> **v1.9.37-media (not car-verified; issue #51): now playing, and the car's media keys, for the non-Bluetooth audio modes.**
+> In browser (and A2I) audio the phone no longer streams over A2DP, so the car gets neither track text nor "next": the
+> phone's own media playback channel (12) carries it, and until now the daemon read one varint out of it. The daemon now
+> merges 0x8001 (state, app name, position, shuffle/repeat) and 0x8003 (song, artist, album, playlist, duration, album
+> art size) - `audio/media_state.hpp`, host-tested - and publishes the result as `state=playing / source= / song= /
+> artist= / album= / pos= / dur= / ...` lines in **/dev/shmem/nbt-aad-media**, rewritten in place at most 5 times a
+> second and cleared at every session start and end. The control port answers **`media`** (UDP 127.0.0.1:52790, the record
+> as the reply) and takes **`media next|prev|playpause|play|pause`** (or `echo next > /dev/shmem/nbt-aad-media.cmd` from the unit's shell, the file is then removed), which send Android's media keys (87, 88, 85, 126,
+> 127 - already in our input channel's key list) to the phone. Log: `[Media] <song> - <artist> [playing, Spotify, 57s/214s]`.
+> The **steering wheel** buttons are decoded too (`car/mfl.hpp`, MOST 15/02): `NBT_MFL_NEXT`, `NBT_MFL_PREV`,
+> `NBT_MFL_PLAYPAUSE` name the function ids (hex) and every function the block carries is logged when it is first seen
+> and whenever its value changes (`[MFL] 15/02 fkt=C31 op=C len=1: 01 (changed, #6)`), so a press is never missed by
+> sampling and the ids can be read off one drive with no rebuild - the wheel's roller is not documented anywhere, and
+> the ids stay unmapped until they are set; the build's defaults (`511:2` next, `511:1` previous) come from J29 logs and are not
+> confirmed yet. A value can be part of the mapping (`fkt:value`), because this car's track roller carries both
+> directions on one function: it sends `00 -> 02 -> 00` while the button is held and `01` the other way. Without a value,
+> any change away from 0 is the press (so `7f` works as well as `01`), back to 0 the release. Keys are only forwarded when the audio mode is
+> not Bluetooth (there the car's own AVRCP handling owns them). `media browser probe (NBT_AA_BROWSE=1)`: advertises the
+> media browser service (channel 17, descriptor field 11) with an empty config and logs whatever the phone sends there -
+> Google's head unit integration guide documents only media playback status, and the 16.1 phone app has no handler for the
+> browser service, so the play queue itself is drawn by the phone and is not on the wire. Cleanup after the run: `rm
+> /dev/shmem/nbt-aad-media` when going back to an older build.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -719,6 +742,8 @@ Leave these unset unless you are testing.
 | `NBT_CP_HANDOFF=0` | Turns off the CarPlay hand-off (screen window and decoder created at start and never retuned for CarPlay, as before v1.8.32) |
 | `NBT_CP_LIVE_RETUNE=0` | Do not give the decoder CarPlay's settings when CarPlay takes the screen during a live Android Auto session (v1.8.37) |
 | `NBT_PTT_ASSISTANT=1` | Experimental: long press of the steering-wheel voice button starts the Google Assistant. Off by default (the button is only logged) |
+| `NBT_MFL_NEXT`, `NBT_MFL_PREV`, `NBT_MFL_PLAYPAUSE` | Steering-wheel buttons (MOST 15/02) that become Android's next / previous / play-pause media keys: `fkt` or `fkt:value`, hex as the recon log prints them (`511:2`), several separated by commas (`511:2,C31`). A `:value` maps one direction of a roller that carries both on one function; without it any change away from 0 is a press. Defaults (`511:2` next, `511:1` previous) come from a J29 log and are unconfirmed - swap them if the wheel skips the wrong way, and `NBT_MFL_*= ` (empty) unmaps a key. Only forwarded when `NBT_AUDIO_MODE` is not `bt`. `NBT_MFL_LOG=0` stops the per-change log line. See `car/mfl.hpp` |
+| `NBT_AA_BROWSE=1` | Experiment, off: advertises the Android Auto media browser service (channel 17, descriptor field 11) with an empty config and logs every message the phone sends there. Nothing else uses it. See the v1.9.37 entry |
 | `NBT_GPS_ACCURACY_M` | A fixed accuracy for every car GPS fix, in metres, 2 to 499 (default: HDOP x 5 m, at least 2 m; 10 m when a fix has no usable HDOP) |
 | `NBT_NIGHT_MODE=0/1`, `NBT_DRIVING_STATUS=0` | Sensor values. Night mode follows the car by default (`vehicle.dayNightChangeOver` via the iDrive app); `NBT_NIGHT_MODE` forces day (0) or night (1) |
 | `NBT_CAR_MAKE/MODEL/YEAR`, `NBT_VEHICLE_ID`, `NBT_HU_MAKE/MODEL`, `NBT_SW_VERSION`, `NBT_BT_ADDR` | Single identity fields |

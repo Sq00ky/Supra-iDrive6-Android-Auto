@@ -17,6 +17,18 @@ const int kFktPttButton1 = 0x512;
 // (GPS arrived with no key), but E5 and 15 without their keys is untested on the car.
 const uint16_t kDevCtrlKeys[] = { 0xE510, 0xE503, 0xE505, 0xE512, 0xE514, 0xE501, 0xE502, 0x1502 };
 
+// MflEvent -> the event form the daemon already handles (kind 1 = key).
+CcsEvent makeMflCcsEvent(const MflEvent& e) {
+    CcsEvent ev;
+    ev.kind = 1;
+    ev.keycode = e.keycode;
+    ev.down = e.down;
+    ev.delta = 0;
+    ev.what = e.what;
+    ev.cancel = 0;
+    return ev;
+}
+
 } // namespace
 
 CcsInput::CcsInput() : pttAssistant_(false), cb_(NULL), user_(NULL), statusLogged_(0), ccsLogged_(0) {}
@@ -31,8 +43,23 @@ bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb,
     for (int s = 0; s < CCS_SLOTS; ++s) printf(" %s=%u", CcsDecoder::slotName(s), dec_.slotKey(s));
     printf("\n");
 
+    // Steering wheel media keys (car/mfl.hpp): fkt (+ value for the roller) -> key, read from NBT_MFL_*. One broad route
+    // on the block covers whatever the wheel sends; onMfl skips the voice button, which pttTramp handles.
+    mfl_.setConfig(readMflConfig());
+    {
+        const MflConfig& mc = mfl_.config();
+        printf("[MFL] steering-wheel keys:");
+        if (!mc.n) printf(" none mapped");
+        for (int i = 0; i < mc.n; ++i) {
+            if (mc.b[i].value < 0) printf(" %s=%03X->%u", mc.b[i].what, mc.b[i].fkt, mc.b[i].key);
+            else printf(" %s=%03X:%02X->%u", mc.b[i].what, mc.b[i].fkt, (unsigned)mc.b[i].value, mc.b[i].key);
+        }
+        printf(", recon log %s\n", mc.log ? "on (NBT_MFL_LOG=0 silences)" : "off");
+    }
+
     bool ok = client.addRoute(kFBlockController, most::kAny, most::kAny, most::kAny, &CcsInput::controllerTramp, this) &&
               client.addRoute(kFBlockSteeringWheel, most::kAny, kFktPttButton1, most::kOpStatus, &CcsInput::pttTramp, this) &&
+              client.addRoute(kFBlockSteeringWheel, most::kAny, most::kAny, most::kAny, &CcsInput::mflTramp, this) &&
               client.addLinkListener(&CcsInput::linkTramp, this);
     for (size_t i = 0; ok && i < sizeof(kDevCtrlKeys) / sizeof(kDevCtrlKeys[0]); ++i) ok = client.addDevCtrl(kDevCtrlKeys[i]);
     if (!ok) printf("[Knob] no room on the MOST client: knob/keys disabled\n");
@@ -41,6 +68,7 @@ bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb,
 
 void CcsInput::controllerTramp(const most::View& m, void* self) { static_cast<CcsInput*>(self)->onController(m); }
 void CcsInput::pttTramp(const most::View& m, void* self) { static_cast<CcsInput*>(self)->onPtt(m); }
+void CcsInput::mflTramp(const most::View& m, void* self) { static_cast<CcsInput*>(self)->onMfl(m); }
 void CcsInput::linkTramp(most::LinkState s, void* self) { static_cast<CcsInput*>(self)->onLink(s); }
 
 void CcsInput::onLink(most::LinkState s) {
@@ -74,6 +102,18 @@ void CcsInput::onPtt(const most::View& m) {
         ev.kind = 1; ev.keycode = AAK_SEARCH; ev.delta = 0; ev.what = "PTT"; ev.cancel = 0;
         ev.down = 1; cb_(ev, user_);
         ev.down = 0; cb_(ev, user_);
+    }
+}
+
+// Steering-wheel buttons other than the voice one: MflDecoder maps the configured fkts to AA media keys and logs every
+// function the block carries once, so the mapping can be read off a single drive (car/mfl.hpp).
+void CcsInput::onMfl(const most::View& m) {
+    if (m.fkt == kFktPttButton1) return;   // pttTramp owns it
+    MflEvent ev[2];
+    int n = mfl_.feed(m.fkt, m.op, m.len ? m.data : NULL, m.len, ev, 2);
+    for (int i = 0; i < n; ++i) {
+        printf("[MFL] %s %s -> AA key %u\n", ev[i].what, ev[i].down ? "down" : "up", ev[i].keycode);
+        if (cb_) cb_(makeMflCcsEvent(ev[i]), user_);
     }
 }
 

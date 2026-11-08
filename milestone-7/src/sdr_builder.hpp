@@ -83,6 +83,10 @@ int retypeGuidanceSink(ServiceDiscovery& manifest);
 // NBT_SYSTEM_SINK=0 leaves it out. Returns 1 if added. Does nothing if channel 16 already exists.
 int addSystemAudioSink(ServiceDiscovery& manifest);
 
+// NBT_AA_BROWSE=1 (experiment, off): adds the media browser service (channel 17, descriptor field 11) with an empty
+// config, so the session logs whatever the phone sends there. Returns 1 if added.
+int addMediaBrowserProbe(ServiceDiscovery& manifest);
+
 // Keeps only the AudioConfigs with this sample rate in `channel`'s audio sink. Does nothing when no offer has that
 // rate, or when it is the only rate offered. Returns the number of offers removed.
 int keepAudioSinkRate(ServiceDiscovery& manifest, unsigned channel, uint32_t rate);

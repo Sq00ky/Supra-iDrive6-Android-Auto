@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include "car/ccs_config.hpp"
 #include "car/ccs_decoder.hpp"
+#include "car/mfl.hpp"
 #include "car/ptt.hpp"
 #include "most/client.hpp"
 
@@ -17,8 +18,8 @@ typedef void (*CcsEventCb)(const CcsEvent& ev, void* user);
 
 // iDrive controller input for the daemon (default on; NBT_KNOB=0 disables).
 // A consumer of the observe-only MOST client: it receives copies of the controller's status messages (FBlock 0xE5, any
-// instance: CcsDecoder picks its own) and of the steering-wheel voice button (FBlock 0x15, any instance), and decodes
-// them. Nothing is ever sent to the controller. The HMI keeps receiving the same events.
+// instance: CcsDecoder picks its own) and of the steering wheel's block (FBlock 0x15, any instance): the voice button
+// (car/ptt.hpp) and the buttons MflDecoder turns into media keys (car/mfl.hpp, NBT_MFL_*), and decodes them. Nothing is ever sent to the controller. The HMI keeps receiving the same events.
 // The event callback runs on the DSI callback thread: see the handler rules in most/client.hpp.
 // When the MOST link stops being up, held keys get a release with CcsEvent::cancel set, because the real release may never
 // arrive, and the voice button forgets its press.
@@ -32,12 +33,15 @@ public:
 private:
     static void controllerTramp(const most::View& m, void* self);
     static void pttTramp(const most::View& m, void* self);
+    static void mflTramp(const most::View& m, void* self);
     static void linkTramp(most::LinkState s, void* self);
     void onController(const most::View& m);
     void onPtt(const most::View& m);
+    void onMfl(const most::View& m);
     void onLink(most::LinkState s);
 
     CcsDecoder dec_;
+    MflDecoder mfl_;
     PttTracker ptt_;
     bool pttAssistant_;
     CcsEventCb cb_;
