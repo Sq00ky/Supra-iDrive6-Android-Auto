@@ -70,7 +70,7 @@ mv /opt/hmi/ID5/data/ro/Plugins/NbtAad/LibNbtAad.so /opt/hmi/ID5/data/ro/Plugins
 mv /opt/hmi/ID5/data/ro/Plugins/NbtAad /opt/aa/NbtAad.old
 mkdir -p /opt/hmi/ID5/data/ro/Plugins/NbtAad
 cd /opt/hmi/ID5/data/ro/Plugins/NbtAad/
-cp /mnt/umassXXXXX/release/* ./
+cp /mnt/umassXXXXX/Releases/* ./
 ls -l /opt/hmi/ID5/data/ro/Plugins/NbtAad/
 ```
 We're going to verify all five files copied over okay: `libNbtAad.so`, `NbtAad.manifest`, `NbtAad.xml`, `NbtAad_ALL_Texts.zip` and `NbtAad_ALL_Images.zip`.
