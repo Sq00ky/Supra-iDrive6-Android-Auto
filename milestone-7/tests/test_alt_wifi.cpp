@@ -254,6 +254,16 @@ int main() {
     CHECK(pin == "12345670");
 
     unlink(pass); unlink(wps); unlink(junk);
+
+    // "Use WiFi Direct Network" checkbox (rhmiapp-44): a set NBT_ALT_WIFI wins, unset the flag file picks DIRECT
+    CHECK(nbt::altWifiSetting(NULL, false) == nbt::ALT_WIFI_BOTH);
+    CHECK(nbt::altWifiSetting("", false) == nbt::ALT_WIFI_BOTH);
+    CHECK(nbt::altWifiSetting(NULL, true) == nbt::ALT_WIFI_DIRECT);
+    CHECK(nbt::altWifiSetting("", true) == nbt::ALT_WIFI_DIRECT);
+    CHECK(nbt::altWifiSetting("carplay", true) == nbt::ALT_WIFI_CARPLAY);
+    CHECK(nbt::altWifiSetting("both", true) == nbt::ALT_WIFI_BOTH);
+    CHECK(nbt::altWifiSetting("direct", false) == nbt::ALT_WIFI_DIRECT);
+    CHECK(strcmp(nbt::kWfdOnlyFlagFile, "/var/opt/aa/wifi-direct") == 0);
     printf(fails ? "test_alt_wifi: %d FAILED\n" : "test_alt_wifi: all passed\n", fails);
     return fails ? 1 : 0;
 }

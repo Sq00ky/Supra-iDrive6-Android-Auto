@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-43-combo (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-44-gpswfd (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -227,7 +227,7 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the seven checkbox models whenever it is shown.
+// handler here, to refresh the nine checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
 const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
@@ -331,6 +331,18 @@ const unsigned    kActUsbAa        = 83;
 const unsigned    kUsbAaModel      = 84;
 const char* const kUsbAaFlag       = "/var/opt/aa/usb-aa";
 const char* const kUsbAaManual     = "/opt/aa/usb-aa";
+// "Use Phone GPS" and "Use WiFi Direct Network" checkboxes (rhmiapp-44) on the Settings page, both off by default:
+// <checkbox action="87" id="90" model="88" textModel="89"> and <checkbox action="91" id="94" model="92" textModel="93">.
+// Flag files read by nbt-aad at start (nbt_env.hpp phoneGpsEnabled(), alt_wifi.hpp altWifiMode()); NBT_PHONE_GPS /
+// NBT_ALT_WIFI in nbt-aad.env win either way, so a change applies at the next Start / Restart.
+const unsigned    kActPhoneGps     = 87;
+const unsigned    kPhoneGpsModel   = 88;
+const char* const kPhoneGpsFlag    = "/var/opt/aa/phone-gps";
+const char* const kPhoneGpsManual  = "/opt/aa/phone-gps";
+const unsigned    kActWfdOnly      = 91;
+const unsigned    kWfdOnlyModel    = 92;
+const char* const kWfdOnlyFlag     = "/var/opt/aa/wifi-direct";
+const char* const kWfdOnlyManual   = "/opt/aa/wifi-direct";
 const char* const kGctxProperty    = "hmi.graphicalContext";
 const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
 // DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
@@ -1746,6 +1758,49 @@ bool onUsbAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// ---- Use Phone GPS / Use WiFi Direct Network (rhmiapp-44) ---------------------------------------------------------
+// Flip a checkbox flag: remove both files when on, create the /var one when off. Returns the new state.
+bool toggleFlagFile(const char* flag, const char* manual, const char* what) {
+    bool on = fileExists(flag) || fileExists(manual);
+    if (on) {
+        if (fileExists(flag) && unlink(flag) != 0) alog("%s: cannot remove %s (errno %d)", what, flag, errno);
+        if (fileExists(manual) && unlink(manual) != 0)
+            alog("%s: cannot remove %s (errno %d, read-only?): remove it by hand", what, manual, errno);
+    } else {
+        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
+        int fd = open(flag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) alog("%s: cannot create %s (errno %d)", what, flag, errno);
+        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
+    }
+    bool now = fileExists(flag) || fileExists(manual);
+    alog("menu: %s %s -> %s (applies at the next Start / Restart)", what, on ? "on" : "off", now ? "on" : "off");
+    return now;
+}
+
+bool g_phoneGpsShown = false;
+bool phoneGpsOn() { return fileExists(kPhoneGpsFlag) || fileExists(kPhoneGpsManual); }
+void showPhoneGps(bmw::PluginApp* app) {
+    app->updateModel(kPhoneGpsModel, phoneGpsOn());
+    g_phoneGpsShown = true;
+}
+bool onPhoneGpsToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kPhoneGpsFlag, kPhoneGpsManual, "Use Phone GPS (NBT_PHONE_GPS in nbt-aad.env wins)");
+    if (g_runApp) showPhoneGps(g_runApp);
+    return true;
+}
+
+bool g_wfdOnlyShown = false;
+bool wfdOnlyOn() { return fileExists(kWfdOnlyFlag) || fileExists(kWfdOnlyManual); }
+void showWfdOnly(bmw::PluginApp* app) {
+    app->updateModel(kWfdOnlyModel, wfdOnlyOn());
+    g_wfdOnlyShown = true;
+}
+bool onWfdOnlyToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kWfdOnlyFlag, kWfdOnlyManual, "Use WiFi Direct Network (NBT_ALT_WIFI in nbt-aad.env wins)");
+    if (g_runApp) showWfdOnly(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -1889,6 +1944,8 @@ void statusRun(void* /*self*/) {
     if (!g_kombiNavShown) showKombiNav(app);
     if (!g_warningsShown) showWarnings(app);
     if (!g_usbAaShown) showUsbAa(app);
+    if (!g_phoneGpsShown) showPhoneGps(app);
+    if (!g_wfdOnlyShown) showWfdOnly(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -2051,7 +2108,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the seven checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the nine checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2070,7 +2127,9 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showKombiNav(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
-        alog("settings: seven checkbox models refreshed");
+        showPhoneGps(g_app);
+        showWfdOnly(g_app);
+        alog("settings: nine checkbox models refreshed");
     }
     return true;
 }
@@ -2106,6 +2165,8 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActKombiNav, &onKombiNavToggle);
     addAction(self, kActWarnings, &onWarningsToggle);
     addAction(self, kActUsbAa, &onUsbAaToggle);
+    addAction(self, kActPhoneGps, &onPhoneGpsToggle);
+    addAction(self, kActWfdOnly, &onWfdOnlyToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;

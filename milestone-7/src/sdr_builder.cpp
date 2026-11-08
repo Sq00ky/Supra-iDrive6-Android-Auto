@@ -617,7 +617,14 @@ bool envInt(const char* n, int& v) {
 
 } // namespace
 
-bool configureSensors(ServiceDiscovery& m) {
+bool isCarPositionSensor(int sensor) {
+    return sensor == SENSOR_LOCATION || sensor == SENSOR_COMPASS || sensor == SENSOR_GPS_SATELLITE ||
+           sensor == SENSOR_ACCELEROMETER || sensor == SENSOR_GYROSCOPE;
+}
+
+bool configureSensors(ServiceDiscovery& m) { return configureSensors(m, phoneGpsEnabled()); }
+
+bool configureSensors(ServiceDiscovery& m, bool phoneGps) {
     static const int kSensors[] = {
         SENSOR_LOCATION, SENSOR_COMPASS, SENSOR_CAR_SPEED, SENSOR_ODOMETER, SENSOR_FUEL_LEVEL, SENSOR_PARKING_BRAKE,
         SENSOR_GEAR, SENSOR_NIGHT_MODE, SENSOR_DRIVING_STATUS, SENSOR_ACCELEROMETER, SENSOR_GPS_SATELLITE
@@ -625,7 +632,10 @@ bool configureSensors(ServiceDiscovery& m) {
     static const int kFuelTypes[] = { FUEL_UNLEADED };
     AaChannel* c = findChannel(m, AA_CH_SENSORS);
     if (!c || c->service != AaChannel::SENSOR_SOURCE) return false;
-    const std::vector<int> sensors = listOf(kSensors), fuelTypes = listOf(kFuelTypes);
+    const std::vector<int> all = listOf(kSensors), fuelTypes = listOf(kFuelTypes);
+    std::vector<int> sensors;
+    for (size_t i = 0; i < all.size(); ++i)
+        if (!phoneGps || !isCarPositionSensor(all[i])) sensors.push_back(all[i]);
     if (c->sensors.sensors == sensors && c->sensors.fuelTypes == fuelTypes && c->sensors.evConnectors.empty())
         return false;
     c->sensors.sensors = sensors;
@@ -633,7 +643,8 @@ bool configureSensors(ServiceDiscovery& m) {
     c->sensors.evConnectors.clear();
     printf("[SDR] sensors advertised: ");
     for (size_t i = 0; i < sensors.size(); ++i) printf("%s%d", i ? "," : "", sensors[i]);
-    printf("; fuel: unleaded; EV connectors: none\n");
+    printf("; fuel: unleaded; EV connectors: none%s\n",
+           phoneGps ? " (Use Phone GPS: location, compass, GPS satellites and accelerometer are left to the phone)" : "");
     return true;
 }
 

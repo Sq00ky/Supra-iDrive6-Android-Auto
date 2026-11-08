@@ -205,6 +205,16 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > **v1.9.34-driverside (not car-verified): `NBT_DRIVER_SIDE` tells Android Auto which side the driver sits on.** It was
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
+>
+> **v1.9.37-gpswfd + rhmiapp-44-gpswfd (not car-verified): Use Phone GPS and Use WiFi Direct Network checkboxes.**
+> Two more checkboxes on the Settings page, both off by default and read when the daemon starts, so press **Restart**
+> after changing them. **Use Phone GPS** (`/var/opt/aa/phone-gps`, `NBT_PHONE_GPS=1|0` wins) is for cars without the
+> navigation antenna: the car's GPS and heading are not read, and Android Auto is not offered the location, compass,
+> GPS satellite or accelerometer sensors, so the phone uses its own GPS, compass and motion sensors. Logs:
+> `[Main] Use Phone GPS on (Settings checkbox)`, `[SDR] sensors advertised: 3,5,6,7,8,10,13; ... (Use Phone GPS: ...)`.
+> **Use WiFi Direct Network** (`/var/opt/aa/wifi-direct`) offers the phone only the car's Wi-Fi Direct group, with no
+> CarPlay hotspot fallback: the same as `NBT_ALT_WIFI=DIRECT`. A set `NBT_ALT_WIFI` wins over the checkbox. Log:
+> `[Wireless] Wi-Fi source: DIRECT (Use WiFi Direct Network checkbox; NBT_ALT_WIFI=(unset)) ...`.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -501,7 +511,7 @@ Bluetooth reconnect.
 | Start Android Auto | Starts `/opt/aa/nbt-aad`, or brings a running one to the front. Reads "Connecting..." during setup, then "Open Android Auto" |
 | Force Stop | Asks the daemon to quit; SIGTERM after 3 s, SIGKILL after 6 s |
 | Restart | Force Stop, then Start |
-| Settings | Opens the Settings page (the six checkboxes below, `hmiState 14`); BACK returns to this menu |
+| Settings | Opens the Settings page (the checkboxes below, `hmiState 14`); BACK returns to this menu |
 | About | One wrapping text block (a Richtext list, like BMW's own ActiveSeating intro text, English only): "NBT-AAD: native wireless Android Auto", "Developed by nanaisu", the GitHub address, and the free-of-charge notice |
 
 **Settings page** (the Settings row; `hmiState 14`, reached with `hmiAction` 80):
@@ -514,6 +524,8 @@ Bluetooth reconnect.
 | Show driving mode changes (checkbox) | Off by default. When ticked, changing the driving mode (Sport, Comfort, ECO PRO, ...) makes Android Auto step aside like in reverse so iDrive's own driving-mode display is visible, then Android Auto comes back by itself after `NBT_DRIVEMODE_SHOW_MS` (default 3500 ms). The iDrive app reads CDS `driving.mode` / `driving.mode35up` and logs every value (`CDS driving.mode = '{"mode":n}'`). Stored as `/var/opt/aa/show-drivemode`, read on every change. Car-tested on a Supra (`driving.mode35up` 3 / 4). v1.8.45 / rhmiapp-22 (car-verified, Supra): the app also sends the previous mode, so the first change after the daemon starts is no longer taken as its baseline; the daemon reacts at once instead of on its next 250 ms tick; the LayerManager switch runs in one shell. iDrive is visible 0.3-0.5 s after the CDS value (`... HIDDEN (Z-Order: -1000, N ms)`: 262-468 ms). That was quick enough to show iDrive's blank Android Auto page before its popup, so v1.8.46 waits `NBT_DRIVEMODE_DELAY_MS` (default 400 ms; `0` = at once) after the change; a further change while iDrive has the screen only extends it |
 | Turn arrows in cluster/HUD (checkbox) | Off by default. When ticked, Google Maps' (or another Android Auto nav app's) next turn, its distance and the road name show in the J29's instrument cluster and windscreen HUD, as with an iDrive route. See [Turn arrows in the cluster and HUD](#turn-arrows-in-the-cluster-and-hud-j29). Stored as `/var/opt/aa/kombi-nav` (a hand-made `/opt/aa/kombi-nav` also counts); the daemon checks it once a second, so unticking clears the arrow at once |
 | Android Auto over USB (beta) (checkbox) | Off by default. When ticked, an Android phone plugged into the car's USB port gets Android Auto over the cable, next to wireless. Experimental, not car-verified: see `NBT_USB` (the same switch; a set `NBT_USB` in `nbt-aad.env` wins either way). The phone stays in accessory mode, so iDrive's own USB media doesn't see it until it is replugged. Stored as `/var/opt/aa/usb-aa` (a hand-made `/opt/aa/usb-aa` also counts); the daemon reads it when it starts, so use **Restart** after changing it |
+| Use Phone GPS (checkbox) | Off by default. For cars without the navigation antenna (no GPS fix or heading from the car). When ticked, the daemon does not read the car's GPS and Android Auto is not offered the location, compass, GPS satellite or accelerometer sensors, so the phone uses its own GPS, compass and motion sensors. Stored as `/var/opt/aa/phone-gps` (a hand-made `/opt/aa/phone-gps` also counts); `NBT_PHONE_GPS=1` / `0` in `nbt-aad.env` wins either way. Read when the daemon starts, so use **Restart** after changing it |
+| Use WiFi Direct Network (checkbox) | Off by default. When ticked, the phone is offered only the car's Wi-Fi Direct group, never the CarPlay hotspot (the same as `NBT_ALT_WIFI=DIRECT`). Stored as `/var/opt/aa/wifi-direct` (a hand-made `/opt/aa/wifi-direct` also counts); a set `NBT_ALT_WIFI` in `nbt-aad.env` wins either way. Read when the daemon starts, so use **Restart** after changing it |
 | Show iDrive warnings (checkbox) | Off by default. When ticked, any iDrive screen that comes up on its own over Android Auto (Check Control, a collision warning, the 360 camera, a safety menu, ...) makes Android Auto step aside until it closes. Stored as `/var/opt/aa/show-warnings`; the contexts are logged either way. See the rhmiapp-36 entry above |
 
 ### Favourite key
@@ -628,7 +640,8 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_BT_REFOCUS` | `0` | Request the car's Bluetooth source again after the Assistant closes the mic, so the reply is heard |
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
-| `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor) |
+| `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor). See also `NBT_PHONE_GPS` / **Use Phone GPS** |
+| `NBT_PHONE_GPS` | `0` | Only matters when set: `1` = Use Phone GPS on, `0` = off, whatever the Settings checkbox says. On = no car GPS read, and no location / compass / GPS satellite / accelerometer sensors offered |
 | `NBT_TOUCH_FWD` | `0` | Touch to the phone |
 | `NBT_HIDE_IDLE` | `0` | iDrive gets the screen while no phone is connected. Off = overlay stays up for the whole run |
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |

@@ -20,6 +20,8 @@
       <hmiAction id="25" target="12"/>
       <hmiAction id="80" target="14"/>
       <raAction id="83"/>
+      <raAction id="87"/>
+      <raAction id="91"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -72,6 +74,14 @@
       </textIdModel>
       <raBoolModel id="84"/>
       <textIdModel id="85" textId="24">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="88"/>
+      <textIdModel id="89" textId="25">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="92"/>
+      <textIdModel id="93" textId="26">
         <synonyms/>
       </textIdModel>
     </models>
@@ -151,6 +161,8 @@
           <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
           <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
+          <checkbox action="87" id="90" model="88" text="Use Phone GPS" textModel="89"/>
+          <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network" textModel="93"/>
         </components>
       </hmiState>
     </hmiStates>

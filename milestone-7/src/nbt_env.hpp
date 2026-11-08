@@ -86,6 +86,17 @@ inline bool usbSettingOn(const char* env, bool flagFile) {
 inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
 inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
 
+// "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag file kPhoneGpsFlagFile, a hand-made kPhoneGpsManualFile
+// also counts; NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna,
+// which have no MOST GPS fix or heading: the car's GPS is not read, and the ServiceDiscovery leaves out the location,
+// compass, GPS satellite and accelerometer sensors, so the phone uses its own GPS, compass and motion sensors for
+// everything built on them. Off = the car's GPS and heading go to the phone as before. Read at the start of the daemon
+// (car GPS) and of each session (ServiceDiscovery): a change applies at the next Start / Restart.
+static const char* const kPhoneGpsFlagFile = "/var/opt/aa/phone-gps";
+static const char* const kPhoneGpsManualFile = "/opt/aa/phone-gps";
+inline bool phoneGpsFlagFileSet() { return access(kPhoneGpsFlagFile, F_OK) == 0 || access(kPhoneGpsManualFile, F_OK) == 0; }
+inline bool phoneGpsEnabled() { return usbSettingOn(getenv("NBT_PHONE_GPS"), phoneGpsFlagFileSet()); }
+
 // With Android Auto over USB on (usbEnabled()), read the phone through libusbdi, not devc-serusb-aoap (which it
 // stops for the phone): see usb_direct.hpp. On by default, since the /dev/oap* path loses TLS records whenever another
 // client reads the node and the phone ends the session; NBT_USB_DIRECT=0 / off / no / false goes back to /dev/oap*.

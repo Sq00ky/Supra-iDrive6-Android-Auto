@@ -30,6 +30,11 @@ std::vector<uint8_t> serializeManifest(const ServiceDiscovery& manifest);
 // AASession sends only location, compass, night mode, driving status and GPS satellites, and only acknowledges the others.
 // Returns true if anything was changed (prints the result).
 bool configureSensors(ServiceDiscovery& manifest);
+// The same with "Use Phone GPS" given (configureSensors(m) reads phoneGpsEnabled()): phoneGps leaves out every sensor
+// that comes from the car's GPS / position (isCarPositionSensor: location, compass, GPS satellites, accelerometer,
+// gyroscope), so the phone uses its own. For cars without the navigation antenna, which have no MOST GPS or heading.
+bool configureSensors(ServiceDiscovery& manifest, bool phoneGps);
+bool isCarPositionSensor(int sensor);
 
 // The main display's VideoConfig. Environment (all optional):
 //   NBT_VID_RES  = VideoResolution enum (1 = 800x480, 2 = 1280x720, 3 = 1920x1080); unset or invalid = 2. Decoder

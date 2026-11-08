@@ -794,7 +794,7 @@ static void* wirelessThread(void*) {
     // NBT_ALT_WIFI: which Wi-Fi the phone is offered (see alt_wifi.hpp). CARPLAY unset = the behaviour of every
     // earlier build.
     const nbt::AltWifiMode altMode = nbt::altWifiMode();
-    printf("[Wireless] Wi-Fi source: %s (NBT_ALT_WIFI=%s): %s\n", nbt::altWifiName(altMode),
+    printf("[Wireless] Wi-Fi source: %s (%s; NBT_ALT_WIFI=%s): %s\n", nbt::altWifiName(altMode), nbt::altWifiSource(),
            getenv("NBT_ALT_WIFI") && *getenv("NBT_ALT_WIFI") ? getenv("NBT_ALT_WIFI") : "(unset)",
            altMode == nbt::ALT_WIFI_DIRECT
                ? "the car's Wi-Fi Direct group only, no CarPlay fallback"
@@ -1547,7 +1547,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.36-combo"
+#define NBT_AAD_BUILD "v1.9.37-gpswfd"
 
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
@@ -1845,7 +1845,11 @@ int main(int argc, char* argv[]) {
     // The car's volume is followed whether or not the knob is: it drives the overlay, not the phone.
     if (!g_carVolume.attach(g_most, &onCarVolume, NULL))
         printf("[Main] car volume input failed to start.\n");
-    if (!nbt::carGpsEnabled())
+    if (nbt::phoneGpsEnabled()) {
+        const char* pg = getenv("NBT_PHONE_GPS");
+        printf("[Main] Use Phone GPS on (%s): the car's GPS and heading are not read; the phone uses its own GPS, "
+               "compass and motion sensors.\n", pg && *pg ? "NBT_PHONE_GPS" : "Settings checkbox");
+    } else if (!nbt::carGpsEnabled())
         printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
     else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &onCarCompass,
                            &g_session))

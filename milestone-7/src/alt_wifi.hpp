@@ -61,7 +61,29 @@ inline AltWifiMode parseAltWifi(const char* v) {
     return ALT_WIFI_BOTH;         // an unknown word gets the default (hotspot first, DIRECT behind it)
 }
 
-inline AltWifiMode altWifiMode() { return parseAltWifi(getenv("NBT_ALT_WIFI")); }
+// "Use WiFi Direct Network" checkbox (iDrive Settings page, rhmiapp-44): the flag file asks for DIRECT, the Wi-Fi Direct
+// group only, with no CarPlay hotspot fallback. A set NBT_ALT_WIFI in nbt-aad.env wins either way. Unticked and unset =
+// the default (BOTH). The flag is read once per daemon run: the listener address and the Bluetooth offer have to agree
+// for the whole run, so a change applies at the next Start / Restart.
+static const char* const kWfdOnlyFlagFile = "/var/opt/aa/wifi-direct";
+static const char* const kWfdOnlyManualFile = "/opt/aa/wifi-direct";
+// Pure part (host-tested): NBT_ALT_WIFI's value (NULL = unset) and whether the flag file exists.
+inline AltWifiMode altWifiSetting(const char* env, bool wfdOnlyFlag) {
+    if (env && *env) return parseAltWifi(env);
+    return wfdOnlyFlag ? ALT_WIFI_DIRECT : ALT_WIFI_BOTH;
+}
+inline bool wfdOnlyFlagSet() {
+    static int set = -1;   // read once (see above); two threads racing here read the same file, which is harmless
+    if (set < 0) set = (access(kWfdOnlyFlagFile, F_OK) == 0 || access(kWfdOnlyManualFile, F_OK) == 0) ? 1 : 0;
+    return set == 1;
+}
+inline AltWifiMode altWifiMode() { return altWifiSetting(getenv("NBT_ALT_WIFI"), wfdOnlyFlagSet()); }
+// Where the mode came from, for the start log.
+inline const char* altWifiSource() {
+    const char* e = getenv("NBT_ALT_WIFI");
+    if (e && *e) return wfdOnlyFlagSet() ? "NBT_ALT_WIFI, which wins over the Use WiFi Direct Network checkbox" : "NBT_ALT_WIFI";
+    return wfdOnlyFlagSet() ? "Use WiFi Direct Network checkbox" : "default";
+}
 
 // Which source is offered first when both are available. CARPLAY and BOTH prefer the car's CarPlay hotspot
 // (the path that is car-verified wherever it exists); only DIRECT puts the Wi-Fi Direct group first.

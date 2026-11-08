@@ -105,6 +105,25 @@ int main() {
         printf("sensor channel OK (%u bytes)\n", (unsigned)bytes.size());
     }
     {
+        // Use Phone GPS (rhmiapp-44): every car position sensor is left out, the rest stays in order
+        ServiceDiscovery v = referenceManifest(dhuIdentity());
+        assert(configureSensors(v, true));
+        const AaChannel* c = NULL;
+        for (size_t i = 0; i < v.channels.size(); ++i)
+            if (v.channels[i].service == AaChannel::SENSOR_SOURCE) c = &v.channels[i];
+        assert(c);
+        const int want[] = { SENSOR_CAR_SPEED, SENSOR_ODOMETER, SENSOR_FUEL_LEVEL, SENSOR_PARKING_BRAKE, SENSOR_GEAR,
+                             SENSOR_NIGHT_MODE, SENSOR_DRIVING_STATUS };
+        assert(c->sensors.sensors == std::vector<int>(want, want + sizeof(want) / sizeof(want[0])));
+        for (size_t i = 0; i < c->sensors.sensors.size(); ++i) assert(!isCarPositionSensor(c->sensors.sensors[i]));
+        assert(!configureSensors(v, true));                          // a second run changes nothing
+        assert(configureSensors(v, false));                          // off again: the full list comes back
+        assert(isCarPositionSensor(SENSOR_LOCATION) && isCarPositionSensor(SENSOR_COMPASS) &&
+               isCarPositionSensor(SENSOR_GPS_SATELLITE) && !isCarPositionSensor(SENSOR_NIGHT_MODE));
+        assert(!phoneGpsEnabled() || getenv("NBT_PHONE_GPS"));      // the host has no flag file
+        printf("phone GPS sensor channel OK\n");
+    }
+    {
         // NBT_RAIL_HIDE -> ServiceDiscoveryResponse field 13 (session_configuration)
         assert(parseRailHide(NULL) == 0 && parseRailHide("") == 0 && parseRailHide("  ") == 0);
         assert(parseRailHide("clock") == SESSION_HIDE_CLOCK);
