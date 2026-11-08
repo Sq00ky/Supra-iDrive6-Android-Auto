@@ -61,6 +61,7 @@ set(SOURCES
     src/cluster/nav_core.cpp
     src/cluster/hud_terminal.cpp
     src/cluster/hud6wa_display.cpp
+    src/log_pump.cpp
     src/audio/speex.c
 )
 

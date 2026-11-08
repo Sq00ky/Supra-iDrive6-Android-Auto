@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "crash_handler.hpp"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
@@ -13,6 +14,8 @@ volatile int g_crumb_stage = 0;
 volatile int g_crumb_channel = -1;
 volatile int g_crumb_msg = -1;
 void (*volatile g_fatal_hook)() = NULL;
+void (*volatile g_log_drain_hook)() = NULL;
+const char* volatile g_crash_copy_path = NULL;
 
 namespace {
 
@@ -30,7 +33,8 @@ void put(char* buf, size_t& n, const char* s) {
     while (*s && n < 200) buf[n++] = *s++;
 }
 
-// Async-signal-safe: only write(2), raise() and the (async-signal-safe) fatal hook. No printf/malloc here.
+// Async-signal-safe: only open/write/close(2), nanosleep (in the drain hook), raise() and the (async-signal-safe) hooks.
+// No printf/malloc here.
 void fatalHandler(int sig) {
     char buf[256];
     size_t n = 0;
@@ -58,9 +62,16 @@ void fatalHandler(int sig) {
     }
     buf[n++] = '\n';
     ssize_t w = write(1, buf, n);
+    const char* copy = g_crash_copy_path;
+    if (copy) {
+        int fd = open(copy, O_WRONLY | O_CREAT | O_APPEND, 0666);
+        if (fd >= 0) { w = write(fd, buf, n); close(fd); }
+    }
     (void)w;
     void (*hook)() = g_fatal_hook;
     if (hook) { g_fatal_hook = NULL; hook(); }   // once, even if the hook itself faults
+    void (*drain)() = g_log_drain_hook;
+    if (drain) { g_log_drain_hook = NULL; drain(); }   // the log pump writes the report out (at most 1 s)
     signal(sig, SIG_DFL);   // let the OS dump core / terminate as usual
     raise(sig);
 }

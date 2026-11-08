@@ -20,6 +20,12 @@ void installProcessGuards();
 // clears a cluster/HUD arrow). Must be async-signal-safe.
 extern void (*volatile g_fatal_hook)();
 
+// Optional, set by the log pump (log_pump.hpp): after the report and the fatal hook, a bounded wait for the pump to
+// write the report out (async-signal-safe). And a second file the report is also written to (a RAM path, so the line
+// survives even when the log file's USB stick has hung).
+extern void (*volatile g_log_drain_hook)();
+extern const char* volatile g_crash_copy_path;
+
 } // namespace nbt
 
 #endif
