@@ -218,8 +218,8 @@ KombiNav::KombiNav()
       port_(30502), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
       disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), watch_pid_(-1), watch_fd_(-1),
       watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), watch_fp_(NULL),
-      watch_method_(-1), watch_method_logged_(-1), graph_(NULL), client_(NULL), display_(NULL),
-      core_(NULL) {
+      watch_method_(-1), watch_method_logged_(-1), graph_(NULL), client_(NULL), terminal_(NULL), shadow_(false),
+      stopHint_(""), stale_shown_(false), display_(NULL), core_(NULL) {
     pthread_mutex_init(&mu_, NULL);
     pthread_mutex_init(&watch_mu_, NULL);
 }
@@ -228,6 +228,7 @@ KombiNav::~KombiNav() {
     stop();
     delete core_;
     delete display_;
+    delete terminal_;
     delete client_;
     delete graph_;
 }
@@ -266,7 +267,59 @@ void KombiNav::logLine(const char* line, void* /*user*/) {
     printf("[KombiNav] %s\n", line);
 }
 
-void KombiNav::start() {
+// The place to add a cluster: its driver, what it needs, and how the log names it.
+bool KombiNav::createDisplay(const char* id, most::Client* most) {
+    if (!strcmp(id, "j29")) {
+        graph_ = new Graph(handle_, settings_.hide_bar ? 255 : -1);
+        client_ = new KombiClient(host_, port_);
+        client_->prepareEmergency(*graph_);
+        Link link;
+        link.send = &KombiNav::linkSend;
+        link.cancel = &KombiNav::linkCancel;
+        link.user = this;
+        display_ = new J29Display(*graph_, link);
+        char t[64];
+        snprintf(t, sizeof(t), "KOMBI at %s:%u", host_.c_str(), (unsigned)port_);
+        target_ = t;
+        stopHint_ = "not a J29, or a changed instance handle: NBT_KOMBI_NAV_HANDLE";
+        return true;
+    }
+    if (!strcmp(id, "6wa")) {
+        if (!most) {
+            printf("[KombiNav] NBT_CLUSTER=6wa: no MOST client to send through: cluster arrows disabled\n");
+            return false;
+        }
+        const char* h = getenv("NBT_HUDTERM");
+        shadow_ = h && *h && strcmp(h, "on") != 0;
+        if (shadow_ && strcmp(h, "log") != 0)
+            printf("[KombiNav] NBT_HUDTERM=%s unknown (log, on): shadow mode, nothing is sent\n", h);
+        const hudterm::HudProfile& p = hudterm::k6wa;
+        hudterm::Config c;
+        c.handles = hudterm::handlesOf(p);
+        c.navFrame = p.frame;
+        c.checkNav = true;
+        c.navTexts = hudterm::textsOf(p);
+        c.navBuffers = hudterm::buffersOf(p);
+        c.logBatches = !shadow_;
+        terminal_ = new hudterm::HudTerminal(c);   // never deleted before exit once attached: the client calls it
+        if (!terminal_->attach(*most, !shadow_) || !terminal_->start()) {
+            printf("[KombiNav] cannot attach the HUDTerminal to the MOST client: cluster arrows disabled\n");
+            return false;
+        }
+        display_ = new Hud6waDisplay(*terminal_, p, shadow_);
+        target_ = "HUDTerminal 82/00 on MOST";
+        stopHint_ = "a call failed, or this cluster is not laid out like the 6wa profile: see the [HudTerm] lines";
+        return true;
+    }
+    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa): cluster arrows disabled\n", id);
+    return false;
+}
+
+void KombiNav::logHealth() {
+    if (terminal_) terminal_->logHealth();
+}
+
+void KombiNav::start(most::Client* most) {
     if (started_) return;
     forced_ = envFlag("NBT_KOMBI_NAV");
     const char* e = getenv("NBT_KOMBI_NAV_HANDLE");
@@ -287,20 +340,21 @@ void KombiNav::start() {
     if (envFlag("NBT_KOMBI_NAV_LANES") == 0) settings_.lanes = false;
     e = getenv("NBT_KOMBI_NAV_INPLACE");
     if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
-    graph_ = new Graph(handle_, settings_.hide_bar ? 255 : -1);
-    client_ = new KombiClient(host_, port_);
-    client_->prepareEmergency(*graph_);
-    Link link;
-    link.send = &KombiNav::linkSend;
-    link.cancel = &KombiNav::linkCancel;
-    link.user = this;
-    display_ = new J29Display(*graph_, link);
+    e = getenv("NBT_CLUSTER");
+    if (!createDisplay(e && *e ? e : "j29", most)) return;
     core_ = new Core(*display_, settings_, &KombiNav::logLine, this);
-    printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %g mi, bar %s, iDrive-route "
-           "yield %s, lanes %s, in-place %d\n", enabledNow() ? "ON" : "off",
-           forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", host_.c_str(), (unsigned)port_, handle_,
-           settings_.approach_mi, settings_.hide_bar ? "hidden" : "factory", yield_enabled_ ? "on" : "off",
-           settings_.lanes ? "on" : "off", settings_.inplace);
+    if (client_)
+        printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %g mi, bar %s, iDrive-route "
+               "yield %s, lanes %s, in-place %d\n", enabledNow() ? "ON" : "off",
+               forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", host_.c_str(), (unsigned)port_, handle_,
+               settings_.approach_mi, settings_.hide_bar ? "hidden" : "factory", yield_enabled_ ? "on" : "off",
+               settings_.lanes ? "on" : "off", settings_.inplace);
+    else
+        printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %g mi, iDrive-route yield %s (and the "
+               "factory navigation on the terminal, always)\n", enabledNow() ? "ON" : "off",
+               forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", display_->name(), target_.c_str(),
+               shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "", settings_.approach_mi,
+               yield_enabled_ ? "on" : "off");
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
         return;
@@ -358,8 +412,10 @@ void* KombiNav::workerStub(void* self) {
 }
 
 void KombiNav::worker() {
-    // An arrow left up by a killed daemon (SIGKILL after Force Stop, power loss of the HU only): clear it once.
-    if (access(kShownFile, F_OK) == 0) {
+    // An arrow left up by a killed daemon (SIGKILL after Force Stop, power loss of the HU only): clear it once. The
+    // J29's cancel goes now; another cluster's waits until its transport is ready (tick).
+    if (access(kShownFile, F_OK) == 0 && !client_) stale_shown_ = true;
+    if (access(kShownFile, F_OK) == 0 && client_) {
         std::string detail;
         bool ok = client_->cancel(*graph_, 0.0, 5.0, &KombiNav::quitting, this, &detail);
         printf("[KombiNav] arrow possibly left by the previous run: cancel %s%s%s\n", ok ? "OK" : "FAILED",
@@ -371,13 +427,24 @@ void KombiNav::worker() {
         tick(monoS());
         for (double t = 0; t < kTickS && !quitting(this); t += 0.05) usleep(50000);
     }
-    client_->setTimeoutMs(1500);   // Force Stop sends SIGKILL 10 s after 'quit': keep the exit clear short
+    if (client_) client_->setTimeoutMs(1500);   // Force Stop sends SIGKILL 10 s after 'quit': keep the exit clear short
     if (core_->shown() || core_->sentAny()) core_->clear("nbt-aad exiting");
     markShown(false);
     stopWatch();
 }
 
 void KombiNav::tick(double now) {
+    if (stale_shown_ && display_->ready()) {
+        stale_shown_ = false;
+        if (!core_->shown() && !core_->sentAny()) {    // else our own picture has replaced it already
+            std::string detail;
+            bool ok = display_->clear(&detail);
+            printf("[KombiNav] picture possibly left by the previous run: clear %s%s%s\n", ok ? "OK" : "FAILED",
+                   ok ? "" : ": ", ok ? "" : detail.c_str());
+            if (ok) unlink(kShownFile);                // else the file stays: the next start tries again
+            display_->forget();
+        }
+    }
     if (now - t_setting_ >= 1.0) {
         t_setting_ = now;
         bool on = enabledNow();
@@ -433,6 +500,9 @@ void KombiNav::tick(double now) {
         pthread_mutex_unlock(&watch_mu_);
     }
     if (m.has_status) prev_guidance_ = guidance;
+    // The cluster's own transport sees the factory navigation drawing (the 6WA): never optional, and released only by
+    // the navigation finishing, not by a new Android Auto route.
+    if (display_->factoryActive()) factory = true;
     if (factory) {
         core_->yieldToFactory();
         markShown(false, true);
@@ -448,18 +518,19 @@ void KombiNav::tick(double now) {
     core_->step(pv, now, why);
     if (core_->shown()) link_failures_ = 0;
     if (core_->stopped() == Core::kStoppedRejected) {
-        printf("[KombiNav] the KOMBI rejected a frame: arrows off until the next Android Auto session "
-               "(not a J29, or a changed instance handle: NBT_KOMBI_NAV_HANDLE)\n");
+        printf("[KombiNav] %s: arrows off until the next Android Auto session (%s)\n",
+               client_ ? "the KOMBI rejected a frame" : "the cluster's terminal failed", stopHint_);
         disabled_session_ = true;
         core_->resetStop();
     } else if (core_->stopped() == Core::kStoppedLink) {
         core_->resetStop();
         if (++link_failures_ >= kLinkGiveUp) {
-            printf("[KombiNav] no KOMBI at %s:%u after %d tries: arrows off until the next Android Auto session\n",
-                   host_.c_str(), (unsigned)port_, link_failures_);
+            printf("[KombiNav] no %s after %d tries: arrows off until the next Android Auto session\n",
+                   target_.c_str(), link_failures_);
             disabled_session_ = true;
         } else {
-            printf("[KombiNav] KOMBI link failed: retrying in %.0f s\n", kLinkBackoffS);
+            printf("[KombiNav] %s: retrying in %.0f s\n", client_ ? "KOMBI link failed" : "HUDTerminal offline",
+                   kLinkBackoffS);
             backoff_until_ = now + kLinkBackoffS;
         }
     }

@@ -32,6 +32,7 @@
 #include "most/msg.hpp"
 #include "most/registry.hpp"
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <string>
 #include <vector>
@@ -167,6 +168,55 @@ inline std::vector<uint8_t> setText(uint16_t h, const char* s) {
     return p;
 }
 
+// UTF-8 -> text setText() takes and the cluster's font can show. Letters, digits and spaces are kept; Latin-1 and
+// Latin Extended-A letters become their plain letters (German umlauts and sharp s the German way: ae, oe, ue, ss);
+// the characters in `punct` are kept; a comma becomes a dot when commaToDot (a decimal comma in a distance); anything
+// else becomes a space. Runs of spaces become one, the ends are trimmed, and the result is cut to maxChars.
+// Which characters a cluster's font has is its profile's business: a comma made the 6WA show nothing at all.
+inline std::string toClusterText(const std::string& utf8, const char* punct, size_t maxChars, bool commaToDot) {
+    // U+00C0..U+017F, one entry per code point.
+    static const char* const kLatin =
+        "A|A|A|A|Ae|A|AE|C|E|E|E|E|I|I|I|I|D|N|O|O|O|O|Oe| |O|U|U|U|Ue|Y|Th|ss|"
+        "a|a|a|a|ae|a|ae|c|e|e|e|e|i|i|i|i|d|n|o|o|o|o|oe| |o|u|u|u|ue|y|th|y|"
+        "A|a|A|a|A|a|C|c|C|c|C|c|C|c|D|d|D|d|E|e|E|e|E|e|E|e|E|e|G|g|G|g|"
+        "G|g|G|g|H|h|H|h|I|i|I|i|I|i|I|i|I|i|IJ|ij|J|j|K|k|k|L|l|L|l|L|l|L|"
+        "l|L|l|N|n|N|n|N|n|n|N|n|O|o|O|o|O|o|OE|oe|R|r|R|r|R|r|S|s|S|s|S|s|"
+        "S|s|T|t|T|t|T|t|U|u|U|u|U|u|U|u|U|u|U|u|W|w|Y|y|Y|Z|z|Z|z|Z|z|s";
+    std::string raw;
+    size_t i = 0;
+    while (i < utf8.size()) {
+        unsigned char c = (unsigned char)utf8[i];
+        uint32_t cp;
+        size_t k = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 1;
+        if (i + k > utf8.size()) k = 1;
+        cp = k == 1 ? c : k == 2 ? (c & 0x1Fu) : k == 3 ? (c & 0x0Fu) : (c & 0x07u);
+        for (size_t j = 1; j < k; ++j) cp = (cp << 6) | ((unsigned char)utf8[i + j] & 0x3Fu);
+        if (k == 1 && c >= 0x80) cp = 0xFFFD;                         // a stray continuation or bad lead byte
+        i += k;
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9') || cp == ' ') {
+            raw.push_back((char)cp);
+        } else if (cp == ',' && commaToDot) {
+            raw.push_back('.');
+        } else if (cp > ' ' && cp < 0x7F && punct && strchr(punct, (int)cp)) {
+            raw.push_back((char)cp);
+        } else if (cp >= 0xC0 && cp <= 0x17F) {
+            const char* p = kLatin;
+            for (uint32_t n = cp - 0xC0; n; --n) p = strchr(p, '|') + 1;
+            while (*p && *p != '|') raw.push_back(*p++);
+        } else {
+            raw.push_back(' ');
+        }
+    }
+    std::string out;
+    for (size_t j = 0; j < raw.size(); ++j) {
+        if (raw[j] == ' ' && (out.empty() || out[out.size() - 1] == ' ')) continue;
+        out.push_back(raw[j]);
+    }
+    if (out.size() > maxChars) out.resize(maxChars);
+    while (!out.empty() && out[out.size() - 1] == ' ') out.resize(out.size() - 1);
+    return out;
+}
+
 // The ASCII text of a TextareaSetText payload (others as '?'), with or without the terminator; "" if it is not one.
 inline std::string decodeText(const uint8_t* p, size_t n) {
     std::string s;
@@ -235,6 +285,44 @@ inline bool buildCall(uint16_t host, const Call& c, uint32_t tag, const HandleSe
     out.hdrTag = tag;
     out.data = c.payload;
     return true;
+}
+
+// One call for the log: "21D ImageAddPolygon h5 #0 polygon 7 pts x 70..130 y 20..120", "210 TextareaSetText h3 '250'".
+inline std::string describeCall(const Call& c) {
+    char b[160];
+    const std::vector<uint8_t>& p = c.payload;
+    size_t n = p.size();
+    int k = snprintf(b, sizeof(b), "%03X %s h%u", c.fkt, fktName(c.fkt), c.handle());
+    if (k < 0 || k >= (int)sizeof(b)) return b;
+    char* e = b + k;
+    size_t room = sizeof(b) - (size_t)k;
+    if (c.fkt == kSetVisibility && n == 3) {
+        snprintf(e, room, " %s", p[2] ? "on" : "off");
+    } else if (c.fkt == kSwitchVisibility && n == 4) {
+        snprintf(e, room, " hidden, h%u shown", rdBe16(&p[2]));
+    } else if (c.fkt == kTextareaSetText) {
+        snprintf(e, room, " '%s'", decodeText(&p[0], n).c_str());
+    } else if ((c.fkt == kSetFillColor || c.fkt == kSetLineColor || c.fkt == kSetLineWidth || c.fkt == kSetFillMode) &&
+               n == 3) {
+        snprintf(e, room, " %u", p[2]);
+    } else if (c.fkt == kAddPolygon && n >= 6 && n == 6 + 4 * (size_t)p[5] && p[5]) {
+        int x0 = 32767, y0 = 32767, x1 = -32768, y1 = -32768;
+        for (size_t i = 6; i + 3 < n; i += 4) {
+            int x = (int16_t)rdBe16(&p[i]), y = (int16_t)rdBe16(&p[i + 2]);
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+        snprintf(e, room, " #%u %s %u pts x %d..%d y %d..%d", rdBe16(&p[2]), p[4] == kPolygon ? "polygon" : "polyline",
+                 p[5], x0, x1, y0, y1);
+    } else if ((c.fkt == kAddCircle || c.fkt == kAddCircleDiameter) && n == 19) {
+        snprintf(e, room, " #%u centre %d,%d size %u, %d..%d", rdBe16(&p[2]), (int16_t)rdBe16(&p[5]),
+                 (int16_t)rdBe16(&p[7]), rdBe16(&p[9]), (int)rdBe32(&p[11]), (int)rdBe32(&p[15]));
+    } else if (c.fkt != kRemoveAllItems && c.fkt != kGetSize) {
+        snprintf(e, room, " %u bytes", (unsigned)n);
+    }
+    return b;
 }
 
 // ---- the cluster's copies of our answers ----

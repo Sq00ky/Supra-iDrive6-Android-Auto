@@ -20,6 +20,10 @@ LDLIBS   := -lpthread -lssl -lcrypto -lm
 # The vendored speexdsp resampler, built as C the way the daemon builds it.
 SPEEX := $(ROOT)/src/audio/speex.c
 
+# The guidance runtime with both cluster drivers (KombiNav creates either).
+SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/cluster/nav_core.cpp \
+                 src/cluster/hud6wa_display.cpp src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_aa_proto          := src/wireless_setup.cpp
 SRC_test_aa_sensor_msg     :=
@@ -44,12 +48,13 @@ SRC_test_ccs_input         := src/car/ccs_input.cpp src/most/client.cpp tests/fa
 SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
+SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
-SRC_test_j29_golden        := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/cluster/nav_core.cpp
+SRC_test_j29_golden        := $(SRC_KOMBI_NAV)
 SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_kombi_graph       :=
-SRC_test_kombi_nav         := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/cluster/nav_core.cpp
+SRC_test_kombi_nav         := $(SRC_KOMBI_NAV)
 SRC_test_kombi_nav_msg     :=
 SRC_test_lm_geometry       :=
 SRC_test_media_ack         :=

@@ -2,8 +2,9 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // The swap point between the guidance state machine (cluster/nav_core.hpp) and a cluster: ClusterDisplay draws what
 // the state machine decides, in that cluster's own protocol. One driver per protocol: J29Display (SOME/IP KOMBI graph,
-// cluster/j29_display.hpp) today. A cluster on the same protocol with another layout is a new profile for its driver,
-// not a new driver.
+// cluster/j29_display.hpp) and Hud6waDisplay (MOST HUDTerminal, cluster/hud6wa_display.hpp). A cluster on the same
+// protocol with another layout is a new profile for its driver, not a new driver. KombiNav (cluster/nav_core.hpp)
+// picks one per daemon run: createDisplay() is the place to add a cluster.
 //
 // What stays in the state machine, for every cluster: when guidance counts as gone (grace time), the approach hold,
 // a maneuver with no distance yet, the distance text clean-up, the distance update rate, and what is a new maneuver.
@@ -71,6 +72,11 @@ public:
     virtual void forget() = 0;
     // Something was sent since the last forget(), even if it failed, so a clear is due.
     virtual bool sentAny() const = 0;
+    // The factory navigation is using the cluster, as this driver's own transport sees it: the state machine yields as
+    // it does for an iDrive route seen in the system log. The J29's transport has no such view.
+    virtual bool factoryActive() { return false; }
+    // The transport could take a clear now: the clear for a picture a killed daemon left waits for this.
+    virtual bool ready() { return true; }
 };
 
 } // namespace kombinav

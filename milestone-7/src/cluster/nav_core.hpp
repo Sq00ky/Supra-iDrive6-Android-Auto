@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// kombi_nav: Android Auto turn-by-turn on the J29 cluster and windscreen HUD, with no iDrive route.
+// kombi_nav: Android Auto turn-by-turn on the J29 cluster and windscreen HUD, with no iDrive route. The same state
+// machine drives an F-series 6WA cluster with NBT_CLUSTER=6wa (KombiNav below, cluster/hud6wa_display.hpp); what
+// follows describes the J29 path.
 //
 // The phone's navigation status (ch 10, via AASession's nav-status callback) is turned into the KOMBI's own
 // route-guidance graph, sent from the OMAP straight to the KOMBI (cluster/j29_client.hpp):
@@ -28,6 +30,8 @@
 #include <sys/types.h>
 
 #include "cluster/display.hpp"
+#include "cluster/hud6wa_display.hpp"
+#include "cluster/hud_terminal.hpp"
 #include "cluster/j29_display.hpp"
 #include "cluster/nav_msg.hpp"
 #include "cluster/j29_graph.hpp"
@@ -104,15 +108,26 @@ private:
 };
 
 // The daemon-side runtime: worker thread, setting, system-log watch, session hooks. One instance (g_kombiNav).
+//
+// The cluster driver (cluster/display.hpp) is chosen once at start() by NBT_CLUSTER:
+//   j29 (default)  the J29's SOME/IP KOMBI graph
+//   6wa            an F-series 6WA's MOST HUDTerminal (cluster/hud6wa_display.hpp), through the MOST client passed to
+//                  start(); NBT_HUDTERM=log runs it in shadow mode: worked out and logged, nothing sent
+// The 6WA's own transport also sees the factory navigation drawing, and the worker yields to that as it does to an
+// iDrive route in the system log.
 class KombiNav {
 public:
     KombiNav();
     ~KombiNav();
 
-    // Reads NBT_KOMBI_NAV_* and starts the worker (idle until the setting is on). Call once from main().
-    void start();
+    // Reads NBT_CLUSTER, NBT_HUDTERM and NBT_KOMBI_NAV_*, and starts the worker (idle until the setting is on). Call
+    // once from main(), before the MOST client starts: the 6WA driver attaches to it.
+    void start(most::Client* most = NULL);
     // Stops the worker and clears the arrow (one quick attempt). Safe to call twice.
     void stop();
+    // The 6WA transport's health line, from main's 60 s loop (nothing for the J29).
+    void logHealth();
+    const char* clusterName() const { return display_ ? display_->name() : "none"; }
 
     // AASession nav-status callback (session thread): copies the message and returns.
     static void navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t len, void* user);
@@ -185,9 +200,16 @@ private:
     int watch_method_;
     int watch_method_logged_;
 
-    Graph* graph_;
-    KombiClient* client_;
-    J29Display* display_;
+    bool createDisplay(const char* id, most::Client* most);   // the place to add a cluster
+
+    Graph* graph_;                   // j29
+    KombiClient* client_;            // j29
+    hudterm::HudTerminal* terminal_; // 6wa
+    bool shadow_;                    // 6wa: NBT_HUDTERM=log
+    std::string target_;             // for the log: what the driver talks to
+    const char* stopHint_;           // for the log: why a driver may stop for the session
+    bool stale_shown_;               // a picture a killed daemon left: cleared once the transport is ready
+    ClusterDisplay* display_;
     Core* core_;
     static KombiClient::Result linkSend(void* self, const std::vector<Frame>& frames, std::string* detail);
     static bool linkCancel(void* self, std::string* detail);

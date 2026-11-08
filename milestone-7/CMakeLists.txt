@@ -58,6 +58,7 @@ set(SOURCES
     src/cluster/j29_display.cpp
     src/cluster/nav_core.cpp
     src/cluster/hud_terminal.cpp
+    src/cluster/hud6wa_display.cpp
     src/audio/speex.c
 )
 

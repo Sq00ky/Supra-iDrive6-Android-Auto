@@ -1922,7 +1922,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     g_tcp = &tcp_server;
-    g_kombiNav.start();            // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on
+    g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
+                                   // g_most starts: NBT_CLUSTER=6wa attaches to it
     {
         pthread_t t;
         if (pthread_create(&t, NULL, &mediaMailThread, NULL) == 0) pthread_detach(t);
@@ -2066,6 +2067,7 @@ int main(int argc, char* argv[]) {
         if (monoMs() - most_health_ms >= 60000u) {
             most_health_ms = monoMs();
             g_most.logHealth();
+            g_kombiNav.logHealth();
         }
         bool act = g_session.isActive();
         if (act || g_sessionActive) cp_idle_ticks = 0;
