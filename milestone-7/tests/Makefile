@@ -46,6 +46,7 @@ SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
+SRC_test_j29_golden        := src/cluster/j29_client.cpp src/cluster/nav_core.cpp
 SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_kombi_graph       :=
 SRC_test_kombi_nav         := src/cluster/j29_client.cpp src/cluster/nav_core.cpp
@@ -90,6 +91,7 @@ SRC_test_wpp               := src/wireless_setup.cpp
 ARGS_test_ccs_decoder := tests/fixtures/controls_2026-10-22_e5.txt
 ARGS_test_ccs_push    := tests/fixtures/controls_2026-10-23_push.txt
 ARGS_test_ccs_input   := tests/fixtures/controls_2026-10-23_push.txt
+ARGS_test_j29_golden  := tests/fixtures/j29_golden.txt
 
 TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 
