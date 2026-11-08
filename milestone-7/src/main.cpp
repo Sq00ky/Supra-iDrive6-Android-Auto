@@ -1793,16 +1793,23 @@ static bool startLogPump(nbt::logpump::Mode mode, const char* path) {
     const nbt::logpump::Config c = nbt::logpump::daemonConfig(mode, path, g_ramLog, ramWanted, kBuildLine);
     fflush(stdout);
     if (!nbt::logpump::start(c)) return false;
-    if (ramWanted) g_ramUsed = true;
     g_ramLog = false;   // fd 1 is the pipe now; the pump keeps the RAM log's cap
     return true;
 }
 
+// NBT_LOG_FILE without the pump (it could not start): the file straight on stdout, as before v1.9.58. Every log line
+// then waits for that file, and the main loop fsyncs it every 2 s.
+static bool g_logDirect = false;
+
 // At start and every 5 s: "Save logs to USB" ticked -> the log pump (once started, it handles the stick, the box
-// being unticked again and a removed stick itself).
+// being unticked again and a removed stick itself). A failed start leaves nothing behind and is tried again every
+// 5 s, said once. A pump that stopped (its reader stopped) is not started again: start() refuses.
 static void serviceUsbLog() {
-    if (nbt::logpump::running() || !nbt::usblog::enabled()) return;
-    if (!startLogPump(nbt::logpump::kUsb, NULL)) printf("[Log] Save logs to USB is on, but the log pump did not start\n");
+    static bool said = false;
+    if (g_logDirect || nbt::logpump::running() || !nbt::usblog::enabled()) return;   // NBT_LOG_FILE wins
+    if (startLogPump(nbt::logpump::kUsb, NULL)) return;
+    if (!said) printf("[Log] Save logs to USB is on, but the log pump did not start: no USB log (trying every 5 s)\n");
+    said = true;
 }
 
 // Before leaving main: the pump writes what it holds (bounded, a dead stick cannot hang the exit).
@@ -1833,9 +1840,17 @@ int main(int argc, char* argv[]) {
     // logs to USB" checkbox decides (serviceUsbLog).
     const char* log_file = getenv("NBT_LOG_FILE");
     bool log_forced = false;
-    if (log_file && *log_file) log_forced = startLogPump(nbt::logpump::kForced, log_file);
-    else serviceUsbLog();
-    if (!nbt::logpump::running() && stdoutIsNull()) stdoutToRamOrNull();   // started by the iDrive app with no USB log
+    if (log_file && *log_file) {
+        log_forced = startLogPump(nbt::logpump::kForced, log_file);
+        if (!log_forced && freopen(log_file, "a", stdout)) {
+            setvbuf(stdout, NULL, _IOLBF, 0);
+            dup2(fileno(stdout), 2);
+            g_logDirect = true;
+        }
+    } else {
+        serviceUsbLog();
+    }
+    if (!nbt::logpump::running() && !g_logDirect && stdoutIsNull()) stdoutToRamOrNull();   // started by the iDrive app with no USB log
     printf("====================================================\n");
     printf("  NBT-AAD: Native Wireless Android Auto Daemon      \n");
     printf("  Platform: BMW NBT Evo ID6 / Toyota GR Supra (J29) \n");
@@ -1846,8 +1861,10 @@ int main(int argc, char* argv[]) {
     if (nbt::logpump::running())
         printf("  Log: %s through the log pump (NBT_LOG_RING_KB, NBT_LOG_SLOW_MS)\n",
                log_forced ? log_file : "Save logs to USB");
+    else if (g_logDirect)
+        printf("  Log: NBT_LOG_FILE=%s directly: the log pump did not start, so logging waits for that file\n", log_file);
     else if (log_file && *log_file)
-        printf("  Log: NBT_LOG_FILE=%s, but the log pump did not start: not logging to it\n", log_file);
+        printf("  Log: NBT_LOG_FILE=%s: the log pump did not start and the file could not be opened\n", log_file);
     nbt::printNbtAadBannerNotice();
     printf("====================================================\n");
     printf("----------------------------------------------------\n");
@@ -2230,6 +2247,7 @@ int main(int argc, char* argv[]) {
             printf("[Main] running for 10 min: autostart bootloop guard cleared\n");
         if ((log_sync_ticks % 20) == 0) serviceUsbLog();   // every 5 s: checkbox ticked while running
         checkRamLogCap();                                    // every tick: RAM log 5 MB cap (without the log pump)
+        if (g_logDirect && (log_sync_ticks % 8) == 0) { fflush(stdout); fsync(fileno(stdout)); }
         if (act && !was_active) { g_userExit = 0; g_carExit = 0; }   // a new phone session comes up in Android Auto
         if (g_backState == 1 && (uint32_t)(monoMs() - g_backDownMs) >= backHoldMs()) {
             // Car-side minimize, like reverse: only the overlay goes down. Telling the phone (unrequested UNFOCUSED,

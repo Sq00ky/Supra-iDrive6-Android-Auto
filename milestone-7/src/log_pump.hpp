@@ -19,8 +19,12 @@
 //   terminal with a non-blocking write and puts the bytes in the ring. When the ring is full it drops whole lines and
 //   later puts a "[Log] N lines ... not saved" notice in their place.
 // - The writer is the only code that touches the file: it opens (and rotates) the stick's file, fsyncs every 2 s,
-//   checks the checkbox flag and the stick every 5 s, times every write and reports slow ones. With no file open,
-//   lines go to the RAM log (/dev/shmem, 5 MB cap) when the daemon was using it, else nowhere but the terminal.
+//   checks the checkbox flag and the stick every 5 s, times every write and reports slow ones. It batches: a write
+//   goes out once 16 KB are waiting or the oldest line has waited 250 ms (the stick is mounted without write-behind,
+//   so each write() is a trip to the stick). With no file open, lines go to the RAM log (/dev/shmem, 5 MB cap) when
+//   the daemon was using it, else nowhere but the terminal.
+// - If the reader ever stops on its own (a read error), fds 1 and 2 go back to what they were, so nothing can block
+//   on a pipe nobody empties.
 // - Once started, the pump stays until the daemon exits (shutdown(), bounded, so a dead stick cannot hang the exit).
 //   The fatal-signal handler waits up to 1 s for the pump to drain (drainForCrash) and also writes its line to a RAM
 //   copy, so the crash report survives a hung stick.
@@ -106,7 +110,10 @@ struct Config {
     unsigned serviceMs;          // flag / stick check (5000)
     unsigned fsyncMs;            // fsync of the open file (2000)
     unsigned summaryMs;          // slow-write / drop summary, only when something changed (60000)
+    unsigned batchMs;            // write once the oldest waiting line is this old (250) ...
+    size_t batchBytes;           // ... or this much is waiting (16 KB), or at stop / crash
     FileOps* ops;                // NULL = the real calls
+    size_t readerFailAfter;      // tests only: the reader acts as if read() failed after this many bytes (0 = never)
     Config();
 };
 
@@ -114,8 +121,8 @@ struct Config {
 // or /dev/null with NBT_RAM_LOG not off and the RAM log not full).
 Config daemonConfig(Mode mode, const char* forcedPath, bool origIsRam, bool ramWanted, const char* build);
 
-// Moves fds 1 (and 2) onto the pipe and starts both threads. Prints nothing itself. False (stdout unchanged) if the
-// pump is already running or a pipe / thread could not be made. Once per process.
+// Moves fds 1 (and 2) onto the pipe and starts both threads. Prints nothing itself. False (stdout unchanged, nothing
+// left behind, so it can be tried again) if the pump is already running or a pipe / thread could not be made.
 bool start(const Config& c);
 bool running();
 

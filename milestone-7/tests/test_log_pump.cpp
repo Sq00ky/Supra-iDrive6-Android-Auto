@@ -5,6 +5,7 @@
 // over fd 1, once per process), under a private temporary directory.
 #include "log_pump.hpp"
 #include "crash_handler.hpp"
+#include "usb_log.hpp"
 
 #include <assert.h>
 #include <errno.h>
@@ -74,6 +75,7 @@ static Config testConfig(Mode mode, const std::string& file) {
     c.serviceMs = 50;
     c.fsyncMs = 100;
     c.summaryMs = 3600000;
+    c.batchMs = 20;   // the scenarios look at the files 200 ms after a line
     return c;
 }
 
@@ -397,6 +399,114 @@ static void crashReport() {
     raise(SIGSEGV);
 }
 
+// Lines arriving a few ms apart go out in one write (the stick has no write-behind), yet soon.
+struct CountingOps : FileOps {
+    int lineWrites;
+    CountingOps() : lineWrites(0) {}
+    ssize_t writeFile(int fd, const void* p, size_t n) {
+        if (memmem(p, n, "batch line", 10)) ++lineWrites;
+        return FileOps::writeFile(fd, p, n);
+    }
+};
+
+static void batching() {
+    static CountingOps ops;
+    const std::string f = g_dir + "/batch.log";
+    Config c = testConfig(kForced, f);
+    c.ops = &ops;
+    c.batchMs = 250;
+    assert(start(c));
+    sleepMs(300);
+    for (int i = 0; i < 50; ++i) {   // 50 separate pipe writes over about 100 ms
+        printf("batch line %02d\n", i);
+        sleepMs(2);
+    }
+    sleepMs(600);                    // within the 250 ms batch window plus a margin, all of it is in the file
+    std::string s = readFile(f);
+    assert(has(s, "batch line 00\n") && has(s, "batch line 49\n"));
+    assert(shutdown(2000));          // the writer is joined: its count can be read
+    fprintf(stderr, "  batching: 50 lines in %d file writes\n", ops.lineWrites);
+    assert(ops.lineWrites >= 1 && ops.lineWrites <= 3);
+}
+
+// The reader stops on its own (a read error): fd 1 goes back to where it was, so later printf cannot block on a
+// pipe nobody empties.
+static void readerStops() {
+    const std::string orig = g_dir + "/reader-orig.log";
+    int fd = open(orig.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    assert(fd >= 0 && dup2(fd, 1) == 1);
+    close(fd);
+    Config c = testConfig(kForced, g_dir + "/reader.log");
+    c.readerFailAfter = 2000;
+    assert(start(c));
+    for (int i = 0; i < 100; ++i) printf("early line %03d ................................\n", i);   // > 2000 bytes
+    const uint64_t t0 = nowMs();
+    while (running() && nowMs() - t0 < 2000) sleepMs(10);
+    assert(!running());
+    const uint64_t t1 = nowMs();
+    for (int i = 0; i < 5000; ++i) printf("late line %04d ................................................\n", i);
+    printf("LATE-LAST\n");
+    fflush(stdout);
+    fprintf(stderr, "  reader stops: 300 KB after it in %llu ms\n", (unsigned long long)(nowMs() - t1));
+    assert(nowMs() - t1 < 2000);
+    std::string s = readFile(orig);
+    assert(has(s, "[Log] the log pump's reader stopped (Input/output error): logging to the original stdout"));
+    assert(has(s, "late line 4999") && has(s, "LATE-LAST\n"));
+    assert(!start(c));   // stopped for good
+    shutdown(2000);      // still joins its threads
+}
+
+// The fatal handler on a full pipe that nobody reads (the pump's reader stuck): the process still dies.
+static void dummyDrain() {}
+
+static void crashFullPipe() {
+    struct rlimit rl = { 0, 0 };
+    setrlimit(RLIMIT_CORE, &rl);
+    nbt::installProcessGuards();
+    int pf[2];
+    assert(pipe(pf) == 0);
+    fcntl(pf[1], F_SETFL, fcntl(pf[1], F_GETFL) | O_NONBLOCK);
+    char junk[4096];
+    memset(junk, 'j', sizeof(junk));
+    while (write(pf[1], junk, sizeof(junk)) > 0) {}
+    while (write(pf[1], junk, 1) > 0) {}
+    fcntl(pf[1], F_SETFL, fcntl(pf[1], F_GETFL) & ~O_NONBLOCK);   // full and blocking, as the pump's pipe is
+    assert(dup2(pf[1], 1) == 1);
+    static std::string copy;
+    copy = g_dir + "/crash-full-copy.log";
+    nbt::g_crash_copy_path = copy.c_str();
+    nbt::g_log_drain_hook = &dummyDrain;   // "the pump owns fd 1"
+    raise(SIGSEGV);
+}
+
+// The RAM fallback keeps the 5 MB cap through its one fd: whole lines up to the cap, then the "full" line.
+static void ramCap() {
+    const std::string ram = g_dir + "/cap-ram.log";
+    int fd = open(ram.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    assert(fd >= 0);
+    const long start0 = nbt::ramlog::kMaxBytes - nbt::ramlog::kReserve - 1000;
+    assert(ftruncate(fd, start0) == 0);
+    close(fd);
+    static std::string mnt;
+    mnt = g_dir + "/cap-mnt";
+    assert(mkdir(mnt.c_str(), 0755) == 0);
+    Config c = testConfig(kUsb, "");
+    c.mntRoot = mnt.c_str();
+    c.usbEnabled = &usbOn;   // no stick under mnt: everything goes to the RAM log
+    c.ramPath = ram.c_str();
+    c.ramAppend = true;      // this run's RAM log already, 1000 bytes short of the cap
+    assert(start(c));
+    sleepMs(100);
+    for (int i = 0; i < 40; ++i) printf("cap line %02d ...........................................................\n", i);
+    shutdown(2000);
+    std::string s = readFile(ram);
+    assert((long)s.size() <= nbt::ramlog::kMaxBytes);
+    const std::string tail = s.substr((size_t)start0);
+    assert(has(tail, "cap line 00") && !has(tail, "cap line 39"));
+    const std::string full = nbt::ramlog::kFullLine;
+    assert(tail.size() >= full.size() && tail.compare(tail.size() - full.size(), full.size(), full) == 0);
+}
+
 typedef void (*Scenario)();
 
 static void runChild(const char* name, Scenario fn, int wantSignal) {
@@ -438,6 +548,14 @@ int main() {
     runChild("stick lifecycle", &stickLifecycle, 0);
     runChild("bounded shutdown", &boundedShutdown, 0);
     runChild("terminal copy", &terminalCopy, 0);
+    runChild("batching", &batching, 0);
+    runChild("reader stops", &readerStops, 0);
+    runChild("ram cap", &ramCap, 0);
+    runChild("crash on a full pipe", &crashFullPipe, SIGSEGV);
+    {
+        std::string copy = readFile(g_dir + "/crash-full-copy.log");
+        assert(has(copy, "[CRASH] fatal signal 11 (SIGSEGV)"));
+    }
     runChild("crash report", &crashReport, SIGSEGV);
     {
         std::string s = readFile(g_dir + "/crash.log"), copy = readFile(g_dir + "/crash-copy.log");

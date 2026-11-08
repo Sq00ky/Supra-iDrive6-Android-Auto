@@ -61,6 +61,13 @@ void fatalHandler(int sig) {
         }
     }
     buf[n++] = '\n';
+    // While the log pump runs, fd 1 is its private pipe: if the pump's reader is stuck (the crash took a lock it
+    // needs) and the pipe is full, a blocking write would hang here and the process would never die. The pipe is ours
+    // alone, so making it non-blocking touches nobody else (unlike a terminal shared with a shell).
+    if (g_log_drain_hook) {
+        int fl = fcntl(1, F_GETFL);
+        if (fl >= 0) fcntl(1, F_SETFL, fl | O_NONBLOCK);
+    }
     ssize_t w = write(1, buf, n);
     const char* copy = g_crash_copy_path;
     if (copy) {

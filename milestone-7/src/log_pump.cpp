@@ -189,7 +189,8 @@ int FileOps::closeFile(int fd) { return ::close(fd); }
 Config::Config()
     : mode(kUsb), forcedPath(NULL), mntRoot("/mnt"), usbEnabled(&usblog::enabled), build(""), ramPath(NULL),
       ramAppend(false), crashCopyPath(NULL), takeStderr(true), ringBytes(1024u * 1024u), readerPrio(22),
-      writerPrio(10), slowMs(0), serviceMs(5000), fsyncMs(2000), summaryMs(60000), ops(NULL) {}
+      writerPrio(10), slowMs(0), serviceMs(5000), fsyncMs(2000), summaryMs(60000), batchMs(250),
+      batchBytes(16u * 1024u), ops(NULL), readerFailAfter(0) {}
 
 Config daemonConfig(Mode mode, const char* forcedPath, bool origIsRam, bool ramWanted, const char* build) {
     Config c;
@@ -232,6 +233,7 @@ struct Pump {
     // Under mu.
     bool readerDone, writerDone, stopping, shut;
     bool announced;     // the writer printed its "log pump on" line
+    bool joined;        // shutdown() joined both threads
     int readerPrioNow, writerPrioNow;
     bool readerReady;
     uint64_t rx, queued, done, ttyMissed, lostOnError;
@@ -241,6 +243,7 @@ struct Pump {
 
     // Low 32 bits of rx, for drainForCrash (one writer, aligned word stores).
     volatile uint32_t rx32;
+    volatile int flushNow;   // set by drainForCrash: write what waits, don't batch
 
     // Writer only.
     int fileFd;
@@ -249,7 +252,11 @@ struct Pump {
     bool dirty;
     uint64_t lastFsync, nextService, nextSummary, lastSlowMsg;
     uint64_t ramBytes;
-    ramlog::Capped ram;
+    // RAM log sink: one fd kept open (lazily), with the 5 MB cap.
+    int ramFd;
+    long ramUsed;
+    bool ramOpened;     // this run's RAM log exists (opened, or stdout was it): open it appending
+    bool ramFull;
     bool ramOn;
     bool openFailSaid;
     // what the last summary showed
@@ -259,11 +266,12 @@ struct Pump {
     Pump()
         : ring(NULL), ops(NULL), rfd(-1), origOut(-1), origErr(-1), ttyFd(-1), extraFd(-1), haveReader(false),
           haveWriter(false), cvMono(false), readerDone(false), writerDone(false), stopping(false), shut(false),
-          announced(false),
+          announced(false), joined(false),
           readerPrioNow(-1), writerPrioNow(-1), readerReady(false), rx(0), queued(0), done(0), ttyMissed(0),
           lostOnError(0), fileWrites(0), slow100(0), slow1000(0), longestMs(0), fileOpenNow(false), rx32(0),
-          fileFd(-1), dirty(false), lastFsync(0), nextService(0), nextSummary(0),
-          lastSlowMsg(0), ramBytes(0), ramOn(false), openFailSaid(false), sumSlow100(0), sumDropped(0),
+          flushNow(0), fileFd(-1), dirty(false), lastFsync(0), nextService(0), nextSummary(0),
+          lastSlowMsg(0), ramBytes(0), ramFd(-1), ramUsed(0), ramOpened(false),
+          ramFull(false), ramOn(false), openFailSaid(false), sumSlow100(0), sumDropped(0),
           sumTtyMissed(0), sumLost(0) {
         filePathNow[0] = filePath[0] = stickDir[0] = 0;
     }
@@ -341,11 +349,39 @@ void fileLine(Pump& p, const char* fmt, ...) {
     if (writeAll(p.ops, p.fileFd, line, (size_t)n)) p.dirty = true;
 }
 
-void ramLine(Pump& p, const char* line) {
-    if (!p.ramOn) return;
-    ramlog::append(p.ram, p.ramPath.c_str(), line, strlen(line));
-    if (p.ram.full) p.ramOn = false;
+// The RAM log, as ramlog::append caps it (5 MB, room kept for the "full" line), through one fd. A chunk that would
+// cross the cap keeps its whole lines that fit.
+void ramWrite(Pump& p, const char* d, size_t n) {
+    if (!p.ramOn || p.ramFull || !n) return;
+    if (p.ramFd < 0) {
+        p.ramFd = ::open(p.ramPath.c_str(), O_WRONLY | O_CREAT | (p.ramOpened ? O_APPEND : O_TRUNC), 0666);
+        cloexec(p.ramFd);
+        if (p.ramFd < 0) return;
+        if (!p.ramOpened) p.ramUsed = 0;
+        p.ramOpened = true;
+    }
+    const long room = ramlog::kMaxBytes - ramlog::kReserve - p.ramUsed;
+    size_t take = n;
+    bool full = false;
+    if ((long)n > room) {
+        full = true;
+        take = 0;
+        for (size_t i = room > 0 ? (size_t)room : 0; i > 0; --i)
+            if (d[i - 1] == '\n') { take = i; break; }
+    }
+    if (take && writeAll(&g_realOps, p.ramFd, d, take)) p.ramUsed += (long)take;
+    if (full) {
+        const size_t fl = strlen(ramlog::kFullLine);
+        if (p.ramUsed + (long)fl <= ramlog::kMaxBytes && writeAll(&g_realOps, p.ramFd, ramlog::kFullLine, fl))
+            p.ramUsed += (long)fl;
+        p.ramFull = true;
+        p.ramOn = false;
+        ::close(p.ramFd);
+        p.ramFd = -1;
+    }
 }
+
+void ramLine(Pump& p, const char* line) { ramWrite(p, line, strlen(line)); }
 
 void publishFile(Pump& p) {
     pthread_mutex_lock(&p.mu);
@@ -390,9 +426,9 @@ void closeFile(Pump& p) {
 
 // No file any more: back to the RAM log, when that is the fallback.
 void backToRam(Pump& p) {
-    if (p.ramPath.empty() || p.ram.full) return;
+    if (p.ramPath.empty() || p.ramFull) return;
     p.ramOn = true;
-    if (p.ram.opened) {
+    if (p.ramOpened) {
         char line[256];
         snprintf(line, sizeof(line), "[Log] back on the RAM log %s\n", p.ramPath.c_str());
         ramLine(p, line);
@@ -411,7 +447,7 @@ bool openFile(Pump& p, const char* path) {
     p.fileFd = fd;
     snprintf(p.filePath, sizeof(p.filePath), "%s", path);
     p.lastFsync = monoMs();
-    if (p.ramOn && p.ram.opened) {
+    if (p.ramOn && p.ramOpened) {
         char line[384];
         snprintf(line, sizeof(line), "[Log] %s: logging to %s (the RAM log %s stops here)\n",
                  p.cfg.mode == kUsb ? "USB stick found" : "log file open", path, p.ramPath.c_str());
@@ -474,9 +510,8 @@ void sinkWrite(Pump& p, const char* d, size_t k) {
                 strerror(err), (unsigned)k, p.cfg.serviceMs / 1000);
         }
     } else if (p.ramOn) {
-        ramlog::append(p.ram, p.ramPath.c_str(), d, k);
+        ramWrite(p, d, k);
         p.ramBytes += k;
-        if (p.ram.full) p.ramOn = false;
     }
     if (p.extraFd >= 0 && !writeAll(&g_realOps, p.extraFd, d, k)) {
         ::close(p.extraFd);
@@ -509,10 +544,18 @@ void* readerMain(void*) {
     pthread_cond_broadcast(&p.cv);
     pthread_mutex_unlock(&p.mu);
     char buf[4096];
+    int readErr = 0;
     for (;;) {
-        const ssize_t n = ::read(p.rfd, buf, sizeof(buf));
+        ssize_t n = ::read(p.rfd, buf, sizeof(buf));
         if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) break;
+        if (n > 0 && p.cfg.readerFailAfter && p.rx + (uint64_t)n >= p.cfg.readerFailAfter) {   // tests only
+            n = -1;
+            errno = EIO;
+        }
+        if (n <= 0) {
+            readErr = n < 0 ? errno : 0;
+            break;
+        }
         uint64_t miss = 0;
         if (p.ttyFd >= 0) {
             const ssize_t w = ::write(p.ttyFd, buf, (size_t)n);
@@ -535,6 +578,23 @@ void* readerMain(void*) {
         pthread_cond_broadcast(&p.cv);
         pthread_mutex_unlock(&p.mu);
     }
+    // Nobody empties the pipe from here on. Unless this is the shutdown (which puts fds 1 and 2 back itself), put them
+    // back now: a full pipe nobody reads would block every printf for good. Then close the read end, so a child that
+    // still holds the pipe gets EPIPE (SIGPIPE is ignored) instead of blocking.
+    pthread_mutex_lock(&p.mu);
+    const bool unexpected = !p.stopping;
+    if (unexpected) p.shut = true;
+    pthread_mutex_unlock(&p.mu);
+    if (unexpected) {
+        fflush(stdout);
+        dup2(p.origOut, 1);
+        if (p.origErr >= 0) dup2(p.origErr, 2);
+        g_log_drain_hook = NULL;
+        printf("[Log] the log pump's reader stopped (%s): logging to the original stdout from here\n",
+               readErr ? strerror(readErr) : "end of the pipe");
+        fflush(stdout);
+    }
+    ::close(p.rfd);
     pthread_mutex_lock(&p.mu);
     p.readerDone = true;
     pthread_cond_broadcast(&p.cv);
@@ -548,9 +608,13 @@ void* writerMain(void*) {
     const uint64_t t0 = monoMs();
     pthread_mutex_lock(&p.mu);
     p.writerPrioNow = threadPrio();
-    while (!p.readerReady && monoMs() - t0 < 200) waitMs(p, 20);
+    while (!p.readerReady && !p.readerDone && monoMs() - t0 < 200) waitMs(p, 20);
     const int rprio = p.readerPrioNow, wprio = p.writerPrioNow;
+    const bool aborted = p.readerDone && !p.readerReady;   // start() could not make the reader
+    if (aborted) p.writerDone = true;
+    pthread_cond_broadcast(&p.cv);
     pthread_mutex_unlock(&p.mu);
+    if (aborted) return NULL;
     char extra[96] = "";
     if (p.cfg.slowMs) snprintf(extra, sizeof(extra), "; NBT_LOG_SLOW_MS=%u: every file write waits that long (test)",
                                p.cfg.slowMs);
@@ -565,7 +629,7 @@ void* writerMain(void*) {
 
     const uint64_t start = monoMs();
     p.nextSummary = start + p.cfg.summaryMs;
-    uint64_t lastRx = 0, quietSince = start;
+    uint64_t lastRx = 0, quietSince = start, pendingSince = 0;
     bool stopSeen = false;
     pthread_mutex_lock(&p.mu);
     for (;;) {
@@ -576,13 +640,24 @@ void* writerMain(void*) {
             stopSeen = p.stopping;
         }
         p.ring->flushNotice();
-        const bool empty = p.ring->used() == 0;
-        if (empty && p.readerDone) break;
-        if (empty && p.stopping && now - quietSince >= 100) break;   // a child may still hold the pipe: don't wait for EOF
+        const size_t used = p.ring->used();
+        if (!used) pendingSince = 0;
+        else if (!pendingSince) pendingSince = now;
+        if (!used && p.readerDone) break;
+        if (!used && p.stopping && now - quietSince >= 100) break;   // a child may still hold the pipe: don't wait for EOF
+        // Batch: one write for many lines. At once when enough waits, the oldest line has waited long enough, the
+        // ring is half full (no drops while waiting), or at stop / crash.
+        const bool flush = used && (used >= p.cfg.batchBytes || used >= p.ring->capacity() / 2 ||
+                                    now - pendingSince >= p.cfg.batchMs || p.stopping || p.readerDone || p.flushNow);
         const bool due = now >= p.nextService || now >= p.nextSummary ||
                          (p.fileFd >= 0 && p.dirty && now - p.lastFsync >= p.cfg.fsyncMs);
-        if (empty && !due) {
-            waitMs(p, p.stopping ? 20 : 250);
+        if (!flush && !due) {
+            unsigned wait = p.stopping ? 20 : 250;
+            if (used) {
+                const uint64_t left = pendingSince + p.cfg.batchMs - now;
+                if (left < wait) wait = (unsigned)left;
+            }
+            waitMs(p, wait ? wait : 1);
             continue;
         }
         pthread_mutex_unlock(&p.mu);
@@ -591,15 +666,20 @@ void* writerMain(void*) {
             service(p);
             p.nextService = monoMs() + p.cfg.serviceMs;
         }
-        const char* d = NULL;
-        const size_t k = p.ring->peek(&d, 32768);
-        if (k) {
+        // What waits now, in writes of up to 64 KB (two at the ring's wrap point); lines arriving meanwhile wait for
+        // the next round, so service / fsync / summary keep their times under a steady stream.
+        for (size_t budget = flush ? used : 0; budget > 0;) {
+            const char* d = NULL;
+            const size_t k = p.ring->peek(&d, budget < 65536 ? budget : 65536);
+            if (!k) break;
             sinkWrite(p, d, k);
             p.ring->consume(k);
+            budget -= k;
             pthread_mutex_lock(&p.mu);
             p.done += k;
             pthread_mutex_unlock(&p.mu);
         }
+        if (flush) pendingSince = 0;
         if (p.fileFd >= 0 && p.dirty && monoMs() - p.lastFsync >= p.cfg.fsyncMs) timedFsync(p);
         if (monoMs() >= p.nextSummary) {
             summary(p);
@@ -626,7 +706,7 @@ bool sameFile(int fd, const char* path) {
 } // namespace
 
 bool start(const Config& c) {
-    if (g_pump) return false;
+    if (g_pump) return false;   // running, or stopped for good (shut down, or its reader stopped)
     Pump* p = new Pump;
     p->cfg = c;
     p->forcedPath = c.forcedPath ? c.forcedPath : "";
@@ -670,10 +750,10 @@ bool start(const Config& c) {
     p->ramOn = c.ramPath != NULL;
     if (c.ramPath && c.ramAppend) {
         struct stat st;
-        p->ram.opened = true;
-        p->ram.used = stat(c.ramPath, &st) == 0 ? (long)st.st_size : 0;
-        if (p->ram.used >= ramlog::kMaxBytes - ramlog::kReserve) {
-            p->ram.full = true;
+        p->ramOpened = true;
+        p->ramUsed = stat(c.ramPath, &st) == 0 ? (long)st.st_size : 0;
+        if (p->ramUsed >= ramlog::kMaxBytes - ramlog::kReserve) {
+            p->ramFull = true;
             p->ramOn = false;
         }
     }
@@ -689,27 +769,43 @@ bool start(const Config& c) {
     pthread_condattr_destroy(&ca);
 
     g_pump = p;
-    if (dup2(pf[1], 1) < 0 || (c.takeStderr && dup2(pf[1], 2) < 0)) {
-        dup2(p->origOut, 1);
-        if (p->origErr >= 0) dup2(p->origErr, 2);
-        ::close(pf[0]);
-        ::close(pf[1]);
-        g_pump = NULL;
-        return false;
-    }
-    ::close(pf[1]);
-    p->haveReader = pthread_create(&p->reader, NULL, &readerMain, NULL) == 0;
-    p->haveWriter = p->haveReader && pthread_create(&p->writer, NULL, &writerMain, NULL) == 0;
-    if (!p->haveWriter) {
-        // Back as it was; a started reader sees EOF and ends. The Pump stays allocated for it.
-        dup2(p->origOut, 1);
-        if (p->origErr >= 0) dup2(p->origErr, 2);
-        if (!p->haveReader) ::close(pf[0]);
-        p->shut = true;
-        return false;
-    }
+    // The crash hooks before fd 1 is the pipe: a reader that stops at once clears them, and must find them set.
     if (!p->crashPath.empty()) g_crash_copy_path = p->crashPath.c_str();
     g_log_drain_hook = &crashDrain;
+    // The writer first: it never touches the pipe, so if the reader cannot be made, the writer is stopped and
+    // joined and nothing is left behind.
+    p->haveWriter = pthread_create(&p->writer, NULL, &writerMain, NULL) == 0;
+    bool ok = p->haveWriter && dup2(pf[1], 1) >= 0 && (!c.takeStderr || dup2(pf[1], 2) >= 0);
+    if (ok) {
+        ::close(pf[1]);
+        pf[1] = -1;
+        p->haveReader = pthread_create(&p->reader, NULL, &readerMain, NULL) == 0;
+        ok = p->haveReader;
+    }
+    if (!ok) {
+        dup2(p->origOut, 1);
+        if (p->origErr >= 0) dup2(p->origErr, 2);
+        if (p->haveWriter) {
+            pthread_mutex_lock(&p->mu);
+            p->readerDone = true;   // the writer sees no reader and returns
+            pthread_cond_broadcast(&p->cv);
+            pthread_mutex_unlock(&p->mu);
+            pthread_join(p->writer, NULL);
+        }
+        g_log_drain_hook = NULL;
+        g_crash_copy_path = NULL;
+        g_pump = NULL;
+        ::close(pf[0]);
+        if (pf[1] >= 0) ::close(pf[1]);
+        const int fds[] = { p->origOut, p->origErr, p->ttyFd, p->extraFd };
+        for (size_t i = 0; i < sizeof(fds) / sizeof(fds[0]); ++i)
+            if (fds[i] >= 0) ::close(fds[i]);
+        pthread_cond_destroy(&p->cv);
+        pthread_mutex_destroy(&p->mu);
+        delete p->ring;
+        delete p;
+        return false;
+    }
     return true;
 }
 
@@ -724,20 +820,27 @@ bool running() {
 
 bool shutdown(unsigned timeoutMs) {
     Pump* p = g_pump;
-    if (!p || !running()) return true;
+    if (!p) return true;
+    pthread_mutex_lock(&p->mu);
+    const bool joined = p->joined;
+    const bool stoppedItself = p->shut;   // its reader stopped: fds 1 and 2 are back already
+    pthread_mutex_unlock(&p->mu);
+    if (joined) return true;
     fflush(stdout);
     fflush(stderr);
-    g_log_drain_hook = NULL;
     const uint64_t t0 = monoMs();
-    pthread_mutex_lock(&p->mu);
-    while (!p->announced && !p->writerDone && monoMs() - t0 < timeoutMs) waitMs(*p, 20);   // its line is ours too
-    p->stopping = true;
-    p->shut = true;
-    pthread_cond_broadcast(&p->cv);
-    pthread_mutex_unlock(&p->mu);
-    // Our write ends go; the reader then sees EOF (unless a child still holds one: the writer stops on quiet).
-    dup2(p->origOut, 1);
-    if (p->origErr >= 0) dup2(p->origErr, 2);
+    if (!stoppedItself) {
+        g_log_drain_hook = NULL;
+        pthread_mutex_lock(&p->mu);
+        while (!p->announced && !p->writerDone && monoMs() - t0 < timeoutMs) waitMs(*p, 20);   // its line is ours too
+        p->stopping = true;
+        p->shut = true;
+        pthread_cond_broadcast(&p->cv);
+        pthread_mutex_unlock(&p->mu);
+        // Our write ends go; the reader then sees EOF (unless a child still holds one: the writer stops on quiet).
+        dup2(p->origOut, 1);
+        if (p->origErr >= 0) dup2(p->origErr, 2);
+    }
 
     pthread_mutex_lock(&p->mu);
     while (!p->writerDone && monoMs() - t0 < timeoutMs) waitMs(*p, 20);
@@ -747,12 +850,16 @@ bool shutdown(unsigned timeoutMs) {
     pthread_mutex_unlock(&p->mu);
     if (done) pthread_join(p->writer, NULL);
     if (readerDone) pthread_join(p->reader, NULL);
+    pthread_mutex_lock(&p->mu);
+    p->joined = done && readerDone;
+    pthread_mutex_unlock(&p->mu);
     return all;
 }
 
 void drainForCrash(unsigned timeoutMs) {
     Pump* p = g_pump;
     if (!p) return;
+    p->flushNow = 1;   // no batching wait (the writer sees it within its next wait, at most 250 ms)
     uint32_t lastRx = p->rx32;
     unsigned quiet = 0;
     for (unsigned t = 0; t < timeoutMs; t += 20) {
