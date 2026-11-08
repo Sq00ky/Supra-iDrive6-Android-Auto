@@ -56,6 +56,7 @@ set(SOURCES
     src/crash_handler.cpp
     src/cluster/j29_client.cpp
     src/cluster/nav_core.cpp
+    src/cluster/hud_terminal.cpp
     src/audio/speex.c
 )
 
