@@ -75,6 +75,10 @@ static void sensors() {
     f.altitude_e2 = -2300; f.speed_e3 = 13889; f.bearing_e6 = 359999999;
     buildLocationEvent(f, event);
     show(kFile, kType, "position, all fields", event, MESSAGE_ID_BYTES);
+    buildCompassEvent(0, event);
+    show(kFile, kType, "compass north", event, MESSAGE_ID_BYTES);
+    buildCompassEvent(358593750, event);
+    show(kFile, kType, "compass", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(0, event);
     show(kFile, kType, "no satellites", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(7, event);

@@ -80,6 +80,10 @@ public:
     // The newest satellite count. The session sends it as a GPS_SATELLITE (sensor 21) event about once a second once the
     // phone has started that sensor, whether or not anything was posted: with nothing recent the count is 0. Thread-safe.
     void postCarSatellites(const SatelliteStatus& status);
+    // The newest heading, degrees * 1e6, clockwise from north: sent to the phone as a COMPASS (sensor 2) event once it has
+    // started that sensor, and repeated if nothing new comes (kCompassRepeatMs). It has no age limit: the car's value stays
+    // true while the car stands still, and how often the car sends it then is not known yet. Thread-safe.
+    void postCarCompass(int32_t bearing_e6);
     // Car microphone PCM (16 kHz mono S16LE) for the phone. Thread-safe (capture thread); queued and sent on
     // ch 14 by the session thread while the phone has the mic open, dropped otherwise.
     void postMicData(const uint8_t* pcm, size_t len);
@@ -147,6 +151,14 @@ private:
     uint32_t satellites_last_ms_;                  // session thread: when the last one went out
     uint32_t satellites_last_used_;                // session thread: the count it carried
     void drainSatellites();                        // session thread: send GPS_SATELLITE when one is due
+    int32_t car_bearing_e6_;                       // guarded by touch_mutex_: latest heading
+    bool have_compass_;                            // guarded by touch_mutex_: car_bearing_e6_ is set (kept across sessions)
+    bool compass_started_;                         // guarded by touch_mutex_: phone started sensor 2 this session
+    bool pending_compass_;                         // guarded by touch_mutex_: send a COMPASS event on next drain
+    uint32_t compass_sent_;                        // session thread: COMPASS events this session
+    uint32_t compass_last_ms_;                     // session thread: when the last one went out
+    bool compassRunning();                         // the phone started sensor 2 and there is a heading to send
+    void drainCompass();                           // session thread: repeat COMPASS when one is due
     VideoFocusCallback focus_cb_;
     void* focus_user_data_;
     MicRequestCallback mic_cb_;

@@ -175,6 +175,125 @@ static void testLocation() {
     endSession(s, sv);
 }
 
+static std::vector<uint8_t> compassEvent(int32_t bearing_e6) {
+    std::vector<uint8_t> want;
+    buildCompassEvent(bearing_e6, want);
+    return want;
+}
+
+// Sensor 2 with nothing from the car: started and answered, but no made-up direction. The first heading goes out on arrival,
+// without waiting for a timer.
+static void testCompassNoData() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 2, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    const uint32_t t0 = testNowMs();
+    s->postCarCompass(90000000);
+    assert(nextSensorFrame(sv[1], 900, p) && p == compassEvent(90000000));
+    assert(testNowMs() - t0 < 500);
+    endSession(s, sv);
+}
+
+// A heading posted before the start is not sent until the phone starts the sensor, and its first event carries it. Each new
+// heading then goes out on arrival, and it puts the repeat back by a full interval.
+static void testCompassPosted() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarCompass(90000000);
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    sendStart(sv[1], 2, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(90000000));
+    const uint32_t t0 = testNowMs();
+    s->postCarCompass(180000000);
+    assert(nextSensorFrame(sv[1], 900, p) && p == compassEvent(180000000));
+    assert(testNowMs() - t0 < 500);
+    assert(!nextSensorFrame(sv[1], kCompassRepeatMs - 200, p));
+    assert(nextSensorFrame(sv[1], 1000, p) && p == compassEvent(180000000));
+    endSession(s, sv);
+}
+
+// With nothing new and the phone silent, the last heading keeps going out: not on every pass of the loop, and not stretched to
+// the 2 s that 1 s select() ticks would give.
+static void testCompassRepeats() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarCompass(270000000);
+    sendStart(sv[1], 2, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(270000000));
+    uint32_t t0 = testNowMs();
+    for (int i = 0; i < 3; ++i) {
+        assert(nextSensorFrame(sv[1], 2500, p) && p == compassEvent(270000000));
+        const uint32_t t1 = testNowMs();
+        assert(t1 - t0 >= kCompassRepeatMs - 100);
+        assert(t1 - t0 < 1900);
+        t0 = t1;
+    }
+    endSession(s, sv);
+}
+
+// Wakes restart the select() tick, so wakes faster than the tick mean it never times out. The repeat must still go out. An old
+// position makes a wake that sends nothing.
+static void testCompassRepeatsThroughWakes() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 1, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    s->postCarCompass(90000000);
+    sendStart(sv[1], 2, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(90000000));
+    LocationFix old;
+    old.lat_e7 = 525000000; old.lon_e7 = -45000000; old.accuracy_e3 = 10000;
+    const uint32_t start = testNowMs();
+    uint32_t last = start;
+    int repeats = 0;
+    while (testNowMs() - start < 3000) {
+        old.rx_ms = testNowMs() - kLocationMaxAgeMs - 1;
+        s->postCarLocation(old);
+        if (nextSensorFrame(sv[1], 100, p)) {
+            assert(p == compassEvent(90000000));
+            assert(testNowMs() - last < 1900);
+            last = testNowMs();
+            ++repeats;
+        }
+    }
+    assert(repeats >= 2);
+    endSession(s, sv);
+}
+
+// The heading is kept when a session ends, including one that arrives between sessions, and nothing goes out until the next
+// session's phone starts the sensor.
+static void testCompassAcrossSessions() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarCompass(90000000);
+    sendStart(sv[1], 2, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(90000000));
+    s->stop();
+    close(sv[1]);
+    s->postCarCompass(180000000);
+
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    assert(s->start(sv[0]));
+    uint8_t ch = 0xFF;
+    assert(readFrame(sv[1], 2000, ch, p));      // the VersionRequest
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    sendStart(sv[1], 2, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(180000000));
+    endSession(s, sv);
+}
+
 // The period parser: present, the -1 of a 10-byte varint, absent, and a message it should stop on.
 static void testPeriod() {
     const uint8_t a[] = { 0x80, 0x01, 0x08, 0x01, 0x10, 0xE8, 0x07 };
@@ -211,6 +330,11 @@ int main() {
     testSatellitesNoData();
     testSatellitesPosted();
     testLocation();
+    testCompassNoData();
+    testCompassPosted();
+    testCompassRepeats();
+    testCompassRepeatsThroughWakes();
+    testCompassAcrossSessions();
     testStartWithMinusOne();
     printf("test_session_sensors OK\n");
     return 0;
