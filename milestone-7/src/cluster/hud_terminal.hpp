@@ -18,7 +18,18 @@
 //   kFailed     a call got no answer within the reply timeout, or an error answer: nothing is sent until reset(), the
 //               link comes back, or the host changes
 // Leaving kReady drops the batch in progress and the one queued, so on the way back to kReady the driver redraws its
-// whole state. It is told through the status listener.
+// whole state. It is told through the status listener, and epoch() changes whenever work was dropped.
+//
+// Batches: one is sent at a time, back to back; one more waits. A "full" batch redraws everything the driver shows
+// (a new maneuver, a clear), so a full batch submitted while another waits takes its place. A partial batch (a new
+// distance) is merged into the waiting one instead: a text call for a handle the waiting batch already sets replaces
+// that call's payload in place, anything else is appended. So a distance update never wipes out a new maneuver that
+// has not gone out yet.
+//
+// Profile check (Config::checkNav): the driver's profile says which instances the factory navigation uses for text
+// and which pair it swaps. A navigation call that puts text anywhere else, or swaps other instances, means this
+// cluster is laid out differently from the profile: the terminal fails for good (until the daemon restarts), so we
+// never draw into instances whose role we have wrong.
 //
 // The factory navigation, as the 6WA showed it (car, S19):
 //   - any FB 82 message to or from the host that is neither ours, nor an answer to us, nor the cluster's copy of an answer
@@ -51,27 +62,33 @@ struct Config {
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false) {}
+    bool checkNav;           // the profile check above
+    HandleSet navTexts;      // the instances the factory navigation may put text on
+    HandleSet navBuffers;    // the instances it may swap with SwitchVisibility
+    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false),
+               checkNav(false) {}
 };
 
 struct Batch {
     std::string label;       // for the log
     std::vector<Call> calls;
-    Batch() {}
-    explicit Batch(const char* l) : label(l) {}
+    bool full;               // redraws everything the driver shows: may replace a waiting batch
+    Batch() : full(false) {}
+    explicit Batch(const char* l, bool f = false) : label(l), full(f) {}
     void add(uint16_t fkt, const std::vector<uint8_t>& p) { calls.push_back(Call(fkt, p)); }
 };
 
 enum SubmitResult {
     kQueued,      // will be sent after the batch in progress, if any
-    kReplaced,    // took the place of a queued batch that had not started: the newest state wins
+    kReplaced,    // a full batch took the place of a queued one that had not started: the newest state wins
+    kMerged,      // a partial batch was merged into the queued one
     kNotReady,    // status is not kReady: dropped, the driver redraws when kReady comes back
     kRefused      // empty, too long, or a call breaks a limit (cluster/hudterm.hpp): nothing of it is sent
 };
 const char* submitResultName(SubmitResult r);
 
 struct TerminalStats {
-    uint32_t batches, batchesDone, batchesDropped, replaced, refused;
+    uint32_t batches, batchesDone, batchesDropped, replaced, merged, refused;
     uint32_t calls, answers, copies, strays, navMsgs, timeouts, errors;
 };
 
@@ -94,6 +111,8 @@ public:
 
     Status status() const { return status_; }
     bool busy() const { return haveCurrent_ || havePending_; }
+    uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
+    bool mismatch() const { return mismatch_; }    // the profile check failed
     uint16_t host() const { return host_; }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
@@ -106,6 +125,8 @@ private:
 
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
+    void checkNav(const most::View& m, uint32_t now);
+    bool merge(const Batch& b);
     void fail(const char* why, uint32_t now);
     void refresh(const char* why, uint32_t now);
     void dropWork();
@@ -114,7 +135,7 @@ private:
     Config cfg_;
     bool linkUp_;
     uint16_t self_, host_;
-    bool failed_, navActive_, frameOff_;
+    bool failed_, navActive_, frameOff_, mismatch_;
     uint32_t lastNavMs_;
     Status status_;
     bool changed_;
@@ -126,12 +147,25 @@ private:
     std::vector<InFlight> inFlight_;
     RecentCalls recent_;
     uint32_t tag_;
+    uint32_t epoch_;
     TerminalStats stats_;
+};
+
+// What a HUDTerminal cluster driver needs from the transport: HudTerminal, or a test's fake.
+class Port {
+public:
+    virtual ~Port() {}
+    virtual SubmitResult submit(const Batch& b) = 0;
+    virtual Status status() const = 0;
+    virtual uint32_t epoch() const = 0;
+    virtual void reset() = 0;                     // leave kFailed (not after a profile mismatch)
+    // Until everything submitted is answered: true then; false on the timeout or once the status leaves kReady.
+    virtual bool waitIdle(uint32_t ms) = 0;
 };
 
 // A Core on its own thread. attach() before the client's start(). The listener runs on the terminal's thread with no
 // lock held, so it may submit().
-class HudTerminal {
+class HudTerminal : public Port {
 public:
     typedef bool (*SendFn)(const most::Msg& m, void* user);
     typedef void (*StatusCb)(Status s, void* user);
@@ -139,7 +173,9 @@ public:
     explicit HudTerminal(const Config& cfg);
     ~HudTerminal();
 
-    bool attach(most::Client& c);                 // allowSend, a route for 82/00, link and registry listeners
+    // A route for 82/00, link and registry listeners and, when sending, allowSend. Without allowSend the client refuses
+    // every call, which is what the shadow mode wants: the terminal only watches.
+    bool attach(most::Client& c, bool sending = true);
     void setSender(SendFn fn, void* user);        // in place of the client's send (host tests)
     void setStatusListener(StatusCb cb, void* user);
     bool start();
@@ -148,6 +184,8 @@ public:
     SubmitResult submit(const Batch& b);
     void reset();
     Status status() const;
+    uint32_t epoch() const;
+    bool waitIdle(uint32_t ms);
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop
 

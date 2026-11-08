@@ -172,7 +172,9 @@ static void testAnswersAndQueue() {
     assert(k.next(0, p0) && k.next(0, p1) && k.next(0, t));
 
     assert(k.submit(batchOf(1), 1) == kQueued);         // waits for this batch
-    assert(k.submit(batchOf(2), 1) == kReplaced);       // the newest queued state wins
+    Batch full = batchOf(2);
+    full.full = true;
+    assert(k.submit(full, 1) == kReplaced);             // a full batch: the newest state wins
     most::Msg x;
     assert(!k.next(1, x));
 
@@ -193,6 +195,116 @@ static void testAnswersAndQueue() {
     while (k.next(6, x)) ++n;
     assert(n == 2 && k.busy());
     assert(k.status() == kReady);
+}
+
+// A partial batch never wipes out a full one that is waiting: texts replace in place, the rest is appended.
+static void testMerge() {
+    Config c = config();
+    c.maxBatch = 5;
+    Core k = readyCore(c);
+    assert(k.submit(batchOf(1), 0) == kQueued);         // in progress
+    Batch show("maneuver", true);
+    std::vector<Point> pts(3);
+    show.add(kAddPolygon, addPolygon(5, 0, kPolygon, pts));
+    show.add(kTextareaSetText, setText(3, "300"));
+    show.add(kTextareaSetText, setText(4, "m"));
+    assert(k.submit(show, 0) == kQueued);               // waiting
+    Batch d1("distance");
+    d1.add(kTextareaSetText, setText(3, "250"));
+    assert(k.submit(d1, 1) == kMerged);
+    Batch d2("distance");
+    d2.add(kTextareaSetText, setText(3, "200"));
+    d2.add(kTextareaSetText, setText(4, "ft"));
+    assert(k.submit(d2, 2) == kMerged);
+    Batch vis("frame");
+    vis.add(kSetVisibility, setVisibility(kFrame, true));
+    assert(k.submit(vis, 3) == kMerged);                // appended: 4 calls
+    Batch two("two");
+    two.add(kSetVisibility, setVisibility(2, true));
+    two.add(kSetVisibility, setVisibility(3, true));
+    assert(k.submit(two, 4) == kRefused);               // 6 > maxBatch: the waiting batch stays as it was
+    assert(k.stats().merged == 3 && k.stats().refused == 1);
+
+    most::Msg cur;                                      // the batch in progress, answered
+    assert(k.next(5, cur));
+    Wire a = answer(cur);
+    k.onMessage(a.v, 5);
+    most::Msg m[4], x;
+    for (int i = 0; i < 4; ++i) assert(k.next(6, m[i]));
+    assert(!k.next(6, x));
+    assert(m[0].fkt == kAddPolygon);
+    assert(m[1].fkt == kTextareaSetText && decodeText(&m[1].data[0], m[1].data.size()) == "200");
+    assert(m[2].fkt == kTextareaSetText && decodeText(&m[2].data[0], m[2].data.size()) == "ft");
+    assert(m[3].fkt == kSetVisibility);
+
+    // Nothing waiting: a partial batch just waits behind the one in progress.
+    Batch d3("distance");
+    d3.add(kTextareaSetText, setText(3, "150"));
+    assert(k.submit(d3, 7) == kQueued);
+}
+
+// The epoch moves whenever submitted work may be lost: dropped work, or the status leaving ready.
+static void testEpoch() {
+    Core k = readyCore();
+    uint32_t e0 = k.epoch();
+    assert(k.submit(batchOf(2), 0) == kQueued);
+    assert(k.epoch() == e0);
+    Wire nav = navCall(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(nav.v, 1);                              // the navigation: our batch is dropped
+    assert(k.status() == kNavActive && k.epoch() != e0);
+    uint32_t e1 = k.epoch();
+    Wire off = navCall(kSetVisibility, setVisibility(kFrame, false));
+    k.onMessage(off.v, 2);
+    k.tick(2 + 5000);
+    assert(k.status() == kReady && k.epoch() == e1);    // coming back changes nothing more
+    k.setLink(false, 0, 5100);                          // nothing queued, but what we drew may be gone
+    assert(k.epoch() != e1);
+}
+
+// The profile check: the navigation's text or swap on instances the profile does not list stops the terminal for good.
+static void testProfileMismatch() {
+    Config c = config();
+    c.checkNav = true;
+    for (int h = 2; h <= 4; ++h) c.navTexts.allow(h);
+    c.navBuffers.allow(5);
+    c.navBuffers.allow(6);
+    {
+        Core k = readyCore(c);
+        Wire t = navCall(kTextareaSetText, setText(3, "400"));
+        Wire s = navCall(kSwitchVisibility, switchVisibility(6, 5));
+        Wire other = navCall(kRemoveAllItems, removeAllItems(9));
+        Wire ans = navAnswer(kTextareaSetText, setText(9, ""));   // the cluster's answer: only calls are checked
+        k.onMessage(t.v, 0);
+        k.onMessage(s.v, 1);
+        k.onMessage(other.v, 2);
+        k.onMessage(ans.v, 3);
+        assert(k.status() == kNavActive && !k.mismatch());
+    }
+    {
+        Core k = readyCore(c);
+        Wire t = navCall(kTextareaSetText, setText(9, "x"));
+        k.onMessage(t.v, 0);
+        assert(k.status() == kFailed && k.mismatch());
+        k.reset(1);
+        assert(k.status() == kFailed);
+        k.setLink(false, 0, 2);
+        k.setLink(true, kSelf, 3);
+        assert(k.status() == kFailed);
+        k.setHost(0x0124, 4);
+        assert(k.status() == kFailed && k.submit(batchOf(1), 5) == kNotReady);
+    }
+    {
+        Core k = readyCore(c);
+        Wire s = navCall(kSwitchVisibility, switchVisibility(6, 7));
+        k.onMessage(s.v, 0);
+        assert(k.status() == kFailed && k.mismatch());
+    }
+    {
+        Core k = readyCore();                           // the check off: anything goes
+        Wire t = navCall(kTextareaSetText, setText(9, "x"));
+        k.onMessage(t.v, 0);
+        assert(k.status() == kNavActive && !k.mismatch());
+    }
 }
 
 static void testCopiesIgnored() {
@@ -447,13 +559,14 @@ static void testThreaded() {
 
     assert(t.submit(batchOf(3)) == kQueued);
     assert(fc.waitSent(3));
+    assert(!t.waitIdle(50));                             // nothing answered yet: times out
     for (size_t i = 0; i < 3; ++i) {
         most::Msg m = fc.at(i);
         Wire a = answer(m), cp = copyOf(m);
         t.onMessage(a.v);
         t.onMessage(cp.v);
     }
-    for (int i = 0; i < 100 && t.stats().batchesDone < 1; ++i) usleep(10 * 1000);
+    assert(t.waitIdle(1000));
     assert(t.stats().batchesDone == 1 && t.stats().copies == 3 && t.status() == kReady);
 
     Wire nav = navCall(kSetVisibility, setVisibility(kFrame, true));
@@ -475,6 +588,7 @@ static void testThreaded() {
     assert(log2.waitFor(kReady));
     assert(t2.submit(batchOf(1)) == kQueued);
     assert(fc2.waitSent(1));
+    assert(!t2.waitIdle(5000));                          // returns when the status leaves ready, not after 5 s
     assert(log2.waitFor(kFailed) && t2.stats().timeouts == 1);
     t2.reset();
     assert(log2.waitFor(kReady));
@@ -537,12 +651,48 @@ static void testOnClient() {
     assert(t.status() == kOffline);
 }
 
+// Attached without sending (the shadow mode): the terminal watches, and the client refuses any call to 82/00.
+static void testWatchOnly() {
+    fake_dsi::reset();
+    most::Client client;
+    HudTerminal t(config());
+    assert(t.attach(client, false));
+    assert(client.start("T"));
+    fake_dsi::attach();
+    std::vector<uint8_t> resp;
+    most::putLe32(resp, 77);
+    most::putLe16(resp, kSelf);
+    fake_dsi::data(most::kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+    std::vector<uint8_t> reg;
+    most::putLe32(reg, 1);
+    most::putLe16(reg, kHost); most::putLe16(reg, most::registryKey(0x82, 0));
+    fake_dsi::data(most::kAttrRegistry, &reg[0], (uint32_t)reg.size());
+    assert(t.status() == kReady);
+
+    size_t before = fake_dsi::calls.size();
+    most::Msg m;
+    assert(buildCall(kHost, Call(kSetVisibility, setVisibility(kFrame, true)), 9, config().handles, m));
+    assert(!client.send(m));
+    assert(fake_dsi::calls.size() == before);
+
+    most::Msg nav;
+    nav.txType = 0; nav.varTag = 2; nav.varVal = 0; nav.dst = kHost; nav.src = kNav; nav.fblock = 0x82; nav.inst = 0;
+    nav.fkt = kSetVisibility; nav.opType = most::kOpStartResultAck; nav.hdrTag = 0;
+    nav.data = setVisibility(kFrame, true);
+    deliver(nav);
+    assert(t.status() == kNavActive);
+    fake_dsi::detach();
+}
+
 int main() {
     testStatusAndOffline();
     testRequestBytes();
     testRefusals();
     testBackToBackAndWindow();
     testAnswersAndQueue();
+    testMerge();
+    testEpoch();
+    testProfileMismatch();
     testCopiesIgnored();
     testOwnAndForeignIgnored();
     testNavTakeoverMidBatch();
@@ -553,6 +703,7 @@ int main() {
     testLateAnswerAfterLinkDrop();
     testThreaded();
     testOnClient();
+    testWatchOnly();
     printf("test_hud_terminal: all passed\n");
     return 0;
 }

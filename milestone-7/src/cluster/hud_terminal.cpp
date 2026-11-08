@@ -40,6 +40,7 @@ const char* submitResultName(SubmitResult r) {
     switch (r) {
         case kQueued: return "queued";
         case kReplaced: return "replaced";
+        case kMerged: return "merged";
         case kNotReady: return "not-ready";
         case kRefused: return "refused";
     }
@@ -49,15 +50,16 @@ const char* submitResultName(SubmitResult r) {
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
 Core::Core(const Config& cfg)
-    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), frameOff_(false), lastNavMs_(0),
-      status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false), nextCall_(0), batchStartMs_(0),
-      recent_(cfg.replyMs), tag_(1) {
+    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), frameOff_(false),
+      mismatch_(false), lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
+      nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
 }
 
 void Core::dropWork() {
     stats_.batchesDropped += (haveCurrent_ ? 1 : 0) + (havePending_ ? 1 : 0);
+    if (haveCurrent_ || havePending_) ++epoch_;
     haveCurrent_ = havePending_ = false;
     current_ = Batch();
     pending_ = Batch();
@@ -66,9 +68,11 @@ void Core::dropWork() {
 }
 
 void Core::refresh(const char* why, uint32_t) {
-    Status s = (!linkUp_ || !self_ || !host_) ? kOffline : failed_ ? kFailed : navActive_ ? kNavActive : kReady;
+    Status s = (!linkUp_ || !self_ || !host_) ? kOffline : (failed_ || mismatch_) ? kFailed
+             : navActive_ ? kNavActive : kReady;
     if (s == status_) return;
     printf("[HudTerm] %s -> %s (%s)\n", statusName(status_), statusName(s), why);
+    if (status_ == kReady) ++epoch_;          // what we drew may be gone or overdrawn: the driver redraws
     if (s != kReady) dropWork();
     status_ = s;
     changed_ = true;
@@ -121,7 +125,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
 }
 
 void Core::reset(uint32_t now) {
-    if (!failed_) return;
+    if (!failed_) return;                     // a profile mismatch stays
     failed_ = false;
     refresh("reset", now);
 }
@@ -141,21 +145,54 @@ SubmitResult Core::submit(const Batch& b, uint32_t) {
         return kRefused;
     }
     if (status_ != kReady) return kNotReady;
-    ++stats_.batches;
     if (!haveCurrent_) {
+        ++stats_.batches;
         current_ = b;
         haveCurrent_ = true;
         nextCall_ = 0;
         batchStartMs_ = 0;
         return kQueued;
     }
-    pending_ = b;
-    if (havePending_) {
+    if (!havePending_) {
+        ++stats_.batches;
+        pending_ = b;
+        havePending_ = true;
+        return kQueued;
+    }
+    if (b.full) {
+        ++stats_.batches;
         ++stats_.replaced;
+        pending_ = b;
         return kReplaced;
     }
-    havePending_ = true;
-    return kQueued;
+    if (!merge(b)) {
+        ++stats_.refused;
+        printf("[HudTerm] batch '%s' refused: merged into '%s' it would be over %u calls\n", b.label.c_str(),
+               pending_.label.c_str(), cfg_.maxBatch);
+        return kRefused;
+    }
+    ++stats_.merged;
+    return kMerged;
+}
+
+// A partial batch into the waiting one: a text for a handle it already sets replaces that payload where it stands
+// (the newest text wins, in the waiting batch's order), anything else is appended. Nothing changes if the result would
+// be too long.
+bool Core::merge(const Batch& b) {
+    Batch m = pending_;
+    for (size_t i = 0; i < b.calls.size(); ++i) {
+        const Call& c = b.calls[i];
+        size_t k = 0;
+        if (c.fkt == kTextareaSetText)
+            while (k < m.calls.size() && !(m.calls[k].fkt == kTextareaSetText && m.calls[k].handle() == c.handle())) ++k;
+        else
+            k = m.calls.size();
+        if (k < m.calls.size()) m.calls[k].payload = c.payload;
+        else m.calls.push_back(c);
+    }
+    if (m.calls.size() > cfg_.maxBatch) return false;
+    pending_ = m;
+    return true;
 }
 
 bool Core::next(uint32_t now, most::Msg& out) {
@@ -243,9 +280,31 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
     finishIfDone(now);
 }
 
+// A navigation call (to the host) that does not fit the driver's profile: text on an instance that is not one of its
+// texts, or a swap of instances that are not its buffer pair.
+void Core::checkNav(const most::View& m, uint32_t now) {
+    if (!cfg_.checkNav || mismatch_ || m.dst != host_ || m.len < 2) return;
+    uint16_t h = rdBe16(m.data);
+    char why[128];
+    if (m.fkt == kTextareaSetText && !cfg_.navTexts.has(h)) {
+        snprintf(why, sizeof(why), "profile mismatch: the factory navigation put text on instance %u", h);
+    } else if (m.fkt == kSwitchVisibility && m.len >= 4 &&
+               (!cfg_.navBuffers.has(h) || !cfg_.navBuffers.has(rdBe16(m.data + 2)))) {
+        snprintf(why, sizeof(why), "profile mismatch: the factory navigation swapped instances %u and %u", h,
+                 rdBe16(m.data + 2));
+    } else {
+        return;
+    }
+    mismatch_ = true;
+    printf("[HudTerm] FAILED: %s; this cluster is not laid out as the profile says: nothing is sent until the "
+           "daemon restarts\n", why);
+    refresh(why, now);
+}
+
 void Core::onNav(const most::View& m, uint32_t now) {
     ++stats_.navMsgs;
     lastNavMs_ = now;
+    checkNav(m, now);
     if (m.fkt == kSetVisibility && m.len >= 3 && cfg_.navFrame > 0 && rdBe16(m.data) == cfg_.navFrame)
         frameOff_ = m.data[2] == 0;
     if (navActive_) return;
@@ -311,13 +370,14 @@ HudTerminal::~HudTerminal() {
     pthread_mutex_destroy(&lock_);
 }
 
-bool HudTerminal::attach(most::Client& c) {
+bool HudTerminal::attach(most::Client& c, bool sending) {
     client_ = &c;
     if (!send_) {
         send_ = &HudTerminal::clientSend;
         sendUser_ = this;
     }
-    return c.allowSend(kFBlock, kInst) && c.addRoute(kFBlock, kInst, most::kAny, most::kAny, &HudTerminal::msgTramp, this) &&
+    if (sending && !c.allowSend(kFBlock, kInst)) return false;
+    return c.addRoute(kFBlock, kInst, most::kAny, most::kAny, &HudTerminal::msgTramp, this) &&
            c.addLinkListener(&HudTerminal::linkTramp, this) && c.addRegistryListener(&HudTerminal::regTramp, this);
 }
 
@@ -376,6 +436,29 @@ Status HudTerminal::status() const {
     return s;
 }
 
+uint32_t HudTerminal::epoch() const {
+    pthread_mutex_lock(&lock_);
+    uint32_t e = core_.epoch();
+    pthread_mutex_unlock(&lock_);
+    return e;
+}
+
+// Polled: it is only used for a clear, where a short wait does not matter.
+bool HudTerminal::waitIdle(uint32_t ms) {
+    uint32_t t0 = nowMs();
+    for (;;) {
+        pthread_mutex_lock(&lock_);
+        Status s = core_.status();
+        bool busy = core_.busy();
+        pthread_mutex_unlock(&lock_);
+        if (s != kReady) return false;
+        if (!busy) return true;
+        if (nowMs() - t0 >= ms) return false;
+        struct timespec d = { 0, 10 * 1000000 };
+        nanosleep(&d, NULL);
+    }
+}
+
 TerminalStats HudTerminal::stats() const {
     pthread_mutex_lock(&lock_);
     TerminalStats s = core_.stats();
@@ -390,10 +473,10 @@ void HudTerminal::logHealth() {
     Status s = core_.status();
     uint16_t host = core_.host();
     pthread_mutex_unlock(&lock_);
-    printf("[HudTerm] %s, host %04X: batches %u (done %u, dropped %u, replaced %u, refused %u), calls %u, answers %u, "
-           "copies %u, strays %u, nav msgs %u, timeouts %u, errors %u\n",
+    printf("[HudTerm] %s, host %04X: batches %u (done %u, dropped %u, replaced %u, merged %u, refused %u), calls %u, "
+           "answers %u, copies %u, strays %u, nav msgs %u, timeouts %u, errors %u\n",
            statusName(s), host, t.batches - l.batches, t.batchesDone - l.batchesDone, t.batchesDropped - l.batchesDropped,
-           t.replaced - l.replaced, t.refused - l.refused, t.calls - l.calls, t.answers - l.answers, t.copies - l.copies,
+           t.replaced - l.replaced, t.merged - l.merged, t.refused - l.refused, t.calls - l.calls, t.answers - l.answers, t.copies - l.copies,
            t.strays - l.strays, t.navMsgs - l.navMsgs, t.timeouts - l.timeouts, t.errors - l.errors);
 }
 
