@@ -67,6 +67,9 @@ AASession::AASession()
     input_ready_ = false;
     memset(av_session_, 0, sizeof(av_session_));
     pending_focus_ = 0;
+    pending_audio_loss_ = false;
+    audio_focus_cb_ = NULL;
+    audio_focus_user_data_ = NULL;
     night_state_ = -1;
     night_started_ = false;
     pending_night_ = false;
@@ -150,6 +153,21 @@ void AASession::postVideoFocus(bool projected) {
     char b = 1;
     ssize_t w = write(wake_pipe_[1], &b, 1);
     (void)w;
+}
+
+void AASession::postAudioFocusLoss() {
+    if (wake_pipe_[1] < 0) { printf("[AASession] audio focus loss not sent (no wake pipe: NBT_TOUCH_FWD=0)\n"); return; }
+    pthread_mutex_lock(&touch_mutex_);
+    pending_audio_loss_ = true;
+    pthread_mutex_unlock(&touch_mutex_);
+    char b = 1;
+    ssize_t w = write(wake_pipe_[1], &b, 1);
+    (void)w;
+}
+
+void AASession::setAudioFocusCallback(AudioFocusCallback cb, void* user_data) {
+    audio_focus_cb_ = cb;
+    audio_focus_user_data_ = user_data;
 }
 
 void AASession::postNightMode(bool night) {
@@ -362,6 +380,7 @@ bool AASession::start(int client_fd) {
     touch_queue_.clear();
     key_queue_.clear();
     pending_focus_ = 0;
+    pending_audio_loss_ = false;
     night_started_ = false;
     pending_night_ = false;
     location_started_ = false;
@@ -687,6 +706,8 @@ void AASession::drainTouch() {
     keys.swap(key_queue_);
     int focus = pending_focus_;
     pending_focus_ = 0;
+    const bool audio_loss = pending_audio_loss_;
+    pending_audio_loss_ = false;
     bool night = pending_night_ && night_started_;
     pending_night_ = false;
     bool location = pending_location_ && location_started_;
@@ -706,6 +727,11 @@ void AASession::drainTouch() {
     }
     if (night && !sendSensorEvent(10)) printf("[AASession] NIGHT_MODE event: SEND FAILED\n");
     if (location && !sendSensorEvent(1)) printf("[AASession] LOCATION event: SEND FAILED\n");
+    if (audio_loss) {
+        // AudioFocusNotification {state = LOSS}: the same message as the answer to a request, sent unrequested.
+        const bool ok = sendAudioFocusResponse(3);
+        printf("[AASession] audio focus -> phone: LOSS (unrequested: the car took the audio) %s\n", ok ? "sent" : "SEND FAILED");
+    }
     if (focus) {
         bool ok = sendVideoFocusIndication(6, focus == 1, true);
         printf("[AASession] video focus -> phone: %s (unrequested) %s\n", focus == 1 ? "FOCUSED/projected" : "UNFOCUSED/native", ok ? "sent" : "SEND FAILED");
@@ -1444,6 +1470,7 @@ void AASession::sessionLoop() {
                     printf("[AASession] >>> Received AudioFocusRequest on Channel 0 (request=%u)! Sending AudioFocusResponse(state=%u)...\n",
                            requested_focus, response_focus);
                     sendAudioFocusResponse(response_focus);
+                    if (audio_focus_cb_) audio_focus_cb_(requested_focus, audio_focus_user_data_);
                 } else if (msg_id == 0x000D) { // NavigationFocusRequest {type=1}: 1 NATIVE, 2 PROJECTED
                     // Maps asks for navigation focus when guidance starts (2) and ends (1). Unanswered it never gets
                     // it. Like openauto, grant PROJECTED: this head unit has no native guidance of its own running.

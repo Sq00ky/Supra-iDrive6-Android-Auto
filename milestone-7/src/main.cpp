@@ -107,6 +107,7 @@
 #include "car/volume_input.hpp"
 #include "car/input_activity.hpp"
 #include "car/gps.hpp"
+#include "car/source_key.hpp"
 #include "most/client.hpp"
 #include "most/trace.hpp"
 #include "crash_handler.hpp"
@@ -155,6 +156,7 @@ static nbt::car::CcsInput g_ccs;             // iDrive controller and voice butt
 static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
 static nbt::car::InputActivity g_carInput;   // any car control the driver touched: a consumer of g_most
 static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
+static nbt::car::SourceKey g_sourceKey;      // the driver changing audio source (browser hold): a consumer of g_most
 static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
@@ -1373,6 +1375,18 @@ static void onCarInput(const char* what, void*) {
 // Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03, car/volume_level.hpp): mirror it on
 // the overlay. This is the value the amplifier actually applied, so the pill always matches what the driver hears.
 // From g_carVolume on the DSI callback thread.
+// Browser hold (NBT_BROWSER_HOLD=1, audio/route_policy.hpp): the driver changed source (DSI callback thread), the
+// phone asked for audio focus (session thread), and the mixer giving the source back (mixer thread: tell the phone).
+static void onSourceKey(const char* what, void*) {
+    if (g_browserAudio) g_browserAudio->onSourceChange(what);
+}
+static void onAudioFocusRequest(uint32_t request, void*) {
+    if (g_browserAudio) g_browserAudio->onAudioFocusRequest(request);
+}
+static void onBrowserFocusLoss(void*) {
+    g_session.postAudioFocusLoss();
+}
+
 static void onCarVolume(int level, int max, void*) {
     g_carInputMs = monoMs() | 1u;   // iDrive draws its own volume bar: that is the driver, not the car
     volumeApply(nbt::car::VolumeLevel::percent(level, max), false);
@@ -1744,6 +1758,7 @@ int main(int argc, char* argv[]) {
         if (underflow) browser.setUnderflowCallback(&onAudioUnderflow, NULL);
         g_session.setUnderflowReports(underflow);
         printf("[Browser] underflow reports to the phone: %s (NBT_AA_UNDERFLOW_REPORT)\n", underflow ? "on" : "off");
+        if (browser.holdEnabled()) browser.setFocusLossCallback(&onBrowserFocusLoss, NULL);
         g_browserAudio = &browser;
         g_audioBackend = &browser;
     } else if (audio_mode == nbt::AUDIO_MODE_BT) {
@@ -1789,6 +1804,7 @@ int main(int argc, char* argv[]) {
     g_session.setAudioStateCallback(&onAudioState, NULL);
     g_session.setVideoFocusCallback(&onVideoFocusRequest, NULL);
     g_session.setMicRequestCallback(&onMicRequest, NULL);
+    g_session.setAudioFocusCallback(&onAudioFocusRequest, NULL);
     g_session.setNavStatusCallback(&nbt::kombinav::KombiNav::navStatusCallback, &g_kombiNav);
 
     if (!tcp_server.start()) {
@@ -1843,6 +1859,10 @@ int main(int argc, char* argv[]) {
         printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
     else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &g_session))
         printf("[Main] car GPS failed to start.\n");
+    // Browser hold: the steering-wheel MODE button gives the held source back to the car.
+    if (g_browserAudio && g_browserAudio->holdEnabled() && !g_sourceKey.attach(g_most, &onSourceKey, NULL))
+        printf("[Main] source-change input failed to start: with NBT_BROWSER_HOLD=1 only the session end releases "
+               "the browser source.\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.
     const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;

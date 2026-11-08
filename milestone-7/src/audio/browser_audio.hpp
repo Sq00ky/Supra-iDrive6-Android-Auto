@@ -34,6 +34,11 @@
 //                        device does not open and there is no AA audio that session; the reason is in sloginfo.
 //   NBT_BROWSER_IDLE_S   remove the connection after this many seconds without sound once AA media has played
 //                        (default 10, 0 = keep it until the session ends)
+//   NBT_BROWSER_HOLD     1 = once AA media has played, keep the connection through pauses however long, until the
+//                        driver picks another source (steering-wheel MODE, car/source_key.hpp). Then the connection
+//                        goes back to the car, the phone is told it lost audio focus (it pauses), and AA media takes
+//                        the connection again only when the phone asks for focus (play pressed). Default 0 (off): an
+//                        undecoded source change would leave the car's own sources silent behind it.
 //   NBT_BROWSER_PROMPT_IDLE_MS  when no AA media is playing (e.g. the user is on the radio), remove it this many ms
 //                        after a prompt / system sound ends, so the radio is cut only for the prompt (default 1000,
 //                        0 = use NBT_BROWSER_IDLE_S)
@@ -107,6 +112,18 @@ public:
     typedef void (*UnderflowFn)(uint8_t channel, void* user);
     void setUnderflowCallback(UnderflowFn fn, void* user) { underflow_fn_ = fn; underflow_user_ = user; }
 
+    // Hold (NBT_BROWSER_HOLD=1, audio/route_policy.hpp). holdEnabled: set by init().
+    bool holdEnabled() const { return hold_; }
+    // The driver picked another audio source (what = "MODE", ...). Any thread; the mixer acts on it within a block:
+    // if AA media holds the source it goes back to the car and the focus-loss callback runs (mixer thread), so the
+    // phone pauses. Nothing when hold is off or AA media holds nothing.
+    void onSourceChange(const char* what);
+    // The phone asked for audio focus (AudioFocusRequest type: 1 GAIN, 2 GAIN_TRANSIENT, 3 GAIN_NAVI, 4 RELEASE).
+    // Session thread. GAIN after a source change lets AA media take the source again.
+    void onAudioFocusRequest(uint32_t type);
+    typedef void (*FocusLossFn)(void* user);
+    void setFocusLossCallback(FocusLossFn fn, void* user) { focus_loss_fn_ = fn; focus_loss_user_ = user; }
+
     // Mixer thread (internal).
     void mixerLoop();
     void routeGranted();
@@ -163,6 +180,14 @@ private:
     // config
     uint32_t conn_;
     bool refocus_;
+    bool hold_;                          // NBT_BROWSER_HOLD
+
+    // Hold: a source change waiting for the mixer (guarded by lock_), and the phone to tell (focus loss).
+    void applySourceChange(bool other_active);   // mixer thread, once per block
+    bool yield_req_;
+    const char* yield_what_;
+    FocusLossFn focus_loss_fn_;
+    void* focus_loss_user_;
     DuckConfig duck_cfg_;
 
     // The libasound shim and its device (mixer thread; loaded at init).

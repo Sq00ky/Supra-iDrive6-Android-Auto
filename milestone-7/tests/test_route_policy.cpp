@@ -182,6 +182,75 @@ int main() {
     CHECK(strcmp(RoutePolicy::stateName(RoutePolicy::ROUTED), "granted") == 0);
     CHECK(strcmp(RoutePolicy::stateName(RoutePolicy::RELEASING), "releasing") == 0);
 
+    // 14. NBT_BROWSER_HOLD=1: after media, a pause keeps the source however long, whatever NBT_BROWSER_IDLE_S says;
+    //     prompts alone still go after NBT_BROWSER_PROMPT_IDLE_MS, and with that at 0 after NBT_BROWSER_IDLE_S.
+    {
+        RoutePolicy::Config c;
+        CHECK(!c.hold);                                                      // off by default
+        c.hold = true;
+        RoutePolicy p = routedAt(1000, c);
+        CHECK(p.decide(2000 + 10001, false, 2000, 2000) == RoutePolicy::NONE);
+        CHECK(p.decide(2000 + 3600000, false, 2000, 2000) == RoutePolicy::NONE);   // an hour paused
+        CHECK(p.decide(20000 + 1001, false, 20000, 0) == RoutePolicy::RELEASE_PROMPT);
+        c.prompt_idle_ms = 0;
+        RoutePolicy q = routedAt(1000, c);
+        CHECK(q.decide(20000 + 5000, false, 20000, 0) == RoutePolicy::NONE);
+        CHECK(q.decide(20000 + 10001, false, 20000, 0) == RoutePolicy::RELEASE_IDLE);
+        CHECK(q.decide(20000 + 3600000, false, 2000, 2000) == RoutePolicy::NONE);
+    }
+
+    // 15. holdsMedia: media played and the source built or being built; not when idle or releasing.
+    {
+        RoutePolicy p;
+        CHECK(!p.holdsMedia(5000));
+        CHECK(p.tryBuild(1000));
+        CHECK(p.holdsMedia(5000));
+        CHECK(!p.holdsMedia(0));                                             // only a prompt built it
+        p.granted(1100);
+        CHECK(p.holdsMedia(5000));
+        CHECK(p.startRelease(6000));
+        CHECK(!p.holdsMedia(5000));
+    }
+
+    // 16. Yield: AA media alone no longer needs the source; prompts and sounds still do; endYield gives it back.
+    {
+        RoutePolicy p;
+        CHECK(!p.yielded());
+        CHECK(p.needsSource(true, false) && p.needsSource(false, true) && !p.needsSource(false, false));
+        p.yieldToCar();
+        CHECK(p.yielded());
+        CHECK(!p.needsSource(true, false));                                  // late media frames: no rebuild
+        CHECK(p.needsSource(false, true) && p.needsSource(true, true));      // a prompt on the radio: built for it
+        CHECK(!p.needsSource(false, false));
+        CHECK(p.endYield());
+        CHECK(!p.yielded() && p.needsSource(true, false));
+        CHECK(!p.endYield());                                                // not yielded: nothing to end
+    }
+
+    // 17. The whole MODE cycle with hold: media holds through a pause, MODE yields (released at once), a prompt on the
+    //     radio builds and releases the source, play in AA (focus request) takes it back and holds it again.
+    {
+        RoutePolicy::Config c;
+        c.hold = true;
+        RoutePolicy p = routedAt(1000, c);
+        CHECK(p.decide(500000, false, 2000, 2000) == RoutePolicy::NONE);    // paused for minutes: still held
+        CHECK(p.holdsMedia(2000));
+        p.yieldToCar();
+        CHECK(p.startRelease(500001));
+        p.released();
+        CHECK(!p.needsSource(true, false));                                  // the phone's last media frames
+        CHECK(p.needsSource(false, true) && p.tryBuild(510000));             // a Maps prompt on the radio
+        p.granted(510100);
+        CHECK(!p.holdsMedia(0));                                             // last_media reset at the yield
+        CHECK(p.decide(513000 + 1001, false, 513000, 0) == RoutePolicy::RELEASE_PROMPT);
+        CHECK(p.startRelease(514001));
+        p.released();
+        CHECK(p.endYield());                                                 // play pressed in AA
+        CHECK(p.needsSource(true, false) && p.tryBuild(600000));
+        p.granted(600100);
+        CHECK(p.decide(600000 + 3600000, false, 600200, 600200) == RoutePolicy::NONE);   // held again
+    }
+
     if (fails) { printf("test_route_policy: %d failure(s)\n", fails); return 1; }
     printf("test_route_policy OK\n");
     return 0;

@@ -14,7 +14,7 @@ static int fails = 0;
 static const char* const kVars[] = {
     "NBT_AUDIO_MODE", "NBT_AUDIO_BT",
     "NBT_BROWSER_CONN", "NBT_BROWSER_RATE", "NBT_BROWSER_FORCE_RATE", "NBT_BROWSER_IDLE_S",
-    "NBT_BROWSER_PROMPT_IDLE_MS", "NBT_BROWSER_WAIT_MS", "NBT_BROWSER_PREROLL_MS", "NBT_BROWSER_DRIFT",
+    "NBT_BROWSER_PROMPT_IDLE_MS", "NBT_BROWSER_HOLD", "NBT_BROWSER_WAIT_MS", "NBT_BROWSER_PREROLL_MS", "NBT_BROWSER_DRIFT",
     "NBT_BROWSER_DRIFT_LOOP", "NBT_BROWSER_PRIO", "NBT_BROWSER_RESAMPLER", "NBT_BROWSER_SPEEX_Q",
     "NBT_BROWSER_RESAMPLER_FILE", "NBT_BROWSER_REFOCUS", "NBT_BROWSER_ASOUND", "NBT_BROWSER_PCM", "NBT_BROWSER_FRAG",
     "NBT_BROWSER_FRAGS", "NBT_DUCK_DB", "NBT_DUCK_ATTACK_MS", "NBT_DUCK_RELEASE_MS", "NBT_DUCK_HOLD_MS",
@@ -41,6 +41,7 @@ int main() {
         CHECK(c.force_rate == 0 && d.force_rate == 0);
         CHECK(c.idle_s == 10 && d.idle_s == 10);
         CHECK(c.prompt_idle_ms == 1000 && d.prompt_idle_ms == 1000);
+        CHECK(!c.hold && !d.hold);
         CHECK(c.wait_ms == 30 && d.wait_ms == 30);
         CHECK(c.preroll_ms == 60 && d.preroll_ms == 60);
         CHECK(c.drift && d.drift);
@@ -69,6 +70,7 @@ int main() {
         setenv("NBT_BROWSER_FORCE_RATE", "48000", 1);
         setenv("NBT_BROWSER_IDLE_S", "0", 1);
         setenv("NBT_BROWSER_PROMPT_IDLE_MS", "250", 1);
+        setenv("NBT_BROWSER_HOLD", "1", 1);
         setenv("NBT_BROWSER_WAIT_MS", "45", 1);
         setenv("NBT_BROWSER_PREROLL_MS", "0", 1);
         setenv("NBT_BROWSER_DRIFT", "0", 1);
@@ -97,6 +99,7 @@ int main() {
         CHECK(c.force_rate == 48000);
         CHECK(c.idle_s == 0);
         CHECK(c.prompt_idle_ms == 250);
+        CHECK(c.hold);
         CHECK(c.wait_ms == 45);
         CHECK(c.preroll_ms == 0);
         CHECK(!c.drift);
