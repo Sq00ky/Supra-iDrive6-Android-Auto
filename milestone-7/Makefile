@@ -55,6 +55,7 @@ SRCS = src/main.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
        src/cluster/j29_client.cpp \
+       src/cluster/j29_display.cpp \
        src/cluster/nav_core.cpp \
        src/cluster/hud_terminal.cpp \
        src/volume_osd.cpp

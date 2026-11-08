@@ -76,9 +76,10 @@ struct Rig {
     Graph g;
     KombiClient c;
     TestLink l;
+    J29Display d;
     Core core;
     explicit Rig(const Settings& s = noApproach())
-        : g(0xC8, 255), c("127.0.0.1", k.port()), l(c, g), core(g, l.link, s, &logFn, NULL) {
+        : g(0xC8, 255), c("127.0.0.1", k.port()), l(c, g), d(g, l.link), core(d, s, &logFn, NULL) {
         g_log.clear();
     }
     void feed(const NavMessages& m, double t) {
@@ -528,7 +529,8 @@ int main() {
         KombiClient c("127.0.0.1", 9, 500);
         TestLink l(c, g);
         g_log.clear();
-        Core core(g, l.link, noApproach(), &logFn, NULL);
+        J29Display d(g, l.link);
+        Core core(d, noApproach(), &logFn, NULL);
         std::vector<Tick> drive = demoDrive(demoRoute());
         NavView v;
         assert(viewFromMessages(drive[1].m, v));

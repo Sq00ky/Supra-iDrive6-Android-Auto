@@ -27,6 +27,8 @@
 #include <pthread.h>
 #include <sys/types.h>
 
+#include "cluster/display.hpp"
+#include "cluster/j29_display.hpp"
 #include "cluster/nav_msg.hpp"
 #include "cluster/j29_graph.hpp"
 #include "cluster/j29_client.hpp"
@@ -34,39 +36,13 @@
 namespace nbt {
 namespace kombinav {
 
-struct Settings {
-    double approach_mi;    // show a maneuver only within this many miles (0 = at once); like a production nav HUD
-    double hysteresis;     // once shown, the same maneuver hides again only past approach_mi * hysteresis
-    size_t dist_chars;     // with approach on: distance text <= 3 chars + the KOMBI's mi/ft
-    bool hide_bar;         // red distance bar hidden (pct 255); its percentage means nothing without a factory route
-    double grace_s;        // guidance off this long before the clear (rerouting blips survive)
-    double first_dist_s;   // a new maneuver without a distance yet waits this long, then shows "-"
-    double min_update_s;   // distance updates at most this often
-    double nav_stale_s;    // guidance on but no ch 10 message this long = ended
-    bool lanes;            // the phone's lanes as the KOMBI lane row (NBT_KOMBI_NAV_LANES=0 turns it off)
-    double lane_resend_s;  // a lane-only change on the same maneuver resends the graph at most this often
-    double lane_feed_s;    // the position update the KOMBI checks lanes against: at most this often
-    int inplace;           // next maneuver / lane change on a shown route: 1 = in-place maneuver-0 update (default),
-                           // 2 = the same without the 0x07 guiding model, 0 = full graph (NBT_KOMBI_NAV_INPLACE)
-    Settings() : approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
-                 min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1) {}
-};
-
-// What the state machine drives (callbacks, like AASession's): the real client in cluster/nav_core.cpp, a test's own in tests.
-struct Link {
-    KombiClient::Result (*send)(void* user, const std::vector<Frame>& frames, std::string* detail);
-    bool (*cancel)(void* user, std::string* detail);   // the factory cancel; true = acknowledged
-    void* user;
-};
-
-typedef void (*LogFn)(const char* line, void* user);
-
-// The guidance state machine. Single-threaded: the worker calls it. now = seconds (monotonic).
+// The guidance state machine, the same for every cluster: what to show and when. How it is drawn is the
+// ClusterDisplay's (cluster/display.hpp). Single-threaded: the worker calls it. now = seconds (monotonic).
 class Core {
 public:
     enum Stop { kRunning = 0, kStoppedLink, kStoppedRejected };
 
-    Core(const Graph& g, const Link& link, const Settings& s, LogFn log = NULL, void* log_user = NULL);
+    Core(ClusterDisplay& d, const Settings& s, LogFn log = NULL, void* log_user = NULL);
 
     // One tick. v = the next maneuver, or NULL when there is no guidance (or it went stale).
     void step(const NavView* v, double now, const char* why_none = "guidance ended");
@@ -76,24 +52,21 @@ public:
     void yieldToFactory();
 
     bool shown() const { return has_shown_; }
-    bool sentAny() const { return sent_any_; }
+    bool sentAny() const { return d_.sentAny(); }
     bool lastCancelOk() const { return last_cancel_ok_; }   // the last clear's cancel was acknowledged
     Stop stopped() const { return stop_; }
     void resetStop() { stop_ = kRunning; }
     const NavView& current() const { return shown_; }
     const Settings& settings() const { return s_; }
-    void setSettings(const Settings& s) { s_ = s; }
+    void setSettings(const Settings& s) { s_ = s; d_.setSettings(s); }
 
 private:
     bool approachHold(const NavView& v, double now);
-    bool sendFrames(const char* label, const std::vector<Frame>& frames, bool quiet = false);
-    KombiClient::Result sendLogged(const char* label, const std::vector<Frame>& frames, bool quiet);
-    void feed(const NavView& v, double now, bool force);
+    void fail(ClusterDisplay::Result r);   // stops and clears after a draw went wrong
     void forget();
     void log(const char* fmt, ...);
 
-    const Graph& g_;
-    Link link_;
+    ClusterDisplay& d_;
     Settings s_;
     LogFn log_fn_;
     void* log_user_;
@@ -105,16 +78,8 @@ private:
     double off_since_;
     bool no_dist_;          // no_dist_since valid
     double no_dist_since_;
-    bool sent_any_;
     bool last_cancel_ok_;
     Stop stop_;
-    KombiLanes shown_lanes_;  // the lane row in the graph we sent (empty = none)
-    bool full_next_;          // the next maneuver gets the full graph (after a guidance gap: likely a reroute)
-    bool inplace_ok_;         // false after the KOMBI rejected an in-place update (full graphs until the next clear)
-    double t_graph_;
-    double t_pos_;
-    bool has_last_pos_;
-    double last_pos_;
 };
 
 // iDrive route detection from the system log (NavNBTEvoController / MapViewer lines, car-seen 2026-10-31):
@@ -222,6 +187,7 @@ private:
 
     Graph* graph_;
     KombiClient* client_;
+    J29Display* display_;
     Core* core_;
     static KombiClient::Result linkSend(void* self, const std::vector<Frame>& frames, std::string* detail);
     static bool linkCancel(void* self, std::string* detail);

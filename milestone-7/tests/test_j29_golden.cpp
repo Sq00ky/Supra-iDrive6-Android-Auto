@@ -51,14 +51,15 @@ struct Golden {
     Graph g;
     KombiClient c;
     Link link;
+    J29Display d;
     Core core;
     size_t seen;
     bool lastShown;
     int lastStop;
 
     Golden(std::vector<std::string>& o, const char* name, const Settings& s)
-        : out(o), g(0xC8, 255), c("127.0.0.1", k.port()), core(g, makeLink(), s, &logFn, this), seen(0), lastShown(false),
-          lastStop(0) {
+        : out(o), g(0xC8, 255), c("127.0.0.1", k.port()), d(g, makeLink()), core(d, s, &logFn, this), seen(0),
+          lastShown(false), lastStop(0) {
         out.push_back(fmt("== %s", name));
     }
     ~Golden() { out.push_back(""); }

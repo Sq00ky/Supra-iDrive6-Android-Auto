@@ -43,10 +43,12 @@ volatile int g_mayShow = 0;   // an arrow may be up: the fatal-signal handler se
 
 // ---- Core ---------------------------------------------------------------------------------------------------------
 
-Core::Core(const Graph& g, const Link& link, const Settings& s, LogFn log, void* log_user)
-    : g_(g), link_(link), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false),
-      off_since_(0), no_dist_(false), no_dist_since_(0), sent_any_(false), last_cancel_ok_(true), stop_(kRunning),
-      full_next_(false), inplace_ok_(true), t_graph_(0), t_pos_(0), has_last_pos_(false), last_pos_(0) {}
+Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
+    : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
+      no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning) {
+    d_.setSettings(s);
+    d_.setLog(log, log_user);
+}
 
 void Core::log(const char* fmt, ...) {
     char buf[320];
@@ -57,22 +59,10 @@ void Core::log(const char* fmt, ...) {
     if (log_fn_) log_fn_(buf, log_user_);
 }
 
-KombiClient::Result Core::sendLogged(const char* label, const std::vector<Frame>& frames, bool quiet) {
-    std::string detail;
-    KombiClient::Result r = link_.send(link_.user, frames, &detail);
-    sent_any_ = true;
-    if (!quiet || r != KombiClient::kOk)
-        log("%s: %u frame(s) %s%s%s", label, (unsigned)frames.size(), r == KombiClient::kOk ? "OK" : "FAILED",
-            detail.empty() || r == KombiClient::kOk ? "" : ": ", r == KombiClient::kOk ? "" : detail.c_str());
-    return r;
-}
-
-bool Core::sendFrames(const char* label, const std::vector<Frame>& frames, bool quiet) {
-    KombiClient::Result r = sendLogged(label, frames, quiet);
-    if (r == KombiClient::kOk) return true;
-    stop_ = r == KombiClient::kRejected ? kStoppedRejected : kStoppedLink;
-    clear(r == KombiClient::kRejected ? "KOMBI rejected a frame" : "KOMBI link failed");
-    return false;
+void Core::fail(ClusterDisplay::Result r) {
+    stop_ = r == ClusterDisplay::kLink ? kStoppedLink : kStoppedRejected;
+    clear(r == ClusterDisplay::kLink ? "KOMBI link failed" :
+          r == ClusterDisplay::kRejected ? "KOMBI rejected a frame" : "template layout");
 }
 
 bool Core::approachHold(const NavView& v, double /*now*/) {
@@ -95,7 +85,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     if (!in) {
         no_dist_ = false;
         if (!has_shown_) return;
-        full_next_ = true;                             // guidance gap (a reroute): the next maneuver gets a full graph
+        d_.guidanceGap();                              // a guidance gap (a reroute)
         if (!off_) { off_ = true; off_since_ = now; }
         if (now - off_since_ >= s_.grace_s) clear(why_none);
         return;
@@ -131,93 +121,35 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     }
     v.road = utf8Prefix(v.road.empty() ? std::string(" ") : v.road, kMaxRoad);
     v.dist_text = utf8Prefix(v.dist_text, kMaxDist);
-    int dir = kombiDirection(v.aa_type), ku = kombiUnit(v.aa_unit);
-    std::vector<Frame> frames;
-    KombiLanes lanes;
-    if (s_.lanes) kombiLanes(v, lanes);                  // empty = no lane row (none sent, or nothing we can map)
     bool new_man = !has_shown_ || !v.sameManeuver(shown_);
-    if (!new_man) full_next_ = false;                    // guidance came back on the same maneuver: nothing to rebuild
-    // the phone adds / re-highlights / drops lanes as the junction nears: the same maneuver's graph is resent with the
-    // new lane row (the car-proven path), at most every lane_resend_s
-    bool lanes_changed = !new_man && lanes != shown_lanes_ && now - t_graph_ >= s_.lane_resend_s;
-    if (new_man || lanes_changed) {
-        std::string lane_note;
-        if (!lanes.empty() || lanes_changed) lane_note = " | lanes " + describeLanes(lanes);
-        log("%s type %d -> direction %d | %s %s | road '%s'%s", new_man ? "SHOW" : "LANES", v.aa_type, dir,
-            v.dist_text.c_str(), kombiUnitName(ku), v.road.c_str(),
-            lane_note.c_str());
-        const KombiLanes* lp = lanes.empty() ? NULL : &lanes;
-        bool done = false;
-        if (has_shown_ && !full_next_ && inplace_ok_ && s_.inplace > 0 &&
-            g_.maneuver(dir, v.road, v.dist_text, ku, frames, lp, s_.inplace != 2)) {
-            KombiClient::Result r = sendLogged("maneuver", frames, false);
-            if (r == KombiClient::kOk) {
-                done = true;
-            } else if (r == KombiClient::kRejected) {
-                log("the KOMBI rejected the in-place update: full graphs until the next clear");
-                inplace_ok_ = false;
-            } else {
-                stop_ = kStoppedLink;
-                clear("KOMBI link failed");
-                return;
-            }
+    bool redraw = !new_man && d_.sameManeuver(v, now);
+    if (new_man || redraw) {
+        ClusterDisplay::Result r = d_.showManeuver(v, now, new_man, !has_shown_);
+        if (r != ClusterDisplay::kOk) {
+            fail(r);
+            return;
         }
-        if (!done) {
-            if (!g_.start(dir, v.road, v.dist_text, ku, frames, lp)) {
-                log("internal error: the graph template has an unexpected layout");
-                stop_ = kStoppedRejected;
-                clear("template layout");
-                return;
-            }
-            if (!sendFrames("graph", frames)) return;
-        }
-        full_next_ = false;
         has_shown_ = true;
         shown_ = v;
         last_dist_ = v;
         last_dist_t_ = now;
-        shown_lanes_ = lanes;
-        t_graph_ = now;
-        has_last_pos_ = false;
-        if (!lanes.empty()) feed(v, now, true);           // the KOMBI checks lanes on the next position update
         return;
     }
     if (!v.sameDistance(last_dist_) && now - last_dist_t_ >= s_.min_update_s) {
-        if (!g_.distance(v.dist_text, ku, frames)) {
-            log("internal error: the distance template has an unexpected layout");
-            stop_ = kStoppedRejected;
-            clear("template layout");
+        ClusterDisplay::Result r = d_.updateDistance(v, now);
+        if (r != ClusterDisplay::kOk) {
+            fail(r);
             return;
         }
-        log("DIST %s %s", v.dist_text.c_str(), (ku < 0 ? "" : kombiUnitName(ku)));
-        if (!sendFrames("distance", frames)) return;
         last_dist_ = v;
         last_dist_t_ = now;
     }
-    if (!shown_lanes_.empty()) {
-        feed(v, now, false);
-        if (stop_ != kRunning) return;
-    }
-    shown_ = v;
-}
-
-// The lane row's position feed: the car's route position from the metres to the maneuver (one 0x11 update, at most
-// every lane_feed_s and only when it moved >= 1 m), so the KOMBI's lane-section check sees the car inside our section.
-void Core::feed(const NavView& v, double now, bool force) {
-    if (!force && now - t_pos_ < s_.lane_feed_s) return;
-    double m = 0, pos = 0;
-    bool has = distanceMetres(v, m);
-    if (!g_.feedPosition(has, m, pos)) return;
-    if (!force && has_last_pos_ && pos - last_pos_ < 1.0 && last_pos_ - pos < 1.0) return;
-    std::vector<Frame> frames;
-    if (!g_.position(pos, frames)) {
-        log("internal error: the graph template has no destination info: lane row without position updates");
+    ClusterDisplay::Result r = d_.keepUp(v, now);
+    if (r != ClusterDisplay::kOk) {
+        fail(r);
         return;
     }
-    if (!sendFrames("position", frames, true)) return;
-    t_pos_ = now;
-    has_last_pos_ = true;
-    last_pos_ = pos;
+    shown_ = v;
 }
 
 void Core::forget() {
@@ -226,18 +158,14 @@ void Core::forget() {
     last_dist_ = NavView();
     off_ = false;
     no_dist_ = false;
-    sent_any_ = false;
-    shown_lanes_.clear();
-    has_last_pos_ = false;
-    full_next_ = false;
-    inplace_ok_ = true;
+    d_.forget();
 }
 
 void Core::clear(const char* why) {
     log("CLEAR (%s)", why);
-    if (sent_any_ || has_shown_) {
+    if (d_.sentAny() || has_shown_) {
         std::string detail;
-        bool ok = link_.cancel(link_.user, &detail);
+        bool ok = d_.clear(&detail);
         log("cancel: %s%s%s", ok ? "OK" : "FAILED", ok ? "" : ": ", ok ? "" : detail.c_str());
         last_cancel_ok_ = ok;
     }
@@ -245,7 +173,7 @@ void Core::clear(const char* why) {
 }
 
 void Core::yieldToFactory() {
-    if (has_shown_ || sent_any_) log("YIELD (iDrive route active): stop writing, no cancel");
+    if (has_shown_ || d_.sentAny()) log("YIELD (iDrive route active): stop writing, no cancel");
     forget();
 }
 
@@ -290,7 +218,7 @@ KombiNav::KombiNav()
       port_(30502), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
       disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), watch_pid_(-1), watch_fd_(-1),
       watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), watch_fp_(NULL),
-      watch_method_(-1), watch_method_logged_(-1), graph_(NULL), client_(NULL),
+      watch_method_(-1), watch_method_logged_(-1), graph_(NULL), client_(NULL), display_(NULL),
       core_(NULL) {
     pthread_mutex_init(&mu_, NULL);
     pthread_mutex_init(&watch_mu_, NULL);
@@ -299,6 +227,7 @@ KombiNav::KombiNav()
 KombiNav::~KombiNav() {
     stop();
     delete core_;
+    delete display_;
     delete client_;
     delete graph_;
 }
@@ -365,7 +294,8 @@ void KombiNav::start() {
     link.send = &KombiNav::linkSend;
     link.cancel = &KombiNav::linkCancel;
     link.user = this;
-    core_ = new Core(*graph_, link, settings_, &KombiNav::logLine, this);
+    display_ = new J29Display(*graph_, link);
+    core_ = new Core(*display_, settings_, &KombiNav::logLine, this);
     printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %g mi, bar %s, iDrive-route "
            "yield %s, lanes %s, in-place %d\n", enabledNow() ? "ON" : "off",
            forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", host_.c_str(), (unsigned)port_, handle_,
