@@ -727,7 +727,7 @@ static void recoverWifiPath(const char* why) {
 static const int kApCfgRecheckSec = 10;
 
 static bool apConfigPresent(const char* cfg) {
-    // NBT_ALT_WIFI=DIRECT/BOTH: the Wi-Fi Direct group counts as a usable Wi-Fi even when the car has no CarPlay
+    // DIRECT (checkbox or NBT_ALT_WIFI): the Wi-Fi Direct group counts as a usable Wi-Fi even when the car has no CarPlay
     // hotspot config at all (cars without the CarPlay licence). Quiet: this runs every kApCfgRecheckSec.
     nbt::AltWifiMode m = nbt::altWifiMode();
     if (m != nbt::ALT_WIFI_CARPLAY) {
@@ -750,7 +750,9 @@ static void logNoApConfig(const char* cfg) {
                "Auto is unavailable, Bluetooth links are left alone; checking again every %d s\n", kApCfgRecheckSec);
     else
         printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are "
-               "left alone; checking again every %d s\n", cfg ? cfg : "iap2.cfg / iap2_Wifi.cfg", kApCfgRecheckSec);
+               "left alone; checking again every %d s. A car without the CarPlay hotspot (no CarPlay licence) can use "
+               "its Wi-Fi Direct group: tick \"Use WiFi Direct Network\" in Settings\n",
+               cfg ? cfg : "iap2.cfg / iap2_Wifi.cfg", kApCfgRecheckSec);
 }
 
 // One Wi-Fi the phone may be offered. File-scope (not inside wirelessThread) because GCC 4.4.2 rejects a local
@@ -798,11 +800,11 @@ static void* wirelessThread(void*) {
            getenv("NBT_ALT_WIFI") && *getenv("NBT_ALT_WIFI") ? getenv("NBT_ALT_WIFI") : "(unset)",
            altMode == nbt::ALT_WIFI_DIRECT
                ? "the car's Wi-Fi Direct group only, no CarPlay fallback"
-               : (altMode == nbt::ALT_WIFI_BOTH
-                      ? "the car's Wi-Fi Direct group first, the CarPlay hotspot after two tries without a connection"
-                      : "the CarPlay hotspot only"));
-    // Watch the interface of the source offered first (CARPLAY and BOTH: the hotspot; DIRECT: wfd0). The other one
-    // is covered by the "no IP on <if>, retry" path and by recoverWifiPath() when a BOTH try falls back.
+               : "the CarPlay hotspot only, no Wi-Fi Direct fallback");
+    if (nbt::altWifiRetiredBoth(getenv("NBT_ALT_WIFI")))
+        printf("[Wireless] NBT_ALT_WIFI=BOTH is no longer an option (v1.9.37): using the CarPlay hotspot. Tick \"Use "
+               "WiFi Direct Network\" (or NBT_ALT_WIFI=DIRECT) for the Wi-Fi Direct group\n");
+    // Watch the interface of the source offered (CARPLAY: the hotspot; DIRECT: wfd0).
     const char* pollIfn = altMode == nbt::ALT_WIFI_DIRECT ? wfdIfn : ifn;
 
     int apState = -1;           // ifn: -1 unknown, 0 no IP (access point off), 1 has an IP
@@ -891,10 +893,8 @@ static void* wirelessThread(void*) {
         }
         idleWait = false;
         // Which Wi-Fi this link is offered (NBT_ALT_WIFI, alt_wifi.hpp):
-        //   CARPLAY  the car's hotspot from iap2.cfg, unchanged
-        //   DIRECT   the car's Wi-Fi Direct group only, no fallback
-        //   BOTH     the hotspot first (the car-verified path), the DIRECT group after two tries without a
-        //            connection; cars that have no CarPlay config have no hotspot at all, so BOTH is DIRECT there
+        //   CARPLAY  the car's hotspot from iap2.cfg (iap2_Wifi.cfg as a second passphrase), no DIRECT fallback
+        //   DIRECT   the car's Wi-Fi Direct group only, no hotspot fallback
         std::vector<ApChoice> directChoices;   // the Wi-Fi Direct group (wfd0)
         std::vector<ApChoice> cpChoices;       // the CarPlay hotspot (iap2.cfg / iap2_Wifi.cfg)
         if (altMode != nbt::ALT_WIFI_CARPLAY) {
@@ -958,14 +958,8 @@ static void* wirelessThread(void*) {
                 }
             }
         }
-        // Order: CARPLAY and BOTH put the car's hotspot first, so a car that has CarPlay keeps the path that is
-        // verified there; the DIRECT group is only reached when there is no hotspot config, or BOTH falls back to
-        // it after two tries the phone took but never connected with (apNoJoin below).
-        const bool cpFirst = nbt::altWifiPrefersCarplay();
-        std::vector<ApChoice>& vFirst = cpFirst ? cpChoices : directChoices;
-        std::vector<ApChoice>& vSecond = cpFirst ? directChoices : cpChoices;
-        std::vector<ApChoice> choices = vFirst;
-        if (altMode == nbt::ALT_WIFI_BOTH) choices.insert(choices.end(), vSecond.begin(), vSecond.end());
+        // One source per run: the hotspot candidates (CARPLAY) or the DIRECT group (DIRECT), never the other.
+        std::vector<ApChoice> choices = nbt::altWifiPrefersCarplay() ? cpChoices : directChoices;
         if (choices.empty()) {
             close(fd);
             logNoApConfig(cfg);
