@@ -111,6 +111,7 @@
 #include "most/trace.hpp"
 #include "crash_handler.hpp"
 #include "a2i_client.h"
+#include "audio/media_state.hpp"
 #include "audio/voice_scenario.hpp"
 #include "usb_log.hpp"
 #include "spp_rereg.hpp"
@@ -375,8 +376,12 @@ static uint16_t ctlPort() {
     return (uint16_t)((v > 0 && v < 65536) ? v : 52790);
 }
 
+// Control port "media ..." (now-playing record or a transport key). False: nothing to reply.
+static bool mediaCtlPrepare(const char* cmd, std::string& reply);
+static void resetMedia(const char* why);   // now-playing record (defined with the media block below)
+
 static void* ctlThread(void*) {
-    char buf[32];
+    char buf[512];
     while (g_running) {
         struct sockaddr_in from;
         socklen_t flen = sizeof(from);
@@ -403,6 +408,11 @@ static void* ctlThread(void*) {
             int v = atoi(buf + 9);
             if (v != g_dayNight) printf("[Night] day/night change-over %d -> %d (from iDrive app)\n", (int)g_dayNight, v);
             g_dayNight = v;
+        }
+        else if (!strncmp(buf, "media", 5) && (buf[5] == 0 || buf[5] == ' ' || buf[5] == '\n')) {
+            std::string reply;
+            if (mediaCtlPrepare(buf + 5, reply))
+                sendto(g_ctlFd, reply.data(), reply.size(), 0, (struct sockaddr*)&from, flen);
         }
         else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
         else if (!strncmp(buf, "dsc ", 4)) onDscMsg(buf + 4);
@@ -1211,6 +1221,7 @@ static void onSessionEnded(void* user_data) {
     // Browser: mixer stopped, source released. Bluetooth: queued audioconn requests dropped, NBT_BT_RELEASE.
     if (g_audioBackend) g_audioBackend->onSessionEnded();
     g_kombiNav.onSessionEnded();   // the worker clears a cluster/HUD arrow
+    resetMedia("session ended");   // the iDrive app must not show the last track of a session that is over
 }
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
@@ -1239,6 +1250,7 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     printf("[Main] [%9.3f] Android Auto client connected over %s on fd %d. Initializing aasdk session...\n",
            g_sessionStartS, nbt::transportName(t), client_fd);
     g_sessionActive = true;
+    resetMedia("new session");
     if (server) server->markSessionActive();
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames
     if (!g_session.start(client_fd)) {
@@ -1433,6 +1445,111 @@ static uint32_t monoMs() {
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint32_t)ts.tv_sec * 1000u + (uint32_t)(ts.tv_nsec / 1000000);
 }
+// ---- now playing (audio/media_state.hpp) -----------------------------------------------------------------------
+// The phone's media playback channel (12) carries 0x8001 status about once a second and 0x8003 metadata per track. The
+// merge lives in media_state.hpp; here it is published for the iDrive app as /dev/shmem/nbt-aad-media (a line record,
+// written in place like the menu-entry state) and served on the control port:
+//   "media"               -> the record, as a UDP reply (the app polls this while its Now Playing page is up)
+//   "media next" / "prev" / "playpause" / "play" / "pause" -> the Android media key to the phone (input channel 7)
+// The keys also come from the steering wheel (car/mfl.hpp, NBT_MFL_*). Both are only forwarded when the audio mode is not
+// Bluetooth, where the phone already plays over A2DP and the car's own AVRCP handling owns those keys.
+static const char* const kMediaFile = "/dev/shmem/nbt-aad-media";
+static nbt::MediaState g_media;
+static pthread_mutex_t g_mediaMutex = PTHREAD_MUTEX_INITIALIZER;
+static bool g_mediaKeysToPhone = false;   // set at start-up from the audio mode
+static uint32_t g_mediaWriteMs = 0;       // monoMs() of the last record write
+
+// Caller holds g_mediaMutex. One fixed record written over the old bytes before the file is shortened (QNX /dev/shmem
+// has no rename, and the app must never read a half-written line).
+static void writeMediaRecordLocked() {
+    const std::string rec = nbt::mediaRecord(g_media);
+    int fd = open(kMediaFile, O_WRONLY | O_CREAT, 0666);
+    static bool s_warned = false;
+    if (fd < 0) {
+        if (!s_warned) { printf("[Media] cannot write %s: %s\n", kMediaFile, strerror(errno)); s_warned = true; }
+        return;
+    }
+    fchmod(fd, 0666);
+    ssize_t w = write(fd, rec.data(), rec.size());
+    if (w == (ssize_t)rec.size()) ftruncate(fd, (off_t)rec.size());
+    else if (!s_warned) { printf("[Media] short write to %s\n", kMediaFile); s_warned = true; }
+    close(fd);
+}
+
+static void resetMedia(const char* why) {
+    pthread_mutex_lock(&g_mediaMutex);
+    g_media.clear();
+    writeMediaRecordLocked();
+    pthread_mutex_unlock(&g_mediaMutex);
+    printf("[Media] cleared (%s)\n", why);
+}
+
+// Session thread, never blocks: merge, log a change, rewrite the record (at most 5 times a second).
+static void onMediaStatus(uint16_t msg_id, const uint8_t* body, size_t len, void* user_data) {
+    (void)user_data;
+    pthread_mutex_lock(&g_mediaMutex);
+    const bool changed = nbt::mediaMerge(g_media, msg_id, body, len);
+    const uint32_t now = monoMs();
+    g_media.updatedMs = now;
+    if (changed) {
+        printf("[Media] %s\n", nbt::mediaLine(g_media).c_str());
+        if (g_mediaWriteMs == 0 || (uint32_t)(now - g_mediaWriteMs) >= 200) {
+            g_mediaWriteMs = now;
+            writeMediaRecordLocked();
+        }
+    }
+    pthread_mutex_unlock(&g_mediaMutex);
+}
+
+// One press: a media key acts on the down edge, and the phone expects the release too.
+static void sendMediaKey(uint32_t key, const char* what) {
+    if (!g_mediaKeysToPhone) { printf("[Media] %s ignored: audio mode is Bluetooth\n", what); return; }
+    if (!g_sessionActive) { printf("[Media] %s ignored: no Android Auto session\n", what); return; }
+    printf("[Media] %s -> AA key %u\n", what, key);
+    g_session.postKeyEvent(key, true);
+    g_session.postKeyEvent(key, false);
+}
+
+static bool mediaCtlPrepare(const char* cmd, std::string& reply) {
+    while (*cmd == ' ' || *cmd == '\n' || *cmd == '\r') ++cmd;
+    char word[16];
+    size_t n = 0;
+    while (cmd[n] && cmd[n] != ' ' && cmd[n] != '\n' && cmd[n] != '\r' && n + 1 < sizeof(word)) { word[n] = cmd[n]; ++n; }
+    word[n] = 0;
+    if (!word[0]) {                                   // bare "media": the record as it stands (the app's poll)
+        pthread_mutex_lock(&g_mediaMutex);
+        reply = nbt::mediaRecord(g_media);
+        pthread_mutex_unlock(&g_mediaMutex);
+        return true;
+    }
+    if (!strcmp(word, "next")) sendMediaKey(nbt::AAK_MEDIA_NEXT, "next");
+    else if (!strcmp(word, "prev")) sendMediaKey(nbt::AAK_MEDIA_PREVIOUS, "prev");
+    else if (!strcmp(word, "playpause")) sendMediaKey(nbt::AAK_MEDIA_PLAY_PAUSE, "play/pause");
+    else if (!strcmp(word, "play")) sendMediaKey(nbt::AAK_MEDIA_PLAY, "play");
+    else if (!strcmp(word, "pause")) sendMediaKey(nbt::AAK_MEDIA_PAUSE, "pause");
+    else printf("[Media] unknown command '%s'\n", word);
+    return false;
+}
+
+// Shell test path: `echo next > /dev/shmem/nbt-aad-media.cmd` (the daemon removes the file). Same words as the control
+// port, so the media keys can be tried from the unit's shell without the iDrive app or a mapped steering wheel.
+static void* mediaMailThread(void*) {
+    const char* path = "/dev/shmem/nbt-aad-media.cmd";
+    while (g_running) {
+        if (access(path, F_OK) == 0) {
+            char cmd[64] = "";
+            FILE* f = fopen(path, "r");
+            if (f) { if (!fgets(cmd, sizeof(cmd), f)) cmd[0] = 0; fclose(f); }
+            unlink(path);
+            printf("[Media] command from %s: '%s'\n", path, cmd);
+            std::string reply;
+            mediaCtlPrepare(cmd, reply);
+        }
+        usleep(250000);
+    }
+    return NULL;
+}
+
 static uint32_t backHoldMs() {
     static int v = -1;
     if (v < 0) {
@@ -1489,6 +1606,11 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         }
         return;                                   // st == 2: the hold already minimized AA, swallow the release
     }
+    if (ev.what && (!strcmp(ev.what, "MFL_NEXT") || !strcmp(ev.what, "MFL_PREV") ||
+                    !strcmp(ev.what, "MFL_PLAYPAUSE"))) {   // steering-wheel media keys (car/mfl.hpp)
+        if (ev.down) sendMediaKey(ev.keycode, ev.what);
+        return;   // iDrive's copy of the key is its own business: nothing here acts on it in a non-Bluetooth mode
+    }
     if (ev.what && !strcmp(ev.what, "PTT")) {     // steering-wheel voice button (NBT_PTT_ASSISTANT=1), any screen
         printf("[PTT] Assistant key %s -> phone\n", ev.down ? "down" : "up");
         s->postKeyEvent(ev.keycode, ev.down != 0);
@@ -1541,8 +1663,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.37-gpswfd"
-
+#define NBT_AAD_BUILD "v1.9.38-media-gpswfd"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -1723,6 +1844,11 @@ int main(int argc, char* argv[]) {
     nbt::BtAudio bt;
     const nbt::AudioMode audio_mode = nbt::audioMode();
     printf("[Main] audio mode: %s (NBT_AUDIO_MODE=bt|browser|a2i)\n", nbt::audioModeName(audio_mode));
+    // Steering-wheel / control-port media keys go to the phone only when its media does not come over A2DP: in Bluetooth
+    // mode the car's own AVRCP handling already owns those keys (audio/media_state.hpp, car/mfl.hpp).
+    g_mediaKeysToPhone = audio_mode != nbt::AUDIO_MODE_BT;
+    printf("[Media] now playing on %s, media keys to the phone: %s\n", kMediaFile,
+           g_mediaKeysToPhone ? "on (audio mode is not Bluetooth)" : "off (audio mode is Bluetooth)");
     if (audio_mode == nbt::AUDIO_MODE_BROWSER) {
         // Media sink (ch 9) and GUIDANCE sink (ch 8) stay in the ServiceDiscovery and a SYSTEM_AUDIO sink (ch 16) is
         // added, so the phone sends all three streams here instead of to A2DP. The A2I pipeline is not opened; the
@@ -1789,6 +1915,7 @@ int main(int argc, char* argv[]) {
     g_session.setVideoFocusCallback(&onVideoFocusRequest, NULL);
     g_session.setMicRequestCallback(&onMicRequest, NULL);
     g_session.setNavStatusCallback(&nbt::kombinav::KombiNav::navStatusCallback, &g_kombiNav);
+    g_session.setMediaStatusCallback(&onMediaStatus, NULL);
 
     if (!tcp_server.start()) {
         printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
@@ -1796,6 +1923,10 @@ int main(int argc, char* argv[]) {
     }
     g_tcp = &tcp_server;
     g_kombiNav.start();            // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on
+    {
+        pthread_t t;
+        if (pthread_create(&t, NULL, &mediaMailThread, NULL) == 0) pthread_detach(t);
+    }
     nbt::g_fatal_hook = &nbt::kombinav::KombiNav::onFatalSignal;
 
     // 4b. Android Auto over USB (NBT_USB=1, experimental). Same user data as the TCP server, so its "session

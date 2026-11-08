@@ -31,7 +31,8 @@ enum AaChannelId {
     AA_CH_MEDIA_PLAYBACK = 12,
     AA_CH_VENDOR_EXTENSION = 13,
     AA_CH_MICROPHONE = 14,
-    AA_CH_BLUETOOTH = 15
+    AA_CH_BLUETOOTH = 15,
+    AA_CH_MEDIA_BROWSER = 17    // probe only (NBT_AA_BROWSE=1, sdr_builder addMediaBrowserProbe)
 };
 
 enum AaSensorType {
@@ -169,7 +170,7 @@ struct VendorExtensionService {
 struct AaChannel {
     enum Service {
         SENSOR_SOURCE, AUDIO_SINK, VIDEO_SINK, INPUT_SOURCE, MICROPHONE, BLUETOOTH, NAV_STATUS, MEDIA_PLAYBACK,
-        PHONE_STATUS, VENDOR_EXTENSION
+        PHONE_STATUS, VENDOR_EXTENSION, MEDIA_BROWSER
     };
     int id;
     Service service;

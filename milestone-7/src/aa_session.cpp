@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_manifest.hpp"
 #include "aa_control_msgs.hpp"
 #include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
@@ -93,6 +94,8 @@ AASession::AASession()
     mic_user_data_ = NULL;
     nav_cb_ = NULL;
     nav_user_data_ = NULL;
+    media_cb_ = NULL;
+    media_user_data_ = NULL;
     mic_open_ = false;
     mic_sent_ = 0;
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
@@ -212,6 +215,11 @@ void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
 void AASession::setNavStatusCallback(NavStatusCallback cb, void* user_data) {
     nav_cb_ = cb;
     nav_user_data_ = user_data;
+}
+
+void AASession::setMediaStatusCallback(MediaStatusCallback cb, void* user_data) {
+    media_cb_ = cb;
+    media_user_data_ = user_data;
 }
 
 bool AASession::micOpen() {
@@ -1262,8 +1270,11 @@ void AASession::sessionLoop() {
                 if (mic_cb_) mic_cb_(on, mic_user_data_);
             } else if (channel == 14 && msg_id == 0x8004) { // AVMediaAck for our mic frames: nothing to do
             } else if (msg_id == 7) { // ChannelOpenRequest (sent by phone on the channel being opened!)
-                printf("[AASession] >>> Received ChannelOpenRequest on Channel %u! Sending ChannelOpenResponse (SUCCESS)...\n",
-                       channel);
+                // { service_type = 1, channel_id = 2 }: the service type is the phone's own number for what it is opening,
+                // which is what tells the media browser probe that the phone knew the service.
+                printf("[AASession] >>> Received ChannelOpenRequest on Channel %u (service type %u, channel id %u)! "
+                       "Sending ChannelOpenResponse (SUCCESS)...\n", channel, pbFirstVarint(frame_data, 2, 1),
+                       pbFirstVarint(frame_data, 2, 2));
                 uint8_t open_resp[4] = { 0x00, 0x08, 0x08, 0x00 }; // Msg ID 8 (ChannelOpenResponse), Status 0 (OK)
                 std::vector<uint8_t> enc_resp;
                 if (cryptor_.encrypt(open_resp, sizeof(open_resp), enc_resp)) {
@@ -1283,9 +1294,10 @@ void AASession::sessionLoop() {
                     nav_cb_(msg_id, frame_data.size() > 2 ? &frame_data[2] : NULL,
                             frame_data.size() > 2 ? frame_data.size() - 2 : 0, nav_user_data_);
             } else if (channel == 12 && msg_id >= 0x8000) {
-                // Media playback status channel: 0x8001 = {state, source name e.g. "Apple Music", position} every
-                // second, 0x8003 = track metadata + album art. Informational only. Before v1.6.6 the generic AV
-                // handler below logged every 0x8001 as "AV START_INDICATION on Channel 12". Log state changes only.
+                // Media playback channel: 0x8001 = {state, source name e.g. "Apple Music", position} about once a
+                // second, 0x8003 = track metadata + album art. The merge and the record the iDrive app reads live in
+                // audio/media_state.hpp (behind media_cb_). Before v1.6.6 the generic AV handler below logged every
+                // 0x8001 as "AV START_INDICATION on Channel 12"; keep logging the state changes here.
                 static uint32_t last_state = 0xFFFFFFFFu;
                 if (msg_id == 0x8001) {
                     uint32_t st = pbFirstVarint(frame_data, 2, 1);
@@ -1293,7 +1305,21 @@ void AASession::sessionLoop() {
                         last_state = st;
                         printf("[AASession] media status ch12: state %u\n", st);
                     }
+                } else if (msg_id != 0x8003) {
+                    printf("[AASession] media channel 12: msg 0x%04X (%u bytes)\n", msg_id,
+                           (unsigned)frame_data.size());
                 }
+                if (media_cb_)
+                    media_cb_(msg_id, frame_data.size() > 2 ? &frame_data[2] : NULL,
+                              frame_data.size() > 2 ? frame_data.size() - 2 : 0, media_user_data_);
+            } else if (channel == AA_CH_MEDIA_BROWSER) {
+                // Media browser probe (NBT_AA_BROWSE=1, sdr_builder addMediaBrowserProbe): the phone only opens this
+                // channel if it still serves the service. Log everything it sends, so one drive answers whether a browse
+                // tree (the play queue) is available at all.
+                printf("[AASession] media browser ch%u: msg 0x%04X (%u bytes):", channel, msg_id,
+                       (unsigned)frame_data.size());
+                for (size_t i = 0; i < frame_data.size() && i < 24; ++i) printf(" %02x", frame_data[i]);
+                printf("%s\n", frame_data.size() > 24 ? " ..." : "");
             } else if (msg_id == 0x8000) { // AV SETUP_REQUEST (Phone requests AV configuration on Video/Audio channel)
                 // Only focus/open the main dashboard display. Advertising/focusing all
                 // DHU display channels makes the phone encode several H.264 streams; we
