@@ -86,13 +86,15 @@ inline bool usbSettingOn(const char* env, bool flagFile) {
 inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
 inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
 
-// NBT_USB_DIRECT=1 (with NBT_USB=1, experimental): read the phone through libusbdi, not devc-serusb-aoap (which it
-// stops for the phone): see usb_direct.hpp.
-inline bool usbDirectEnabled() {
-    const char* e = getenv("NBT_USB_DIRECT");
-    if (!e || !*e) return false;
-    return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
+// With Android Auto over USB on (usbEnabled()), read the phone through libusbdi, not devc-serusb-aoap (which it
+// stops for the phone): see usb_direct.hpp. On by default, since the /dev/oap* path loses TLS records whenever another
+// client reads the node and the phone ends the session; NBT_USB_DIRECT=0 / off / no / false goes back to /dev/oap*.
+// Pure part (host-tested): NBT_USB_DIRECT's value (NULL = unset).
+inline bool usbDirectSettingOn(const char* env) {
+    if (!env || !*env) return true;
+    return !(strcmp(env, "0") == 0 || strcmp(env, "off") == 0 || strcmp(env, "no") == 0 || strcmp(env, "false") == 0);
 }
+inline bool usbDirectEnabled() { return usbDirectSettingOn(getenv("NBT_USB_DIRECT")); }
 
 // NBT_USB_CLAIM_DRIVER=0: with NBT_USB_DIRECT, stop devc-serusb-aoap after it has started instead of keeping it from
 // starting (usb_direct.hpp). On by default.
