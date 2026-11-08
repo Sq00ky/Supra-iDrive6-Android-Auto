@@ -54,8 +54,8 @@ set(SOURCES
     src/car/gps.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
-    src/kombi_client.cpp
-    src/kombi_nav.cpp
+    src/cluster/j29_client.cpp
+    src/cluster/nav_core.cpp
     src/audio/speex.c
 )
 

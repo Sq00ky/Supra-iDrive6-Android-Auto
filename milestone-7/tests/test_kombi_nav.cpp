@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: kombi_nav state machine + SOME/IP client against a fake KOMBI on 127.0.0.1, the iDrive-route watch,
-// and the daemon runtime end to end (src/kombi_nav.cpp, src/kombi_client.cpp).
-// Build: g++ -std=gnu++98 -Iinclude -Isrc -Itests tests/test_kombi_nav.cpp src/kombi_nav.cpp src/kombi_client.cpp -lpthread
-#include "kombi_nav.hpp"
+// and the daemon runtime end to end (src/cluster/nav_core.cpp, src/cluster/j29_client.cpp).
+// Build: g++ -std=gnu++98 -Iinclude -Isrc -Itests tests/test_kombi_nav.cpp src/cluster/nav_core.cpp src/cluster/j29_client.cpp -lpthread
+#include "cluster/nav_core.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <assert.h>
 #include <errno.h>

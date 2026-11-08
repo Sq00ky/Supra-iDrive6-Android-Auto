@@ -118,7 +118,7 @@
 #include "spp_link_policy.hpp"
 #include "spp_direction.hpp"
 #include "neutral_resume.hpp"
-#include "kombi_nav.hpp"
+#include "cluster/nav_core.hpp"
 #include <termios.h>
 
 #include <stdio.h>

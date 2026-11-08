@@ -54,8 +54,8 @@ SRCS = src/main.cpp \
        src/car/gps.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
-       src/kombi_client.cpp \
-       src/kombi_nav.cpp \
+       src/cluster/j29_client.cpp \
+       src/cluster/nav_core.cpp \
        src/volume_osd.cpp
 
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.

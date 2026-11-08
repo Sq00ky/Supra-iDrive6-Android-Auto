@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test: kombi_nav ch 10 decode + the AA -> KOMBI tables (src/kombi_nav_msg.hpp).
-#include "kombi_nav_msg.hpp"
+// Host test: kombi_nav ch 10 decode + the AA -> KOMBI tables (src/cluster/nav_msg.hpp).
+#include "cluster/nav_msg.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <assert.h>
 #include <stdio.h>

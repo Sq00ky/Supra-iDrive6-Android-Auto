@@ -3,7 +3,7 @@
 // kombi_nav: Android Auto turn-by-turn on the J29 cluster and windscreen HUD, with no iDrive route.
 //
 // The phone's navigation status (ch 10, via AASession's nav-status callback) is turned into the KOMBI's own
-// route-guidance graph, sent from the OMAP straight to the KOMBI (kombi_client.hpp):
+// route-guidance graph, sent from the OMAP straight to the KOMBI (cluster/j29_client.hpp):
 //   guidance starts         -> full template graph with maneuver 0 patched (direction, distance + unit, road)
 //   distance text changes   -> one in-place distance frame
 //   next maneuver           -> in-place maneuver-0 update (the factory's update block, no route rebuild); the full
@@ -16,8 +16,8 @@
 // Fail closed: a frame the KOMBI rejects stops the feature for the rest of the Android Auto session (wrong car or
 // stale instance handle are rejected at the first frame). Factory navigation wins: when an iDrive route starts
 // (seen in the system log) kombi_nav stops writing without a cancel, until the next Android Auto route.
-#ifndef KOMBI_NAV_HPP
-#define KOMBI_NAV_HPP
+#ifndef CLUSTER_NAV_CORE_HPP
+#define CLUSTER_NAV_CORE_HPP
 
 #include <stdint.h>
 #include <stdio.h>
@@ -27,9 +27,9 @@
 #include <pthread.h>
 #include <sys/types.h>
 
-#include "kombi_nav_msg.hpp"
-#include "kombi_graph.hpp"
-#include "kombi_client.hpp"
+#include "cluster/nav_msg.hpp"
+#include "cluster/j29_graph.hpp"
+#include "cluster/j29_client.hpp"
 
 namespace nbt {
 namespace kombinav {
@@ -52,7 +52,7 @@ struct Settings {
                  min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1) {}
 };
 
-// What the state machine drives (callbacks, like AASession's): the real client in kombi_nav.cpp, a test's own in tests.
+// What the state machine drives (callbacks, like AASession's): the real client in cluster/nav_core.cpp, a test's own in tests.
 struct Link {
     KombiClient::Result (*send)(void* user, const std::vector<Frame>& frames, std::string* detail);
     bool (*cancel)(void* user, std::string* detail);   // the factory cancel; true = acknowledged

@@ -2,7 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // kombi_nav: the KOMBI route-guidance graph (BMW.IC.Guidance, SOME/IP service 0xB006), header-only, no I/O.
 //
-// Template-patch design: every frame is a byte copy of the captured factory route start (kombi_graph_template.hpp)
+// Template-patch design: every frame is a byte copy of the captured factory route start (cluster/j29_graph_template.hpp)
 // and only the fields proven on the car are changed, so the KOMBI always sees a self-consistent graph:
 //   - instance handle         body[0:4]   (0xC8 on every boot seen; NBT_KOMBI_NAV_HANDLE overrides)
 //   - ManeuverDescription 0x0F direction enum at body[33]
@@ -14,8 +14,8 @@
 // dropped (93 frames instead of 97). position() is the 0x11 destination-info update the KOMBI re-checks lanes on.
 // Only maneuver 0 (the next one) is patched. Frame body layout: [0:4] handle, [4:8] model id (<type><index24>),
 // [8] model type, [9:13] payload length (= body length - 17), [13:17] tag, [17:] payload.
-#ifndef KOMBI_GRAPH_HPP
-#define KOMBI_GRAPH_HPP
+#ifndef CLUSTER_J29_GRAPH_HPP
+#define CLUSTER_J29_GRAPH_HPP
 
 #include <stdint.h>
 #include <stddef.h>
@@ -23,8 +23,8 @@
 #include <string>
 #include <vector>
 
-#include "kombi_graph_template.hpp"
-#include "kombi_nav_msg.hpp"
+#include "cluster/j29_graph_template.hpp"
+#include "cluster/nav_msg.hpp"
 
 namespace nbt {
 namespace kombinav {

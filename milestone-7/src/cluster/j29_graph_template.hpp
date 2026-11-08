@@ -4,8 +4,8 @@
 // Captured from a J29 head unit's own route start (instance handle 0xC8) and replayed route-free from a second
 // client. Each entry is the SOME/IP method + the request body (no 16-byte header). Road names are replaced
 // by neutral strings of the same length, so every frame keeps the captured layout. Generated, do not edit.
-#ifndef KOMBI_GRAPH_TEMPLATE_HPP
-#define KOMBI_GRAPH_TEMPLATE_HPP
+#ifndef CLUSTER_J29_GRAPH_TEMPLATE_HPP
+#define CLUSTER_J29_GRAPH_TEMPLATE_HPP
 
 #include <stdint.h>
 #include <stddef.h>
