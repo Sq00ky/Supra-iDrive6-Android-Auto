@@ -405,6 +405,10 @@ inline void unitDisplay(double m, int phone_unit, std::string& text, int& aa_uni
     }
 }
 
+// Motorway-type turns, due by distance too: AA off-ramps (21-24) and forks (25, 26). Keep-left/right is left out (it
+// is common in towns too), and so are on-ramps (the turn is still on the road before the motorway).
+inline bool motorwayTurn(int aa_type) { return aa_type >= 21 && aa_type <= 26; }
+
 // Metres to the next maneuver: the phone's value, else parsed from the display text + unit.
 inline bool distanceMetres(const NavView& v, double& m) {
     if (v.has_step_m) { m = (double)v.step_m; return true; }

@@ -71,12 +71,6 @@ const char* approachName(Approach a) {
     return a == kApproachTime ? "time" : a == kApproachDistance ? "distance" : "off";
 }
 
-namespace {
-// Motorway-type turns, due by distance too: AA off-ramps (21-24) and forks (25, 26). Keep-left/right is left out (it
-// is common in towns too), and so are on-ramps (the turn is still on the road before the motorway).
-bool motorwayTurn(int aa_type) { return aa_type >= 21 && aa_type <= 26; }
-}
-
 // True: v is held back (not shown, and a different maneuver shown is cleared).
 bool Core::approachHold(const NavView& v, double now) {
     if (s_.approach == kApproachOff) return false;
@@ -461,6 +455,13 @@ std::string KombiNav::approachText() const {
     return b;
 }
 
+std::string KombiNav::junctionText() const {
+    char b[96];
+    if (!settings_.junction) return "off";
+    snprintf(b, sizeof(b), "at the main prompt or %g m", settings_.near_m);
+    return b;
+}
+
 void KombiNav::start(most::Client* most) {
     if (started_) return;
     forced_ = envFlag("NBT_KOMBI_NAV");
@@ -474,6 +475,9 @@ void KombiNav::start(most::Client* most) {
     if (envFlag("NBT_KOMBI_NAV_SHOW_BAR") == 1) settings_.hide_bar = false;
     if (envFlag("NBT_KOMBI_NAV_YIELD") == 0) yield_enabled_ = false;
     if (envFlag("NBT_KOMBI_NAV_LANES") == 0) settings_.lanes = false;
+    if (envFlag("NBT_HUD_JUNCTION") == 0) settings_.junction = false;
+    envNumber("NBT_HUD_NEAR_M", 50, 2000, settings_.near_m);
+    if (envFlag("NBT_HUD_LANES") == 1) settings_.hud_lanes = true;
     e = getenv("NBT_KOMBI_NAV_INPLACE");
     if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
     e = getenv("NBT_CLUSTER");
@@ -486,10 +490,11 @@ void KombiNav::start(most::Client* most) {
                approachText().c_str(), settings_.hide_bar ? "hidden" : "factory", yield_enabled_ ? "on" : "off",
                settings_.lanes ? "on" : "off", settings_.inplace);
     else
-        printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %s, iDrive-route yield %s (and the "
-               "factory navigation on the terminal, always)\n", enabledNow() ? "ON" : "off",
-               forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", display_->name(), target_.c_str(),
-               shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "", approachText().c_str(),
+        printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %s, junction view %s, lanes %s, "
+               "iDrive-route yield %s (and the factory navigation on the terminal, always)\n",
+               enabledNow() ? "ON" : "off", forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file",
+               display_->name(), target_.c_str(), shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "",
+               approachText().c_str(), junctionText().c_str(), settings_.hud_lanes ? "on" : "off",
                yield_enabled_ ? "on" : "off");
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");

@@ -137,7 +137,7 @@ public:
     KombiNav();
     ~KombiNav();
 
-    // Reads NBT_CLUSTER, NBT_HUDTERM and NBT_KOMBI_NAV_*, and starts the worker (idle until the setting is on). Call
+    // Reads NBT_CLUSTER, NBT_HUDTERM, NBT_HUD_* and NBT_KOMBI_NAV_*, and starts the worker (idle until the setting is on). Call
     // once from main(), before the MOST client starts: the 6WA driver attaches to it.
     void start(most::Client* most = NULL);
     // Stops the worker and clears the arrow (one quick attempt). Safe to call twice.
@@ -221,6 +221,7 @@ private:
     bool createDisplay(const char* id, most::Client* most);   // the place to add a cluster
     void readApproach();                                      // NBT_KOMBI_NAV_APPROACH* into settings_
     std::string approachText() const;                         // for the start-up line
+    std::string junctionText() const;                         // and the 6WA's junction view, for it too
 
     Graph* graph_;                   // j29
     KombiClient* client_;            // j29
