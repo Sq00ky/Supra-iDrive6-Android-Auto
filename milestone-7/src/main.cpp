@@ -210,6 +210,9 @@ static bool popSlot(int* q, int* n, int* v) {
 }
 static volatile int g_gear = -1;
 static volatile int g_pdc = -1;                    // -1 = unknown (no report yet)
+// iDrive camera view (rhmiapp-46 "camera <ctx>"): the iDrive app saw a camera context (NBT_AA_CAMERA_CTX) in
+// hmi.graphicalContext - the button-opened 360 / Top View, which neither reverse nor PDCStatus reports. 0 = none.
+static volatile int g_camera = 0;
 
 // ---- driving mode (Sport / Comfort / ECO PRO ...), like reverse -------------------------------------------------
 // The iDrive app relays CDS driving.mode / driving.mode35up ('{"mode":%d}', libhmiremoting CCdsPropertyDrivingMode::
@@ -418,6 +421,11 @@ static void* ctlThread(void*) {
         }
         else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
         else if (!strncmp(buf, "dsc ", 4)) onDscMsg(buf + 4);
+        else if (!strncmp(buf, "camera ", 7)) {
+            int v = atoi(buf + 7);
+            if (v != g_camera) printf("[Camera] iDrive camera view %d -> %d (from iDrive app)\n", (int)g_camera, v);
+            g_camera = v;
+        }
         else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] [%9.3f] 'quit' received.\n", upSec()); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
         else printf("[Ctl] unknown request '%s' ignored.\n", buf);
@@ -1675,7 +1683,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.42-audio-lci"
+#define NBT_AAD_BUILD "v1.9.43-camctx"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -2046,6 +2054,8 @@ int main(int argc, char* argv[]) {
     readDayNightFile();
     const bool pdc_action = nbt::envFlag("NBT_PDC_ACTION") != 0;       // default on; NBT_PDC_ACTION=0 ignores park assist
     bool was_park = false;
+    bool was_camera = false;
+    bool camera_dismissed = false; // iDrive Android Auto entry chosen over a camera view: AA until that view closes
     bool park_dismissed = false;   // iDrive Android Auto entry chosen while park assist is active: AA until it ends
     // Manual gearbox (feature request 2026-10-31): reverse -> neutral + handbrake leaves park assist (and with it
     // iDrive's parking view) up, since only P or driving off ends it. NBT_NEUTRAL_RESUME_S=<s> (default 5, 0 = off)
@@ -2191,6 +2201,7 @@ int main(int argc, char* argv[]) {
             printf("[Focus] iDrive entry selected: back to Android Auto%s\n", act ? "" : " (no phone session yet)");
             force_show = true;                           // re-assert even if we think it is up (HMI may have reordered layers)
             if (was_park) { park_dismissed = true; printf("[Park] Android Auto chosen during park assist: kept until it ends\n"); }
+            if (was_camera) { camera_dismissed = true; printf("[Camera] Android Auto chosen over the camera view: kept until it closes\n"); }
         }
         bool reverse = gear_action && g_gear == gear_reverse;
         if (reverse != was_reverse) {
@@ -2227,6 +2238,15 @@ int main(int argc, char* argv[]) {
                                         : "park assist off: restoring");
             if (reverse_focus && act && !g_userExit) g_session.postVideoFocus(!park && !reverse);
             was_park = park;
+        }
+        const bool camera_raw = g_camera > 0;
+        if (!camera_raw) camera_dismissed = false;
+        const bool camera = camera_raw && !camera_dismissed;
+        if (camera != was_camera) {
+            printf("[Camera] %s\n", camera ? "iDrive camera view up: overlay down for the camera"
+                                            : "camera view closed: restoring");
+            if (reverse_focus && act && !g_userExit) g_session.postVideoFocus(!camera && !park && !reverse);
+            was_camera = camera;
         }
         // CarPlay taking the screen while an Android Auto session is still open (iPhone joins while the Android phone
         // stays connected, MINI tester 2026-10-29): CarPlay plays through our decoder context, so without its factory
@@ -2281,7 +2301,7 @@ int main(int argc, char* argv[]) {
                 ++g_idrAsks;
             }
         }
-        bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !dm_peek;
+        bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !camera && !dm_peek;
         if (want && act && !overlay_on && (video.decoderInCarPlayMode() || video.decoderParked())) {
             printf("[Main] back to Android Auto after %s: rebuilding the decoder context\n",
                    video.decoderParked() ? "iDrive (overlay had surface 1280)" : "CarPlay");

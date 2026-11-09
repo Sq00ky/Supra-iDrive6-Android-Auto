@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-45-audio-lci (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-46-camctx (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -602,7 +602,14 @@ int g_lastPdc = -1000;
 // PDCStatus changes. Without this, PDCStatus staying 1 for 47 s after reversing made the safety button "during park
 // assist: left to that logic" and Android Auto stayed over the safety menu (car 2026-11-05).
 bool g_pdcDismissed = false;
-bool pdcOwnsScreen() { return g_lastPdc == kPdcActive && !g_pdcDismissed; }
+// Camera screen (rhmiapp-46): the iDrive context of a camera view (NBT_AA_CAMERA_CTX, default 692,1023) is up. Counted
+// with park assist everywhere below, so nothing re-holds over the camera and Android Auto stepping aside for it does not
+// send iDrive to its main menu (which would close the camera). Dismissed like park assist when the driver picks the
+// Android Auto entry over it.
+int g_cameraCtx = 0;              // the camera context that is up, 0 = none
+bool g_cameraDismissed = false;
+bool cameraOwnsScreen() { return g_cameraCtx > 0 && !g_cameraDismissed; }
+bool pdcOwnsScreen() { return (g_lastPdc == kPdcActive && !g_pdcDismissed) || cameraOwnsScreen(); }
 
 bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) {
     char text[160];
@@ -629,6 +636,10 @@ bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) 
 
 // Every "show" goes through here: the daemon takes it as the driver choosing Android Auto, over park assist too.
 void sendShow() {
+    if (cameraOwnsScreen()) {
+        g_cameraDismissed = true;
+        alog("camera: Android Auto chosen over iDrive's camera view (context %d): kept until that view closes", g_cameraCtx);
+    }
     if (g_lastPdc == kPdcActive && !g_pdcDismissed) {
         g_pdcDismissed = true;
         alog("park assist on: Android Auto chosen over it, so iDrive screens make it step aside again until park assist ends");
@@ -1023,6 +1034,53 @@ void owInit() {
 // views and the safety menus get learned - but it only acts with "Show iDrive warnings" ticked: see overlay_watch.hpp.
 // (rhmiapp-32..35 acted only on widgets named *popup* while state 13 was visible; Check Control is
 // LT_ScrollLabel_CCM_Details, so it waited ~25 s for another path - F31 bench, 2026-11-05.)
+// Camera views (rhmiapp-46): whatever the checkboxes, a camera context makes the daemon step aside ("camera <ctx>", like
+// park assist) and the next other context brings Android Auto back ("camera 0"). A widgetless, untitled context that
+// is not in the list is logged as a candidate, so a car whose camera uses another id shows it in one capture.
+void onCameraContext(int vc, const char* widget, const char* title) {
+    static int s_list[16];
+    static int s_n = -1;
+    if (s_n < 0) {
+        FILE* f = fopen(kDaemonEnv, "r");
+        char line[160];
+        char list[160] = "";
+        while (f && fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "NBT_AA_CAMERA_CTX=", 18) == 0) snprintf(list, sizeof(list), "%s", line + 18);
+        }
+        if (f) fclose(f);
+        list[strcspn(list, "\r\n")] = 0;
+        s_n = nbt::parseCameraContexts(list, s_list, 16);
+        char shown[96] = "";
+        for (int i = 0; i < s_n; ++i) {
+            size_t l = strlen(shown);
+            snprintf(shown + l, sizeof(shown) - l, "%s%d", i ? "," : "", s_list[i]);
+        }
+        alog("camera: iDrive contexts %s are camera views: Android Auto steps aside for them and comes back after%s",
+             shown, list[0] ? " (NBT_AA_CAMERA_CTX)" : " (default; NBT_AA_CAMERA_CTX in nbt-aad.env changes it)");
+    }
+    if (vc <= 0) return;
+    const bool cam = nbt::isCameraContext(vc, s_list, s_n);
+    if (cam && g_cameraCtx != vc) {
+        const bool was = g_cameraCtx > 0;
+        g_cameraCtx = vc;
+        if (!was) g_cameraDismissed = false;             // a new camera episode
+        alog("camera: iDrive camera view (context %d) is up: Android Auto steps aside until it closes", vc);
+        char msg[32];
+        snprintf(msg, sizeof(msg), "camera %d", vc);
+        sendToDaemon(msg);
+    } else if (!cam && g_cameraCtx > 0) {
+        alog("camera: iDrive left the camera view (context %d -> %d): Android Auto comes back%s", g_cameraCtx, vc,
+             g_cameraDismissed ? " (it was already chosen over the camera)" : "");
+        g_cameraCtx = 0;
+        g_cameraDismissed = false;
+        sendToDaemon("camera 0");
+    } else if (!cam && !title[0] && !strcmp(widget, "GFXIDENTIFIER_INVALID") && vc < 50000 && vc != 3 &&
+               g_aaVisible) {
+        alog("camera: context %d (no widget, no title) came up over Android Auto: if this was a camera view, add it to "
+             "NBT_AA_CAMERA_CTX in nbt-aad.env", vc);
+    }
+}
+
 bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     char text[300];
     size_t n = 0;
@@ -1042,6 +1100,7 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
          warningsOn() ? "" : " (Show iDrive warnings is off)");
     FILE* f = fopen(kGctxFile, "w");
     if (f) { fprintf(f, "vc %d\n%s\n", vc, text); fclose(f); }
+    onCameraContext(vc, widget, title);
     // Fed to the overlay watch whether or not iDrive took our state 13 (on some units it never does - F31 bench
     // 2026-11-05 - so the old "popup widget while state 13 is visible" rule waited ~25 s for another path). The step-aside
     // itself is decided on the next status poll (>= 300 ms later), once a hard key's input has reached the state file.
@@ -1294,6 +1353,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
                      "steps aside until it closes", g_ow.aside());
                 return;
             }
+            if (cameraOwnsScreen()) return;              // a camera view took the focus: the daemon steps aside
             fireHold(app, "state lost focus (OPTIONS panel?)");
         }
         return;
