@@ -207,10 +207,10 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
 > **v1.9.44-pfaa + rhmiapp-47-pfaa (not car-verified): pf_aa built into nbt-aad and in the iDrive menu.**
-> `nbt-aad --pf-install | --pf-check | --pf-uninstall` is `pf_aa` without the separate binary, and a **Firewall rules
-> for Android Auto (pf_aa)** checkbox on the Settings page runs it in the background and logs its output in the app
-> log; ticked = the rules and `NBT_KEEP_PF=1` are in place.
-> Restart the head unit afterwards so the car loads `pf.conf`. See [Troubleshooting](#troubleshooting).
+> `nbt-aad --pf-install | --pf-check | --pf-uninstall [--load]` is `pf_aa` (1.2) without the separate binary. The
+> Settings page gets **Install PF Rules**, **Check PF Rules** and **Uninstall PF Rules** rows that show each step in
+> their own text; install / uninstall apply to the running filter at once (`--load`), no restart. pf_aa's output goes
+> to the app log. See [Troubleshooting](#troubleshooting).
 >
 > **v1.9.42-audio-lci + rhmiapp-45-audio-lci (not car-verified): two more Settings checkboxes.** **Use Native Audio
 > instead of Bluetooth** (`/var/opt/aa/native-audio`) is browser audio mode from the menu: Android Auto sound comes over
@@ -897,12 +897,13 @@ packet filter blocks that port, so the daemon runs `pfctl -d` at start. The log 
 it worked. If the return value isn't 0 (one car returned 256), post the log.
 
 **Keeping the packet filter on (`pf_aa`, one time):** instead of switching the whole filter off, let the port through
-it. Easiest (rhmiapp-47 + v1.9.44): tick **Firewall rules for Android Auto (pf_aa)** on the Android Auto Settings
-page. pf_aa is built into nbt-aad (`nbt-aad --pf-install | --pf-check | --pf-uninstall` from a shell does the same), so
-nothing else has to be copied; with an older daemon the checkbox falls back to a separate `/opt/aa/pf_aa` or the USB
-stick's. Unticking runs the uninstall. The app writes pf_aa's output to the app log (`pf_aa: ...` lines, then `pf_aa --install done (exit 0): rules in
-place - restart the head unit ...`). The box shows whether the rules and `NBT_KEEP_PF=1` are in place. By hand, copy
-`pf_aa` from the release next to the daemon and install the rules once:
+it. Easiest (rhmiapp-47 + v1.9.44): **Install PF Rules** at the bottom of the Android Auto Settings page. The row shows
+`Writing rules...` -> `Rules successfully written` -> `Rules active`: pf_aa is built into nbt-aad (`nbt-aad --pf-install
+--load`; from a shell `--pf-check` / `--pf-uninstall` too) and `--load` applies the rules at once (`pfctl -f`, `-e`), no
+restart needed. **Check PF Rules** shows `Rules in place` (active), `Rules in place, not active` or `Rules not in place`;
+**Uninstall PF Rules** restores the stock file and switches the filter off as nbt-aad did before (`Rules successfully
+removed` -> `Packet filter off, as before`). The app writes pf_aa's output to the app log (`pf_aa: ...` lines, then `pf_aa exit N`). By hand, copy `pf_aa` from the release next to
+the daemon and install the rules once:
 
 ```
 cp /mnt/umass01200t7/pf_aa /opt/aa/pf_aa

@@ -61,7 +61,6 @@
 #include "boot_guard.hpp"
 #include "overlay_watch.hpp"
 #include "entry_key.hpp"
-#include "pf_menu.hpp"
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
@@ -228,7 +227,7 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the twelve checkbox models whenever it is shown.
+// handler here, to refresh the eleven checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
 const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
@@ -356,15 +355,21 @@ const unsigned    kActLciMedia     = 124;
 const unsigned    kLciMediaModel   = 125;
 const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
 const char* const kLciMediaManual  = "/opt/aa/lci-media";
-// "Firewall rules for Android Auto (pf_aa)" (rhmiapp-47): <checkbox action="132" id="135" model="133" textModel="134">.
-// Ticked = pf_aa's rules are in the car's pf.conf and NBT_KEEP_PF=1 is in nbt-aad.env (rhmiapp/pf_menu.hpp). Pressing
-// runs `nbt-aad --pf-install` / `--pf-uninstall` (pf_aa is built into the daemon since v1.9.44) in the background; an
-// older daemon without it falls back to a separate /opt/aa/pf_aa (or the USB stick's). Output goes to the app log. The
-// car loads pf.conf at its next start, so the head unit needs a restart afterwards.
-const unsigned    kActPfAa         = 132;
-const unsigned    kPfAaModel       = 133;
-const char* const kPfAaTool        = "/opt/aa/pf_aa";
-const char* const kPfConf          = "/fs/sda0/etc/pf.conf";
+// Firewall (pf_aa) rows on the Settings page (rhmiapp-47), under a separator after the checkboxes, worked like Start /
+// Force Stop / Restart: <button action="132" id="135" model="134"> Install PF Rules, <button action="136" id="140"
+// model="138"> Check PF Rules, <button action="137" id="141" model="139"> Uninstall PF Rules. Each press runs
+// `nbt-aad --pf-install --load` / `--pf-check` / `--pf-uninstall --load` (pf_aa is built into the daemon, v1.9.44+) in
+// the background; the row's own text shows the steps ("Writing rules..." -> "Rules successfully written" -> "Rules
+// active") with iDrive's busy ring, then goes back to its label. pf_aa's output goes to the app log.
+const unsigned    kActPfInstall    = 132;
+const unsigned    kActPfCheck      = 136;
+const unsigned    kActPfUninstall  = 137;
+const unsigned    kPfRowModel[3]   = { 134, 138, 139 };   // textIdModels: install, check, uninstall
+const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
+const unsigned    kPfRowLabel[3]   = { 29, 30, 31 };      // Install / Check / Uninstall PF Rules
+enum { kTxtPfWriting = 32, kTxtPfWritten = 33, kTxtPfActive = 34, kTxtPfChecking = 35, kTxtPfInPlace = 36,
+       kTxtPfInPlaceIdle = 37, kTxtPfMissing = 38, kTxtPfRemoving = 39, kTxtPfRemoved = 40, kTxtPfStockOff = 41,
+       kTxtPfNotActive = 42, kTxtPfFailed = 43 };
 const char* const kPfAaOut         = "/dev/shmem/nbt-aad-pf_aa.out";
 const char* const kPfAaEmbedMark   = "(built into nbt-aad)";   // in nbt-aad's pf_aa banner (src/pf_aa_embed.cpp)
 const char* const kGctxProperty    = "hmi.graphicalContext";
@@ -1845,37 +1850,25 @@ void showLciMedia(bmw::PluginApp* app) {
     app->updateModel(kLciMediaModel, lciMediaOn());
     g_lciMediaShown = true;
 }
-// ---- Firewall rules for Android Auto (pf_aa, rhmiapp-47) ----------------------------------------------------------
-pid_t g_pfAaPid = 0;              // pf_aa running in the background
-bool g_pfAaInstall = false;       // what it was asked to do
-time_t g_pfAaStart = 0;
-bool g_pfAaShown = false;
+// ---- Firewall (pf_aa) rows (rhmiapp-47) ------------------------------------------------------------------------
+// One operation at a time. Row text: label -> working text (busy ring) -> result (-> second result) -> label again.
+enum PfOp { kPfInstall = 0, kPfCheck = 1, kPfUninstall = 2 };
+int g_pfOp = -1;                  // the row whose operation is running or whose result is showing, -1 = none
+pid_t g_pfPid = 0;                // its nbt-aad --pf-* process
+time_t g_pfStart = 0;
+unsigned g_pfNext = 0;            // a second result text to show at g_pfNextMs (0 = none)
+uint32_t g_pfNextMs = 0;
+uint32_t g_pfLabelMs = 0;         // when the row goes back to its label (0 = not scheduled)
 
-// Whole small file into buf (NUL-terminated); false if it cannot be read.
-bool readSmallFile(const char* path, char* buf, size_t n) {
-    FILE* f = fopen(path, "r");
-    if (!f) return false;
-    size_t got = fread(buf, 1, n - 1, f);
-    buf[got] = 0;
-    fclose(f);
-    return true;
+void pfRowText(bmw::PluginApp* app, int op, unsigned text, bool busy) {
+    if (!app || op < 0) return;
+    bmw::TextID t(text);
+    app->updateModel(kPfRowModel[op], t);
+    bmw::Parcel p(busy);
+    app->setProperty(kPfRowButton[op], kPropWaiting, p);
 }
 
-bool pfAaInstalled() {
-    static char conf[16384], env[4096];
-    if (!readSmallFile(kPfConf, conf, sizeof(conf))) return false;
-    bool u = false, w = false;
-    nbt::pfmenu::coverage(conf, &u, &w);
-    if (!u || !w) return false;
-    return readSmallFile(kDaemonEnv, env, sizeof(env)) && nbt::pfmenu::keepPfSet(env);
-}
-
-void showPfAa(bmw::PluginApp* app) {
-    app->updateModel(kPfAaModel, pfAaInstalled());
-    g_pfAaShown = true;
-}
-
-// nbt-aad carries pf_aa (v1.9.44+): its binary holds the embedded banner text. Read once per press; ~1 MB.
+// nbt-aad carries pf_aa (v1.9.44+): its binary holds the embedded banner text. Read on each press; ~1 MB.
 bool daemonHasPfAa() {
     FILE* f = fopen(kDaemon, "rb");
     if (!f) return false;
@@ -1897,39 +1890,27 @@ bool daemonHasPfAa() {
     return found;
 }
 
-// The tool: nbt-aad itself when it carries pf_aa (embedded = true), else a standalone pf_aa from /opt/aa or the first
-// USB stick that carries one (the release's root).
-bool findPfAa(char* out, size_t n, bool* embedded) {
-    *embedded = false;
-    if (daemonHasPfAa()) { snprintf(out, n, "%s", kDaemon); *embedded = true; return true; }
-    if (fileExists(kPfAaTool)) { snprintf(out, n, "%s", kPfAaTool); return true; }
-    char stick[128];
-    if (nbt::usblog::findStick(stick, sizeof(stick))) {
-        snprintf(out, n, "%s/pf_aa", stick);
-        if (fileExists(out)) return true;
+void startPfOp(int op) {
+    static const char* const kNames[3] = { "Install PF Rules", "Check PF Rules", "Uninstall PF Rules" };
+    if (g_pfPid > 0) {
+        alog("menu: %s ignored: %s is still running", kNames[op], kNames[g_pfOp]);
+        return;
     }
-    return false;
-}
-
-bool onPfAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    if (g_pfAaPid > 0) {
-        alog("menu: pf_aa is still running (pid %d): wait for it", (int)g_pfAaPid);
-        if (g_runApp) showPfAa(g_runApp);
-        return true;
+    if (g_pfOp >= 0 && g_pfOp != op) pfRowText(g_runApp, g_pfOp, kPfRowLabel[g_pfOp], false);   // old result off
+    g_pfOp = op;
+    g_pfNext = 0;
+    g_pfLabelMs = 0;
+    if (!daemonHasPfAa()) {
+        alog("menu: %s: %s has no pf_aa built in (older than v1.9.44): update nbt-aad", kNames[op], kDaemon);
+        pfRowText(g_runApp, op, kTxtPfFailed, false);
+        g_pfLabelMs = nowMs() + 8000;
+        return;
     }
-    const bool installed = pfAaInstalled();
-    char tool[160];
-    bool embedded = false;
-    if (!findPfAa(tool, sizeof(tool), &embedded)) {
-        alog("menu: Firewall rules for Android Auto: %s has no pf_aa built in (older than v1.9.44) and there is no "
-             "pf_aa in %s or on a USB stick: update nbt-aad", kDaemon, kPfAaTool);
-        if (g_runApp) showPfAa(g_runApp);
-        return true;
-    }
-    g_pfAaInstall = !installed;
-    const char* mode = embedded ? (g_pfAaInstall ? "--pf-install" : "--pf-uninstall")
-                                : (g_pfAaInstall ? "--install" : "--uninstall");
-    char* argv[] = { tool, const_cast<char*>(mode), NULL };
+    char* argv[4];
+    argv[0] = const_cast<char*>(kDaemon);
+    argv[1] = const_cast<char*>(op == kPfInstall ? "--pf-install" : op == kPfCheck ? "--pf-check" : "--pf-uninstall");
+    argv[2] = op == kPfCheck ? NULL : const_cast<char*>("--load");
+    argv[3] = NULL;
     // The HMI's LD_PRELOAD (graphics libraries) is no use to pf_aa, pfctl or mount.
     char* envp[96];
     int ne = 0;
@@ -1949,55 +1930,74 @@ bool onPfAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
         posix_spawn_file_actions_adddup2(&fa, in, 0);
         posix_spawn_file_actions_adddup2(&fa, out, 1);
         posix_spawn_file_actions_adddup2(&fa, out, 2);
-        if (posix_spawn(&pid, tool, &fa, NULL, argv, envp) != 0) pid = -1;
+        if (posix_spawn(&pid, kDaemon, &fa, NULL, argv, envp) != 0) pid = -1;
         posix_spawn_file_actions_destroy(&fa);
     }
     int err = errno;
     if (in >= 0) close(in);
     if (out >= 0) close(out);
     if (pid <= 0) {
-        alog("menu: Firewall rules for Android Auto: cannot start %s %s (errno %d)", tool, mode, err);
-    } else {
-        g_pfAaPid = pid;
-        g_pfAaStart = time(NULL);
-        alog("menu: Firewall rules for Android Auto %s -> running %s %s (pid %d)", installed ? "on" : "off", tool, mode,
-             (int)pid);
-    }
-    if (g_runApp) showPfAa(g_runApp);
-    return true;
-}
-
-// Status poll: pf_aa finished -> its output into the app log, the checkbox from the files again.
-void servicePfAa(bmw::PluginApp* app) {
-    if (g_pfAaPid <= 0) return;
-    int st = 0;
-    pid_t r = waitpid(g_pfAaPid, &st, WNOHANG);
-    if (r == 0) {
-        if (time(NULL) - g_pfAaStart > 60) {
-            alog("pf_aa (pid %d) still running after 60 s: leaving it, the checkbox shows the files as they are",
-                 (int)g_pfAaPid);
-            g_pfAaPid = 0;
-            showPfAa(app);
-        }
+        alog("menu: %s: cannot start %s %s (errno %d)", kNames[op], kDaemon, argv[1], err);
+        pfRowText(g_runApp, op, kTxtPfFailed, false);
+        g_pfLabelMs = nowMs() + 8000;
         return;
     }
-    FILE* f = fopen(kPfAaOut, "r");
-    char line[200];
-    int n = 0;
-    while (f && fgets(line, sizeof(line), f) && n < 60) {
-        line[strcspn(line, "\r\n")] = 0;
-        if (line[0]) { alog("pf_aa: %s", line); ++n; }
+    g_pfPid = pid;
+    g_pfStart = time(NULL);
+    alog("menu: %s -> %s %s%s (pid %d)", kNames[op], kDaemon, argv[1], argv[2] ? " --load" : "", (int)pid);
+    pfRowText(g_runApp, op, op == kPfInstall ? kTxtPfWriting : op == kPfCheck ? kTxtPfChecking : kTxtPfRemoving, true);
+}
+
+bool onPfInstallRow(void*, const bmw::Parcel&) { startPfOp(kPfInstall); return true; }
+bool onPfCheckRow(void*, const bmw::Parcel&) { startPfOp(kPfCheck); return true; }
+bool onPfUninstallRow(void*, const bmw::Parcel&) { startPfOp(kPfUninstall); return true; }
+
+// Status poll: the process ended -> its output into the app log, the row shows the outcome; timed text changes.
+// pf_aa exit codes: 0 done (with --load: the running filter is as intended), 8 written but not active, --check:
+// 0 in place and active, 9 in place but not active, 7 missing; anything else failed.
+void servicePfOps(bmw::PluginApp* app) {
+    const uint32_t now = nowMs();
+    if (g_pfPid > 0) {
+        int st = 0;
+        pid_t r = waitpid(g_pfPid, &st, WNOHANG);
+        if (r == 0 && time(NULL) - g_pfStart <= 60) return;
+        FILE* f = fopen(kPfAaOut, "r");
+        char line[200];
+        int n = 0;
+        while (f && fgets(line, sizeof(line), f) && n < 80) {
+            line[strcspn(line, "\r\n")] = 0;
+            if (line[0]) { alog("pf_aa: %s", line); ++n; }
+        }
+        if (f) fclose(f);
+        int rc = (r == g_pfPid && WIFEXITED(st)) ? WEXITSTATUS(st) : -1;
+        if (r == 0) alog("pf_aa (pid %d) still running after 60 s: no longer waiting for it", (int)g_pfPid);
+        else if (r != g_pfPid) alog("pf_aa (pid %d): exit status not available (reaped elsewhere)", (int)g_pfPid);
+        g_pfPid = 0;
+        unsigned first = kTxtPfFailed, second = 0;
+        if (g_pfOp == kPfInstall) {
+            if (rc == 0) { first = kTxtPfWritten; second = kTxtPfActive; }
+            else if (rc == 8) { first = kTxtPfWritten; second = kTxtPfNotActive; }
+        } else if (g_pfOp == kPfUninstall) {
+            if (rc == 0) { first = kTxtPfRemoved; second = kTxtPfStockOff; }
+            else if (rc == 8) { first = kTxtPfRemoved; second = kTxtPfNotActive; }
+        } else {
+            first = rc == 0 ? kTxtPfInPlace : rc == 9 ? kTxtPfInPlaceIdle : rc == 7 ? kTxtPfMissing : kTxtPfFailed;
+        }
+        alog("pf_aa exit %d: row shows text %u%s", rc, first, second ? " then a second result" : "");
+        pfRowText(app, g_pfOp, first, false);
+        if (second) { g_pfNext = second; g_pfNextMs = now + 2000; g_pfLabelMs = now + 12000; }
+        else g_pfLabelMs = now + 10000;
+        return;
     }
-    if (f) fclose(f);
-    const bool reaped = r == g_pfAaPid;
-    const bool now = pfAaInstalled();
-    // A SIGCHLD the HMI ignores reaps the child itself (waitpid -1/ECHILD): judge by the files then.
-    const bool ok = reaped ? (WIFEXITED(st) && WEXITSTATUS(st) == 0) : (now == g_pfAaInstall);
-    alog("pf_aa %s %s (exit %d%s): rules %s%s", g_pfAaInstall ? "--install" : "--uninstall", ok ? "done" : "FAILED",
-         (reaped && WIFEXITED(st)) ? WEXITSTATUS(st) : -1, reaped ? "" : ", status not available: judged by pf.conf",
-         now ? "in place" : "not in place", ok ? " - restart the head unit so the car loads pf.conf" : "");
-    g_pfAaPid = 0;
-    showPfAa(app);
+    if (g_pfNext && (int32_t)(now - g_pfNextMs) >= 0) {
+        pfRowText(app, g_pfOp, g_pfNext, false);
+        g_pfNext = 0;
+    }
+    if (g_pfLabelMs && (int32_t)(now - g_pfLabelMs) >= 0 && g_pfOp >= 0) {
+        pfRowText(app, g_pfOp, kPfRowLabel[g_pfOp], false);
+        g_pfLabelMs = 0;
+        g_pfOp = -1;
+    }
 }
 
 bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
@@ -2153,8 +2153,7 @@ void statusRun(void* /*self*/) {
     if (!g_wfdOnlyShown) showWfdOnly(app);
     if (!g_nativeAudioShown) showNativeAudio(app);
     if (!g_lciMediaShown) showLciMedia(app);
-    if (!g_pfAaShown) showPfAa(app);
-    servicePfAa(app);
+    servicePfOps(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -2317,7 +2316,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the eleven checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2340,8 +2339,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showWfdOnly(g_app);
         showNativeAudio(g_app);
         showLciMedia(g_app);
-        if (g_pfAaPid <= 0) showPfAa(g_app);
-        alog("settings: twelve checkbox models refreshed");
+        alog("settings: eleven checkbox models refreshed");
     }
     return true;
 }
@@ -2381,7 +2379,9 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActWfdOnly, &onWfdOnlyToggle);
     addAction(self, kActNativeAudio, &onNativeAudioToggle);
     addAction(self, kActLciMedia, &onLciMediaToggle);
-    addAction(self, kActPfAa, &onPfAaToggle);
+    addAction(self, kActPfInstall, &onPfInstallRow);
+    addAction(self, kActPfCheck, &onPfCheckRow);
+    addAction(self, kActPfUninstall, &onPfUninstallRow);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;

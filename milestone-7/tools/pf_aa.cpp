@@ -37,12 +37,13 @@ const char* const kBackupDefault = "/opt/aa/pf.bak";
 #define NBT_PFCTL "/bin/pfctl"   // host smoke test: -DNBT_PFCTL=<fake>
 #endif
 const char* const kPfctl = NBT_PFCTL;
-#define PF_AA_VERSION "1.1"   // 1.1: /dev/shmem check copy (fsync ENOSYS) no longer fails the install
+#define PF_AA_VERSION "1.2"   // 1.2: --load (apply now), live status in --check; 1.1: /dev/shmem check copy fix
 const char* const kMountPoint = "/fs/sda0";
 #ifndef NBT_PF_CHECKFILE
 #define NBT_PF_CHECKFILE "/dev/shmem/pf_aa-check.conf"   // parse-only copy for pfctl -n (RAM)
 #endif
 const char* const kCheckFile = NBT_PF_CHECKFILE;
+bool g_load = false;   // --load: apply to the running filter after --install / --uninstall
 
 // Whole file into out. False with errno set when it cannot be opened.
 bool readFile(const char* path, std::string& out) {
@@ -168,6 +169,37 @@ struct Mount {
     }
 };
 
+// The running filter: pfctl -s info (status) and -s rules (5277 coverage of what is loaded). status: 1/0/-1.
+void liveState(int* status, nbt::pfaa::Coverage* loaded) {
+    std::string out;
+    *status = run(std::string(kPfctl) + " -s info", out) >= 0 ? nbt::pfaa::pfStatus(out) : -1;
+    nbt::pfaa::Coverage none = { false, false };
+    *loaded = run(std::string(kPfctl) + " -s rules", out) == 0 ? nbt::pfaa::coverage(out) : none;
+}
+
+const char* statusName(int s) { return s == 1 ? "Enabled" : s == 0 ? "Disabled" : "unknown"; }
+
+// --load: apply pf.conf now instead of at the next start. enable = after --install (rules loaded, filter on, as after
+// a boot with NBT_KEEP_PF=1); !enable = after --uninstall (stock rules loaded, filter off, as nbt-aad does at start
+// without NBT_KEEP_PF). 0 = the running filter is in that state; 8 = it is not (files are written either way).
+int loadNow(const char* pf, bool enable) {
+    std::string out;
+    printf("loading %s into the running packet filter\n", pf);
+    int rc = run(std::string(kPfctl) + " -f " + pf, out);
+    if (rc != 0) printf("ERROR: '%s -f %s' failed (rc %d):\n%s", kPfctl, pf, rc, out.c_str());
+    rc = run(std::string(kPfctl) + (enable ? " -e" : " -d"), out);   // "already enabled/disabled" is fine
+    if (rc != 0) printf("%s %s: rc %d: %s", kPfctl, enable ? "-e" : "-d", rc, out.c_str());
+    int status;
+    nbt::pfaa::Coverage loaded;
+    liveState(&status, &loaded);
+    printf("packet filter now: Status: %s; loaded rules: uap0 %s, wfd0 %s\n", statusName(status),
+           loaded.uap0 ? "5277 allowed" : "5277 not allowed", loaded.wfd0 ? "5277 allowed" : "5277 not allowed");
+    bool ok = enable ? (status == 1 && loaded.uap0 && loaded.wfd0) : status == 0;
+    if (ok) printf(enable ? "rules active\n" : "stock rules loaded, packet filter off (as nbt-aad does at start)\n");
+    else printf("ERROR: the running packet filter is not as intended; the files are written: reboot the head unit\n");
+    return ok ? 0 : 8;
+}
+
 const char* allowed(bool b) { return b ? "TCP 5277 allowed" : "TCP 5277 NOT allowed"; }
 
 void printCoverage(const nbt::pfaa::Coverage& c) {
@@ -176,12 +208,13 @@ void printCoverage(const nbt::pfaa::Coverage& c) {
 
 int usage() {
 #ifdef NBT_PF_AA_EMBEDDED
-    printf("usage: nbt-aad --pf-install | --pf-check | --pf-uninstall   (pf_aa built into nbt-aad)\n");
+    printf("usage: nbt-aad --pf-install | --pf-check | --pf-uninstall [--load]   (pf_aa built into nbt-aad)\n");
 #endif
-    printf("usage: pf_aa --install | --check | --uninstall\n"
+    printf("usage: pf_aa --install | --check | --uninstall [--load]\n"
            "  --install    back up pf.conf to /opt/aa/pf.bak, add the Android Auto rules, set NBT_KEEP_PF=1\n"
-           "  --check      report only\n"
-           "  --uninstall  restore pf.conf from /opt/aa/pf.bak, remove NBT_KEEP_PF (also: --restore)\n");
+           "  --check      report only (exit 0 = rules in pf.conf and active, 9 = in pf.conf but not active, 7 = missing)\n"
+           "  --uninstall  restore pf.conf from /opt/aa/pf.bak, remove NBT_KEEP_PF (also: --restore)\n"
+           "  --load       with --install / --uninstall: apply it now (pfctl -f, then -e / -d) instead of at the next boot\n");
     return 1;
 }
 
@@ -240,6 +273,7 @@ int install(const char* pf, const char* env, const char* backup) {
         }
         int rc = setEnv(env);
         if (rc == 0 && needEnv) printf("NBT_KEEP_PF=1 applies from the next Android Auto Start in iDrive\n");
+        if (rc == 0 && g_load) return loadNow(pf, true);
         return rc;
     }
 
@@ -283,6 +317,7 @@ int install(const char* pf, const char* env, const char* backup) {
 
     rc = setEnv(env);
     if (rc) return rc;
+    if (g_load) return loadNow(pf, true);
     printf("pf.conf modified, restart pf to take effect (reboot the head unit, or: pfctl -f %s -e)\n", pf);
     return 0;
 }
@@ -312,16 +347,19 @@ int check(const char* pf, const char* env, const char* backup) {
         ++bad;
     }
     if (!readFile(backup, bak)) printf("note: no backup at %s\n", backup);
-    if (run(std::string(kPfctl) + " -s info", out) >= 0) {
-        size_t s = out.find("Status:");
-        if (s != std::string::npos) {
-            size_t e = out.find('\n', s);
-            printf("packet filter now: %s\n", out.substr(s, e == std::string::npos ? std::string::npos : e - s).c_str());
-        }
-    }
+    int status;
+    nbt::pfaa::Coverage loaded;
+    liveState(&status, &loaded);
+    printf("packet filter now: Status: %s; loaded rules: uap0 %s, wfd0 %s\n", statusName(status),
+           loaded.uap0 ? "5277 allowed" : "5277 not allowed", loaded.wfd0 ? "5277 allowed" : "5277 not allowed");
     if (bad) return 7;
-    printf("rules look good\n");
-    return 0;
+    if (status == 1 && loaded.uap0 && loaded.wfd0) {
+        printf("rules look good and are active\n");
+        return 0;
+    }
+    printf("rules look good in pf.conf but are not active (filter %s): pf_aa --install --load, or reboot\n",
+           statusName(status));
+    return 9;
 }
 
 int uninstall(const char* pf, const char* env, const char* backup) {
@@ -381,6 +419,7 @@ int uninstall(const char* pf, const char* env, const char* backup) {
         }
         printf("the daemon switches the packet filter off again from its next Start\n");
     }
+    if (g_load) return loadNow(pf, false);
     if (needPf)
         printf("pf.conf restored, restart pf to take effect (reboot the head unit, or: pfctl -f %s)\n", pf);
     return 0;
@@ -400,12 +439,13 @@ int nbt::pfaa::run(int argc, char** argv) {
         if (!strcmp(a, "--install") && mode == NONE) mode = INSTALL;
         else if (!strcmp(a, "--check") && mode == NONE) mode = CHECK;
         else if ((!strcmp(a, "--uninstall") || !strcmp(a, "--restore")) && mode == NONE) mode = UNINSTALL;
+        else if (!strcmp(a, "--load")) g_load = true;
         else if (!strcmp(a, "--pf") && i + 1 < argc) pf = argv[++i];
         else if (!strcmp(a, "--env") && i + 1 < argc) env = argv[++i];
         else if (!strcmp(a, "--backup") && i + 1 < argc) backup = argv[++i];
         else return usage();
     }
-    if (mode == NONE) return usage();
+    if (mode == NONE || (g_load && mode == CHECK)) return usage();
     if (!pf) {
         struct stat st;
         pf = stat(kPfDefault, &st) == 0 ? kPfDefault : kPfFallback;

@@ -25,6 +25,8 @@
       <raAction id="120"/>
       <raAction id="124"/>
       <raAction id="132"/>
+      <raAction id="136"/>
+      <raAction id="137"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -95,8 +97,13 @@
       <textIdModel id="126" textId="28">
         <synonyms/>
       </textIdModel>
-      <raBoolModel id="133"/>
       <textIdModel id="134" textId="29">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="138" textId="30">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="139" textId="31">
         <synonyms/>
       </textIdModel>
     </models>
@@ -180,7 +187,10 @@
           <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network" textModel="93"/>
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
           <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
-          <checkbox action="132" id="135" model="133" text="Firewall rules for Android Auto (pf_aa)" textModel="134"/>
+          <separator id="142"/>
+          <button action="132" id="135" model="134" text="Install PF Rules"/>
+          <button action="136" id="140" model="138" text="Check PF Rules"/>
+          <button action="137" id="141" model="139" text="Uninstall PF Rules"/>
         </components>
       </hmiState>
     </hmiStates>

@@ -194,6 +194,17 @@ inline std::string dropKeepPf(const std::string& env, int* removed) {
     return out;
 }
 
+// `pfctl -s info` output -> 1 "Status: Enabled", 0 "Status: Disabled", -1 neither found.
+inline int pfStatus(const std::string& info) {
+    size_t s = info.find("Status:");
+    if (s == std::string::npos) return -1;
+    size_t e = info.find('\n', s);
+    std::string line = info.substr(s, e == std::string::npos ? std::string::npos : e - s);
+    if (line.find("Enabled") != std::string::npos) return 1;
+    if (line.find("Disabled") != std::string::npos) return 0;
+    return -1;
+}
+
 // tools/pf_aa.cpp: the command line (--install | --check | --uninstall [--pf/--env/--backup <file>]); pf_aa's main()
 // and nbt-aad's --pf-* options both call it. Returns the exit status.
 int run(int argc, char** argv);
