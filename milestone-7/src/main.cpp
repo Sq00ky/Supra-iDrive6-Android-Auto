@@ -1670,7 +1670,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.39-carspeed"
+#define NBT_AAD_BUILD "v1.9.40-rxdeadline"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
