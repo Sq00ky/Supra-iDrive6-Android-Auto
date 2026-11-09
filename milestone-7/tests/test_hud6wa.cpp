@@ -51,7 +51,7 @@ struct FakePort : public Port {
     }
     Status status() const { return st; }
     uint32_t epoch() const { return ep; }
-    bool waiting() const { return wait; }
+    bool waiting(int) const { return wait; }
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
 };

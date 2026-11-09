@@ -88,7 +88,7 @@ Batch Hud6waDisplay::showBatch(bool isNew, const HudTexts& t, const ShapeSpec& s
 }
 
 Batch Hud6waDisplay::clearBatch() const {
-    Batch b("clear", true);
+    Batch b("clear", true, kSlotAll);
     b.add(kSetVisibility, setVisibility(p_.frame, false));
     b.add(kRemoveAllItems, removeAllItems(p_.bufA));
     b.add(kRemoveAllItems, removeAllItems(p_.bufB));
@@ -123,7 +123,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     Result r = health(&e);
     if (r != kOk) return r;
     if (port_.status() == kNavActive) return kOk;   // the state machine yields on its next tick
-    if (!shadow_ && port_.waiting()) {
+    if (!shadow_ && port_.waiting(kSlotMain)) {
         // Only we add batches and the transport only takes them away, so once nothing waits, every batch before this
         // one runs (or is dropped, which changes the epoch and redraws everything).
         if (!held_) log("HOLD type %d: a batch is still waiting, drawn once it goes out", v.aa_type);
