@@ -8,24 +8,33 @@
 //                                 receiver, about 1 ms apart. Nothing is sent before the first movement, and the car
 //                                 appears to go quiet while it stands (inferred: the MOST log skips unchanged values).
 //   fkt 0x626 DrivingCondition2   byte 0: 0 stopped, 1 forward, 2 reverse, 3 unclear (at low speed, in either direction)
-//   fkt 0x228 gear                byte 0: 2 is reverse. Nothing is sent before the first shift.
+//   fkt 0x228 gear                byte 0: 1 N, 2 R, 3 P, 4 and up driving (5 and up follow the forward gear in an automatic),
+//                                 0 and 15 say nothing. Nothing is sent before the first shift. The firmware's speed lock
+//                                 reads this function, 1 as N and 3 as P. Manual gearbox values are not known.
+//   fkt 0xCB5 hand brake          byte 0: 1 released, 2 on, others say nothing. The firmware's speed lock reads this function
+//                                 as statusContactHandBrake and falls back to fkt 0xD01 on the others; 0xD01 is not read
+//                                 here. Nothing is sent before the first report, so the state at start is not known.
 // The function names are the firmware's. The scale was fitted against the car's GPS speed.
 
 #include "aa_sensor_msg.hpp"
 #include "most/client.hpp"
 
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 namespace nbt {
 namespace car {
 
 const uint8_t kVehicleFBlock = 0x05, kVehicleInst = 0x00;
-const uint16_t kCarSpeedFkt = 0x621, kDrivingConditionFkt = 0x626, kVehicleGearFkt = 0x228;
+const uint16_t kCarSpeedFkt = 0x621, kDrivingConditionFkt = 0x626, kVehicleGearFkt = 0x228, kParkingBrakeFkt = 0xCB5;
 
 const uint16_t kCarSpeedInvalid = 0xFFFF;
 const uint8_t kConditionForward = 1, kConditionReverse = 2;
-const uint8_t kVehicleGearReverse = 2;
+const uint8_t kVehicleGearNeutral = 1, kVehicleGearReverse = 2, kVehicleGearPark = 3;
+const uint8_t kVehicleGearDriveFirst = 4, kVehicleGearDriveLast = 14;
+const uint8_t kParkingBrakeReleased = 1, kParkingBrakeOn = 2;
 
 // Copies of one message arrive about 1 ms apart and new readings about 500 ms apart, so this tells them apart.
 const uint32_t kCarSpeedCopyWindowMs = 100;
@@ -132,27 +141,125 @@ private:
     bool badLengthLogged_;
 };
 
-typedef void (*CarSpeedCb)(const CarSpeedSample& speed, void* user);
+// The car's raw gear as the value Android Auto takes, or -1 for one that says nothing.
+inline int gearToAa(int raw) {
+    if (raw == kVehicleGearNeutral) return AA_GEAR_NEUTRAL;
+    if (raw == kVehicleGearReverse) return AA_GEAR_REVERSE;
+    if (raw == kVehicleGearPark) return AA_GEAR_PARK;
+    if (raw >= kVehicleGearDriveFirst && raw <= kVehicleGearDriveLast) return AA_GEAR_DRIVE;
+    return -1;
+}
 
-// A consumer of the observe-only MOST client: three routes and no device-controller keys, like car GPS. It hands on each new
-// valid speed. A silent or invalid signal hands on nothing, so no 0 is ever made up here. The callback runs on the DSI
-// callback thread: see the handler rules in most/client.hpp.
+// The car's raw hand brake as 0 released or 1 on, or -1 for one that says nothing.
+inline int parkingBrakeToAa(int raw) {
+    if (raw == kParkingBrakeReleased) return 0;
+    if (raw == kParkingBrakeOn) return 1;
+    return -1;
+}
+
+// A state the car reports in one byte and Android Auto wants on change. Compares what would be sent, not the raw value or
+// the time: that drops the copies per receiver, and a shift from one forward gear to the next, which is still DRIVE. A raw
+// value that says nothing leaves the last state as it was. Pure: host-tested in tests/test_car_vehicle.cpp.
+class CarStateFilter {
+public:
+    typedef int (*Decode)(int raw);     // the value to send, or -1 for a raw value that says nothing
+
+    struct Result {
+        bool known;             // raw says something: value is the state now
+        bool changed;           // and it differs from the last known one
+        bool logBadLength;      // the first frame of a length other than 1
+        bool logUnknown;        // the first time this raw value said nothing
+        int raw;
+        int value;
+    };
+
+    explicit CarStateFilter(Decode decode) : decode_(decode), have_(false), last_(-1), badLengthLogged_(false) {
+        memset(unknownLogged_, 0, sizeof(unknownLogged_));
+    }
+
+    Result feed(const uint8_t* p, size_t n) {
+        if (n != 1 || !p) {
+            Result r = Result();
+            r.logBadLength = !badLengthLogged_;
+            badLengthLogged_ = true;
+            return r;
+        }
+        return feedRaw(p[0]);
+    }
+
+    Result feedRaw(int raw) {
+        Result r = Result();
+        r.raw = raw;
+        r.value = decode_(raw);
+        if (r.value < 0) {
+            bool& logged = unknownLogged_[(uint8_t)raw];
+            r.logUnknown = !logged;
+            logged = true;
+            return r;
+        }
+        r.known = true;
+        r.changed = !have_ || r.value != last_;
+        have_ = true;
+        last_ = r.value;
+        return r;
+    }
+
+private:
+    Decode decode_;
+    bool have_;
+    int last_;
+    bool badLengthLogged_;
+    bool unknownLogged_[256];
+};
+
+typedef void (*CarSpeedCb)(const CarSpeedSample& speed, void* user);
+typedef void (*CarGearCb)(int aaGear, void* user);              // AaGear
+typedef void (*CarParkingBrakeCb)(bool on, void* user);
+
+// A NULL callback turns that signal off.
+struct CarVehicleCallbacks {
+    CarSpeedCb speed;
+    CarGearCb gear;
+    CarParkingBrakeCb parkingBrake;
+    void* user;
+    CarVehicleCallbacks() : speed(NULL), gear(NULL), parkingBrake(NULL), user(NULL) {}
+};
+
+// A consumer of the observe-only MOST client: up to four routes and no device-controller keys, like car GPS. It hands on each
+// new valid speed, and the gear and parking brake when they change. A silent or invalid signal hands on nothing, so no value
+// is ever made up here. The callbacks run on the DSI callback thread, or for the gear on the thread calling gearFromApp: see
+// the handler rules in most/client.hpp.
 class CarVehicle {
 public:
     CarVehicle();
+    ~CarVehicle();
 
-    // Before the client's start(). False: the client has no room for the routes.
-    bool attach(most::Client& client, CarSpeedCb cb, void* user);
+    // Before the client's start(). False: the client has no room for the routes, and every callback stays silent.
+    bool attach(most::Client& client, const CarVehicleCallbacks& callbacks);
+
+    // The gear from the iDrive app (raw, same codes as fkt 228). It fills in until fkt 228 has said something, which gives a
+    // gear at start, before the first shift, and on a car without that function. Ignored after that. Thread-safe, and safe
+    // before attach.
+    void gearFromApp(int raw);
 
 private:
     static void speedTramp(const most::View& m, void* self);
     static void conditionTramp(const most::View& m, void* self);
     static void gearTramp(const most::View& m, void* self);
+    static void parkingBrakeTramp(const most::View& m, void* self);
     void onSpeed(const most::View& m);
+    void onGear(const most::View& m);
+    void onParkingBrake(const most::View& m);
+    void reportGear(const CarStateFilter::Result& r, const char* source);   // with gearMutex_ held
 
-    CarSpeedFilter filter_;     // only touched on the DSI callback thread
-    CarSpeedCb cb_;
-    void* user_;
+    CarSpeedFilter filter_;         // only touched on the DSI callback thread
+    CarStateFilter brake_;          // only touched on the DSI callback thread
+    // Held across the callback, so the gears are posted in the order they were decided: a stale gear from the app must not
+    // land after a newer one from the car, because nothing would correct it before the next shift.
+    pthread_mutex_t gearMutex_;
+    CarStateFilter gear_;           // guarded by gearMutex_
+    bool mostGearHeard_;            // guarded by gearMutex_: fkt 228 has said something, so the app's gear no longer counts
+    CarVehicleCallbacks callbacks_; // gear guarded by gearMutex_, as gearFromApp can run before attach. The rest is set before start.
 };
 
 } // namespace car

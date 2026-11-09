@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for src/aa_sensor_msg.hpp: the LOCATION, GPS_SATELLITE and CAR_SPEED event encodings and their age limits.
+// Host test for src/aa_sensor_msg.hpp: the LOCATION, GPS_SATELLITE, CAR_SPEED, GEAR and PARKING_BRAKE event encodings and their
+// age limits.
 #include "aa_sensor_msg.hpp"
 #include <assert.h>
 #include <stdio.h>
@@ -204,6 +205,31 @@ int main() {
         s.speed_e3 = 0;
         s.rx_ms = 1000;
         assert(carSpeedSendable(s, 1000 + 3600000));
+    }
+    // GEAR: field 8 of the batch, {1: gear}. Exact bytes, and NEUTRAL is written: the field is required and 0 is its value.
+    {
+        std::vector<uint8_t> ev(100, 0xEE);
+        const struct { int gear; uint8_t wire; } gears[] = {
+            { AA_GEAR_NEUTRAL, 0x00 }, { AA_GEAR_DRIVE, 0x64 }, { AA_GEAR_PARK, 0x65 }, { AA_GEAR_REVERSE, 0x66 }
+        };
+        for (size_t g = 0; g < sizeof(gears) / sizeof(gears[0]); ++g) {
+            buildGearEvent(gears[g].gear, ev);
+            const uint8_t want[] = { 0x80, 0x03, 0x42, 0x02, 0x08, gears[g].wire };
+            assert(ev.size() == sizeof(want));
+            for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+        }
+    }
+    // PARKING_BRAKE: field 7 of the batch, {1: on}. Exact bytes, and released is written, for the same reason.
+    {
+        std::vector<uint8_t> ev(100, 0xEE);
+        buildParkingBrakeEvent(true, ev);
+        const uint8_t on[] = { 0x80, 0x03, 0x3A, 0x02, 0x08, 0x01 };
+        assert(ev.size() == sizeof(on));
+        for (size_t i = 0; i < sizeof(on); ++i) assert(ev[i] == on[i]);
+        buildParkingBrakeEvent(false, ev);
+        const uint8_t released[] = { 0x80, 0x03, 0x3A, 0x02, 0x08, 0x00 };
+        assert(ev.size() == sizeof(released));
+        for (size_t i = 0; i < sizeof(released); ++i) assert(ev[i] == released[i]);
     }
     printf("test_aa_sensor_msg OK\n");
     return 0;
