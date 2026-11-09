@@ -33,7 +33,7 @@ HudTexts hudTexts(const NavView& v, const HudProfile& p) {
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
     : port_(port), p_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
-      redraw_(false), visible_(p.bufB), epoch_(0) {}
+      redraw_(false), held_(false), visible_(p.bufB), epoch_(0) {}
 
 void Hud6waDisplay::log(const char* fmt, ...) {
     char buf[320];
@@ -92,7 +92,7 @@ Batch Hud6waDisplay::clearBatch() const {
     b.add(kSetVisibility, setVisibility(p_.frame, false));
     b.add(kRemoveAllItems, removeAllItems(p_.bufA));
     b.add(kRemoveAllItems, removeAllItems(p_.bufB));
-    if (visible_ != p_.bufB) b.add(kSwitchVisibility, switchVisibility(visible_, p_.bufB));
+    b.add(kSwitchVisibility, switchVisibility(p_.bufA, p_.bufB));   // always: after a restart or lost work we may not know
     b.add(kTextareaSetText, setText(p_.street, ""));
     b.add(kTextareaSetText, setText(p_.distance, ""));
     b.add(kTextareaSetText, setText(p_.unit, ""));
@@ -115,7 +115,7 @@ bool Hud6waDisplay::submit(const Batch& b, SubmitResult* r) {
 
 bool Hud6waDisplay::sameManeuver(const NavView&, double) {
     health(NULL);
-    return redraw_;
+    return redraw_ || held_;
 }
 
 ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, bool isNew, bool) {
@@ -123,6 +123,13 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     Result r = health(&e);
     if (r != kOk) return r;
     if (port_.status() == kNavActive) return kOk;   // the state machine yields on its next tick
+    if (!shadow_ && port_.waiting()) {
+        // Only we add batches and the transport only takes them away, so once nothing waits, every batch before this
+        // one runs (or is dropped, which changes the epoch and redraws everything).
+        if (!held_) log("HOLD type %d: a batch is still waiting, drawn once it goes out", v.aa_type);
+        held_ = true;
+        return kOk;
+    }
     HudTexts t = hudTexts(v, p_);
     ShapeSpec spec = shapeFor(v.aa_type, v.has_exit_angle, v.exit_angle);
     Batch b = showBatch(isNew, t, spec);
@@ -136,6 +143,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     visible_ = visible_ == p_.bufA ? p_.bufB : p_.bufA;
     fresh_ = false;
     redraw_ = false;
+    held_ = false;
     epoch_ = e;
     shown_ = t;
     return kOk;
@@ -193,6 +201,7 @@ void Hud6waDisplay::forget() {
     sent_any_ = false;
     fresh_ = true;
     redraw_ = false;
+    held_ = false;
     visible_ = p_.bufB;                               // where a clear or the navigation's end of route leaves it
     shown_ = HudTexts();
 }
