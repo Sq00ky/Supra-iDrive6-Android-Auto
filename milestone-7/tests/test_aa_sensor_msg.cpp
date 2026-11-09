@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for src/aa_sensor_msg.hpp: the LOCATION and GPS_SATELLITE event encodings and their age limits.
+// Host test for src/aa_sensor_msg.hpp: the LOCATION, GPS_SATELLITE and CAR_SPEED event encodings and their age limits.
 #include "aa_sensor_msg.hpp"
 #include <assert.h>
 #include <stdio.h>
@@ -172,6 +172,38 @@ int main() {
         assert(compassRepeatDue(0xFFFFFF00u, 2000));                 // wrapped, past the limit
         // The car's beat must not reach the limit, and a repeat must stay inside what Google Maps counts as current.
         assert(kCompassRepeatMs > 1000 && kCompassRepeatMs < 1500);
+    }
+    // CAR_SPEED: field 3 of the batch, {1: speed_e3}. Exact bytes for a made-up speed, and the buffer's old content goes.
+    {
+        std::vector<uint8_t> ev(100, 0xEE);
+        buildCarSpeedEvent(6944, ev);
+        const uint8_t want[] = { 0x80, 0x03, 0x1A, 0x03, 0x08, 0xA0, 0x36 };
+        assert(ev.size() == sizeof(want));
+        for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+        // Zero is written, not left out: it is the reading that says the car has stopped.
+        buildCarSpeedEvent(0, ev);
+        const uint8_t zero[] = { 0x80, 0x03, 0x1A, 0x02, 0x08, 0x00 };
+        assert(ev.size() == sizeof(zero));
+        for (size_t i = 0; i < sizeof(zero); ++i) assert(ev[i] == zero[i]);
+        // Negative: a 10-byte varint, sign-extended, as protobuf writes an int32.
+        buildCarSpeedEvent(-1, ev);
+        assert(ev.size() == 15 && ev[2] == 0x1A && ev[3] == 11 && ev[4] == 0x08 && ev[14] == 0x01);
+        size_t i = 5;
+        assert((int32_t)(int64_t)var(ev, i) == -1 && i == ev.size());
+    }
+    // When it may go out: a moving speed has an age limit, and a 0 does not.
+    {
+        CarSpeedSample s = { 6944, 1000 };
+        assert(carSpeedSendable(s, 1000));
+        assert(carSpeedSendable(s, 1000 + kCarSpeedMaxAgeMs));
+        assert(!carSpeedSendable(s, 1000 + kCarSpeedMaxAgeMs + 1));
+        s.speed_e3 = -6944;
+        assert(!carSpeedSendable(s, 1000 + kCarSpeedMaxAgeMs + 1));
+        s.rx_ms = 0xFFFFFF00u;
+        assert(carSpeedSendable(s, 100));               // wrapped, 356 ms old
+        s.speed_e3 = 0;
+        s.rx_ms = 1000;
+        assert(carSpeedSendable(s, 1000 + 3600000));
     }
     printf("test_aa_sensor_msg OK\n");
     return 0;

@@ -3,8 +3,8 @@
 #ifndef AA_SENSOR_MSG_HPP
 #define AA_SENSOR_MSG_HPP
 
-// Android Auto sensor channel: the LOCATION, COMPASS and GPS_SATELLITE events, in Android Auto units. It knows nothing about where
-// the data came from. Pure: host-tested in tests/test_aa_sensor_msg.cpp.
+// Android Auto sensor channel: the LOCATION, COMPASS, GPS_SATELLITE and CAR_SPEED events, in Android Auto units. It knows nothing
+// about where the data came from. Pure: host-tested in tests/test_aa_sensor_msg.cpp.
 
 #include "aa_proto.hpp"
 
@@ -63,6 +63,22 @@ inline bool compassRepeatDue(uint32_t last_sent_ms, uint32_t now_ms) {
     return now_ms - last_sent_ms >= kCompassRepeatMs;
 }
 
+struct CarSpeedSample {
+    int32_t speed_e3;           // metres per second * 1000, negative in reverse
+    uint32_t rx_ms;             // CLOCK_MONOTONIC ms, truncated to 32 bits, when it was received
+};
+
+// An old moving speed is not sent: nothing says the car still does that speed. A 0 has no age limit, because the car can
+// stay silent while it stands, and it is repeated so the phone keeps hearing it. The repeat only ever follows a 0 the car
+// reported: silence after a moving speed does not become a 0.
+const uint32_t kCarSpeedMaxAgeMs = 2000;
+const uint32_t kCarSpeedRepeatZeroEveryMs = 1000;
+
+// now_ms must be read after the sample was received. Holds across the 32-bit wrap.
+inline bool carSpeedSendable(const CarSpeedSample& s, uint32_t now_ms) {
+    return s.speed_e3 == 0 || now_ms - s.rx_ms <= kCarSpeedMaxAgeMs;
+}
+
 enum { AA_MSG_SENSOR_EVENT = 0x8003 };
 
 // Plain SensorEventIndication (0x8003) with one LocationData (SensorBatch field 1):
@@ -108,6 +124,17 @@ inline void buildCompassEvent(int32_t bearing_e6, std::vector<uint8_t>& out) {
     compass.integer(F_BEARING, bearing_e6);
     proto::ProtoWriter event(AA_MSG_SENSOR_EVENT);
     event.message(F_COMPASS, compass);
+    out = event.bytes();
+}
+
+// Plain SensorEventIndication (0x8003) with one speed entry (SensorBatch field 3): {1: speed_e3}, written even when 0.
+inline void buildCarSpeedEvent(int32_t speed_e3, std::vector<uint8_t>& out) {
+    enum { F_CAR_SPEED = 3 };
+    enum { F_SPEED_E3 = 1 };
+    proto::ProtoWriter speed;
+    speed.integer(F_SPEED_E3, speed_e3);
+    proto::ProtoWriter event(AA_MSG_SENSOR_EVENT);
+    event.message(F_CAR_SPEED, speed);
     out = event.bytes();
 }
 

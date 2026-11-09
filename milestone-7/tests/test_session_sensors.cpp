@@ -294,6 +294,107 @@ static void testCompassAcrossSessions() {
     endSession(s, sv);
 }
 
+static std::vector<uint8_t> speedEvent(int32_t speed_e3) {
+    std::vector<uint8_t> want;
+    buildCarSpeedEvent(speed_e3, want);
+    return want;
+}
+
+static CarSpeedSample speedNow(int32_t speed_e3, uint32_t ageMs = 0) {
+    CarSpeedSample s;
+    s.speed_e3 = speed_e3;
+    s.rx_ms = testNowMs() - ageMs;
+    return s;
+}
+
+// Sensor 3 with nothing from the car: answered, and silent. That also covers NBT_CAR_SPEED=0, which posts nothing.
+static void testSpeedNoData() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    endSession(s, sv);
+}
+
+// Nothing until the phone starts it. Then the newest on start and on each post, with the sign. An old moving speed stays home.
+static void testSpeedPosted() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(6944));
+    assert(!nextSensorFrame(sv[1], 300, p));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(6944));
+    s->postCarSpeed(speedNow(-1388));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(-1388));
+    // A moving speed is not repeated: silence does not become a claim about now.
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    s->postCarSpeed(speedNow(6944, kCarSpeedMaxAgeMs + 1));
+    assert(!nextSensorFrame(sv[1], 500, p));
+    endSession(s, sv);
+}
+
+// A start with an old moving speed sends nothing, and the next reading goes out as usual.
+static void testSpeedStaleAtStart() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(6944, kCarSpeedMaxAgeMs + 1));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    s->postCarSpeed(speedNow(7000));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(7000));
+    endSession(s, sv);
+}
+
+// A 0 has no age limit and repeats about once a second with the car silent, until the car moves again.
+static void testSpeedZeroRepeats() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(0, 60000));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
+    uint32_t t0 = testNowMs();
+    for (int i = 0; i < 2; ++i) {
+        assert(nextSensorFrame(sv[1], 2500, p) && p == speedEvent(0));
+        uint32_t t1 = testNowMs();
+        assert(t1 - t0 >= 800);                 // about once a second, not on every pass of the loop
+        t0 = t1;
+    }
+    s->postCarSpeed(speedNow(6944));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(6944));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    endSession(s, sv);
+}
+
+// The speed survives a new session, but the phone must start the sensor again first.
+static void testSpeedNewSession() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(0));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
+    s->stop();
+    close(sv[1]);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    assert(s->start(sv[0]));
+    uint8_t ch = 0xFF;
+    assert(readFrame(sv[1], 2000, ch, p));      // the VersionRequest
+    assert(!nextSensorFrame(sv[1], 1300, p));   // no repeat left over from the last session
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
+    endSession(s, sv);
+}
+
 // The period parser: present, the -1 of a 10-byte varint, absent, and a message it should stop on.
 static void testPeriod() {
     const uint8_t a[] = { 0x80, 0x01, 0x08, 0x01, 0x10, 0xE8, 0x07 };
@@ -336,6 +437,11 @@ int main() {
     testCompassRepeatsThroughWakes();
     testCompassAcrossSessions();
     testStartWithMinusOne();
+    testSpeedNoData();
+    testSpeedPosted();
+    testSpeedStaleAtStart();
+    testSpeedZeroRepeats();
+    testSpeedNewSession();
     printf("test_session_sensors OK\n");
     return 0;
 }

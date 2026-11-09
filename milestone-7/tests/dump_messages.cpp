@@ -79,6 +79,12 @@ static void sensors() {
     show(kFile, kType, "compass north", event, MESSAGE_ID_BYTES);
     buildCompassEvent(358593750, event);
     show(kFile, kType, "compass", event, MESSAGE_ID_BYTES);
+    buildCarSpeedEvent(0, event);
+    show(kFile, kType, "car stopped", event, MESSAGE_ID_BYTES);
+    buildCarSpeedEvent(6944, event);
+    show(kFile, kType, "car forward", event, MESSAGE_ID_BYTES);
+    buildCarSpeedEvent(-1389, event);
+    show(kFile, kType, "car in reverse", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(0, event);
     show(kFile, kType, "no satellites", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(7, event);

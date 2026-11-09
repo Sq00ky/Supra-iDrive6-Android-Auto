@@ -241,6 +241,13 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > Google's head unit integration guide documents only media playback status, and the 16.1 phone app has no handler for the
 > browser service, so the play queue itself is drawn by the phone and is not on the wire. Cleanup after the run: `rm
 > /dev/shmem/nbt-aad-media` when going back to an older build.
+>
+> **v1.9.39-carspeed (not car-verified): the car's wheel speed reaches the phone.** The phone starts this sensor and
+> used to get nothing, so it probably read "parked" all the time. It now gets the speed from the car's own MOST traffic
+> (nothing is sent on MOST), so parked-only features should close when moving and come back when stopped. `DRIVING_STATUS`
+> still stays 0. `NBT_CAR_SPEED=0` turns it off. Daemon log: `[Vehicle] car speed: MOST 05/00 fkt 621 ...` at start,
+> `[AASession] >>> Sensor CAR_SPEED event #N` while sending, and `[Vehicle] speed: moving again after ...` with the number
+> of zero frames seen, which shows whether the car goes quiet while stopped.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -409,8 +416,9 @@ no settings file.
 | "Hey Google" / Assistant using the car's microphone (`Carplay_Siri_1mic` speech scenario) | Car-verified |
 | Assistant replies audible (the car's Bluetooth source is requested again when the mic closes) | Car-verified |
 | Driving status, night mode | Works; night mode follows the car's day/night (like CarPlay) since v1.8.30 / rhmiapp-15 |
-| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP, the GPS speed, the direction of travel above 2 m/s, and the altitude converted from sea level to the WGS84 ellipsoid. This speed is always positive and is not the Mechanical Speed sensor, which is not sent |
+| Car GPS position | Sent as the LOCATION sensor (latitude / longitude about once a second, from the car's GNSS fix on MOST, only while the receiver reports a 3D fix), with an accuracy estimated from the fix's HDOP, the GPS speed, the direction of travel above 2 m/s, and the altitude converted from sea level to the WGS84 ellipsoid. This speed is always positive and is not the wheel speed below |
 | Car GPS satellites | Sent as the GPS_SATELLITE sensor (satellites used, about once a second, 0 with no fix) |
+| Car wheel speed | Sent as the CAR_SPEED sensor from MOST 05/00 fkt 621 (about twice a second while moving, negative in reverse, 0 repeated once a second while stopped). Not car-verified. Gear and parking brake are still not sent |
 | iDrive menu entry with its own icon and a "Connecting..." text | Car-verified |
 | Menu: **Start** | Car-verified |
 | Menu: **Force Stop**, **Restart** | Fixed in v1.8.3 (state file), not yet car-verified |
@@ -668,6 +676,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
 | `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor). See also `NBT_PHONE_GPS` / **Use Phone GPS** |
 | `NBT_PHONE_GPS` | `0` | Only matters when set: `1` = Use Phone GPS on, `0` = off, whatever the Settings checkbox says. On = no car GPS read, and no location / compass / GPS satellite / accelerometer sensors offered |
+| `NBT_CAR_SPEED` | `0` | The car's wheel speed to the phone (CAR_SPEED sensor) |
 | `NBT_TOUCH_FWD` | `0` | Touch to the phone |
 | `NBT_HIDE_IDLE` | `0` | iDrive gets the screen while no phone is connected. Off = overlay stays up for the whole run |
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |
