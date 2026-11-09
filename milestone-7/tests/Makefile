@@ -42,6 +42,7 @@ SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
 SRC_test_car_gps           := src/car/geoid.cpp src/car/gps.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+SRC_test_car_state         :=
 SRC_test_ccs_config        :=
 SRC_test_ccs_decoder       :=
 SRC_test_ccs_input         := src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp

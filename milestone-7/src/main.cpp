@@ -83,6 +83,7 @@
 #include "nbt_env.hpp"
 #include "audio/config.hpp"
 #include "car_config.hpp"
+#include "car_state.hpp"
 #include "screen_video.h"
 #include "audio/a2i_audio.hpp"
 #include "audio/backend.hpp"
@@ -171,10 +172,10 @@ static int g_ctlFd = -1;
 //   g_userExit  - the driver left Android Auto (phone's "exit to car" icon, VideoFocusRequest UNFOCUSED); cleared by
 //                 the iDrive Android Auto entry ("show"), by the phone asking for focus again, or by a new session.
 //   g_gear      - car gear from the iDrive app (CDS "driving.gear", ctl message "gear <n>", also read from
-//                 /dev/shmem/nbt-aad-gear at start). Reverse (NBT_GEAR_REVERSE, default 2) gives iDrive the screen
+//                 /dev/shmem/nbt-aad-car at start). Reverse (NBT_GEAR_REVERSE, default 2) gives iDrive the screen
 //                 for the camera; leaving reverse brings Android Auto back unless the driver had exited.
 //   g_pdc       - park distance control / park assist state from the iDrive app (CDS "sensors.PDCStatus", ctl
-//                 message "pdc <n>", /dev/shmem/nbt-aad-pdc at start). While it is active iDrive gets the screen for
+//                 message "pdc <n>", /dev/shmem/nbt-aad-car at start). While it is active iDrive gets the screen for
 //                 the parking view, from wherever the driver is - like native CarPlay when the park-assist button is
 //                 pressed. NBT_PDC_ACTIVE lists the active values (default 1).
 //   g_inputToPhone - touch / knob events reach the phone only while the overlay is up.
@@ -214,7 +215,8 @@ static volatile int g_pdc = -1;                    // -1 = unknown (no report ye
 // onStatus, from the vehicle's FES VehicleDynamicSwitchHMI; 15 / 63 = not valid) as "drivemode <prop> <n>". With the
 // iDrive menu checkbox "Show driving mode changes" (flag file below, read on every change) a change of mode makes
 // Android Auto step aside for NBT_DRIVEMODE_SHOW_MS (default 3500) so iDrive's own driving-mode popup is visible, then
-// it comes back by itself. The first value after start is only the baseline. Not car-verified.
+// it comes back by itself. The baseline is the mode in /dev/shmem/nbt-aad-car; with no valid mode there (an older app),
+// the first value is the baseline unless its <prev> shows a change. Not car-verified.
 static const char* const kDriveModeFlag   = "/var/opt/aa/show-drivemode";
 static const char* const kDriveModeManual = "/opt/aa/show-drivemode";
 static volatile int g_driveMode = -1;              // last valid mode (-1 = none yet)
@@ -239,23 +241,24 @@ static bool driveModePeekDue() {   // a pending step-aside whose start time has 
     uint32_t until = g_dmPeekUntil, from = g_dmPeekFrom, now = upMs();
     return !g_dmShown && until != 0 && (int32_t)(now - from) >= 0 && (int32_t)(until - now) > 0;
 }
+static bool driveModeValid(int prop, int v) { return v >= 0 && !(prop == 1 ? v == 63 : v == 15); }
 static void onDriveModeMsg(const char* s) {
     // "<prop> <n> [<prev>]": rhmiapp-22 adds the value it had before (-1 = none, -2 = its first value came long after
     // subscribing). The app gets the current mode when it subscribes at iDrive start, but the daemon starts later and
     // only hears about changes, so the first press used to become the daemon's baseline (Supra nbt-aad-28: mode 3 at
     // 130.747, HMI popup took focus 30 ms later, AA stayed on top). With <prev> it is a change (car-verified,
-    // nbt-aad-29: '4 -> 3' on the first press, iDrive visible ~0.4 s after the CDS value).
+    // nbt-aad-29: '4 -> 3' on the first press, iDrive visible ~0.4 s after the CDS value). The baseline now comes from
+    // /dev/shmem/nbt-aad-car; <prev> still covers an older app and a daemon that found no valid mode there.
     int prop = -1, v = -1, prev = -1;
     int nf = sscanf(s, "%d %d %d", &prop, &v, &prev);
     if (nf < 2) { printf("[DriveMode] bad message '%s'\n", s); return; }
     if (nf < 3) prev = -1;
     const char* name = prop == 1 ? "driving.mode35up" : "driving.mode";
-    bool valid = v >= 0 && !(prop == 1 ? v == 63 : v == 15);
-    if (!valid) { printf("[DriveMode] %s = %d (not valid)\n", name, v); return; }
+    if (!driveModeValid(prop, v)) { printf("[DriveMode] %s = %d (not valid)\n", name, v); return; }
     int was = g_driveMode;
     g_driveMode = v;
     if (was < 0) {
-        bool prevOk = prev >= 0 && !(prop == 1 ? prev == 63 : prev == 15) && prev != v;
+        bool prevOk = driveModeValid(prop, prev) && prev != v;
         if (prevOk) was = prev;                                  // daemon restarted under a running iDrive app
         else if (prev != -2) { printf("[DriveMode] [%9.3f] %s = %d (initial mode)\n", upSec(), name, v); return; }
         else printf("[DriveMode] [%9.3f] %s = %d: first value, but long after the app subscribed (a change)\n",
@@ -310,8 +313,8 @@ static const char* const kPdcFile = "/dev/shmem/nbt-aad-pdc";
 // 50 -> iDrive main menu' a second later, before any phone was connected).
 static volatile sig_atomic_t g_inputToPhone = 0;
 static const char* const kGearFile = "/dev/shmem/nbt-aad-gear";
-// Car day/night (iDrive app: CDS vehicle.dayNightChangeOver, message "daynight <n>", /dev/shmem/nbt-aad-daynight at
-// start). Mapped the way factory CarPlay does (HmiMain3D CHmiCarPlayService::onDayNightChangeOver @0x4583a4):
+// Car day/night (iDrive app: CDS vehicle.dayNightChangeOver, message "daynight <n>", /dev/shmem/nbt-aad-car at start).
+// Mapped the way factory CarPlay does (HmiMain3D CHmiCarPlayService::onDayNightChangeOver @0x4583a4):
 // 2 = night, 1 = day, 0 = "no change", 3 = "not a valid signal". Sent to the phone as Android Auto night mode.
 static volatile int g_dayNight = -1;
 static const char* const kDayNightFile = "/dev/shmem/nbt-aad-daynight";
@@ -370,6 +373,41 @@ static void readGearFile() {
     fclose(f);
 }
 
+// What the iDrive app last saw, for a daemon that has just started; changes come in on the control port. An app from
+// before car_state.hpp writes one file per value, so those are read when the new file isn't there.
+static void readCarValues() {
+    char text[nbt::carstate::kMaxBytes];
+    if (!nbt::carstate::readFile(nbt::carstate::kPath, text, sizeof(text))) {
+        readGearFile();
+        readPdcFile();
+        readDayNightFile();
+        return;
+    }
+    const char* path = nbt::carstate::kPath;
+    int v = nbt::carstate::kNoValue;
+    if (nbt::carstate::parse(text, NBT_CAR_KEY_GEAR, &v) && v != nbt::carstate::kNoValue) {
+        g_gear = v;
+        printf("[Gear] initial gear %d (from %s)\n", v, path);
+    }
+    if (nbt::carstate::parse(text, NBT_CAR_KEY_PDC, &v) && v != nbt::carstate::kNoValue) {
+        g_pdc = v;
+        printf("[Park] initial park-assist state %d (from %s)\n", v, path);
+    }
+    if (nbt::carstate::parse(text, NBT_CAR_KEY_DAYNIGHT, &v) && v != nbt::carstate::kNoValue) {
+        g_dayNight = v;
+        printf("[Night] initial day/night change-over %d (from %s)\n", v, path);
+    }
+    // Only the one the car's variant codes reports. Without a baseline the first press would not count as a change.
+    static const char* const kModeKeys[2] = { NBT_CAR_KEY_MODE0, NBT_CAR_KEY_MODE1 };
+    for (int prop = 0; prop < 2; ++prop) {
+        if (nbt::carstate::parse(text, kModeKeys[prop], &v) && driveModeValid(prop, v)) {
+            g_driveMode = v;
+            printf("[DriveMode] initial mode %d (%s, from %s)\n", v, kModeKeys[prop], path);
+            break;
+        }
+    }
+}
+
 static uint16_t ctlPort() {
     const char* p = getenv("NBT_CTL_PORT");
     int v = (p && *p) ? atoi(p) : 52790;
@@ -394,18 +432,18 @@ static void* ctlThread(void*) {
             continue;
         }
         if (!strncmp(buf, "show", 4)) { printf("[Ctl] 'show' from a second launch (iDrive menu): overlay to front.\n"); g_showReq = 1; }
-        else if (!strncmp(buf, "gear ", 5)) {
-            int g = atoi(buf + 5);
+        else if (const char* gear = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_GEAR)) {
+            int g = atoi(gear);
             if (g != g_gear) printf("[Gear] gear %d -> %d (from iDrive app)\n", (int)g_gear, g);
             g_gear = g;
         }
-        else if (!strncmp(buf, "pdc ", 4)) {
-            int v = atoi(buf + 4);
+        else if (const char* pdc = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_PDC)) {
+            int v = atoi(pdc);
             if (v != g_pdc) printf("[Park] park-assist state %d -> %d (from iDrive app)\n", (int)g_pdc, v);
             g_pdc = v;
         }
-        else if (!strncmp(buf, "daynight ", 9)) {
-            int v = atoi(buf + 9);
+        else if (const char* night = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_DAYNIGHT)) {
+            int v = atoi(night);
             if (v != g_dayNight) printf("[Night] day/night change-over %d -> %d (from iDrive app)\n", (int)g_dayNight, v);
             g_dayNight = v;
         }
@@ -415,7 +453,7 @@ static void* ctlThread(void*) {
                 sendto(g_ctlFd, reply.data(), reply.size(), 0, (struct sockaddr*)&from, flen);
         }
         else if (!strncmp(buf, "drivemode ", 10)) onDriveModeMsg(buf + 10);
-        else if (!strncmp(buf, "dsc ", 4)) onDscMsg(buf + 4);
+        else if (const char* dsc = nbt::carstate::valueAfterKey(buf, NBT_CAR_KEY_DSC)) onDscMsg(dsc);
         else if (!strncmp(buf, "quit", 4)) { printf("[Ctl] [%9.3f] 'quit' received.\n", upSec()); g_running = 0; }
         else if (!strncmp(buf, "hide", 4)) { printf("[Ctl] 'hide' from the iDrive app: a hard key took iDrive elsewhere.\n"); g_hideReq = 1; }
         else printf("[Ctl] unknown request '%s' ignored.\n", buf);
@@ -2015,9 +2053,7 @@ int main(int argc, char* argv[]) {
     const bool gear_action = nbt::envFlag("NBT_GEAR_ACTION") != 0;    // default on; NBT_GEAR_ACTION=0 ignores the gear
     const int gear_reverse = (int)nbt::envHex("NBT_GEAR_REVERSE", 2);   // CDS driving.gear value for R (verify in the log)
     const bool reverse_focus = nbt::envFlag("NBT_REVERSE_FOCUS") == 1; // also tell the phone it lost the screen in R
-    readGearFile();
-    readPdcFile();
-    readDayNightFile();
+    readCarValues();
     const bool pdc_action = nbt::envFlag("NBT_PDC_ACTION") != 0;       // default on; NBT_PDC_ACTION=0 ignores park assist
     bool was_park = false;
     bool park_dismissed = false;   // iDrive Android Auto entry chosen while park assist is active: AA until it ends

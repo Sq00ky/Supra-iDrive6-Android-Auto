@@ -24,6 +24,13 @@ int main() {
     assert(nbt::cdsIntField("{\"dayNightChangeOver\":2}", "dayNightChangeOver", -1) == 2);
     assert(nbt::cdsIntField("{\"dayNightChangeOver\":1}", "dayNightChangeOver", -1) == 1);
     assert(nbt::cdsIntField("{}", "dayNightChangeOver", -1) == -1);
+    // driving.gear and sensors.PDCStatus
+    assert(nbt::cdsFirstInt("{\"gear\":2}", -1) == 2);
+    assert(nbt::cdsFirstInt("{\"PDCStatus\":0}", -1) == 0);
+    assert(nbt::cdsFirstInt("{\"gear\":12}", -1) == 12);
+    assert(nbt::cdsFirstInt("{\"gear\":x}", -1) == -1);
+    assert(nbt::cdsFirstInt("", -1) == -1);
+    assert(nbt::cdsFirstInt(0, -1) == -1);
     printf("test_cds_parse OK\n");
     return 0;
 }

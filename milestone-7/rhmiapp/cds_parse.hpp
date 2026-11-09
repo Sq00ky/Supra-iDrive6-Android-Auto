@@ -30,6 +30,15 @@ inline int cdsIntField(const char* text, const char* key, int def) {
     return atoi(p);
 }
 
+// The first number anywhere in text, for texts with one value such as '{"gear":2}'; def when there is none. Not for a
+// text with several numbers: this read the phone line id as the call state in rhmiapp-10.
+inline int cdsFirstInt(const char* text, int def) {
+    for (const char* p = text; p && *p; ++p) {
+        if (*p >= '0' && *p <= '9') return atoi(p);
+    }
+    return def;
+}
+
 // A phone line is in a call when its "state" is not 0. Unknown text (no "state") counts as no call, so a
 // layout change can never pin the screen hold in "call in progress".
 inline bool cdsCallActive(const char* text) { return cdsIntField(text, "state", 0) != 0; }

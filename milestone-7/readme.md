@@ -800,7 +800,7 @@ Handy checks from the shell: `audioconn -l` (is `0xb8` listed as `BrowserFront`?
 | Daemon, fixed file | `NBT_LOG_FILE=/mnt/umass01200t7/nbt-aad-NN.log` in the env file (overrides the checkbox) |
 | iDrive app | `<stick>/nbt-aad-app.log` with **Save logs to USB** ticked; always in slog (`slog2info \| grep NbtAadApp`) |
 | Daemon state for the app | `/dev/shmem/nbt-aad-state`: `idle\|connecting\|connected <pid> <overlay>` |
-| Gear seen by the app | `/dev/shmem/nbt-aad-gear` |
+| Car values seen by the app | `/dev/shmem/nbt-aad-car`: one `key value` line each for gear, park assist, day/night, driving mode and DSC, `-1` = none yet |
 | System log | `slog2info > /mnt/umass01200t7/slog.txt` (no Bluetooth stack messages; those aren't in slog) |
 
 Logs are synced to the stick every 2 s, so they survive a head-unit reset. Pull the stick only with the car off or
