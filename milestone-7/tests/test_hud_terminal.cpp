@@ -267,52 +267,6 @@ static void testEpoch() {
     assert(k.epoch() != e1);
 }
 
-// The profile check: the navigation's text or swap on instances the profile does not list stops the terminal for good.
-static void testProfileMismatch() {
-    Config c = config();
-    c.checkNav = true;
-    for (int h = 2; h <= 4; ++h) c.navTexts.allow(h);
-    c.navBuffers.allow(5);
-    c.navBuffers.allow(6);
-    {
-        Core k = readyCore(c);
-        Wire t = navCall(kTextareaSetText, setText(3, "400"));
-        Wire s = navCall(kSwitchVisibility, switchVisibility(6, 5));
-        Wire other = navCall(kRemoveAllItems, removeAllItems(9));
-        Wire ans = navAnswer(kTextareaSetText, setText(9, ""));   // the cluster's answer: only calls are checked
-        k.onMessage(t.v, 0);
-        k.onMessage(s.v, 1);
-        k.onMessage(other.v, 2);
-        k.onMessage(ans.v, 3);
-        assert(k.status() == kNavActive && !k.mismatch());
-    }
-    {
-        Core k = readyCore(c);
-        Wire t = navCall(kTextareaSetText, setText(9, "x"));
-        k.onMessage(t.v, 0);
-        assert(k.status() == kFailed && k.mismatch());
-        k.reset(1);
-        assert(k.status() == kFailed);
-        k.setLink(false, 0, 2);
-        k.setLink(true, kSelf, 3);
-        assert(k.status() == kFailed);
-        k.setHost(0x0124, 4);
-        assert(k.status() == kFailed && k.submit(batchOf(1), 5) == kNotReady);
-    }
-    {
-        Core k = readyCore(c);
-        Wire s = navCall(kSwitchVisibility, switchVisibility(6, 7));
-        k.onMessage(s.v, 0);
-        assert(k.status() == kFailed && k.mismatch());
-    }
-    {
-        Core k = readyCore();                           // the check off: anything goes
-        Wire t = navCall(kTextareaSetText, setText(9, "x"));
-        k.onMessage(t.v, 0);
-        assert(k.status() == kNavActive && !k.mismatch());
-    }
-}
-
 static void testCopiesIgnored() {
     Core k = readyCore();
     Batch b("text");
@@ -774,7 +728,6 @@ int main() {
     testAnswersAndQueue();
     testMerge();
     testEpoch();
-    testProfileMismatch();
     testCopiesIgnored();
     testOwnAndForeignIgnored();
     testNavTakeoverMidBatch();

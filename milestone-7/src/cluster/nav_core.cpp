@@ -297,9 +297,6 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         hudterm::Config c;
         c.handles = hudterm::handlesOf(p);
         c.navFrame = p.frame;
-        c.checkNav = true;
-        c.navTexts = hudterm::textsOf(p);
-        c.navBuffers = hudterm::buffersOf(p);
         c.logBatches = !shadow_;
         terminal_ = new hudterm::HudTerminal(c);   // never deleted before exit once attached: the client calls it
         if (!terminal_->attach(*most, !shadow_) || !terminal_->start()) {

@@ -16,7 +16,7 @@
 // newest view. A clear does not depend on what came before, so it may take a waiting batch's place.
 //
 // The transport works on its own thread, so a draw returns once the batch is queued; how the cluster took it shows on
-// the next call: a failed terminal (no answer, an error answer, a profile mismatch) stops guidance for the session
+// the next call: a failed terminal (no answer, an error answer) stops guidance for the session
 // like a rejected J29 frame, an offline one like a lost link. Work the terminal dropped (its status left ready) makes
 // the next step draw the maneuver again. While the factory navigation uses the terminal, factoryActive() is true and
 // the state machine yields; nothing is sent.

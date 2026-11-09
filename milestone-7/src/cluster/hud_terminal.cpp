@@ -51,7 +51,7 @@ const char* submitResultName(SubmitResult r) {
 
 Core::Core(const Config& cfg)
     : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), routeOn_(false),
-      mismatch_(false), lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
+      lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
@@ -87,7 +87,7 @@ bool Core::takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t no
 }
 
 void Core::refresh(const char* why, uint32_t now) {
-    Status s = (!linkUp_ || !self_ || !host_) ? kOffline : (failed_ || mismatch_) ? kFailed
+    Status s = (!linkUp_ || !self_ || !host_) ? kOffline : failed_ ? kFailed
              : navActive_ ? kNavActive : kReady;
     if (s == status_) return;
     printf("[HudTerm] %s -> %s (%s)\n", statusName(status_), statusName(s), why);
@@ -145,7 +145,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
 }
 
 void Core::reset(uint32_t now) {
-    if (!failed_) return;                     // a profile mismatch stays
+    if (!failed_) return;
     failed_ = false;
     refresh("reset", now);
 }
@@ -308,27 +308,6 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
     finishIfDone(now);
 }
 
-// A navigation call (to the host) that does not fit the driver's profile: text on an instance that is not one of its
-// texts, or a swap of instances that are not its buffer pair.
-void Core::checkNav(const most::View& m, uint32_t now) {
-    if (!cfg_.checkNav || mismatch_ || m.dst != host_ || m.len < 2) return;
-    uint16_t h = rdBe16(m.data);
-    char why[128];
-    if (m.fkt == kTextareaSetText && !cfg_.navTexts.has(h)) {
-        snprintf(why, sizeof(why), "profile mismatch: the factory navigation put text on instance %u", h);
-    } else if (m.fkt == kSwitchVisibility && m.len >= 4 &&
-               (!cfg_.navBuffers.has(h) || !cfg_.navBuffers.has(rdBe16(m.data + 2)))) {
-        snprintf(why, sizeof(why), "profile mismatch: the factory navigation swapped instances %u and %u", h,
-                 rdBe16(m.data + 2));
-    } else {
-        return;
-    }
-    mismatch_ = true;
-    printf("[HudTerm] FAILED: %s; this cluster is not laid out as the profile says: nothing is sent until the "
-           "daemon restarts\n", why);
-    refresh(why, now);
-}
-
 // Whether a navigation message (its call, or the cluster's answer with the call's payload) draws: a route is on screen.
 // Clearing up (RemoveAllItems, empty texts, other instances switched off) is not drawing.
 static bool draws(const most::View& m) {
@@ -347,7 +326,6 @@ static bool draws(const most::View& m) {
 void Core::onNav(const most::View& m, uint32_t now) {
     ++stats_.navMsgs;
     lastNavMs_ = now;
-    checkNav(m, now);
     if (m.fkt == kSetVisibility && m.len >= 3 && cfg_.navFrame > 0 && rdBe16(m.data) == cfg_.navFrame)
         routeOn_ = m.data[2] != 0;
     else if (draws(m))

@@ -26,11 +26,6 @@
 // that call's payload in place, anything else is appended. So a distance update never wipes out a new maneuver that
 // has not gone out yet.
 //
-// Profile check (Config::checkNav): the driver's profile says which instances the factory navigation uses for text
-// and which pair it swaps. A navigation call that puts text anywhere else, or swaps other instances, means this
-// cluster is laid out differently from the profile: the terminal fails for good (until the daemon restarts), so we
-// never draw into instances whose role we have wrong.
-//
 // The factory navigation, as the 6WA showed it (car, S19):
 //   - what we see of it is the cluster's answers to it (host -> the navigation's address, each with its call's
 //     payload); its calls to the host are not routed to us. A call to the host would count the same way.
@@ -71,11 +66,7 @@ struct Config {
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
-    bool checkNav;           // the profile check above
-    HandleSet navTexts;      // the instances the factory navigation may put text on
-    HandleSet navBuffers;    // the instances it may swap with SwitchVisibility
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false),
-               checkNav(false) {}
+    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
 struct Batch {
@@ -122,7 +113,6 @@ public:
     bool busy() const { return haveCurrent_ || havePending_; }
     bool waiting() const { return havePending_; }  // a batch waits behind the one in progress
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
-    bool mismatch() const { return mismatch_; }    // the profile check failed
     uint16_t host() const { return host_; }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
@@ -135,7 +125,6 @@ private:
 
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
-    void checkNav(const most::View& m, uint32_t now);
     bool merge(const Batch& b);
     void fail(const char* why, uint32_t now);
     void refresh(const char* why, uint32_t now);
@@ -146,7 +135,7 @@ private:
     Config cfg_;
     bool linkUp_;
     uint16_t self_, host_;
-    bool failed_, navActive_, routeOn_, mismatch_;
+    bool failed_, navActive_, routeOn_;
     uint32_t lastNavMs_;
     Status status_;
     bool changed_;
@@ -172,7 +161,7 @@ public:
     virtual uint32_t epoch() const = 0;
     // A batch waits behind the one in progress: a full batch submitted now would take its place.
     virtual bool waiting() const = 0;
-    virtual void reset() = 0;                     // leave kFailed (not after a profile mismatch)
+    virtual void reset() = 0;                     // leave kFailed
     // Until everything submitted is answered: true then; false on the timeout or once the status leaves kReady.
     virtual bool waitIdle(uint32_t ms) = 0;
 };
