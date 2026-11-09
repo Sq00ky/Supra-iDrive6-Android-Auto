@@ -28,8 +28,8 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).
 LANG_TEXTS = {
-    "de": {22: "iDrive-Warnungen anzeigen", 21: "Abbiegepfeile in Kombi/HUD", 20: "Fahrmodus-Wechsel anzeigen", 19: "MENU-Taste oeffnet iDrive", 2: "Android Auto: Verbinden...", 18: "Protokolle auf USB speichern", 10: "Android Auto starten", 11: "Beenden erzwingen", 12: "Neu starten",
-           13: "Verbinden...", 14: "Android Auto oeffnen", 15: "Automatisch starten", 16: "Info", 23: "Einstellungen", 24: "Android Auto per USB (Beta)", 25: "Telefon-GPS verwenden", 26: "WLAN-Direct-Netz verwenden"},
+    "de": {22: "iDrive-Warnungen anzeigen", 21: "Abbiegepfeile in Kombi/HUD", 20: "Fahrmodus-Wechsel anzeigen", 19: "MENU-Taste öffnet iDrive", 2: "Android Auto: Verbinden...", 18: "Protokolle auf USB speichern", 10: "Android Auto starten", 11: "Beenden erzwingen", 12: "Neu starten",
+           13: "Verbinden...", 14: "Android Auto öffnen", 15: "Automatisch starten", 16: "Info", 23: "Einstellungen", 24: "Android Auto über USB (Beta)", 25: "Telefon-GPS verwenden", 26: "WLAN-Direct-Netz verwenden"},
     "es-ES": {22: "Mostrar avisos de iDrive", 21: "Flechas de giro en cuadro/HUD", 20: "Mostrar cambios de modo de conduccion", 19: "La tecla MENU abre iDrive", 2: "Android Auto: Conectando...", 18: "Guardar registros en USB", 10: "Iniciar Android Auto", 11: "Forzar cierre", 12: "Reiniciar",
               13: "Conectando...", 14: "Abrir Android Auto", 15: "Iniciar automaticamente", 16: "Acerca de", 23: "Ajustes", 24: "Android Auto por USB (beta)", 25: "Usar el GPS del telefono", 26: "Usar la red Wi-Fi Direct"},
     "fr-FR": {22: "Afficher les avertissements iDrive", 21: "Fleches de direction combine/HUD", 20: "Afficher les changements de mode de conduite", 19: "La touche MENU ouvre iDrive", 2: "Android Auto : Connexion...", 18: "Enregistrer les journaux sur USB", 10: "Demarrer Android Auto", 11: "Forcer l'arret", 12: "Redemarrer",
