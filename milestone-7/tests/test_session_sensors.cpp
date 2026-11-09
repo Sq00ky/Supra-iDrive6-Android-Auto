@@ -5,7 +5,10 @@
 #include "stub_cryptor.hpp"
 #include "aa_session.cpp"
 #include <assert.h>
+#include <atomic>
+#include <errno.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -421,6 +424,96 @@ static void testSatellitesWhileSpeedWakes() {
     endSession(s, sv);
 }
 
+// A phone sending pings: one every periodMs, or with periodMs 0 as many as the socket holds, so bytes are always waiting.
+struct PingPhone {
+    int fd;
+    int periodMs;
+    std::atomic<bool> stop;
+};
+
+static void* pingPhone(void* arg) {
+    PingPhone* ph = static_cast<PingPhone*>(arg);
+    const uint8_t ping[] = { 0x00, 0x03, 0x00, 0x04, 0x00, 0x0B, 0x08, 0x01 };
+    std::vector<uint8_t> block(ph->periodMs ? sizeof(ping) : 8192 * sizeof(ping));
+    for (size_t i = 0; i < block.size(); ++i) block[i] = ping[i % sizeof(ping)];
+    size_t off = 0;
+    while (!ph->stop) {
+        if (ph->periodMs) usleep((useconds_t)ph->periodMs * 1000u);
+        struct pollfd pf;
+        pf.fd = ph->fd;
+        pf.events = POLLOUT;
+        pf.revents = 0;
+        if (poll(&pf, 1, 50) <= 0) continue;
+        const ssize_t n = send(ph->fd, &block[off], block.size() - off, MSG_DONTWAIT);
+        if (n < 0 && errno != EAGAIN) break;
+        if (n > 0) off = (off + (size_t)n) % block.size();
+    }
+    return NULL;
+}
+
+struct RepeatCount {
+    int speeds, sats;
+    uint32_t speedGapMs, satGapMs;      // the longest gap between two of them
+};
+
+// A 0 speed and satellites running for this long with the phone sending pings. readerDelayUs holds the session back: its
+// replies fill the socket, so it cannot catch up with what the phone sent.
+static RepeatCount repeatsWithPings(int periodMs, int readerDelayUs, uint32_t ms) {
+    int sv[2];
+    AASession* s = newSession(sv);
+    s->postCarSpeed(speedNow(0));
+    sendStart(sv[1], 3, period0());
+    sendStart(sv[1], 21, period0());
+    PingPhone ph;
+    ph.fd = sv[1];
+    ph.periodMs = periodMs;
+    ph.stop = false;
+    pthread_t t;
+    assert(pthread_create(&t, NULL, &pingPhone, &ph) == 0);
+    RepeatCount c = RepeatCount();
+    const std::vector<uint8_t> speed0 = speedEvent(0), sat0 = satEvent(0);
+    uint32_t lastSpeed = 0, lastSat = 0;
+    uint8_t ch = 0xFF;
+    std::vector<uint8_t> p;
+    const uint32_t start = testNowMs();
+    while (testNowMs() - start < ms) {
+        if (readerDelayUs) usleep((useconds_t)readerDelayUs);
+        if (!readFrame(sv[1], 200, ch, p) || ch != 1) continue;
+        const uint32_t now = testNowMs();
+        if (p == speed0) {
+            if (c.speeds++ && now - lastSpeed > c.speedGapMs) c.speedGapMs = now - lastSpeed;
+            lastSpeed = now;
+        } else if (p == sat0) {
+            if (c.sats++ && now - lastSat > c.satGapMs) c.satGapMs = now - lastSat;
+            lastSat = now;
+        }
+    }
+    ph.stop = true;
+    assert(pthread_join(t, NULL) == 0);
+    while (readFrame(sv[1], 100, ch, p)) { }    // what the session still has to answer, so that it can stop
+    endSession(s, sv);
+    return c;
+}
+
+// A phone frame just before a repeat is due must not put it off by a whole select tick. 800 ms makes that happen on most
+// repeats; with a phone at exactly 1 s it depends on which side of the second each frame lands.
+static void testRepeatsOnTimeWhilePhoneTalks() {
+    const RepeatCount c = repeatsWithPings(800, 0, 6000);
+    printf("repeats with a ping every 800 ms: %d speed (longest gap %u ms), %d satellite (%u ms) in 6 s\n", c.speeds, c.speedGapMs,
+           c.sats, c.satGapMs);
+    assert(c.speeds >= 5 && c.speedGapMs <= 1300);
+    assert(c.sats >= 5 && c.satGapMs <= 1300);
+}
+
+// With the phone's bytes always waiting, select never times out and nothing wakes it, so only the drain at the top of the
+// session loop is left. Slower pings would not show that: select's own deadline covers them.
+static void testRepeatsWhilePhoneBytesAlwaysWaiting() {
+    const RepeatCount c = repeatsWithPings(0, 100, 6000);
+    printf("repeats with the phone's bytes always waiting: %d speed, %d satellite in 6 s\n", c.speeds, c.sats);
+    assert(c.speeds >= 4);
+    assert(c.sats >= 4);
+}
+
 // The period parser: present, the -1 of a 10-byte varint, absent, and a message it should stop on.
 static void testPeriod() {
     const uint8_t a[] = { 0x80, 0x01, 0x08, 0x01, 0x10, 0xE8, 0x07 };
@@ -469,6 +562,8 @@ int main() {
     testSpeedZeroRepeats();
     testSpeedNewSession();
     testSatellitesWhileSpeedWakes();
+    testRepeatsOnTimeWhilePhoneTalks();
+    testRepeatsWhilePhoneBytesAlwaysWaiting();
     printf("test_session_sensors OK\n");
     return 0;
 }

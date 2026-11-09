@@ -574,9 +574,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 FD_SET(wake_pipe_[0], &rf);
                 if (wake_pipe_[0] > maxfd) maxfd = wake_pipe_[0];
             }
-            // 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time, and while a compass
-            // repeat may be needed: at 1 s ticks a quiet phone would stretch it to 2 s.
-            const uint32_t tick_ms = (acks_.hasPending() || compassRunning()) ? 250u : 1000u;
+            const uint32_t tick_ms = periodicTickMs();
             struct timeval tv;
             tv.tv_sec = tick_ms / 1000u;
             tv.tv_usec = (tick_ms % 1000u) * 1000u;
@@ -1095,6 +1093,32 @@ void AASession::drainPeriodic() {
     drainSatellites();
     drainCompass();
     drainSpeed();
+}
+
+static uint32_t msLeft(uint32_t last_ms, uint32_t every_ms, uint32_t now) {
+    const uint32_t elapsed = now - last_ms;
+    return elapsed >= every_ms ? 0 : every_ms - elapsed;
+}
+
+// 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time, and never past the next timed
+// sensor event: a phone frame just before one is due would otherwise put it off by a whole tick, and at 1 s ticks a quiet
+// phone would stretch a compass repeat to 2 s. A 0 here cannot spin, because sendSensorEvent stamps the time before it sends.
+uint32_t AASession::periodicTickMs() {
+    uint32_t tick = acks_.hasPending() ? 250u : 1000u;
+    const uint32_t now = monoMs();
+    if (satellites_started_) {
+        const uint32_t left = msLeft(satellites_last_ms_, kSatelliteSendEveryMs, now);
+        if (left < tick) tick = left;
+    }
+    if (compassRunning()) {
+        const uint32_t left = msLeft(compass_last_ms_, kCompassRepeatMs, now);
+        if (left < tick) tick = left;
+    }
+    if (speed_last_zero_) {
+        const uint32_t left = msLeft(speed_last_ms_, kCarSpeedRepeatZeroEveryMs, now);
+        if (left < tick) tick = left;
+    }
+    return tick;
 }
 
 void AASession::sessionLoop() {
