@@ -169,6 +169,18 @@ ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
 
 ClusterDisplay::Result Hud6waDisplay::keepUp(const NavView&, double) { return health(NULL); }
 
+// Partial, so it never takes a waiting maneuver's place: merged into it, or sent after it.
+ClusterDisplay::Result Hud6waDisplay::remind(const NavView& v, double) {
+    Result r = health(NULL);
+    if (r != kOk || port_.status() == kNavActive || !sent_any_) return r;
+    Batch b("remind");
+    b.add(kSetVisibility, setVisibility(p_.frame, true));
+    log("REMIND type %d: panel on again%s", v.aa_type, shadow_ ? " (shadow: not sent)" : "");
+    SubmitResult sr;
+    if (!submit(b, &sr)) return sr == kRefused ? kInternal : health(NULL);
+    return kOk;
+}
+
 bool Hud6waDisplay::clear(std::string* detail) {
     Status st = port_.status();
     if (st == kNavActive) {

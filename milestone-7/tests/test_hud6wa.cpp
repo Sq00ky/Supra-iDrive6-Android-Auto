@@ -393,6 +393,57 @@ static void testHold() {
     assert(p2.batches.size() == 2);
 }
 
+// The main-prompt reminder: one partial SetVisibility(frame, on), nothing before a picture, in shadow mode or while
+// the factory navigation has the panel; through the state machine, once per maneuver at main_s.
+static void testRemind() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    NavView v = view(8, "Testroad Alpha", "300", 1, 300);
+    assert(d.remind(v, 0) == ClusterDisplay::kOk && port.batches.empty());   // nothing of ours is up
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && port.batches.size() == 1);
+    port.wait = true;                                            // a batch waits: partial, so merged, never a replacement
+    assert(d.remind(v, 1) == ClusterDisplay::kOk && port.batches.size() == 2);
+    const Batch& r = port.batches[1];
+    assert(r.label == "remind" && !r.full && r.calls.size() == 1);
+    expectCall(r.calls[0], kSetVisibility, 1);
+    assert(r.calls[0].payload.size() == 3 && r.calls[0].payload[2] == 1);
+    assert(logged("REMIND type 8: panel on again"));
+    port.st = kNavActive;
+    assert(d.remind(v, 2) == ClusterDisplay::kOk && port.batches.size() == 2);
+    port.st = kFailed;
+    assert(d.remind(v, 3) == ClusterDisplay::kRejected && port.batches.size() == 2);
+
+    FakePort ps;
+    Hud6waDisplay ds(ps, k6wa, true);
+    ds.setLog(&logFn, NULL);
+    assert(ds.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(ds.remind(v, 1) == ClusterDisplay::kOk && ps.batches.empty() && logged("[shadow] 204 SetVisibility h1 on"));
+
+    FakePort p2;
+    Hud6waDisplay d2(p2, k6wa, false);
+    kombinav::Core core(d2, Settings(), &logFn, NULL);
+    NavView a = view(8, "Testroad Alpha", "0.4", 5, 640);
+    a.has_step_s = true;
+    a.step_s = 60;
+    core.step(&a, 0);
+    assert(!core.shown() && p2.batches.empty());
+    a.step_s = 45;
+    core.step(&a, 1);
+    assert(core.shown() && p2.batches.size() == 1 && p2.batches[0].full);
+    a.step_s = 25;
+    a.dist_text = "0.2"; a.step_m = 350;
+    core.step(&a, 2);
+    assert(p2.batches.size() == 2 && p2.batches[1].label == "distance");
+    a.step_s = 18;
+    core.step(&a, 3);
+    assert(p2.batches.size() == 3 && p2.batches[2].label == "remind" && logged("MAIN type 8: 18 s, 350 m"));
+    a.step_s = 9;
+    core.step(&a, 4);
+    assert(p2.batches.size() == 3);
+}
+
 // ---- the transport's states ----------------------------------------------------------------------------------------
 
 static void testStates() {
@@ -592,6 +643,7 @@ int main() {
     testShowBatches();
     testClearBatch();
     testHold();
+    testRemind();
     testStates();
     testShadow();
     testCore();

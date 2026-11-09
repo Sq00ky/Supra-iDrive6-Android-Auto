@@ -7,10 +7,12 @@
 //               SwitchVisibility(shown -> hidden), RemoveAllItems(old buffer), [the three texts switched on, the first
 //               time], street, distance and unit texts, the panel (frame) on
 //   distance    the distance text, and the unit text when it changed
+//   remind      the panel (frame) on again, at the main prompt: the driver may have dismissed it with the stalk
+//               button, as the factory navigation's turns can be (what the cluster does with it is a car check)
 //   clear       panel off, both buffers emptied, SwitchVisibility(5 -> 6) so the navigation's buffer is on show
 //               whatever happened before, texts emptied, street off: the state the factory navigation leaves at the
 //               end of a route
-// A maneuver or a clear is a full batch, a distance a partial one (HudTerminal merges it into a full one still waiting).
+// A maneuver or a clear is a full batch, a distance or a reminder a partial one (HudTerminal merges it into a full one still waiting).
 // A maneuver is built on what the batches before it leave (which buffer is on show, whether the texts are on), so it
 // never takes the place of a waiting batch: while one waits, the maneuver is held and drawn on the next step, from the
 // newest view. A clear does not depend on what came before, so it may take a waiting batch's place.
@@ -57,6 +59,7 @@ public:
     Result showManeuver(const NavView& v, double now, bool isNew, bool first);
     Result updateDistance(const NavView& v, double now);
     Result keepUp(const NavView& v, double now);
+    Result remind(const NavView& v, double now);
     void guidanceGap() {}
     bool clear(std::string* detail);
     void forget();
