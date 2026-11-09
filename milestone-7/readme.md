@@ -1046,15 +1046,15 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
 
 - `aa_session` hands every channel 10 message (0x8000 and up) to a nav-status callback. `kombi_nav` copies the
   newest 0x8003 (status), 0x8006 (next step), 0x8007 (distances), and the older 0x8004 / 0x8005, and returns.
-- A worker thread (4 ticks a second) decodes them (`kombi_nav_msg.hpp`: field numbers as in opencardev/aasdk,
-  maneuver types as androidx `Maneuver.TYPE_*`) and runs the state machine (`kombi_nav.cpp`):
+- A worker thread (4 ticks a second) decodes them (`cluster/nav_msg.hpp`: field numbers as in opencardev/aasdk,
+  maneuver types as androidx `Maneuver.TYPE_*`) and runs the state machine (`cluster/nav_core.cpp`):
   - new maneuver: the full 97-frame route-start graph, maneuver 0 patched;
   - changed distance text: one in-place distance frame (at most twice a second);
   - no distance yet: wait up to 3 s, then `-` (never the template's own distance);
   - lanes (0x8006 step field 3, `NavigationLane`): the graph carries a lane model; a lane-only change on the same
     maneuver resends the graph at most every 3 s, and a 0x11 position update follows at most once a second.
-- The graph (`kombi_graph.hpp`) is a captured factory route start replayed byte for byte
-  (`kombi_graph_template.hpp`, road names replaced by neutral text of the same length). Only fields proven on the
+- The graph (`cluster/j29_graph.hpp`) is a captured factory route start replayed byte for byte
+  (`cluster/j29_graph_template.hpp`, road names replaced by neutral text of the same length). Only fields proven on the
   car are changed: the direction enum in ManeuverDescription (0x0F), the distance text, its unit byte (0x01 mi,
   0x05 ft) and the red bar in ManeuverDistance (0x1D), and the road in TextResource (0x03).
 - Lanes: the lane model (0x1B, method 0x0010 setLaneGuidingData) is decoded from 126 factory frames: per lane a kind
@@ -1209,7 +1209,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_resampler` | speexdsp vs linear: passband 1-18 kHz, the 23 kHz alias, output length at 48 / 16 / 44.1 kHz, drift trim, chunked = whole, no click on trim changes, passthrough, engine switch, every trim clean across ±2 % (fixed-point speex needs a ratio denominator below 2^15) (link `src/audio/speex.c` built as C) |
 | `rhmiapp_host_test` (+ `rhmiapp_fake_appframework`) | iDrive app logic against a fake framework |
 | `test_entry_key` | What one press of the Open Android Auto entry / favourite key does, per daemon state |
-| `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/kombi_nav.cpp src/kombi_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
+| `test_kombi_nav_msg`, `test_kombi_graph`, `test_kombi_nav` (+ `src/cluster/nav_core.cpp src/cluster/j29_client.cpp -lpthread`) | Cluster/HUD arrows: ch 10 decode, graph bytes, state machine + client against a fake KOMBI, iDrive-route watch, the daemon runtime end to end |
 | `test_media_payload.py` | Media metadata payloads |
 
 ## Source layout
@@ -1238,7 +1238,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     settings, read once at start-up), `channels.hpp` (AA channel <-> stream table), `mic_uplink` (car mic),
     `audio_route` (`audioconn` wrapper), `voice_scenario`, `audio_acks` (the session's deferred acks and underflow
     reports, over `media_ack.hpp`) + `aa_media_msgs.hpp` (media-channel messages);
-  - cluster/HUD arrows: `kombi_nav` (+ `kombi_nav_msg.hpp`, `kombi_graph.hpp`, `kombi_graph_template.hpp`),
+  - cluster/HUD arrows: `kombi_nav` (+ `cluster/nav_msg.hpp`, `cluster/j29_graph.hpp`, `cluster/j29_graph_template.hpp`),
     `kombi_client`;
   - other: `crash_handler`, `license_text.hpp`.
 - `include/`: `a2i_client.h`, `dsi_controller.h`, `screen_video.h`.

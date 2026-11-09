@@ -1,0 +1,547 @@
+# test_j29_golden transcript: generated with --update, do not edit
+
+== full graph for every maneuver (inplace 0)
+t=0.00 type 7 road 'Testroad Alpha' dist '0.5' unit 5 step 805 m
+  log SHOW type 7 -> direction 6 | 0.5 mi | road 'Testroad Alpha'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 9ec80328c536736c
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=1.00 type 7 road 'Testroad Alpha' dist '0.4' unit 5 step 644 m
+  log DIST 0.4 mi
+  rx 1 frame(s) on c0, sessions 0062..0062, methods A*1, hash 4c83c7ab415d4e78
+  log distance: 1 frame(s) OK
+t=1.20 type 7 road 'Testroad Alpha' dist '0.4' unit 5 step 644 m
+t=2.00 type 8 road 'Sample Lane Beta' dist '300' unit 6 step 91 m
+  log SHOW type 8 -> direction 7 | 300 ft | road 'Sample Lane Beta'
+  rx 97 frame(s) on c0, sessions 0063..00C3, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 8d4169898ba9fd6c
+  log graph: 97 frame(s) OK
+t=3.00 none (guidance ended)
+t=5.00 none (guidance ended)
+t=10.90 none (guidance ended)
+t=11.00 none (guidance ended)
+  log CLEAR (guidance ended)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+t=12.00 none (guidance ended)
+
+== default settings (approach 1 mi, in-place updates)
+t=0.00 type 7 road 'Testroad Alpha' dist '3.0' unit 5 step 4828 m
+t=1.00 type 7 road 'Testroad Alpha' dist '1.0' unit 5 step 1609 m
+  log SHOW type 7 -> direction 6 | 1.0 mi | road 'Testroad Alpha'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 0585d24573ce033c
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=1.20 type 7 road 'Testroad Alpha' dist '0.9' unit 5 step 1448 m
+t=1.60 type 7 road 'Testroad Alpha' dist '0.9' unit 5 step 1448 m
+  log DIST 0.9 mi
+  rx 1 frame(s) on c0, sessions 0062..0062, methods A*1, hash efca7911de009295
+  log distance: 1 frame(s) OK
+t=2.00 type 8 road 'Sample Lane Beta' dist '0.8' unit 5 step 1287 m
+  log SHOW type 8 -> direction 7 | 0.8 mi | road 'Sample Lane Beta'
+  rx 9 frame(s) on c0, sessions 0063..006B, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 9c9c1289a6aa2c70
+  log maneuver: 9 frame(s) OK
+t=3.00 type 8 road 'Sample Lane Beta' dist '1.1' unit 5 step 1770 m
+  log DIST 1.1 mi
+  rx 1 frame(s) on c0, sessions 006C..006C, methods A*1, hash 02636c9886b83682
+  log distance: 1 frame(s) OK
+t=4.00 type 8 road 'Sample Lane Beta' dist '1.2' unit 5 step 1900 m
+  log APPROACH: next maneuver 1.2 mi away (> 1 mi): hidden
+  log CLEAR (approach)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+t=5.00 type 8 road 'Sample Lane Beta' dist '0.7' unit 5 step 1126 m
+  log SHOW type 8 -> direction 7 | 0.7 mi | road 'Sample Lane Beta'
+  rx 97 frame(s) on c2, sessions 006D..00CD, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 1d4d5e1bb00e58da
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=6.00 none (guidance ended)
+t=7.00 type 35 road 'Demo Circle' dist '500' unit 6 step 152 m angle 90
+  log SHOW type 35 -> direction 15 | 500 ft | road 'Demo Circle'
+  rx 97 frame(s) on c2, sessions 00CE..012E, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash df313a424febaece
+  log graph: 97 frame(s) OK
+t=8.00 type 35 road 'Demo Circle' dist '400' unit 6 step 122 m angle 90
+  log DIST 400 ft
+  rx 1 frame(s) on c2, sessions 012F..012F, methods A*1, hash f8c0bf8d82922bb0
+  log distance: 1 frame(s) OK
+t=9.00 type 42 road 'Example End' dist '200' unit 6 step 61 m
+  log SHOW type 42 -> direction 10 | 200 ft | road 'Example End'
+  rx 9 frame(s) on c2, sessions 0130..0138, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash dfc2f7b335fda528
+  log maneuver: 9 frame(s) OK
+t=9.50 type 42 road 'Example End' dist '200' unit 6 step 61 m
+t=10.00 type 8 road 'Long Distance Road' dist '' unit 0 step 2000 m
+  log APPROACH: next maneuver 1.2 mi away (> 1 mi): hidden
+  log CLEAR (approach)
+  rx 6 frame(s) on c3, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+t=11.00 none (guidance ended)
+t=19.00 none (guidance ended)
+
+== in-place without the guiding model (inplace 2)
+t=0.00 type 9 road 'Fictional Street One' dist '250' unit 1 step 250 m
+  log SHOW type 9 -> direction 4 | 250 m | road 'Fictional Street One'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 5f8e14bcfb980324
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=1.00 type 10 road 'Fictional Street Two' dist '150' unit 1 step 150 m
+  log SHOW type 10 -> direction 5 | 150 m | road 'Fictional Street Two'
+  rx 8 frame(s) on c0, sessions 0062..0069, methods 3*1 E*1 A*3 C*1 4*1 9*1, hash 45b789b7afd42df9
+  log maneuver: 8 frame(s) OK
+clear (test end)
+  log CLEAR (test end)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+
+== lanes and position feed
+t=0.00 type 7 road 'Lane Test Road' dist '0.3' unit 5 step 483 m lanes 4*|1|1|1+5
+  log SHOW type 7 -> direction 6 | 0.3 mi | road 'Lane Test Road' | lanes LEFT* STRAIGHT_ON STRAIGHT_ON STRAIGHT_ON
+  rx 93 frame(s) on c0, sessions 0001..005D, methods 9*5 2*1 3*1 E*1 A*2 10*1 A*1 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*1 10*1 A*1 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash e486f00f65fc42ae
+  log graph: 93 frame(s) OK
+  rx 1 frame(s) on c0, sessions 005E..005E, methods 9*1, hash 1b2b7a9d191aaf86
+  state shown=1 stopped=0
+t=0.50 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 322 m lanes 4*|1|1|1+5
+  log DIST 0.2 mi
+  rx 1 frame(s) on c0, sessions 005F..005F, methods A*1, hash 30aab84aea0d2867
+  log distance: 1 frame(s) OK
+t=1.50 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 300 m lanes 4*|1|1|1+5
+t=2.00 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 150 m lanes 4*|1|1|1+5
+  rx 1 frame(s) on c0, sessions 0060..0060, methods 9*1, hash fb6119f7c0187282
+t=2.50 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 150 m lanes 4|1|1|1+5*
+t=3.10 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 150 m lanes 4|1|1|1+5*
+  log LANES type 7 -> direction 6 | 0.2 mi | road 'Lane Test Road' | lanes LEFT STRAIGHT_ON STRAIGHT_ON RIGHT*
+  rx 10 frame(s) on c0, sessions 0061..006A, methods 3*1 E*1 A*1 B*1 A*1 10*1 A*1 C*1 4*1 9*1, hash 1ca0d4c0bb669f8f
+  log maneuver: 10 frame(s) OK
+  rx 1 frame(s) on c0, sessions 006B..006B, methods 9*1, hash de2fd9895ef33d81
+t=4.50 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 150 m lanes 4|1|1|1+5*
+t=5.60 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 120 m lanes 4|1|1|1+5*
+  rx 1 frame(s) on c0, sessions 006C..006C, methods 9*1, hash eaed94b73dd726f7
+t=6.50 type 7 road 'Lane Test Road' dist '0.2' unit 5 step 120 m lanes 4|0|1
+  log LANES type 7 -> direction 6 | 0.2 mi | road 'Lane Test Road' | lanes none
+  rx 9 frame(s) on c0, sessions 006D..0075, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 5255fa892bb673d7
+  log maneuver: 9 frame(s) OK
+t=7.00 type 5 road 'Lane Test Exit' dist '0.1' unit 5 step 161 m lanes 2*|2*|1|1
+  log SHOW type 5 -> direction 2 | 0.1 mi | road 'Lane Test Exit' | lanes HALF_LEFT* HALF_LEFT* STRAIGHT_ON STRAIGHT_ON
+  rx 10 frame(s) on c0, sessions 0076..007F, methods 3*1 E*1 A*1 B*1 A*1 10*1 A*1 C*1 4*1 9*1, hash 88fbe5b688ae79d0
+  log maneuver: 10 frame(s) OK
+  rx 1 frame(s) on c0, sessions 0080..0080, methods 9*1, hash 38f2b82964d84c4b
+t=8.00 type 1 road 'Plain Road' dist '0.4' unit 5 step 644 m
+  log SHOW type 1 -> direction 1 | 0.4 mi | road 'Plain Road'
+  rx 9 frame(s) on c0, sessions 0081..0089, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash a4b3027a2d3c1ce0
+  log maneuver: 9 frame(s) OK
+t=9.00 none (guidance ended)
+t=17.00 none (Android Auto session ended)
+  log CLEAR (Android Auto session ended)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+
+== distance text and units
+t=0.00 type 1 road 'Unit Test Road' dist '' unit 0
+t=2.90 type 1 road 'Unit Test Road' dist '' unit 0
+t=3.00 type 1 road 'Unit Test Road' dist '' unit 0
+  log SHOW type 1 -> direction 1 | - (unit kept) | road 'Unit Test Road'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash c3ea6a85188f3c66
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=4.00 type 1 road 'Unit Test Road' dist '250' unit 1 step 250 m
+  log DIST 250 m
+  rx 1 frame(s) on c0, sessions 0062..0062, methods A*1, hash 31aa3164ee844747
+  log distance: 1 frame(s) OK
+t=5.00 type 1 road 'Unit Test Road' dist '' unit 0
+t=6.00 type 1 road 'Unit Test Road' dist '1.5' unit 2 step 1500 m
+  log DIST 1.5 km
+  rx 1 frame(s) on c0, sessions 0063..0063, methods A*1, hash 3afd7fc4fa58f37e
+  log distance: 1 frame(s) OK
+t=7.00 type 1 road 'Unit Test Road' dist '12.5' unit 3 step 12500 m
+  log DIST 12.5 km
+  rx 1 frame(s) on c0, sessions 0064..0064, methods A*1, hash 608441bdb03b7ac5
+  log distance: 1 frame(s) OK
+t=8.00 type 1 road 'Unit Test Road' dist '300' unit 7 step 274 m
+  log DIST 300 yd
+  rx 1 frame(s) on c0, sessions 0065..0065, methods A*1, hash ea8154b9eef1150d
+  log distance: 1 frame(s) OK
+t=9.00 type 1 road 'Unit Test Road' dist '0.25' unit 4 step 402 m
+  log DIST 0.25 mi
+  rx 1 frame(s) on c0, sessions 0066..0066, methods A*1, hash ee08ebcb0da5af0d
+  log distance: 1 frame(s) OK
+t=10.00 type 1 road 'Unit Test Road' dist 'x' unit 0 step 1000 m
+  log DIST 0.6 mi
+  rx 1 frame(s) on c0, sessions 0067..0067, methods A*1, hash 22f268a1c9a180d3
+  log distance: 1 frame(s) OK
+t=11.00 type 1 road 'Unit Test Road' dist '123456789' unit 1 step 1000 m
+  log DIST 12345678 m
+  rx 1 frame(s) on c0, sessions 0068..0068, methods A*1, hash f9783a78c2d5a0ec
+  log distance: 1 frame(s) OK
+t=12.00 type 2 road 'A Very Long Invented Road Name That Goes On And On Past Forty' dist '90' unit 1 step 90 m
+  log SHOW type 2 -> direction 1 | 90 m | road 'A Very Long Invented Road Name That Goes'
+  rx 9 frame(s) on c0, sessions 0069..0071, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 949fdcb556753ebf
+  log maneuver: 9 frame(s) OK
+t=13.00 type 3 road 'Prüfweg Ärger → Nirgendwo' dist '80' unit 1 step 80 m
+  log SHOW type 3 -> direction 2 | 80 m | road 'Prüfweg Ärger → Nirgendwo'
+  rx 9 frame(s) on c0, sessions 0072..007A, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 533b059e22bfa007
+  log maneuver: 9 frame(s) OK
+t=14.00 type 4 road '' dist '70' unit 1 step 70 m
+  log SHOW type 4 -> direction 3 | 70 m | road ' '
+  rx 9 frame(s) on c0, sessions 007B..0083, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash aa616a1ef5e21e9b
+  log maneuver: 9 frame(s) OK
+clear (test end)
+  log CLEAR (test end)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+
+== approach hold edges
+t=0.00 type 7 road 'Approach Test Road' dist '' unit 0
+t=3.50 type 7 road 'Approach Test Road' dist '' unit 0
+  log SHOW type 7 -> direction 6 | - (unit kept) | road 'Approach Test Road'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash f8f7a0088db0a1f0
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=4.00 type 8 road 'Approach Test Two' dist '5' unit 2 step 5000 m
+  log APPROACH: next maneuver 3.1 mi away (> 1 mi): hidden
+  log CLEAR (approach)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+t=5.00 type 8 road 'Approach Test Two' dist '1.6' unit 2 step 1600 m
+  log SHOW type 8 -> direction 7 | 1.6 km | road 'Approach Test Two'
+  rx 97 frame(s) on c2, sessions 0062..00C2, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash cb1ed8c51deb9c65
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=6.00 type 8 road 'Approach Test Two' dist '800' unit 1 step 800 m
+  log DIST 800 m
+  rx 1 frame(s) on c2, sessions 00C3..00C3, methods A*1, hash 5fc321b312f71b75
+  log distance: 1 frame(s) OK
+t=7.00 type 42 road 'Approach Destination' dist '0.6' unit 5 step 966 m
+  log SHOW type 42 -> direction 10 | 0.6 mi | road 'Approach Destination'
+  rx 9 frame(s) on c2, sessions 00C4..00CC, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 7683464edc411bcc
+  log maneuver: 9 frame(s) OK
+clear (test end)
+  log CLEAR (test end)
+  rx 6 frame(s) on c3, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+
+== every maneuver type, in place
+t=0.00 type 1 road 'Sweep Start' dist '0.5' unit 5 step 805 m
+  log SHOW type 1 -> direction 1 | 0.5 mi | road 'Sweep Start'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 9ecd17aaf9a2a486
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=1.00 type 0 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 0 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0062..006A, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash c2f9fbd18692727c
+  log maneuver: 9 frame(s) OK
+t=2.00 type 1 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 1 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 006B..0073, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 6f3e9befe1d82c3d
+  log maneuver: 9 frame(s) OK
+t=3.00 type 2 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 2 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0074..007C, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 040c7e04ab3d8fce
+  log maneuver: 9 frame(s) OK
+t=4.00 type 3 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 3 -> direction 2 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 007D..0085, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 32d18a86f0c833b4
+  log maneuver: 9 frame(s) OK
+t=5.00 type 4 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 4 -> direction 3 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0086..008E, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash e9900b5869ec24fe
+  log maneuver: 9 frame(s) OK
+t=6.00 type 5 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 5 -> direction 2 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 008F..0097, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash ea726491e1b5d85a
+  log maneuver: 9 frame(s) OK
+t=7.00 type 6 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 6 -> direction 3 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0098..00A0, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 1e72d21235ac3b6c
+  log maneuver: 9 frame(s) OK
+t=8.00 type 7 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 7 -> direction 6 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00A1..00A9, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash c45e6fba7fb6a544
+  log maneuver: 9 frame(s) OK
+t=9.00 type 8 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 8 -> direction 7 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00AA..00B2, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 5ee11ccb1ed26886
+  log maneuver: 9 frame(s) OK
+t=10.00 type 9 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 9 -> direction 4 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00B3..00BB, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 4b83d1c888c5cc9c
+  log maneuver: 9 frame(s) OK
+t=11.00 type 10 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 10 -> direction 5 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00BC..00C4, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash f677f84135769e72
+  log maneuver: 9 frame(s) OK
+t=12.00 type 11 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 11 -> direction 8 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00C5..00CD, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 284132780fe4df4a
+  log maneuver: 9 frame(s) OK
+t=13.00 type 12 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 12 -> direction 9 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00CE..00D6, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 8f9f067fbe456e70
+  log maneuver: 9 frame(s) OK
+t=14.00 type 13 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 13 -> direction 25 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00D7..00DF, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 6821c7c469895ed1
+  log maneuver: 9 frame(s) OK
+t=15.00 type 14 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 14 -> direction 26 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00E0..00E8, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 3916eac927999241
+  log maneuver: 9 frame(s) OK
+t=16.00 type 15 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 15 -> direction 25 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00E9..00F1, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 6fe8b288a025a003
+  log maneuver: 9 frame(s) OK
+t=17.00 type 16 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 16 -> direction 26 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00F2..00FA, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash f33cb6545ec2415f
+  log maneuver: 9 frame(s) OK
+t=18.00 type 17 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 17 -> direction 25 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 00FB..0103, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash d12717afaad75c75
+  log maneuver: 9 frame(s) OK
+t=19.00 type 18 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 18 -> direction 26 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0104..010C, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 6c1e26b31d0ddb2a
+  log maneuver: 9 frame(s) OK
+t=20.00 type 19 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 19 -> direction 25 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 010D..0115, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash c6e4a6e458378374
+  log maneuver: 9 frame(s) OK
+t=21.00 type 20 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 20 -> direction 26 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0116..011E, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 7716c926210bdc94
+  log maneuver: 9 frame(s) OK
+t=22.00 type 21 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 21 -> direction 28 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 011F..0127, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 50c10883322cc13f
+  log maneuver: 9 frame(s) OK
+t=23.00 type 22 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 22 -> direction 29 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0128..0130, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 3da7414d6ec76891
+  log maneuver: 9 frame(s) OK
+t=24.00 type 23 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 23 -> direction 28 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0131..0139, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 670c36b27068bddd
+  log maneuver: 9 frame(s) OK
+t=25.00 type 24 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 24 -> direction 29 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 013A..0142, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash b6db408fdcb4e967
+  log maneuver: 9 frame(s) OK
+t=26.00 type 25 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 25 -> direction 37 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0143..014B, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 38dc1a717a870192
+  log maneuver: 9 frame(s) OK
+t=27.00 type 26 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 26 -> direction 38 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 014C..0154, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash b2c9c663a4f09df6
+  log maneuver: 9 frame(s) OK
+t=28.00 type 27 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 27 -> direction 32 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0155..015D, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 96d0d0cd202c2d15
+  log maneuver: 9 frame(s) OK
+t=29.00 type 28 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 28 -> direction 33 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 015E..0166, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash ff74a89a3860ee37
+  log maneuver: 9 frame(s) OK
+t=30.00 type 29 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 29 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0167..016F, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 14eaff50e77c27e2
+  log maneuver: 9 frame(s) OK
+t=31.00 type 30 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 135
+  log SHOW type 30 -> direction 15 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0170..0178, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 8a09491f8c915853
+  log maneuver: 9 frame(s) OK
+t=32.00 type 31 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 180
+  log SHOW type 31 -> direction 15 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0179..0181, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash c7e7e898b84f036e
+  log maneuver: 9 frame(s) OK
+t=33.00 type 32 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 45
+  log SHOW type 32 -> direction 14 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0182..018A, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash a3ec022b4d4a73e4
+  log maneuver: 9 frame(s) OK
+t=34.00 type 33 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 90
+  log SHOW type 33 -> direction 14 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 018B..0193, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 3e4c5bdf75dbc739
+  log maneuver: 9 frame(s) OK
+t=35.00 type 34 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 135
+  log SHOW type 34 -> direction 15 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0194..019C, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 3170eaaaaedc23bf
+  log maneuver: 9 frame(s) OK
+t=36.00 type 35 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 180
+  log SHOW type 35 -> direction 15 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 019D..01A5, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 5fe53b75c0e72b32
+  log maneuver: 9 frame(s) OK
+t=37.00 type 36 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 36 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01A6..01AE, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 957f441879349ecf
+  log maneuver: 9 frame(s) OK
+t=38.00 type 37 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 37 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01AF..01B7, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 7e364b56ede4d07a
+  log maneuver: 9 frame(s) OK
+t=39.00 type 38 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 38 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01B8..01C0, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 21f9ff1056daf6a5
+  log maneuver: 9 frame(s) OK
+t=40.00 type 39 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 39 -> direction 10 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01C1..01C9, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 16e30170a9b94be3
+  log maneuver: 9 frame(s) OK
+t=41.00 type 40 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 40 -> direction 10 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01CA..01D2, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 0b03c47818e67090
+  log maneuver: 9 frame(s) OK
+t=42.00 type 41 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 41 -> direction 10 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01D3..01DB, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 13dd3bdd4ef837d5
+  log maneuver: 9 frame(s) OK
+t=43.00 type 42 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 42 -> direction 10 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01DC..01E4, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 1b180c6723e90442
+  log maneuver: 9 frame(s) OK
+t=44.00 type 43 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 180
+  log SHOW type 43 -> direction 14 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01E5..01ED, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash ac6317f06529ea73
+  log maneuver: 9 frame(s) OK
+t=45.00 type 44 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 45
+  log SHOW type 44 -> direction 14 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01EE..01F6, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 2f84cc3cb2c1d5e0
+  log maneuver: 9 frame(s) OK
+t=46.00 type 45 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 90
+  log SHOW type 45 -> direction 15 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 01F7..01FF, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 580d9c93028e92ac
+  log maneuver: 9 frame(s) OK
+t=47.00 type 46 road 'Sweep Road' dist '0.3' unit 5 step 483 m angle 135
+  log SHOW type 46 -> direction 15 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0200..0208, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 2c3a995f7f5ba166
+  log maneuver: 9 frame(s) OK
+t=48.00 type 47 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 47 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0209..0211, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash a677eb1c9828c83d
+  log maneuver: 9 frame(s) OK
+t=49.00 type 48 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 48 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0212..021A, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 16be01f3fc5bce0a
+  log maneuver: 9 frame(s) OK
+t=50.00 type 49 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 49 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 021B..0223, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 0b3dec2e3935db8b
+  log maneuver: 9 frame(s) OK
+t=51.00 type 50 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 50 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0224..022C, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 4c59378fd85297a0
+  log maneuver: 9 frame(s) OK
+t=52.00 type 51 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 51 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 022D..0235, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash b72516aa98308259
+  log maneuver: 9 frame(s) OK
+t=53.00 type 52 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 52 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0236..023E, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 18a873cbabf5ecb6
+  log maneuver: 9 frame(s) OK
+t=54.00 type 53 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 53 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 023F..0247, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 5137ef087dda2e67
+  log maneuver: 9 frame(s) OK
+t=55.00 type 54 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 54 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0248..0250, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash bff660a7384f426c
+  log maneuver: 9 frame(s) OK
+t=56.00 type 55 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 55 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0251..0259, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash a386cbc940ab7a95
+  log maneuver: 9 frame(s) OK
+t=57.00 type 56 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 56 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 025A..0262, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash e6ee4d25db2742d2
+  log maneuver: 9 frame(s) OK
+t=58.00 type 57 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 57 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0263..026B, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 7ba1680c2f6c1c43
+  log maneuver: 9 frame(s) OK
+t=59.00 type 58 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 58 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 026C..0274, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash 1247e9b10895f568
+  log maneuver: 9 frame(s) OK
+t=60.00 type 59 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 59 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 0275..027D, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash d35bd13a3f4fdb71
+  log maneuver: 9 frame(s) OK
+t=61.00 type 60 road 'Sweep Road' dist '0.3' unit 5 step 483 m
+  log SHOW type 60 -> direction 1 | 0.3 mi | road 'Sweep Road'
+  rx 9 frame(s) on c0, sessions 027E..0286, methods 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1, hash a8929ea87d886d9e
+  log maneuver: 9 frame(s) OK
+clear (test end)
+  log CLEAR (test end)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+
+== KOMBI rejections
+t=0.00 type 7 road 'Reject Test Road' dist '0.5' unit 5 step 805 m
+  log SHOW type 7 -> direction 6 | 0.5 mi | road 'Reject Test Road'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 9f194e039a917b0c
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+the KOMBI rejects the next request
+t=1.00 type 8 road 'Reject Test Two' dist '0.4' unit 5 step 644 m
+  log SHOW type 8 -> direction 7 | 0.4 mi | road 'Reject Test Two'
+  rx 1 frame(s) on c0, sessions 0062..0062, methods 3*1, hash c787189583fd21e7
+  log maneuver: 9 frame(s) FAILED: method 0x0003: reply type 0x80 return code 0x01 (not a matching E_OK)
+  log the KOMBI rejected the in-place update: full graphs until the next clear
+  rx 97 frame(s) on c0, sessions 0063..00C3, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash a8cdc125093b6676
+  log graph: 97 frame(s) OK
+t=2.00 type 7 road 'Reject Test Three' dist '0.3' unit 5 step 483 m
+  log SHOW type 7 -> direction 6 | 0.3 mi | road 'Reject Test Three'
+  rx 97 frame(s) on c0, sessions 00C4..0124, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 55cf3e31346e14a8
+  log graph: 97 frame(s) OK
+the KOMBI rejects the next request
+t=3.00 type 7 road 'Reject Test Three' dist '0.2' unit 5 step 322 m
+  log DIST 0.2 mi
+  rx 1 frame(s) on c0, sessions 0125..0125, methods A*1, hash a649f5db8bd72636
+  log distance: 1 frame(s) FAILED: method 0x000A: reply type 0x80 return code 0x01 (not a matching E_OK)
+  log CLEAR (KOMBI rejected a frame)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=2
+t=4.00 type 7 road 'Reject Test Three' dist '0.1' unit 5 step 161 m
+reset stop
+  state shown=0 stopped=0
+t=5.00 type 7 road 'Reject Test Three' dist '0.1' unit 5 step 161 m
+  log SHOW type 7 -> direction 6 | 0.1 mi | road 'Reject Test Three'
+  rx 97 frame(s) on c2, sessions 0126..0186, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 89184d9bac167718
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+clear (test end)
+  log CLEAR (test end)
+  rx 6 frame(s) on c3, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+
+== yield to an iDrive route
+t=0.00 type 7 road 'Yield Test Road' dist '0.5' unit 5 step 805 m
+  log SHOW type 7 -> direction 6 | 0.5 mi | road 'Yield Test Road'
+  rx 97 frame(s) on c0, sessions 0001..0061, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash 2ab633dd2653ef20
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+yield to factory
+  log YIELD (iDrive route active): stop writing, no cancel
+  state shown=0 stopped=0
+t=1.00 type 7 road 'Yield Test Road' dist '0.4' unit 5 step 644 m
+  log SHOW type 7 -> direction 6 | 0.4 mi | road 'Yield Test Road'
+  rx 97 frame(s) on c0, sessions 0062..00C2, methods 9*5 2*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*3 C*1 4*1 9*1 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*3 C*1 4*1 9*1 2*2 3*1 E*1 A*1 B*1 A*2 C*1 4*1 9*1 3*1 E*1 A*2 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*1 B*1 A*1 10*3 A*1 C*1 4*1 9*1 2*1 3*1 E*1 A*3 C*1 4*1 9*2, hash a59a9c5d2ce56fd3
+  log graph: 97 frame(s) OK
+  state shown=1 stopped=0
+t=2.00 none (guidance ended)
+t=10.00 none (guidance stale)
+  log CLEAR (guidance stale)
+  rx 6 frame(s) on c1, sessions 0190..0195, methods 9*3 C*1 4*1 9*1, hash 5483a525f859065f
+  log cancel: OK
+  state shown=0 stopped=0
+clear (nothing shown)
+  log CLEAR (nothing shown)
+

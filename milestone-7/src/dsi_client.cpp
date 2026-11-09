@@ -63,7 +63,7 @@ void* need(void* lib, const char* name) {
 } // namespace
 
 DsiClient::DsiClient()
-    : lib_(NULL), conn_(NULL), cli_(NULL), attached_(false), quiet_(false),
+    : lib_(NULL), conn_(NULL), cli_(NULL), attached_(false), quiet_(false), quietTx_(false),
       attachedCb_(NULL), dataCb_(NULL), detachedCb_(NULL), user_(NULL) {}
 
 void DsiClient::setCallbacks(AttachedCb a, DataCb d, void* user) {
@@ -227,9 +227,10 @@ bool DsiClient::sendRequest(uint32_t requestId, const std::vector<uint8_t>& payl
     if (!payload.empty()) g_s.streamWrite(stream, &payload[0], (unsigned)payload.size());
     int rc = g_s.streamSend(stream, -1);
     g_s.streamDtor(stream);
-    printf("[DsiClient] TX request id=0x%x payload=%u bytes -> send rc=%d\n",
-           requestId, (unsigned)payload.size(), rc);
-    fflush(stdout);
+    if (!quietTx_) {
+        printf("[DsiClient] TX request id=0x%x payload=%u bytes -> send rc=%d\n", requestId, (unsigned)payload.size(), rc);
+        fflush(stdout);
+    }
     return true;
 }
 

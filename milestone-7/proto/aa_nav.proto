@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 //
-// Channel 10 navigation messages from the phone, as src/kombi_nav_msg.hpp reads them. Documentation and a test only:
+// Channel 10 navigation messages from the phone, as src/cluster/nav_msg.hpp reads them. Documentation and a test only:
 // nothing is generated from this. Each message starts with a 2-byte big-endian id, shown here.
 //
 // tests/test_schema.py decodes the messages tests/kombi_nav_test_util.hpp builds. test_kombi_nav_msg reads the same

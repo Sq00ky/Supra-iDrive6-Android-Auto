@@ -11,8 +11,8 @@
 //                                     2 seconds}, 2 destination_distances[] {1 distance {...}, 2 eta, 3 seconds},
 //                                     3 current_road {1 name}}
 //   0x8004 / 0x8005: the older NextTurnEvent / NextTurnDistanceEvent (phones that don't send 0x8006 / 0x8007).
-#ifndef KOMBI_NAV_MSG_HPP
-#define KOMBI_NAV_MSG_HPP
+#ifndef CLUSTER_NAV_MSG_HPP
+#define CLUSTER_NAV_MSG_HPP
 
 #include "aa_proto.hpp"
 

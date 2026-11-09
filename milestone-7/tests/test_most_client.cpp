@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: most::Client against the fake DsiClient (tests/fake_dsi_client.cpp): start-up, the exact request order,
-// refusal, the empty key list, detach, re-attach, link state, message classes and counters.
+// refusal, the empty key list, detach, re-attach, link state, message classes and counters, the guarded send and the
+// registry listener.
 #include "most/client.hpp"
 #include "fake_dsi_client.hpp"
 #include <assert.h>
@@ -340,6 +341,102 @@ static void testLinkState() {
     assert(!d.addLinkListener(&onLink, NULL));
 }
 
+// ---- send and the registry ----------------------------------------------------------------------------------------
+
+static Msg command(uint8_t fblock, uint16_t dst, uint8_t op) {
+    Msg m;
+    m.txType = 0; m.varTag = 1; m.varVal = 0; m.dst = dst; m.src = 0x1234;   // src is ignored: the client fills it in
+    m.fblock = fblock; m.inst = 0; m.fkt = 0x204; m.opType = op; m.hdrTag = 5;
+    m.data.push_back(0); m.data.push_back(1); m.data.push_back(1);
+    return m;
+}
+
+static void testSend() {
+    fake_dsi::reset();
+    Client c;
+    assert(c.addRoute(0x82, 0, kAny, kAny, &handler, NULL));
+    assert(c.allowSend(0x82, 0) && c.allowSend(0x82, 0));         // twice is once
+    Msg m = command(0x82, 0x0123, kOpStartResultAck);
+    assert(!c.send(m));                                           // not started
+    assert(c.selfAddress() == 0);
+    assert(c.start("X"));
+    assert(!c.allowSend(0x83, 0));                                // after start
+    assert(!c.send(m));                                           // not attached
+    fake_dsi::attach();
+    assert(!c.send(m));                                           // not registered
+    respond(61, 0x2077);
+    assert(c.state() == kUp && c.selfAddress() == 0x2077);
+
+    size_t before = fake_dsi::calls.size();
+    assert(c.send(m));
+    assert(fake_dsi::calls.size() == before + 1);
+    const fake_dsi::Call& r = fake_dsi::calls.back();
+    assert(r.kind == fake_dsi::Call::kRequest && r.id == kReqProcessMessage);
+    Msg want = m;
+    want.src = 0x2077;
+    std::vector<uint8_t> expect;
+    putLe32(expect, 61);
+    std::vector<uint8_t> body = buildMessage(want);
+    expect.insert(expect.end(), body.begin(), body.end());
+    assert(r.payload == expect);
+
+    assert(!c.send(command(0x83, 0x0123, kOpStartResultAck)));   // not allowed
+    assert(!c.send(command(0x82, 0x2020, kOpStartResultAck)));   // a head-unit app address
+    assert(!c.send(command(0x82, 0x0050, kOpStartResultAck)));   // below the ring nodes
+    assert(!c.send(command(0x82, 0x1000, kOpStartResultAck)));
+    assert(!c.send(command(0x82, 0x0123, kOpResultAck)));        // an answer, not a command
+    assert(c.send(command(0x82, 0x0FFF, kOpSet)));
+    assert(fake_dsi::calls.size() == before + 2);
+    ClientStats st = c.stats();
+    assert(st.sent == 2 && st.sendRefused == 8);
+    c.logHealth();
+
+    comm(kCommStateOk);
+    comm(1);                                                      // comm went bad
+    assert(c.state() == kCommNotOk && !c.send(m));
+    comm(kCommStateOk);
+    assert(c.send(m));
+    fake_dsi::detach();
+    assert(!c.send(m) && c.selfAddress() == 0);
+}
+
+static void testSendRefusedRegistration() {
+    fake_dsi::reset();
+    Client c;
+    assert(c.addRoute(0x82, 0, kAny, kAny, &handler, NULL) && c.allowSend(0x82, 0));
+    assert(c.start("X"));
+    fake_dsi::attach();
+    respond(kClientRefused, 0x2077);
+    assert(c.selfAddress() == 0 && !c.send(command(0x82, 0x0123, kOpStartResultAck)));
+    assert(countRequests(kReqProcessMessage) == 0);
+}
+
+static std::vector<RegistryEntry> g_reg;
+static unsigned g_regCalls = 0;
+static void onRegistry(const std::vector<RegistryEntry>& reg, void*) { g_reg = reg; ++g_regCalls; }
+
+static void testRegistryListener() {
+    fake_dsi::reset();
+    g_regCalls = 0;
+    Client c;
+    assert(c.addRoute(0x82, 0, kAny, kAny, &handler, NULL));
+    assert(c.addRegistryListener(&onRegistry, NULL));
+    assert(c.start("X"));
+    assert(!c.addRegistryListener(&onRegistry, NULL));            // after start
+    fake_dsi::attach();
+    respond(3, 0x2077);
+    std::vector<uint8_t> p;
+    putLe32(p, 2);
+    putLe16(p, 0x0140); putLe16(p, registryKey(0x52, 0));
+    putLe16(p, 0x0123); putLe16(p, registryKey(0x82, 0));
+    fake_dsi::data(kAttrRegistry, &p[0], (uint32_t)p.size());
+    assert(g_regCalls == 1 && g_reg.size() == 2 && g_reg[1].address == 0x0123 && g_reg[1].key == 0x8200);
+    p.resize(p.size() - 2);                                       // cut short: not handed on
+    fake_dsi::data(kAttrRegistry, &p[0], (uint32_t)p.size());
+    assert(g_regCalls == 1);
+    assert(c.state() == kUp);
+}
+
 int main() {
     testNoConsumer();
     testOpenFails();
@@ -349,6 +446,9 @@ int main() {
     testReattach();
     testLinkState();
     testMessages();
+    testSend();
+    testSendRefusedRegistration();
+    testRegistryListener();
     printf("test_most_client OK\n");
     return 0;
 }

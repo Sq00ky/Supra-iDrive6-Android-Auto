@@ -4,7 +4,7 @@
 #ifndef KOMBI_NAV_TEST_UTIL_HPP
 #define KOMBI_NAV_TEST_UTIL_HPP
 
-#include "kombi_nav_msg.hpp"
+#include "cluster/nav_msg.hpp"
 #include <string>
 #include <vector>
 
