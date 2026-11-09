@@ -33,7 +33,9 @@
 //     to us (RecentCalls) is the navigation: we yield from that message on.
 //   - a route is on screen once the navigation draws: SetVisibility(frame, 1), SwitchVisibility, an item added, or a
 //     non-empty text. A route ends with SetVisibility(frame, 0), then the navigation clearing its instances (no
-//     drawing), about 3 s later.
+//     drawing), about 3 s later. Once the frame is off, nothing but SetVisibility(frame, 1) puts a route back on
+//     screen until we are released: the clean-up may swap buffers back or set a status text, and that must not keep
+//     us yielded for good.
 //   - quiet alone does not end a route: the navigation only sends on a change, so a parked car on a route is quiet too.
 //     So the navigation is over once no route is on screen and the terminal has been quiet for navQuietMs. Traffic that
 //     never draws (a set-up, a status) ends that way too.
@@ -136,6 +138,7 @@ private:
     bool linkUp_;
     uint16_t self_, host_;
     bool failed_, navActive_, routeOn_;
+    bool frameOff_;          // the navigation switched its frame off: only frame-on draws again until the release
     uint32_t lastNavMs_;
     Status status_;
     bool changed_;

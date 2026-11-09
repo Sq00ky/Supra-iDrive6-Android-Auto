@@ -51,6 +51,7 @@ const char* submitResultName(SubmitResult r) {
 
 Core::Core(const Config& cfg)
     : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), routeOn_(false),
+      frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
@@ -138,6 +139,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
     failed_ = false;
     navActive_ = false;
     routeOn_ = false;
+    frameOff_ = false;
     recent_.clear();
     dropWork(now);
     dropped_.clear();                          // answers from the old host are not ours to match
@@ -326,10 +328,12 @@ static bool draws(const most::View& m) {
 void Core::onNav(const most::View& m, uint32_t now) {
     ++stats_.navMsgs;
     lastNavMs_ = now;
-    if (m.fkt == kSetVisibility && m.len >= 3 && cfg_.navFrame > 0 && rdBe16(m.data) == cfg_.navFrame)
+    if (m.fkt == kSetVisibility && m.len >= 3 && cfg_.navFrame > 0 && rdBe16(m.data) == cfg_.navFrame) {
         routeOn_ = m.data[2] != 0;
-    else if (draws(m))
+        frameOff_ = !routeOn_;
+    } else if (draws(m) && !frameOff_) {
         routeOn_ = true;
+    }
     if (navActive_) return;
     navActive_ = true;
     char why[96];
@@ -348,6 +352,7 @@ void Core::tick(uint32_t now) {
     }
     if (navActive_ && !routeOn_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
         navActive_ = false;
+        frameOff_ = false;                     // the next drawing, frame-on seen or not, is a route again
         refresh("factory navigation finished: no route on screen, then quiet", now);
     }
 }

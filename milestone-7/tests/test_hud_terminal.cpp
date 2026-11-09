@@ -391,9 +391,40 @@ static void testNavWithoutRoute() {
     assert(k.status() == kReady);
 
     Wire poly = navAnswer(kAddPolygon, addPolygon(6, 0, kPolygon, std::vector<Point>(3)));
-    k.onMessage(poly.v, 300000);                              // drawing alone is a route too
+    k.onMessage(poly.v, 300000);                              // drawing alone is a route too (after the release)
     k.tick(400000);
     assert(k.status() == kNavActive);
+}
+
+// After the frame went off, the navigation's clean-up may swap its buffers back or set a text: that is not a route
+// on screen again, so we are released after the quiet. Frame-on is, and drawing after it holds us again.
+static void testCleanUpAfterFrameOff() {
+    Core k = readyCore();
+    Wire on = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(on.v, 1000);
+    assert(k.status() == kNavActive);
+    Wire off = navAnswer(kSetVisibility, setVisibility(kFrame, false));
+    k.onMessage(off.v, 50000);
+    Wire swap = navAnswer(kSwitchVisibility, switchVisibility(5, 6));
+    k.onMessage(swap.v, 51000);                               // clean-up: back to the buffer it leaves on show
+    Wire status = navTextAnswer(7, "1");
+    k.onMessage(status.v, 52000);                             // a text on another instance
+    k.tick(56999);
+    assert(k.status() == kNavActive);
+    k.tick(57000);
+    assert(k.status() == kReady);
+
+    k.onMessage(on.v, 60000);                                 // the next route
+    k.onMessage(off.v, 61000);
+    k.onMessage(on.v, 62000);                                 // frame on again: on screen
+    Wire dist = navTextAnswer(3, "400");
+    k.onMessage(dist.v, 63000);
+    k.tick(200000);
+    assert(k.status() == kNavActive);
+    k.onMessage(off.v, 201000);
+    k.onMessage(swap.v, 202000);
+    k.tick(207000);
+    assert(k.status() == kReady);
 }
 
 // An error answer to a call the terminal dropped when the navigation took over is not a failure, within replyMs.
@@ -733,6 +764,7 @@ int main() {
     testNavTakeoverMidBatch();
     testNavFinishes();
     testNavWithoutRoute();
+    testCleanUpAfterFrameOff();
     testLateErrorAfterTakeover();
     testTimeoutAndReset();
     testErrorAnswers();
