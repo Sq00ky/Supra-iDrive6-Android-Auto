@@ -61,7 +61,13 @@ int main() {
         for (size_t i = 1; i + 1 < drive.size(); ++i) {
             assert(viewFromMessages(drive[i].m, v));
             if (v.aa_unit == 6) { feet = true; assert(kombiUnit(6) == 0x05); }
-            if (v.aa_type == 35) { ra = true; assert(v.has_exit_angle && v.exit_angle == 90 && kombiDirection(35) == 15); }
+            if (v.aa_type == 35) {
+                ra = true;
+                assert(v.has_exit_angle && v.exit_angle == 90 && kombiDirection(35) == 15);
+                assert(v.has_exit_number && v.exit_number == 2);   // the helper's maneuver field 2
+            } else {
+                assert(!v.has_exit_number);
+            }
         }
         assert(feet && ra);
     }
@@ -137,6 +143,23 @@ int main() {
         assert(viewFromMessages(m, v) && v.step_pos_seq == 2);
         m.clear();
         assert(m.pos_seq == 0 && m.step_pos_seq == 0);
+    }
+    // a roundabout's exit number: legacy field 5 (and 6, its angle); the maneuver is a different one when it changes
+    {
+        NavMessages m;
+        Bytes s = status(1), ev;
+        m.store(0x8003, &s[0], s.size());
+        fStr(ev, 1, "RING RD"); fInt(ev, 2, 2); fInt(ev, 3, 13); fInt(ev, 5, 3); fInt(ev, 6, 270);
+        m.store(0x8004, &ev[0], ev.size());
+        NavView v, w;
+        assert(viewFromMessages(m, v) && v.has_exit_number && v.exit_number == 3);
+        assert(v.has_exit_angle && v.exit_angle == 270);
+        w = v;
+        assert(w.sameManeuver(v));
+        w.exit_number = 4;
+        assert(!w.sameManeuver(v));
+        w.has_exit_number = false;
+        assert(!w.sameManeuver(v));
     }
     // 0x8006 wins over 0x8004; a step without its 0x8007 has no distance yet
     {
