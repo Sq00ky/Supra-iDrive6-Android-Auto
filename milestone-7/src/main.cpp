@@ -1459,6 +1459,7 @@ static const char* const kMediaFile = "/dev/shmem/nbt-aad-media";
 static nbt::MediaState g_media;
 static pthread_mutex_t g_mediaMutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_mediaKeysToPhone = false;   // set at start-up from the audio mode
+static bool g_wheelMediaKeys = false;     // "Media Controls for LCI Steering Wheels" (nbt_env.hpp lciMediaKeysEnabled())
 static uint32_t g_mediaWriteMs = 0;       // monoMs() of the last record write
 
 // Caller holds g_mediaMutex. One fixed record written over the old bytes before the file is shortened (QNX /dev/shmem
@@ -1615,6 +1616,10 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
     if (ev.what && (!strcmp(ev.what, "MFL_NEXT") || !strcmp(ev.what, "MFL_PREV") ||
                     !strcmp(ev.what, "MFL_PLAYPAUSE"))) {   // steering-wheel media keys (car/mfl.hpp)
+        if (!g_wheelMediaKeys) {
+            if (ev.down) printf("[Media] %s ignored: Media Controls for LCI Steering Wheels is off\n", ev.what);
+            return;
+        }
         if (ev.down) sendMediaKey(ev.keycode, ev.what);
         return;   // iDrive's copy of the key is its own business: nothing here acts on it in a non-Bluetooth mode
     }
@@ -1670,7 +1675,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.41-sensortick"
+#define NBT_AAD_BUILD "v1.9.42-audio-lci"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -1850,10 +1855,20 @@ int main(int argc, char* argv[]) {
     nbt::BrowserAudio browser;
     nbt::BtAudio bt;
     const nbt::AudioMode audio_mode = nbt::audioMode();
-    printf("[Main] audio mode: %s (NBT_AUDIO_MODE=bt|browser|a2i)\n", nbt::audioModeName(audio_mode));
+    {
+        const char* am = getenv("NBT_AUDIO_MODE");
+        const bool set = (am && *am) || nbt::envFlag("NBT_AUDIO_BT") >= 0;
+        printf("[Main] audio mode: %s (NBT_AUDIO_MODE=bt|browser|a2i%s)\n", nbt::audioModeName(audio_mode),
+               set ? " from nbt-aad.env" : nbt::nativeAudioFlagSet() ? "; Use Native Audio instead of Bluetooth is on"
+                                                                     : "; Use Native Audio instead of Bluetooth is off");
+    }
     // Steering-wheel / control-port media keys go to the phone only when its media does not come over A2DP: in Bluetooth
     // mode the car's own AVRCP handling already owns those keys (audio/media_state.hpp, car/mfl.hpp).
     g_mediaKeysToPhone = audio_mode != nbt::AUDIO_MODE_BT;
+    g_wheelMediaKeys = nbt::lciMediaKeysEnabled();
+    printf("[Media] steering-wheel media keys: %s\n",
+           g_wheelMediaKeys ? "on (Media Controls for LCI Steering Wheels)"
+                            : "off (tick Media Controls for LCI Steering Wheels, or NBT_LCI_MEDIA=1)");
     printf("[Media] now playing on %s, media keys to the phone: %s\n", kMediaFile,
            g_mediaKeysToPhone ? "on (audio mode is not Bluetooth)" : "off (audio mode is Bluetooth)");
     if (audio_mode == nbt::AUDIO_MODE_BROWSER) {

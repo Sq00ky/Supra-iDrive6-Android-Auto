@@ -206,6 +206,14 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **v1.9.42-audio-lci + rhmiapp-45-audio-lci (not car-verified): two more Settings checkboxes.** **Use Native Audio
+> instead of Bluetooth** (`/var/opt/aa/native-audio`) is browser audio mode from the menu: Android Auto sound comes over
+> the Android Auto connection and plays through the car's own audio instead of Bluetooth A2DP. `NBT_AUDIO_MODE` /
+> `NBT_AUDIO_BT` in `nbt-aad.env` still win. **Media Controls for LCI Steering Wheels** (`/var/opt/aa/lci-media`,
+> `NBT_LCI_MEDIA=1|0` wins) gates the steering-wheel previous / next from v1.9.38-media: off by default, and still only
+> in a non-Bluetooth audio mode. Both are read when the daemon starts, so press **Restart** after changing them. Log:
+> `[Main] audio mode: browser (...; Use Native Audio instead of Bluetooth is on)`, `[Media] steering-wheel media keys: on`.
+>
 > **v1.9.37-gpswfd + rhmiapp-44-gpswfd (not car-verified): Use Phone GPS and Use WiFi Direct Network checkboxes.**
 > Two more checkboxes on the Settings page, both off by default and read when the daemon starts, so press **Restart**
 > after changing them. **Use Phone GPS** (`/var/opt/aa/phone-gps`, `NBT_PHONE_GPS=1|0` wins) is for cars without the
@@ -685,6 +693,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
 | `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor). See also `NBT_PHONE_GPS` / **Use Phone GPS** |
+| `NBT_LCI_MEDIA` | `0` | Only matters when set: `1` = **Media Controls for LCI Steering Wheels** on, `0` = off, whatever the Settings checkbox says. On = the steering wheel's previous / next (`NBT_MFL_*`) become Android media keys in a non-Bluetooth audio mode. Off by default |
 | `NBT_PHONE_GPS` | `0` | Only matters when set: `1` = Use Phone GPS on, `0` = off, whatever the Settings checkbox says. On = no car GPS read, and no location / compass / GPS satellite / accelerometer sensors offered |
 | `NBT_CAR_SPEED` | `0` | The car's wheel speed to the phone (CAR_SPEED sensor) |
 | `NBT_TOUCH_FWD` | `0` | Touch to the phone |
@@ -761,7 +770,7 @@ Leave these unset unless you are testing.
 | `NBT_CP_HANDOFF=0` | Turns off the CarPlay hand-off (screen window and decoder created at start and never retuned for CarPlay, as before v1.8.32) |
 | `NBT_CP_LIVE_RETUNE=0` | Do not give the decoder CarPlay's settings when CarPlay takes the screen during a live Android Auto session (v1.8.37) |
 | `NBT_PTT_ASSISTANT=1` | Experimental: long press of the steering-wheel voice button starts the Google Assistant. Off by default (the button is only logged) |
-| `NBT_MFL_NEXT`, `NBT_MFL_PREV`, `NBT_MFL_PLAYPAUSE` | Steering-wheel buttons (MOST 15/02) that become Android's next / previous / play-pause media keys: `fkt` or `fkt:value`, hex as the recon log prints them (`511:2`), several separated by commas (`511:2,C31`). A `:value` maps one direction of a roller that carries both on one function; without it any change away from 0 is a press. Defaults (`511:2` next, `511:1` previous) come from a J29 log and are unconfirmed - swap them if the wheel skips the wrong way, and `NBT_MFL_*= ` (empty) unmaps a key. Only forwarded when `NBT_AUDIO_MODE` is not `bt`. `NBT_MFL_LOG=0` stops the per-change log line. See `car/mfl.hpp` |
+| `NBT_MFL_NEXT`, `NBT_MFL_PREV`, `NBT_MFL_PLAYPAUSE` | Steering-wheel buttons (MOST 15/02) that become Android's next / previous / play-pause media keys: `fkt` or `fkt:value`, hex as the recon log prints them (`511:2`), several separated by commas (`511:2,C31`). A `:value` maps one direction of a roller that carries both on one function; without it any change away from 0 is a press. Defaults (`511:2` next, `511:1` previous) come from a J29 log and are unconfirmed - swap them if the wheel skips the wrong way, and `NBT_MFL_*= ` (empty) unmaps a key. Only forwarded with **Media Controls for LCI Steering Wheels** (`NBT_LCI_MEDIA`) on and `NBT_AUDIO_MODE` not `bt`. `NBT_MFL_LOG=0` stops the per-change log line. See `car/mfl.hpp` |
 | `NBT_AA_BROWSE=1` | Experiment, off: advertises the Android Auto media browser service (channel 17, descriptor field 11) with an empty config and logs every message the phone sends there. Nothing else uses it. See the v1.9.37 entry |
 | `NBT_GPS_ACCURACY_M` | A fixed accuracy for every car GPS fix, in metres, 2 to 499 (default: HDOP x 5 m, at least 2 m; 10 m when a fix has no usable HDOP) |
 | `NBT_NIGHT_MODE=0/1`, `NBT_DRIVING_STATUS=0` | Sensor values. Night mode follows the car by default (`vehicle.dayNightChangeOver` via the iDrive app); `NBT_NIGHT_MODE` forces day (0) or night (1) |

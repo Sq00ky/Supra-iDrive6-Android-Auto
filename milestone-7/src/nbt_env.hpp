@@ -101,6 +101,14 @@ static const char* const kPhoneGpsFlagFile = "/var/opt/aa/phone-gps";
 static const char* const kPhoneGpsManualFile = "/opt/aa/phone-gps";
 inline bool phoneGpsFlagFileSet() { return access(kPhoneGpsFlagFile, F_OK) == 0 || access(kPhoneGpsManualFile, F_OK) == 0; }
 inline bool phoneGpsEnabled() { return usbSettingOn(getenv("NBT_PHONE_GPS"), phoneGpsFlagFileSet()); }
+// "Media Controls for LCI Steering Wheels" (iDrive Settings checkbox, rhmiapp-45; flag file kLciMediaFlagFile, a
+// hand-made kLciMediaManualFile also counts; NBT_LCI_MEDIA=1 / 0 wins either way, same words as NBT_USB). Off by
+// default: the steering wheel's previous / next / play-pause (MOST 15/02, car/mfl.hpp, NBT_MFL_*) become Android media
+// keys only with it on, and still only in a non-Bluetooth audio mode. Read at the start of the daemon.
+static const char* const kLciMediaFlagFile = "/var/opt/aa/lci-media";
+static const char* const kLciMediaManualFile = "/opt/aa/lci-media";
+inline bool lciMediaFlagFileSet() { return access(kLciMediaFlagFile, F_OK) == 0 || access(kLciMediaManualFile, F_OK) == 0; }
+inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"), lciMediaFlagFileSet()); }
 
 // With Android Auto over USB on (usbEnabled()), read the phone through libusbdi, not devc-serusb-aoap (which it
 // stops for the phone): see usb_direct.hpp. On by default, since the /dev/oap* path loses TLS records whenever another

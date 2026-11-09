@@ -204,6 +204,16 @@ int main() {
     // 4. The audio mode: NBT_AUDIO_MODE wins over NBT_AUDIO_BT; unknown words fall back to NBT_AUDIO_BT; bt by default.
     {
         CHECK(audioMode() == AUDIO_MODE_BT);                       // default again since v1.8.66
+        // Use Native Audio instead of Bluetooth (rhmiapp-45): the flag file picks browser only when neither env is set
+        CHECK(audioModeSetting(NULL, -1, true) == AUDIO_MODE_BROWSER);
+        CHECK(audioModeSetting("", -1, true) == AUDIO_MODE_BROWSER);
+        CHECK(audioModeSetting(NULL, -1, false) == AUDIO_MODE_BT);
+        CHECK(audioModeSetting("bt", -1, true) == AUDIO_MODE_BT);
+        CHECK(audioModeSetting(NULL, 1, true) == AUDIO_MODE_BT);
+        CHECK(audioModeSetting(NULL, 0, true) == AUDIO_MODE_A2I);
+        CHECK(audioModeSetting("junk", -1, true) == AUDIO_MODE_BROWSER);
+        CHECK(audioModeSetting("a2i", -1, false) == AUDIO_MODE_A2I);
+        CHECK(!nativeAudioFlagSet());                              // the host has no flag file
         setenv("NBT_AUDIO_MODE", "browser", 1);
         CHECK(audioMode() == AUDIO_MODE_BROWSER && !btAudioEnabled() && browserAudioEnabled());
         setenv("NBT_AUDIO_MODE", "bt", 1);

@@ -22,6 +22,8 @@
       <raAction id="83"/>
       <raAction id="87"/>
       <raAction id="91"/>
+      <raAction id="120"/>
+      <raAction id="124"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -82,6 +84,14 @@
       </textIdModel>
       <raBoolModel id="92"/>
       <textIdModel id="93" textId="26">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="121"/>
+      <textIdModel id="122" textId="27">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="125"/>
+      <textIdModel id="126" textId="28">
         <synonyms/>
       </textIdModel>
     </models>
@@ -163,6 +173,8 @@
           <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
           <checkbox action="87" id="90" model="88" text="Use Phone GPS" textModel="89"/>
           <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network" textModel="93"/>
+          <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
+          <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
         </components>
       </hmiState>
     </hmiStates>

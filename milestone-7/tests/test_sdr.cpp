@@ -121,6 +121,9 @@ int main() {
         assert(isCarPositionSensor(SENSOR_LOCATION) && isCarPositionSensor(SENSOR_COMPASS) &&
                isCarPositionSensor(SENSOR_GPS_SATELLITE) && !isCarPositionSensor(SENSOR_NIGHT_MODE));
         assert(!phoneGpsEnabled() || getenv("NBT_PHONE_GPS"));      // the host has no flag file
+        // Media Controls for LCI Steering Wheels (rhmiapp-45): off without the flag file, NBT_LCI_MEDIA wins
+        assert(!lciMediaKeysEnabled() || getenv("NBT_LCI_MEDIA"));
+        assert(usbSettingOn("1", false) && !usbSettingOn("0", true) && usbSettingOn(NULL, true));
         printf("phone GPS sensor channel OK\n");
     }
     {

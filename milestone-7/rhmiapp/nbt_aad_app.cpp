@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-44-gpswfd (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-45-audio-lci (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -227,7 +227,7 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the nine checkbox models whenever it is shown.
+// handler here, to refresh the eleven checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
 const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
@@ -343,6 +343,18 @@ const unsigned    kActWfdOnly      = 91;
 const unsigned    kWfdOnlyModel    = 92;
 const char* const kWfdOnlyFlag     = "/var/opt/aa/wifi-direct";
 const char* const kWfdOnlyManual   = "/opt/aa/wifi-direct";
+// "Use Native Audio instead of Bluetooth" and "Media Controls for LCI Steering Wheels" (rhmiapp-45), both off by default:
+// <checkbox action="120" id="123" model="121" textModel="122"> and <checkbox action="124" id="127" model="125"
+// textModel="126">. Flag files read by nbt-aad at start (audio/config.hpp nativeAudioFlagSet(), nbt_env.hpp
+// lciMediaKeysEnabled()); NBT_AUDIO_MODE / NBT_AUDIO_BT and NBT_LCI_MEDIA in nbt-aad.env win.
+const unsigned    kActNativeAudio  = 120;
+const unsigned    kNativeAudioModel = 121;
+const char* const kNativeAudioFlag = "/var/opt/aa/native-audio";
+const char* const kNativeAudioManual = "/opt/aa/native-audio";
+const unsigned    kActLciMedia     = 124;
+const unsigned    kLciMediaModel   = 125;
+const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
+const char* const kLciMediaManual  = "/opt/aa/lci-media";
 const char* const kGctxProperty    = "hmi.graphicalContext";
 const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
 // DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
@@ -1801,6 +1813,32 @@ bool onWfdOnlyToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// ---- Use Native Audio instead of Bluetooth / Media Controls for LCI Steering Wheels (rhmiapp-45) -----------------
+bool g_nativeAudioShown = false;
+bool nativeAudioOn() { return fileExists(kNativeAudioFlag) || fileExists(kNativeAudioManual); }
+void showNativeAudio(bmw::PluginApp* app) {
+    app->updateModel(kNativeAudioModel, nativeAudioOn());
+    g_nativeAudioShown = true;
+}
+bool onNativeAudioToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kNativeAudioFlag, kNativeAudioManual,
+                   "Use Native Audio instead of Bluetooth (NBT_AUDIO_MODE / NBT_AUDIO_BT in nbt-aad.env win)");
+    if (g_runApp) showNativeAudio(g_runApp);
+    return true;
+}
+
+bool g_lciMediaShown = false;
+bool lciMediaOn() { return fileExists(kLciMediaFlag) || fileExists(kLciMediaManual); }
+void showLciMedia(bmw::PluginApp* app) {
+    app->updateModel(kLciMediaModel, lciMediaOn());
+    g_lciMediaShown = true;
+}
+bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kLciMediaFlag, kLciMediaManual, "Media Controls for LCI Steering Wheels (NBT_LCI_MEDIA in nbt-aad.env wins)");
+    if (g_runApp) showLciMedia(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -1946,6 +1984,8 @@ void statusRun(void* /*self*/) {
     if (!g_usbAaShown) showUsbAa(app);
     if (!g_phoneGpsShown) showPhoneGps(app);
     if (!g_wfdOnlyShown) showWfdOnly(app);
+    if (!g_nativeAudioShown) showNativeAudio(app);
+    if (!g_lciMediaShown) showLciMedia(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -2108,7 +2148,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the nine checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the eleven checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2129,7 +2169,9 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showUsbAa(g_app);
         showPhoneGps(g_app);
         showWfdOnly(g_app);
-        alog("settings: nine checkbox models refreshed");
+        showNativeAudio(g_app);
+        showLciMedia(g_app);
+        alog("settings: eleven checkbox models refreshed");
     }
     return true;
 }
@@ -2167,6 +2209,8 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActUsbAa, &onUsbAaToggle);
     addAction(self, kActPhoneGps, &onPhoneGpsToggle);
     addAction(self, kActWfdOnly, &onWfdOnlyToggle);
+    addAction(self, kActNativeAudio, &onNativeAudioToggle);
+    addAction(self, kActLciMedia, &onLciMediaToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
