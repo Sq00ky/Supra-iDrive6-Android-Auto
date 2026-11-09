@@ -522,6 +522,11 @@ static void runKombiNav(bool shadow) {
     setenv("NBT_CLUSTER", "6wa", 1);
     if (shadow) setenv("NBT_HUDTERM", "log", 1);
     else unsetenv("NBT_HUDTERM");
+    if (shadow) {                                                // a picture an earlier live run left up
+        FILE* f = fopen(shown.c_str(), "w");
+        assert(f);
+        fclose(f);
+    }
     fake_dsi::reset();
     {
         most::Client client;
@@ -551,7 +556,7 @@ static void runKombiNav(bool shadow) {
     }                                                            // the terminal's thread is joined here
     size_t n = hudRequests();
     printf("KombiNav 6wa %s: %u calls to 82/00\n", shadow ? "shadow" : "live", (unsigned)n);
-    if (shadow) assert(n == 0);
+    if (shadow) assert(n == 0 && access(shown.c_str(), F_OK) == 0);   // left for the next live run to clear
     else assert(n >= 8);                                         // a maneuver's calls, up to 8 in flight unanswered
     unsetenv("NBT_CLUSTER");
     unsetenv("NBT_HUDTERM");

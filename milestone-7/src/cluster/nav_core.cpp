@@ -392,8 +392,9 @@ void KombiNav::onFatalSignal() {
 
 // Marker file + flag for the fatal-signal handler while an arrow may be up. It is removed only after an acknowledged
 // cancel (or a yield: the factory graph owns the models then), so the next start retries a cancel that failed.
+// The shadow mode draws nothing and never touches it: a file a live run left stays for the next live run to clear.
 void KombiNav::markShown(bool on, bool force) {
-    if (on == marked_) return;
+    if (shadow_ || on == marked_) return;
     if (on) {
         int fd = open(kShownFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) close(fd);
@@ -414,7 +415,11 @@ void* KombiNav::workerStub(void* self) {
 void KombiNav::worker() {
     // An arrow left up by a killed daemon (SIGKILL after Force Stop, power loss of the HU only): clear it once. The
     // J29's cancel goes now; another cluster's waits until its transport is ready (tick).
-    if (access(kShownFile, F_OK) == 0 && !client_) stale_shown_ = true;
+    if (access(kShownFile, F_OK) == 0 && !client_ && shadow_)
+        printf("[KombiNav] a picture may be left by an earlier live run: the shadow mode leaves it for the next live "
+               "run to clear\n");
+    else if (access(kShownFile, F_OK) == 0 && !client_)
+        stale_shown_ = true;
     if (access(kShownFile, F_OK) == 0 && client_) {
         std::string detail;
         bool ok = client_->cancel(*graph_, 0.0, 5.0, &KombiNav::quitting, this, &detail);
