@@ -50,30 +50,49 @@ const char* submitResultName(SubmitResult r) {
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
 Core::Core(const Config& cfg)
-    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), frameOff_(false),
+    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), routeOn_(false),
       mismatch_(false), lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
 }
 
-void Core::dropWork() {
+void Core::dropWork(uint32_t now) {
     stats_.batchesDropped += (haveCurrent_ ? 1 : 0) + (havePending_ ? 1 : 0);
     if (haveCurrent_ || havePending_) ++epoch_;
     haveCurrent_ = havePending_ = false;
     current_ = Batch();
     pending_ = Batch();
     nextCall_ = 0;
+    for (size_t i = 0; i < inFlight_.size(); ++i) {
+        InFlight f = inFlight_[i];
+        f.sentMs = now;
+        dropped_.push_back(f);
+    }
     inFlight_.clear();
 }
 
-void Core::refresh(const char* why, uint32_t) {
+// An answer to a call dropped within replyMs: taken off the list. Older entries are let go.
+bool Core::takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now) {
+    size_t k = 0;
+    for (size_t i = 0; i < dropped_.size(); ++i)
+        if (left(dropped_[i].sentMs, cfg_.replyMs, now) > 0) dropped_[k++] = dropped_[i];
+    dropped_.resize(k);
+    for (size_t i = 0; i < dropped_.size(); ++i) {
+        if (dropped_[i].fkt != fkt || (byHandle && dropped_[i].handle != handle)) continue;
+        dropped_.erase(dropped_.begin() + i);
+        return true;
+    }
+    return false;
+}
+
+void Core::refresh(const char* why, uint32_t now) {
     Status s = (!linkUp_ || !self_ || !host_) ? kOffline : (failed_ || mismatch_) ? kFailed
              : navActive_ ? kNavActive : kReady;
     if (s == status_) return;
     printf("[HudTerm] %s -> %s (%s)\n", statusName(status_), statusName(s), why);
     if (status_ == kReady) ++epoch_;          // what we drew may be gone or overdrawn: the driver redraws
-    if (s != kReady) dropWork();
+    if (s != kReady) dropWork(now);
     status_ = s;
     changed_ = true;
 }
@@ -103,7 +122,7 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
     linkUp_ = true;
     self_ = self;
     failed_ = false;
-    dropWork();
+    dropWork(now);
     char why[48];
     snprintf(why, sizeof(why), "link up, address %04X", self);
     refresh(why, now);
@@ -118,9 +137,10 @@ void Core::setHost(uint16_t host, uint32_t now) {
     host_ = host;
     failed_ = false;
     navActive_ = false;
-    frameOff_ = false;
+    routeOn_ = false;
     recent_.clear();
-    dropWork();
+    dropWork(now);
+    dropped_.clear();                          // answers from the old host are not ours to match
     refresh(why, now);
 }
 
@@ -252,7 +272,8 @@ void Core::onMessage(const most::View& m, uint32_t now) {
 }
 
 // ErrorAck (9) carries the handle first, like every answer to an Ack method; Error (F) does not, so it matches on the
-// function alone. An error fails the terminal even when it matches nothing in flight: one of our calls is wrong.
+// function alone. An error fails the terminal even when it matches nothing in flight: one of our calls is wrong. Only
+// an answer to a call we dropped a moment ago is let go (see the header).
 void Core::onAnswer(const most::View& m, uint32_t now) {
     if (m.op == most::kOpProcessingAck || m.op == most::kOpProcessing) return;   // still working: the timeout stands
     bool error = m.op != most::kOpResultAck && m.op != most::kOpStatus;
@@ -262,6 +283,12 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
     while (i < inFlight_.size() && !(inFlight_[i].fkt == m.fkt && (!byHandle || inFlight_[i].handle == h))) ++i;
     bool matched = i < inFlight_.size();
     if (matched) inFlight_.erase(inFlight_.begin() + i);
+    if (error && !matched && takeDropped(m.fkt, byHandle, h, now)) {
+        ++stats_.lateErrors;
+        printf("[HudTerm] %s(%X) to %03X %s handle %u, a call dropped when the terminal left ready: not a failure\n",
+               most::opName(m.op), m.op, m.fkt, fktName(m.fkt), h);
+        return;
+    }
     if (error) {
         ++stats_.errors;
         char why[160];
@@ -273,6 +300,7 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
         return;
     }
     if (!matched) {
+        takeDropped(m.fkt, byHandle, h, now);
         ++stats_.strays;
         return;
     }
@@ -301,12 +329,29 @@ void Core::checkNav(const most::View& m, uint32_t now) {
     refresh(why, now);
 }
 
+// Whether a navigation message (its call, or the cluster's answer with the call's payload) draws: a route is on screen.
+// Clearing up (RemoveAllItems, empty texts, other instances switched off) is not drawing.
+static bool draws(const most::View& m) {
+    switch (m.fkt) {
+        case kSwitchVisibility: case kAddPolygon: case kAddCircle: case kAddCircleDiameter: case 0xC05:   // ImageAddBitmap
+            return true;
+        case kTextareaSetText:                    // handle, encoding byte, then the text
+            for (size_t i = 3; i < m.len; ++i)
+                if (m.data[i]) return true;
+            return false;
+        default:
+            return false;
+    }
+}
+
 void Core::onNav(const most::View& m, uint32_t now) {
     ++stats_.navMsgs;
     lastNavMs_ = now;
     checkNav(m, now);
     if (m.fkt == kSetVisibility && m.len >= 3 && cfg_.navFrame > 0 && rdBe16(m.data) == cfg_.navFrame)
-        frameOff_ = m.data[2] == 0;
+        routeOn_ = m.data[2] != 0;
+    else if (draws(m))
+        routeOn_ = true;
     if (navActive_) return;
     navActive_ = true;
     char why[96];
@@ -323,10 +368,9 @@ void Core::tick(uint32_t now) {
                  inFlight_[0].handle, cfg_.replyMs);
         fail(why, now);
     }
-    if (navActive_ && frameOff_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
+    if (navActive_ && !routeOn_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
         navActive_ = false;
-        frameOff_ = false;
-        refresh("factory navigation finished: frame off, then quiet", now);
+        refresh("factory navigation finished: no route on screen, then quiet", now);
     }
 }
 
@@ -336,7 +380,7 @@ uint32_t Core::msUntilDeadline(uint32_t now) const {
         uint32_t t = left(inFlight_[0].sentMs, cfg_.replyMs, now);
         if (t < d) d = t;
     }
-    if (navActive_ && frameOff_) {
+    if (navActive_ && !routeOn_) {
         uint32_t t = left(lastNavMs_, cfg_.navQuietMs, now);
         if (t < d) d = t;
     }
@@ -443,6 +487,13 @@ uint32_t HudTerminal::epoch() const {
     return e;
 }
 
+bool HudTerminal::waiting() const {
+    pthread_mutex_lock(&lock_);
+    bool w = core_.waiting();
+    pthread_mutex_unlock(&lock_);
+    return w;
+}
+
 // Polled: it is only used for a clear, where a short wait does not matter.
 bool HudTerminal::waitIdle(uint32_t ms) {
     uint32_t t0 = nowMs();
@@ -474,10 +525,11 @@ void HudTerminal::logHealth() {
     uint16_t host = core_.host();
     pthread_mutex_unlock(&lock_);
     printf("[HudTerm] %s, host %04X: batches %u (done %u, dropped %u, replaced %u, merged %u, refused %u), calls %u, "
-           "answers %u, copies %u, strays %u, nav msgs %u, timeouts %u, errors %u\n",
+           "answers %u, copies %u, strays %u, nav msgs %u, timeouts %u, errors %u (late %u)\n",
            statusName(s), host, t.batches - l.batches, t.batchesDone - l.batchesDone, t.batchesDropped - l.batchesDropped,
            t.replaced - l.replaced, t.merged - l.merged, t.refused - l.refused, t.calls - l.calls, t.answers - l.answers, t.copies - l.copies,
-           t.strays - l.strays, t.navMsgs - l.navMsgs, t.timeouts - l.timeouts, t.errors - l.errors);
+           t.strays - l.strays, t.navMsgs - l.navMsgs, t.timeouts - l.timeouts, t.errors - l.errors,
+           t.lateErrors - l.lateErrors);
 }
 
 void HudTerminal::onMessage(const most::View& m) {

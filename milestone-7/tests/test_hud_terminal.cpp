@@ -51,6 +51,12 @@ static Wire answer(const most::Msg& m, uint8_t op = most::kOpResultAck) {
 static Wire copyOf(const most::Msg& m) { return Wire(kHost, kNav, m.fkt, most::kOpResultAck, answerPayload(m)); }
 static Wire navCall(uint16_t fkt, const std::vector<uint8_t>& p) { return Wire(kNav, kHost, fkt, most::kOpStartResultAck, p); }
 static Wire navAnswer(uint16_t fkt, const std::vector<uint8_t>& p) { return Wire(kHost, kNav, fkt, most::kOpResultAck, p); }
+// The cluster's answer to a navigation text: like ours, without the 00 00.
+static Wire navTextAnswer(uint16_t h, const char* t) {
+    std::vector<uint8_t> p = setText(h, t);
+    p.resize(p.size() - 2);
+    return navAnswer(kTextareaSetText, p);
+}
 
 static Core readyCore(const Config& c = config()) {
     Core k(c);
@@ -399,6 +405,82 @@ static void testNavFinishes() {
     assert(k.status() == kNavActive);
 }
 
+// Navigation traffic that never draws (a set-up, a status, clearing up) yields only until the terminal is quiet; a
+// drawing seen without its frame-on (a route already running at start-up) holds until the frame goes off.
+static void testNavWithoutRoute() {
+    Core k = readyCore();
+    Wire setup = navAnswer(kRemoveAllItems, removeAllItems(7));
+    k.onMessage(setup.v, 1000);
+    assert(k.status() == kNavActive && k.msUntilDeadline(1000) == 5000);
+    Wire empty = navTextAnswer(3, "");
+    k.onMessage(empty.v, 2000);                               // an empty text is not drawing
+    Wire other = navAnswer(kSetVisibility, setVisibility(22, true));
+    k.onMessage(other.v, 2500);                               // nor another instance switched on
+    k.tick(7499);
+    assert(k.status() == kNavActive);
+    k.tick(7500);
+    Status s;
+    assert(k.status() == kReady && k.takeStatusChange(s) && s == kReady);
+
+    Wire dist = navTextAnswer(3, "400");
+    k.onMessage(dist.v, 10000);                               // a route's text: on screen, frame-on never seen
+    k.tick(200000);
+    assert(k.status() == kNavActive && k.msUntilDeadline(200000) == 0xFFFFFFFFu);
+    Wire off = navAnswer(kSetVisibility, setVisibility(kFrame, false));
+    k.onMessage(off.v, 201000);
+    Wire clear5 = navAnswer(kRemoveAllItems, removeAllItems(5));
+    k.onMessage(clear5.v, 204000);                            // the navigation clearing up: quiet starts again
+    k.onMessage(empty.v, 204000);
+    k.tick(208999);
+    assert(k.status() == kNavActive);
+    k.tick(209000);
+    assert(k.status() == kReady);
+
+    Wire poly = navAnswer(kAddPolygon, addPolygon(6, 0, kPolygon, std::vector<Point>(3)));
+    k.onMessage(poly.v, 300000);                              // drawing alone is a route too
+    k.tick(400000);
+    assert(k.status() == kNavActive);
+}
+
+// An error answer to a call the terminal dropped when the navigation took over is not a failure, within replyMs.
+static void testLateErrorAfterTakeover() {
+    std::vector<uint8_t> err;
+    putBe16(err, 5);
+    err.push_back(0x07);                                      // invented error code
+    for (int late = 0; late <= 1; ++late) {
+        Core k = readyCore();
+        assert(k.submit(batchOf(2), 0) == kQueued);
+        most::Msg m0, m1;
+        assert(k.next(0, m0) && k.next(0, m1));
+        Wire nav = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+        k.onMessage(nav.v, 10);
+        assert(k.status() == kNavActive && k.stats().batchesDropped == 1);
+        Wire e(kHost, kSelf, m0.fkt, most::kOpErrorAck, err);
+        k.onMessage(e.v, late ? 10 + 1500 : 300);
+        if (!late) {
+            assert(k.status() == kNavActive && k.stats().errors == 0 && k.stats().lateErrors == 1);
+            k.onMessage(e.v, 310);                            // the same answer again: matches nothing any more
+            assert(k.status() == kFailed && k.stats().errors == 1);
+        } else {
+            assert(k.status() == kFailed && k.stats().errors == 1 && k.stats().lateErrors == 0);
+        }
+    }
+
+    Core k = readyCore();                                     // a success to a dropped call: a stray, as before
+    assert(k.submit(batchOf(1), 0) == kQueued);
+    most::Msg m;
+    assert(k.next(0, m));
+    Wire nav = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(nav.v, 10);
+    Wire a = answer(m);
+    k.onMessage(a.v, 20);
+    assert(k.stats().strays == 1 && k.status() == kNavActive);
+    Wire off = navAnswer(kSetVisibility, setVisibility(kFrame, false));
+    k.onMessage(off.v, 30);
+    k.tick(5030);
+    assert(k.status() == kReady);
+}
+
 static void testTimeoutAndReset() {
     Core k = readyCore();
     assert(k.submit(batchOf(2), 0) == kQueued);
@@ -697,6 +779,8 @@ int main() {
     testOwnAndForeignIgnored();
     testNavTakeoverMidBatch();
     testNavFinishes();
+    testNavWithoutRoute();
+    testLateErrorAfterTakeover();
     testTimeoutAndReset();
     testErrorAnswers();
     testLinkDropKeepsNav();

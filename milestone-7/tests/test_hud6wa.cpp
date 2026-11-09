@@ -37,10 +37,11 @@ struct FakePort : public Port {
     uint32_t ep;
     SubmitResult result;
     bool idle;
+    bool wait;               // a batch waits behind the one in progress
     int resets;
     Status afterReset;
     std::vector<Batch> batches;
-    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), resets(0), afterReset(kReady) {}
+    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
         for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(k6wa)));
@@ -50,6 +51,7 @@ struct FakePort : public Port {
     }
     Status status() const { return st; }
     uint32_t epoch() const { return ep; }
+    bool waiting() const { return wait; }
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
 };
