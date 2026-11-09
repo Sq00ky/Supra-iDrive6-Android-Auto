@@ -24,6 +24,7 @@
       <raAction id="91"/>
       <raAction id="120"/>
       <raAction id="124"/>
+      <raAction id="132"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -92,6 +93,10 @@
       </textIdModel>
       <raBoolModel id="125"/>
       <textIdModel id="126" textId="28">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="133"/>
+      <textIdModel id="134" textId="29">
         <synonyms/>
       </textIdModel>
     </models>
@@ -175,6 +180,7 @@
           <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network" textModel="93"/>
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
           <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
+          <checkbox action="132" id="135" model="133" text="Firewall rules for Android Auto (pf_aa)" textModel="134"/>
         </components>
       </hmiState>
     </hmiStates>

@@ -206,6 +206,11 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **rhmiapp-47-pfaa (not car-verified): pf_aa from the iDrive menu.** A **Firewall rules for Android Auto (pf_aa)**
+> checkbox on the Settings page runs `pf_aa --install` / `--uninstall` (from `/opt/aa/pf_aa`, else the USB stick's
+> root) in the background and logs its output in the app log; ticked = the rules and `NBT_KEEP_PF=1` are in place.
+> Restart the head unit afterwards so the car loads `pf.conf`. See [Troubleshooting](#troubleshooting).
+>
 > **v1.9.42-audio-lci + rhmiapp-45-audio-lci (not car-verified): two more Settings checkboxes.** **Use Native Audio
 > instead of Bluetooth** (`/var/opt/aa/native-audio`) is browser audio mode from the menu: Android Auto sound comes over
 > the Android Auto connection and plays through the car's own audio instead of Bluetooth A2DP. `NBT_AUDIO_MODE` /
@@ -891,7 +896,11 @@ packet filter blocks that port, so the daemon runs `pfctl -d` at start. The log 
 it worked. If the return value isn't 0 (one car returned 256), post the log.
 
 **Keeping the packet filter on (`pf_aa`, one time):** instead of switching the whole filter off, let the port through
-it. Copy `pf_aa` from the release next to the daemon and install the rules once:
+it. Easiest (rhmiapp-47): tick **Firewall rules for Android Auto (pf_aa)** on the Android Auto Settings page. It runs
+`pf_aa --install` (unticking runs `--uninstall`) from `/opt/aa/pf_aa`, or from the USB stick's root if `/opt/aa` has
+none, and writes pf_aa's output to the app log (`pf_aa: ...` lines, then `pf_aa --install done (exit 0): rules in
+place - restart the head unit ...`). The box shows whether the rules and `NBT_KEEP_PF=1` are in place. By hand, copy
+`pf_aa` from the release next to the daemon and install the rules once:
 
 ```
 cp /mnt/umass01200t7/pf_aa /opt/aa/pf_aa

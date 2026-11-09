@@ -3,6 +3,7 @@
 // Host test for tools/pf_aa.hpp (pf_aa): finding the Android Auto rules in pf.conf, appending them, NBT_KEEP_PF=1.
 
 #include "../tools/pf_aa.hpp"
+#include "../rhmiapp/pf_menu.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string>
@@ -109,6 +110,30 @@ int main() {
     assert(!nbt::pfaa::syncedOk(-1, EIO));
     assert(!nbt::pfaa::syncedOk(-1, ENOSPC));
 
+    // 10. The iDrive app's checkbox reads the same thing without STL (rhmiapp/pf_menu.hpp): same coverage on every case.
+    {
+        const std::string cases[] = {
+            stock, added, half, "# pass quick on uap0 port 5277\n", "pass quick proto tcp to port 5277 keep state\n",
+            "pass quick on en5 proto tcp to port 5277\n", "block in quick on uap0 proto tcp to port 5277\n",
+            "pass in quick on wfd0 proto tcp to 172.16.222.1 port 5277", "pass quick on uap0 port 52770\n", ""
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            Coverage want = nbt::pfaa::coverage(cases[i]);
+            bool u = false, w = false;
+            nbt::pfmenu::coverage(cases[i].c_str(), &u, &w);
+            assert(u == want.uap0 && w == want.wfd0);
+        }
+        assert(nbt::pfmenu::keepPfSet("NBT_AUDIO_BT=1\nNBT_KEEP_PF=1\n"));
+        assert(nbt::pfmenu::keepPfSet("# c\n\n  NBT_KEEP_PF=1 \r\n"));
+        assert(!nbt::pfmenu::keepPfSet("NBT_KEEP_PF=0\n") && !nbt::pfmenu::keepPfSet("#NBT_KEEP_PF=1\n"));
+        assert(!nbt::pfmenu::keepPfSet("") && !nbt::pfmenu::keepPfSet("NBT_KEEP_PF=10\n"));
+        std::string many;
+        for (int i = 0; i < 15; ++i) many += "NBT_X" + std::string(1, (char)('A' + i)) + "=1\n";
+        assert(!nbt::pfmenu::keepPfSet((many + "NBT_KEEP_PF=1\n").c_str()));   // 16th setting: the app drops it
+        EnvEdit ed = nbt::pfaa::setKeepPf("NBT_AUDIO_BT=1\n");
+        assert(nbt::pfmenu::keepPfSet(ed.text.c_str()));
+        printf("pf_menu (iDrive app checkbox) agrees with pf_aa\n");
+    }
     printf("test_pf_aa: all passed\n");
     return 0;
 }

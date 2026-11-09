@@ -61,12 +61,13 @@
 #include "boot_guard.hpp"
 #include "overlay_watch.hpp"
 #include "entry_key.hpp"
+#include "pf_menu.hpp"
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-45-audio-lci (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-47-pfaa (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -227,7 +228,7 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the eleven checkbox models whenever it is shown.
+// handler here, to refresh the twelve checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
 const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
@@ -355,6 +356,15 @@ const unsigned    kActLciMedia     = 124;
 const unsigned    kLciMediaModel   = 125;
 const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
 const char* const kLciMediaManual  = "/opt/aa/lci-media";
+// "Firewall rules for Android Auto (pf_aa)" (rhmiapp-47): <checkbox action="132" id="135" model="133" textModel="134">.
+// Ticked = pf_aa's rules are in the car's pf.conf and NBT_KEEP_PF=1 is in nbt-aad.env (rhmiapp/pf_menu.hpp). Pressing
+// runs /opt/aa/pf_aa --install or --uninstall (from the USB stick if /opt/aa has none) in the background; its output
+// goes to the app log. The car loads pf.conf at its next start, so the head unit needs a restart afterwards.
+const unsigned    kActPfAa         = 132;
+const unsigned    kPfAaModel       = 133;
+const char* const kPfAaTool        = "/opt/aa/pf_aa";
+const char* const kPfConf          = "/fs/sda0/etc/pf.conf";
+const char* const kPfAaOut         = "/dev/shmem/nbt-aad-pf_aa.out";
 const char* const kGctxProperty    = "hmi.graphicalContext";
 const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
 // DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
@@ -1833,6 +1843,134 @@ void showLciMedia(bmw::PluginApp* app) {
     app->updateModel(kLciMediaModel, lciMediaOn());
     g_lciMediaShown = true;
 }
+// ---- Firewall rules for Android Auto (pf_aa, rhmiapp-47) ----------------------------------------------------------
+pid_t g_pfAaPid = 0;              // pf_aa running in the background
+bool g_pfAaInstall = false;       // what it was asked to do
+time_t g_pfAaStart = 0;
+bool g_pfAaShown = false;
+
+// Whole small file into buf (NUL-terminated); false if it cannot be read.
+bool readSmallFile(const char* path, char* buf, size_t n) {
+    FILE* f = fopen(path, "r");
+    if (!f) return false;
+    size_t got = fread(buf, 1, n - 1, f);
+    buf[got] = 0;
+    fclose(f);
+    return true;
+}
+
+bool pfAaInstalled() {
+    static char conf[16384], env[4096];
+    if (!readSmallFile(kPfConf, conf, sizeof(conf))) return false;
+    bool u = false, w = false;
+    nbt::pfmenu::coverage(conf, &u, &w);
+    if (!u || !w) return false;
+    return readSmallFile(kDaemonEnv, env, sizeof(env)) && nbt::pfmenu::keepPfSet(env);
+}
+
+void showPfAa(bmw::PluginApp* app) {
+    app->updateModel(kPfAaModel, pfAaInstalled());
+    g_pfAaShown = true;
+}
+
+// pf_aa from /opt/aa, else from the first USB stick that carries one (the release's root).
+bool findPfAa(char* out, size_t n) {
+    if (fileExists(kPfAaTool)) { snprintf(out, n, "%s", kPfAaTool); return true; }
+    char stick[128];
+    if (nbt::usblog::findStick(stick, sizeof(stick))) {
+        snprintf(out, n, "%s/pf_aa", stick);
+        if (fileExists(out)) return true;
+    }
+    return false;
+}
+
+bool onPfAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    if (g_pfAaPid > 0) {
+        alog("menu: pf_aa is still running (pid %d): wait for it", (int)g_pfAaPid);
+        if (g_runApp) showPfAa(g_runApp);
+        return true;
+    }
+    const bool installed = pfAaInstalled();
+    char tool[160];
+    if (!findPfAa(tool, sizeof(tool))) {
+        alog("menu: Firewall rules for Android Auto: no pf_aa in %s or on a USB stick: copy pf_aa from the release to "
+             "%s (chmod 755) and press again", kPfAaTool, kPfAaTool);
+        if (g_runApp) showPfAa(g_runApp);
+        return true;
+    }
+    g_pfAaInstall = !installed;
+    const char* mode = g_pfAaInstall ? "--install" : "--uninstall";
+    char* argv[] = { tool, const_cast<char*>(mode), NULL };
+    // The HMI's LD_PRELOAD (graphics libraries) is no use to pf_aa, pfctl or mount.
+    char* envp[96];
+    int ne = 0;
+    static char path[] = "PATH=/bin:/usr/bin:/sbin:/usr/sbin:/opt/os/bin:/opt/sys/bin";
+    envp[ne++] = path;
+    for (char** e = environ; e && *e && ne < 95; ++e) {
+        if (!strncmp(*e, "LD_PRELOAD=", 11) || !strncmp(*e, "PATH=", 5)) continue;
+        envp[ne++] = *e;
+    }
+    envp[ne] = NULL;
+    int in = open("/dev/null", O_RDONLY);
+    int out = open(kPfAaOut, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    pid_t pid = -1;
+    if (in >= 0 && out >= 0) {
+        posix_spawn_file_actions_t fa;
+        posix_spawn_file_actions_init(&fa);
+        posix_spawn_file_actions_adddup2(&fa, in, 0);
+        posix_spawn_file_actions_adddup2(&fa, out, 1);
+        posix_spawn_file_actions_adddup2(&fa, out, 2);
+        if (posix_spawn(&pid, tool, &fa, NULL, argv, envp) != 0) pid = -1;
+        posix_spawn_file_actions_destroy(&fa);
+    }
+    int err = errno;
+    if (in >= 0) close(in);
+    if (out >= 0) close(out);
+    if (pid <= 0) {
+        alog("menu: Firewall rules for Android Auto: cannot start %s %s (errno %d)", tool, mode, err);
+    } else {
+        g_pfAaPid = pid;
+        g_pfAaStart = time(NULL);
+        alog("menu: Firewall rules for Android Auto %s -> running %s %s (pid %d)", installed ? "on" : "off", tool, mode,
+             (int)pid);
+    }
+    if (g_runApp) showPfAa(g_runApp);
+    return true;
+}
+
+// Status poll: pf_aa finished -> its output into the app log, the checkbox from the files again.
+void servicePfAa(bmw::PluginApp* app) {
+    if (g_pfAaPid <= 0) return;
+    int st = 0;
+    pid_t r = waitpid(g_pfAaPid, &st, WNOHANG);
+    if (r == 0) {
+        if (time(NULL) - g_pfAaStart > 60) {
+            alog("pf_aa (pid %d) still running after 60 s: leaving it, the checkbox shows the files as they are",
+                 (int)g_pfAaPid);
+            g_pfAaPid = 0;
+            showPfAa(app);
+        }
+        return;
+    }
+    FILE* f = fopen(kPfAaOut, "r");
+    char line[200];
+    int n = 0;
+    while (f && fgets(line, sizeof(line), f) && n < 60) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (line[0]) { alog("pf_aa: %s", line); ++n; }
+    }
+    if (f) fclose(f);
+    const bool reaped = r == g_pfAaPid;
+    const bool now = pfAaInstalled();
+    // A SIGCHLD the HMI ignores reaps the child itself (waitpid -1/ECHILD): judge by the files then.
+    const bool ok = reaped ? (WIFEXITED(st) && WEXITSTATUS(st) == 0) : (now == g_pfAaInstall);
+    alog("pf_aa %s %s (exit %d%s): rules %s%s", g_pfAaInstall ? "--install" : "--uninstall", ok ? "done" : "FAILED",
+         (reaped && WIFEXITED(st)) ? WEXITSTATUS(st) : -1, reaped ? "" : ", status not available: judged by pf.conf",
+         now ? "in place" : "not in place", ok ? " - restart the head unit so the car loads pf.conf" : "");
+    g_pfAaPid = 0;
+    showPfAa(app);
+}
+
 bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kLciMediaFlag, kLciMediaManual, "Media Controls for LCI Steering Wheels (NBT_LCI_MEDIA in nbt-aad.env wins)");
     if (g_runApp) showLciMedia(g_runApp);
@@ -1986,6 +2124,8 @@ void statusRun(void* /*self*/) {
     if (!g_wfdOnlyShown) showWfdOnly(app);
     if (!g_nativeAudioShown) showNativeAudio(app);
     if (!g_lciMediaShown) showLciMedia(app);
+    if (!g_pfAaShown) showPfAa(app);
+    servicePfAa(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -2148,7 +2288,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the eleven checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2171,7 +2311,8 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showWfdOnly(g_app);
         showNativeAudio(g_app);
         showLciMedia(g_app);
-        alog("settings: eleven checkbox models refreshed");
+        if (g_pfAaPid <= 0) showPfAa(g_app);
+        alog("settings: twelve checkbox models refreshed");
     }
     return true;
 }
@@ -2211,6 +2352,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActWfdOnly, &onWfdOnlyToggle);
     addAction(self, kActNativeAudio, &onNativeAudioToggle);
     addAction(self, kActLciMedia, &onLciMediaToggle);
+    addAction(self, kActPfAa, &onPfAaToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
