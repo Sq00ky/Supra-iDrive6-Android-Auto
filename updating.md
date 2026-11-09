@@ -1,9 +1,9 @@
 # Update Guide
-**Note: Releases are in the release folder. The milestones are source code, designed to be built, and then deployed. For releases, see: https://github.com/Sq00ky/Supra-iDrive6-Android-Auto/releases**
+**Note: Releases are in the Releases folder. The milestones are source code, designed to be built, and then deployed. For releases, see: https://github.com/Sq00ky/Supra-iDrive6-Android-Auto/releases**
 ## Overview
 Already have Android Auto installed and want the newest version and still have SSH Open? Good news, updating is a lot quicker than installing. No TurboCode, no ZeroTier session with me, just a flash drive and SSH. The whole process takes roughly 10-15 minutes.
 
-This guide assumes you followed the [Installation Guide](install.md) before, so `/opt/aa/nbt-aad` and the plugin folder `/opt/hmi/ID5/data/ro/Plugins/NbtAad` already exist on your head unit.
+This guide assumes you followed the [Installation Guide](install.md) before, so `/opt/aa/nbt-aad`, `pf_aa`, and the plugin folder `/opt/hmi/ID5/data/ro/Plugins/NbtAad` already exist on your head unit.
 
 ### What are we doing?
 We're swapping out two things for their newer versions:
@@ -17,7 +17,8 @@ Your settings stay where they are. The settings file (`/opt/aa/nbt-aad.env`, if 
 ### What you need
 1. Flash drive formatted in FAT32/exFAT, with the new release on it:
    - `nbt-aad` in the root of the drive
-   - the plugin files in a folder called `release` (`libNbtAad.so`, `NbtAad.manifest`, `NbtAad.xml`, `NbtAad_ALL_Texts.zip`, `NbtAad_ALL_Images.zip`)
+   - `pf_aa` in the root of the drive
+   - the plugin files in a folder called `Releases` (`libNbtAad.so`, `NbtAad.manifest`, `NbtAad.xml`, `NbtAad_ALL_Texts.zip`, `NbtAad_ALL_Images.zip`)
 2. The same SSH access you used during the install (OBD to ENET cable + laptop)
 
 Plug the flash drive into the car's USB port before you start.
@@ -66,7 +67,6 @@ The plugin is loaded by iDrive itself, so it's *always* in use while the car is 
 Move the current plugin aside and copy in the new one:
 ```bash
 rm -r /opt/aa/NbtAad.old
-mv /opt/hmi/ID5/data/ro/Plugins/NbtAad/LibNbtAad.so /opt/hmi/ID5/data/ro/Plugins/NbtAad/LibNbtAad.so.old
 mv /opt/hmi/ID5/data/ro/Plugins/NbtAad /opt/aa/NbtAad.old
 mkdir -p /opt/hmi/ID5/data/ro/Plugins/NbtAad
 cd /opt/hmi/ID5/data/ro/Plugins/NbtAad/
@@ -77,10 +77,18 @@ We're going to verify all five files copied over okay: `libNbtAad.so`, `NbtAad.m
 
 The old plugin goes into `/opt/aa/NbtAad.old` on purpose. If it stayed inside the `Plugins` folder, iDrive could try to load it as a second app.
 
-## Step 5: Reboot
+## Step 5: Install/Verify Firewall Rule (pf_aa)
+```bash
+cp /mnt/umassXXXXX/pf_aa /dev/shmem/
+cd /dev/shmem/
+chmod +x /dev/shmem/pf_aa
+/dev/shmem/pf_aa --install
+/dev/shmem/pf_aa --check
+
+## Step 6: Reboot
 Press and hold the power button for 30 seconds, and the head unit will reboot. This loads the new plugin and puts the file system back to Read Only.
 
-## Step 6: Check it worked
+## Step 7: Check it worked
 Same as before: make sure your phone is connected via Bluetooth, head over to Media/Radio, and select "Android Auto".
 
 Want to double check you're on the new version? Once Android Auto has started, run this over SSH:
