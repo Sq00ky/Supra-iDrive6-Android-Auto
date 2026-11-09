@@ -30,6 +30,7 @@ const double kLinkBackoffS = 30.0;
 const int kLinkGiveUp = 5;    // failed sends in a row without ever drawing: no KOMBI there (not a J29?)
 const double kExitCancelRetryS = 0.0;
 const double kCancelRetryS = 60.0;
+const double kStalePosS = 3.0;   // a new maneuver waits at most this long for a position of its own
 
 double monoS() {
     struct timespec ts;
@@ -45,7 +46,8 @@ volatile int g_mayShow = 0;   // an arrow may be up: the fatal-signal handler se
 
 Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
     : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
-      no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning) {
+      no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning), have_next_(false), next_since_(0),
+      stage_(kHidden), remind_(false), fallback_(false) {
     d_.setSettings(s);
     d_.setLog(log, log_user);
 }
@@ -65,7 +67,67 @@ void Core::fail(ClusterDisplay::Result r) {
           r == ClusterDisplay::kRejected ? "KOMBI rejected a frame" : "template layout");
 }
 
-bool Core::approachHold(const NavView& v, double /*now*/) {
+const char* approachName(Approach a) {
+    return a == kApproachTime ? "time" : a == kApproachDistance ? "distance" : "off";
+}
+
+namespace {
+// Motorway-type turns, due by distance too: AA off-ramps (21-24) and forks (25, 26). Keep-left/right is left out (it
+// is common in towns too), and so are on-ramps (the turn is still on the road before the motorway).
+bool motorwayTurn(int aa_type) { return aa_type >= 21 && aa_type <= 26; }
+}
+
+// True: v is held back (not shown, and a different maneuver shown is cleared).
+bool Core::approachHold(const NavView& v, double now) {
+    if (s_.approach == kApproachOff) return false;
+    if (s_.approach == kApproachDistance) return distanceHold(v);
+    return timeHold(v, now);
+}
+
+bool Core::timeHold(const NavView& v, double now) {
+    bool same = has_shown_ && v.sameManeuver(shown_);
+    if (!have_next_ || !v.sameManeuver(next_)) {      // a new next maneuver
+        have_next_ = true;
+        next_ = v;
+        next_since_ = now;
+        stage_ = same ? kWarned : kHidden;
+    }
+    // Right after a turn the next step can come with the last step's position (a few metres, a few seconds): judge a
+    // new maneuver only on a position stored after its step, or after kStalePosS. Meanwhile nothing changes on the
+    // cluster.
+    if (!same && v.pos_seq != 0 && v.pos_seq == v.step_pos_seq && now - next_since_ < kStalePosS) return true;
+    double m;
+    bool has_m = distanceMetres(v, m), mway = motorwayTurn(v.aa_type) && has_m;
+    if (!v.has_step_s && !mway) {                     // nothing to time it by: the distance rule
+        fallback_ = true;
+        return distanceHold(v);
+    }
+    bool by_s = v.has_step_s && v.step_s <= s_.warn_s;
+    bool warn = by_s || (mway && m <= s_.mway_warn_m);
+    bool main = s_.main_s > 0 && ((v.has_step_s && v.step_s <= s_.main_s) || (mway && m <= s_.mway_main_m));
+    if (same) {                                       // shown: it stays, whatever the traffic does to the seconds
+        if (stage_ < kMain && main) {
+            stage_ = kMain;
+            remind_ = true;
+        }
+        return false;
+    }
+    if (!warn) {
+        if (has_shown_) {
+            log("APPROACH: next maneuver %s%lld s, %.0f m away: hidden", v.has_step_s ? "" : "?",
+                (long long)v.step_s, has_m ? m : -1.0);
+            clear("approach");
+        }
+        no_dist_ = false;
+        return true;
+    }
+    stage_ = main ? kMain : kWarned;
+    log("WARN type %d: %lld s, %.0f m (%s)%s", v.aa_type, (long long)(v.has_step_s ? v.step_s : -1), has_m ? m : -1.0,
+        by_s ? "time" : "motorway distance", main ? ", main prompt already due" : "");
+    return false;
+}
+
+bool Core::distanceHold(const NavView& v) {
     if (s_.approach_mi <= 0) return false;
     double m;
     if (!distanceMetres(v, m)) return false;           // unknown distance: show as before (fail open)
@@ -114,7 +176,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         v.dist_text = text;
         v.aa_unit = unit;
     }
-    if (s_.approach_mi > 0 && v.dist_text != "-") {
+    if (shortDist() && v.dist_text != "-") {
         shortDistance(v, s_.dist_chars, text, unit);
         v.dist_text = text;
         v.aa_unit = unit;
@@ -133,7 +195,19 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         shown_ = v;
         last_dist_ = v;
         last_dist_t_ = now;
+        remind_ = false;                               // drawn whole: the panel is on anyway
         return;
+    }
+    if (remind_) {
+        remind_ = false;
+        double m;
+        log("MAIN type %d: %lld s, %.0f m: shown again", v.aa_type, (long long)(v.has_step_s ? v.step_s : -1),
+            distanceMetres(v, m) ? m : -1.0);
+        ClusterDisplay::Result r = d_.remind(v, now);
+        if (r != ClusterDisplay::kOk) {
+            fail(r);
+            return;
+        }
     }
     if (!v.sameDistance(last_dist_) && now - last_dist_t_ >= s_.min_update_s) {
         ClusterDisplay::Result r = d_.updateDistance(v, now);
@@ -154,6 +228,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
 
 void Core::forget() {
     has_shown_ = false;
+    remind_ = false;
     shown_ = NavView();
     last_dist_ = NavView();
     off_ = false;

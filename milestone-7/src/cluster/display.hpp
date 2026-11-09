@@ -21,10 +21,27 @@
 namespace nbt {
 namespace kombinav {
 
+// When a maneuver is shown (the approach rule):
+//   kApproachTime      like the factory navigation, which draws a turn on the cluster at its first announcement and
+//                      again at the main one: shown once the phone's seconds to it are <= warn_s, shown again (the
+//                      driver's remind(), e.g. after the driver dismissed it) at <= main_s. Off-ramps and forks are
+//                      also due by distance (mway_warn_m, mway_main_m), so a motorway exit in a queue is still warned
+//                      early enough to change lanes. Once shown it stays until the next maneuver. A view with no
+//                      seconds (and no motorway distance) falls back to kApproachDistance.
+//   kApproachDistance  shown within approach_mi miles, hidden again past approach_mi * hysteresis
+//   kApproachOff       shown at once
+enum Approach { kApproachOff = 0, kApproachDistance, kApproachTime };
+const char* approachName(Approach a);
+
 struct Settings {
-    double approach_mi;    // show a maneuver only within this many miles (0 = at once); like a production nav HUD
+    Approach approach;
+    double warn_s;         // kApproachTime: the warning, seconds to the maneuver
+    double main_s;         // kApproachTime: the main prompt (0 = none), below warn_s
+    double mway_warn_m;    // kApproachTime: off-ramps and forks are also warned within this many metres
+    double mway_main_m;    // ... and get their main prompt within this many
+    double approach_mi;    // kApproachDistance: show a maneuver only within this many miles (0 = at once)
     double hysteresis;     // once shown, the same maneuver hides again only past approach_mi * hysteresis
-    size_t dist_chars;     // with approach on: distance text <= 3 chars + the KOMBI's mi/ft
+    size_t dist_chars;     // with an approach rule on: distance text <= 3 chars + the KOMBI's mi/ft
     bool hide_bar;         // red distance bar hidden (pct 255); its percentage means nothing without a factory route
     double grace_s;        // guidance off this long before the clear (rerouting blips survive)
     double first_dist_s;   // a new maneuver without a distance yet waits this long, then shows "-"
@@ -35,7 +52,8 @@ struct Settings {
     double lane_feed_s;    // the position update the KOMBI checks lanes against: at most this often
     int inplace;           // next maneuver / lane change on a shown route: 1 = in-place maneuver-0 update (default),
                            // 2 = the same without the 0x07 guiding model, 0 = full graph (NBT_KOMBI_NAV_INPLACE)
-    Settings() : approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
+    Settings() : approach(kApproachTime), warn_s(50), main_s(20), mway_warn_m(2000), mway_main_m(1000),
+                 approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
                  min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1) {}
 };
 
@@ -64,6 +82,9 @@ public:
     // Each step on a maneuver shown that was not drawn again: whatever the cluster needs kept up (the J29: the
     // position its lane row is checked against).
     virtual Result keepUp(const NavView& v, double now) = 0;
+    // The maneuver shown reached its main prompt (kApproachTime): show it again if the cluster can hide it by
+    // itself (the 6WA: the driver can dismiss the panel with the stalk button). Nothing by default.
+    virtual Result remind(const NavView& v, double now) { (void)v; (void)now; return kOk; }
     // Guidance went away while a maneuver is shown: a gap, likely a reroute.
     virtual void guidanceGap() = 0;
     // Removes what we drew. True when the cluster confirmed it; detail says why not.

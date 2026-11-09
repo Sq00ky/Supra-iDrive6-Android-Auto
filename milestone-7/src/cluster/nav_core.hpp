@@ -63,9 +63,18 @@ public:
     const NavView& current() const { return shown_; }
     const Settings& settings() const { return s_; }
     void setSettings(const Settings& s) { s_ = s; d_.setSettings(s); }
+    // kApproachTime had to use the distance rule since the last call (a view with no seconds): once per session in
+    // the daemon's log, as the sign that a phone does not send them.
+    bool takeFallback() { bool f = fallback_; fallback_ = false; return f; }
 
 private:
+    enum Stage { kHidden = 0, kWarned, kMain };
     bool approachHold(const NavView& v, double now);
+    bool timeHold(const NavView& v, double now);
+    bool distanceHold(const NavView& v);
+    bool shortDist() const {   // an approach rule is on: the distance text is kept short
+        return s_.approach == kApproachTime || (s_.approach == kApproachDistance && s_.approach_mi > 0);
+    }
     void fail(ClusterDisplay::Result r);   // stops and clears after a draw went wrong
     void forget();
     void log(const char* fmt, ...);
@@ -84,6 +93,13 @@ private:
     double no_dist_since_;
     bool last_cancel_ok_;
     Stop stop_;
+    // kApproachTime: the next maneuver as last seen, shown or not, and how far it got.
+    bool have_next_;
+    NavView next_;
+    double next_since_;
+    Stage stage_;
+    bool remind_;           // the main prompt is due on the maneuver shown
+    bool fallback_;
 };
 
 // iDrive route detection from the system log (NavNBTEvoController / MapViewer lines, car-seen 2026-10-31):
