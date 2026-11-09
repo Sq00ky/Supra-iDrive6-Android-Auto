@@ -202,6 +202,7 @@ private:
     double backoff_until_;
     int link_failures_;
     bool marked_;
+    bool fallback_noted_;        // the "no step seconds" line was printed this session
 
     // system-log watch
     pthread_mutex_t watch_mu_;
@@ -217,6 +218,8 @@ private:
     int watch_method_logged_;
 
     bool createDisplay(const char* id, most::Client* most);   // the place to add a cluster
+    void readApproach();                                      // NBT_KOMBI_NAV_APPROACH* into settings_
+    std::string approachText() const;                         // for the start-up line
 
     Graph* graph_;                   // j29
     KombiClient* client_;            // j29
