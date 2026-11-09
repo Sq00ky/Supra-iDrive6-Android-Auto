@@ -206,6 +206,14 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **v1.9.45-camctx + rhmiapp-48-camctx (confirmed by two testers on the v1.9.43-camctx build): Android Auto steps aside for the 360 / Top View camera
+> opened with the camera button.** It had no signal for it (no reverse, no park-assist value), and the iDrive screen
+> watch skipped it because the full-screen camera reports only `GFXIDENTIFIER_INVALID`: the screen hold took it for the
+> OPTIONS panel and put Android Auto back over the camera within ~2 s (F-series NBTevo_Y24073J, context 1023, six times
+> in one log). Camera contexts (`NBT_AA_CAMERA_CTX`, default `692,1023`) now make it step aside like park assist and
+> come back when the camera closes. Log: `camera: iDrive camera view (context 1023) is up` in the app log,
+> `[Camera] iDrive camera view up: overlay down for the camera` in the daemon log.
+>
 > **v1.9.44-pfaa + rhmiapp-47-pfaa (car-verified on a GR Supra, NBTevo_T21424I): pf_aa built into nbt-aad and in the iDrive menu.**
 > `nbt-aad --pf-install | --pf-check | --pf-uninstall [--load]` is `pf_aa` (1.2) without the separate binary. The
 > Settings page gets **Install PF Rules**, **Check PF Rules** and **Uninstall PF Rules** rows that show each step in
@@ -710,6 +718,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
 | `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor). See also `NBT_PHONE_GPS` / **Use Phone GPS** |
+| `NBT_AA_CAMERA_CTX` | `692,1023` | iDrive contexts (`hmi.graphicalContext` visibleContext, logged in `nbt-aad-app.log`) that are camera views: Android Auto steps aside while one is up and comes back when iDrive leaves it, whatever the checkboxes. For the button-opened 360 / Top View, which neither reverse nor park assist reports. 1023 = an F-series NBTevo_Y24073J, 692 = the Supra's Top View. A widgetless untitled screen over Android Auto that is not listed is logged as `camera: context N ... add it to NBT_AA_CAMERA_CTX` |
 | `NBT_LCI_MEDIA` | `0` | Only matters when set: `1` = **Media Controls for LCI Steering Wheels** on, `0` = off, whatever the Settings checkbox says. On = the steering wheel's previous / next (`NBT_MFL_*`) become Android media keys in a non-Bluetooth audio mode. Off by default |
 | `NBT_PHONE_GPS` | `0` | Only matters when set: `1` = Use Phone GPS on, `0` = off, whatever the Settings checkbox says. On = no car GPS read, and no location / compass / GPS satellite / accelerometer sensors offered |
 | `NBT_CAR_SPEED` | `0` | The car's wheel speed to the phone (CAR_SPEED sensor) |
