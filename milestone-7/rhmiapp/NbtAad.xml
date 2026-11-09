@@ -106,6 +106,44 @@
       <textIdModel id="139" textId="31">
         <synonyms/>
       </textIdModel>
+      <!-- textIds 32-43: the PF rows' step / result texts, set at runtime. Declared (unbound) because iDrive drops the
+           whole NbtAad_ALL_Texts.zip (every label blank) when it has an ID above the highest one declared here. -->
+      <textIdModel id="143" textId="32">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="144" textId="33">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="145" textId="34">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="146" textId="35">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="147" textId="36">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="148" textId="37">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="149" textId="38">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="150" textId="39">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="151" textId="40">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="152" textId="41">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="153" textId="42">
+        <synonyms/>
+      </textIdModel>
+      <textIdModel id="154" textId="43">
+        <synonyms/>
+      </textIdModel>
     </models>
     <events>
       <focusEvent id="50" targetModel="40"/>
