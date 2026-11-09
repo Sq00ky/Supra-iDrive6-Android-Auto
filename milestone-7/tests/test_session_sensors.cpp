@@ -104,6 +104,13 @@ static AASession* newSession(int sv[2]) {
     return s;
 }
 
+// The phone starts a sensor, and the session answers.
+static void startSensor(int fd, uint8_t type) {
+    sendStart(fd, type, period0());
+    std::vector<uint8_t> p;
+    assert(nextSensorFrame(fd, 2000, p) && isStartResponse(p));
+}
+
 static void endSession(AASession* s, int sv[2]) {
     s->stop();
     close(sv[1]);
@@ -117,8 +124,7 @@ static void testSatellitesNoData() {
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
     assert(!nextSensorFrame(sv[1], 1300, p));   // not before the phone starts it
-    sendStart(sv[1], 21, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 21);
     assert(nextSensorFrame(sv[1], 2000, p) && p == satEvent(0));
     uint32_t t0 = testNowMs();
     for (int i = 0; i < 2; ++i) {
@@ -138,9 +144,8 @@ static void testSatellitesPosted() {
     st.used = 7;
     st.rx_ms = testNowMs();
     s->postCarSatellites(st);       // before the phone starts the sensor: its first event carries it
-    sendStart(sv[1], 21, period0());
+    startSensor(sv[1], 21);
     std::vector<uint8_t> p;
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
     assert(nextSensorFrame(sv[1], 2000, p) && p == satEvent(7));
     st.used = 9;
     st.rx_ms = testNowMs();
@@ -162,8 +167,7 @@ static void testLocation() {
     s->postCarLocation(f);
     std::vector<uint8_t> p, want;
     assert(!nextSensorFrame(sv[1], 300, p));
-    sendStart(sv[1], 1, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 1);
     buildLocationEvent(f, want);
     assert(nextSensorFrame(sv[1], 2000, p) && p == want);
     f.lat_e7 += 100;
@@ -190,8 +194,7 @@ static void testCompassNoData() {
     int sv[2];
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
-    sendStart(sv[1], 2, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 2);
     assert(!nextSensorFrame(sv[1], 1300, p));
     const uint32_t t0 = testNowMs();
     s->postCarCompass(90000000);
@@ -208,8 +211,7 @@ static void testCompassPosted() {
     std::vector<uint8_t> p;
     s->postCarCompass(90000000);
     assert(!nextSensorFrame(sv[1], 1300, p));
-    sendStart(sv[1], 2, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 2);
     assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(90000000));
     const uint32_t t0 = testNowMs();
     s->postCarCompass(180000000);
@@ -227,8 +229,7 @@ static void testCompassRepeats() {
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
     s->postCarCompass(270000000);
-    sendStart(sv[1], 2, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 2);
     assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(270000000));
     uint32_t t0 = testNowMs();
     for (int i = 0; i < 3; ++i) {
@@ -247,11 +248,9 @@ static void testCompassRepeatsThroughWakes() {
     int sv[2];
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
-    sendStart(sv[1], 1, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 1);
     s->postCarCompass(90000000);
-    sendStart(sv[1], 2, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 2);
     assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(90000000));
     LocationFix old;
     old.lat_e7 = 525000000; old.lon_e7 = -45000000; old.accuracy_e3 = 10000;
@@ -279,8 +278,7 @@ static void testCompassAcrossSessions() {
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
     s->postCarCompass(90000000);
-    sendStart(sv[1], 2, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 2);
     assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(90000000));
     s->stop();
     close(sv[1]);
@@ -291,8 +289,7 @@ static void testCompassAcrossSessions() {
     uint8_t ch = 0xFF;
     assert(readFrame(sv[1], 2000, ch, p));      // the VersionRequest
     assert(!nextSensorFrame(sv[1], 1300, p));
-    sendStart(sv[1], 2, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 2);
     assert(nextSensorFrame(sv[1], 2000, p) && p == compassEvent(180000000));
     endSession(s, sv);
 }
@@ -315,8 +312,7 @@ static void testSpeedNoData() {
     int sv[2];
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
-    sendStart(sv[1], 3, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 3);
     assert(!nextSensorFrame(sv[1], 1300, p));
     endSession(s, sv);
 }
@@ -328,8 +324,7 @@ static void testSpeedPosted() {
     std::vector<uint8_t> p;
     s->postCarSpeed(speedNow(6944));
     assert(!nextSensorFrame(sv[1], 300, p));
-    sendStart(sv[1], 3, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 3);
     assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(6944));
     s->postCarSpeed(speedNow(-1388));
     assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(-1388));
@@ -346,8 +341,7 @@ static void testSpeedStaleAtStart() {
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
     s->postCarSpeed(speedNow(6944, kCarSpeedMaxAgeMs + 1));
-    sendStart(sv[1], 3, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 3);
     assert(!nextSensorFrame(sv[1], 1300, p));
     s->postCarSpeed(speedNow(7000));
     assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(7000));
@@ -360,8 +354,7 @@ static void testSpeedZeroRepeats() {
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
     s->postCarSpeed(speedNow(0, 60000));
-    sendStart(sv[1], 3, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 3);
     assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
     uint32_t t0 = testNowMs();
     for (int i = 0; i < 2; ++i) {
@@ -382,8 +375,7 @@ static void testSpeedNewSession() {
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
     s->postCarSpeed(speedNow(0));
-    sendStart(sv[1], 3, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 3);
     assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
     s->stop();
     close(sv[1]);
@@ -392,9 +384,93 @@ static void testSpeedNewSession() {
     uint8_t ch = 0xFF;
     assert(readFrame(sv[1], 2000, ch, p));      // the VersionRequest
     assert(!nextSensorFrame(sv[1], 1300, p));   // no repeat left over from the last session
-    sendStart(sv[1], 3, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 3);
     assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
+    endSession(s, sv);
+}
+
+static std::vector<uint8_t> gearEvent(int gear) {
+    std::vector<uint8_t> want;
+    buildGearEvent(gear, want);
+    return want;
+}
+
+static std::vector<uint8_t> brakeEvent(bool on) {
+    std::vector<uint8_t> want;
+    buildParkingBrakeEvent(on, want);
+    return want;
+}
+
+// Sensors 7 and 8 with nothing from the car: answered, and silent. No state is made up. That also covers the env switches.
+static void testStatesNoData() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    startSensor(sv[1], 8);
+    startSensor(sv[1], 7);
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    s->postCarGear(AA_GEAR_PARK);               // and the first report goes out as usual
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_PARK));
+    s->postCarParkingBrake(true);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(true));
+    endSession(s, sv);
+}
+
+// Nothing until the phone starts it. Then the newest on start and each post, with no repeat, as the guide wants on change. An
+// old state still goes out: the car only reports changes, so it stays true.
+static void testStatesPosted() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarGear(AA_GEAR_REVERSE);
+    s->postCarGear(AA_GEAR_PARK);
+    s->postCarParkingBrake(false);
+    s->postCarParkingBrake(true);
+    assert(!nextSensorFrame(sv[1], 300, p));
+    startSensor(sv[1], 8);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_PARK));
+    assert(!nextSensorFrame(sv[1], 300, p));    // one started sensor does not bring out the other
+    startSensor(sv[1], 7);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(true));
+    s->postCarGear(AA_GEAR_NEUTRAL);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_NEUTRAL));
+    s->postCarGear(AA_GEAR_DRIVE);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_DRIVE));
+    s->postCarParkingBrake(false);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(false));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    endSession(s, sv);
+}
+
+// A phone reconnecting while parked hears both again, as the car will not report them until they change. It must start the
+// sensors first, and nothing pending from the last session goes out.
+static void testStatesNewSession() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    startSensor(sv[1], 8);
+    startSensor(sv[1], 7);
+    s->postCarGear(AA_GEAR_DRIVE);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_DRIVE));
+    s->postCarParkingBrake(false);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(false));
+    s->stop();
+    close(sv[1]);
+    s->postCarGear(AA_GEAR_PARK);               // between sessions
+    s->postCarParkingBrake(true);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    assert(s->start(sv[0]));
+    uint8_t ch = 0xFF;
+    assert(readFrame(sv[1], 2000, ch, p));      // the VersionRequest
+    assert(!nextSensorFrame(sv[1], 500, p));
+    // In the new session, before the phone has started it: it has not asked yet, whatever it asked for last time.
+    s->postCarParkingBrake(false);
+    assert(!nextSensorFrame(sv[1], 500, p));
+    // Nothing has been posted for the gear in this session, so this event can only be the one kept from before it.
+    startSensor(sv[1], 8);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == gearEvent(AA_GEAR_PARK));
+    startSensor(sv[1], 7);
+    assert(nextSensorFrame(sv[1], 2000, p) && p == brakeEvent(false));
     endSession(s, sv);
 }
 
@@ -403,11 +479,9 @@ static void testSatellitesWhileSpeedWakes() {
     int sv[2];
     AASession* s = newSession(sv);
     std::vector<uint8_t> p;
-    sendStart(sv[1], 21, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 21);
     assert(nextSensorFrame(sv[1], 2000, p) && p == satEvent(0));
-    sendStart(sv[1], 3, period0());
-    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    startSensor(sv[1], 3);
     int sats = 0, speeds = 0;
     const uint32_t start = testNowMs();
     while (testNowMs() - start < 3500) {
@@ -561,6 +635,9 @@ int main() {
     testSpeedStaleAtStart();
     testSpeedZeroRepeats();
     testSpeedNewSession();
+    testStatesNoData();
+    testStatesPosted();
+    testStatesNewSession();
     testSatellitesWhileSpeedWakes();
     testRepeatsOnTimeWhilePhoneTalks();
     testRepeatsWhilePhoneBytesAlwaysWaiting();

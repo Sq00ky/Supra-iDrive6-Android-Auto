@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for src/aa_sensor_msg.hpp: the LOCATION, GPS_SATELLITE and CAR_SPEED event encodings and their age limits.
+// Host test for src/aa_sensor_msg.hpp: the LOCATION, GPS_SATELLITE, CAR_SPEED, GEAR and PARKING_BRAKE event encodings and their
+// age limits.
 #include "aa_sensor_msg.hpp"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 using namespace nbt;
+
+// A macro so that a failure names the line of the check. want is an array.
+#define ASSERT_BYTES(got, want) assert((got).size() == sizeof(want) && memcmp(&(got)[0], (want), sizeof(want)) == 0)
 
 // Reads one protobuf varint at d[i], advancing i.
 static uint64_t var(const std::vector<uint8_t>& d, size_t& i) {
@@ -62,8 +67,7 @@ int main() {
         std::vector<uint8_t> ev;
         buildLocationEvent(f, ev);
         const uint8_t want[] = { 0x80, 0x03, 0x0A, 0x06, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03 };
-        assert(ev.size() == sizeof(want));
-        for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+        ASSERT_BYTES(ev, want);
     }
     // Each optional field on its own, with its tag, in field order, and written even when 0.
     {
@@ -74,16 +78,14 @@ int main() {
         std::vector<uint8_t> ev;
         buildLocationEvent(f, ev);
         const uint8_t speed0[] = { 0x80, 0x03, 0x0A, 0x08, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03, 0x30, 0x00 };
-        assert(ev.size() == sizeof(speed0));
-        for (size_t i = 0; i < sizeof(speed0); ++i) assert(ev[i] == speed0[i]);
+        ASSERT_BYTES(ev, speed0);
 
         f.has_altitude = true; f.altitude_e2 = 5;
         f.speed_e3 = 6;
         f.has_bearing = true; f.bearing_e6 = 7;
         buildLocationEvent(f, ev);
         const uint8_t all[] = { 0x80, 0x03, 0x0A, 0x0C, 0x10, 0x01, 0x18, 0x02, 0x20, 0x03, 0x28, 0x05, 0x30, 0x06, 0x38, 0x07 };
-        assert(ev.size() == sizeof(all));
-        for (size_t i = 0; i < sizeof(all); ++i) assert(ev[i] == all[i]);
+        ASSERT_BYTES(ev, all);
     }
     // Real values round-trip: below sea level is a 10-byte varint, and a bearing near 360 degrees needs 5 bytes.
     {
@@ -127,8 +129,7 @@ int main() {
         std::vector<uint8_t> ev(100, 0xEE);
         buildSatelliteEvent(7, ev);
         const uint8_t want[] = { 0x80, 0x03, 0xAA, 0x01, 0x02, 0x08, 0x07 };
-        assert(ev.size() == sizeof(want));
-        for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+        ASSERT_BYTES(ev, want);
         // The tag is field 21, length-delimited.
         size_t i = 2;
         assert(var(ev, i) == ((21u << 3) | 2u));
@@ -178,13 +179,11 @@ int main() {
         std::vector<uint8_t> ev(100, 0xEE);
         buildCarSpeedEvent(6944, ev);
         const uint8_t want[] = { 0x80, 0x03, 0x1A, 0x03, 0x08, 0xA0, 0x36 };
-        assert(ev.size() == sizeof(want));
-        for (size_t i = 0; i < sizeof(want); ++i) assert(ev[i] == want[i]);
+        ASSERT_BYTES(ev, want);
         // Zero is written, not left out: it is the reading that says the car has stopped.
         buildCarSpeedEvent(0, ev);
         const uint8_t zero[] = { 0x80, 0x03, 0x1A, 0x02, 0x08, 0x00 };
-        assert(ev.size() == sizeof(zero));
-        for (size_t i = 0; i < sizeof(zero); ++i) assert(ev[i] == zero[i]);
+        ASSERT_BYTES(ev, zero);
         // Negative: a 10-byte varint, sign-extended, as protobuf writes an int32.
         buildCarSpeedEvent(-1, ev);
         assert(ev.size() == 15 && ev[2] == 0x1A && ev[3] == 11 && ev[4] == 0x08 && ev[14] == 0x01);
@@ -204,6 +203,28 @@ int main() {
         s.speed_e3 = 0;
         s.rx_ms = 1000;
         assert(carSpeedSendable(s, 1000 + 3600000));
+    }
+    // GEAR: field 8 of the batch, {1: gear}. Exact bytes, and NEUTRAL is written: the field is required and 0 is its value.
+    {
+        std::vector<uint8_t> ev(100, 0xEE);
+        const struct { int gear; uint8_t wire; } gears[] = {
+            { AA_GEAR_NEUTRAL, 0x00 }, { AA_GEAR_DRIVE, 0x64 }, { AA_GEAR_PARK, 0x65 }, { AA_GEAR_REVERSE, 0x66 }
+        };
+        for (size_t g = 0; g < sizeof(gears) / sizeof(gears[0]); ++g) {
+            buildGearEvent(gears[g].gear, ev);
+            const uint8_t want[] = { 0x80, 0x03, 0x42, 0x02, 0x08, gears[g].wire };
+            ASSERT_BYTES(ev, want);
+        }
+    }
+    // PARKING_BRAKE: field 7 of the batch, {1: on}. Exact bytes, and released is written, for the same reason.
+    {
+        std::vector<uint8_t> ev(100, 0xEE);
+        buildParkingBrakeEvent(true, ev);
+        const uint8_t on[] = { 0x80, 0x03, 0x3A, 0x02, 0x08, 0x01 };
+        ASSERT_BYTES(ev, on);
+        buildParkingBrakeEvent(false, ev);
+        const uint8_t released[] = { 0x80, 0x03, 0x3A, 0x02, 0x08, 0x00 };
+        ASSERT_BYTES(ev, released);
     }
     printf("test_aa_sensor_msg OK\n");
     return 0;

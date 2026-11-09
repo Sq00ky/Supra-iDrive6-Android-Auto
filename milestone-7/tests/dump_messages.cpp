@@ -85,6 +85,18 @@ static void sensors() {
     show(kFile, kType, "car forward", event, MESSAGE_ID_BYTES);
     buildCarSpeedEvent(-1389, event);
     show(kFile, kType, "car in reverse", event, MESSAGE_ID_BYTES);
+    buildParkingBrakeEvent(false, event);
+    show(kFile, kType, "parking brake released", event, MESSAGE_ID_BYTES);
+    buildParkingBrakeEvent(true, event);
+    show(kFile, kType, "parking brake on", event, MESSAGE_ID_BYTES);
+    buildGearEvent(AA_GEAR_NEUTRAL, event);
+    show(kFile, kType, "gear neutral", event, MESSAGE_ID_BYTES);
+    buildGearEvent(AA_GEAR_DRIVE, event);
+    show(kFile, kType, "gear drive", event, MESSAGE_ID_BYTES);
+    buildGearEvent(AA_GEAR_PARK, event);
+    show(kFile, kType, "gear park", event, MESSAGE_ID_BYTES);
+    buildGearEvent(AA_GEAR_REVERSE, event);
+    show(kFile, kType, "gear reverse", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(0, event);
     show(kFile, kType, "no satellites", event, MESSAGE_ID_BYTES);
     buildSatelliteEvent(7, event);

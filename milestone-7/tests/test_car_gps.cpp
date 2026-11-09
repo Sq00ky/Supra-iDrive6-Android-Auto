@@ -3,7 +3,7 @@
 // Host test for car/gps: MOST 52/00 fkt 440 and CD/01 fkt C00 decode (car captures), their filters, and CarGps on
 // most::Client with the fake DsiClient, from DSI frame to LocationFix.
 #include "car/gps.hpp"
-#include "fake_dsi_client.hpp"
+#include "most_fixture.hpp"
 #include "most/client.hpp"
 #include <assert.h>
 #include <stdio.h>
@@ -14,6 +14,7 @@
 using namespace nbt;
 using namespace nbt::car;
 using namespace nbt::most;
+using most_fixture::registered;
 
 // Shaped like a car capture: 2021 -> 2022, FB 52/00 fkt 440 Status. The position, time, heading and height are made up.
 static const uint8_t kCapture[] = { 0xfc, 0xcc, 0xcc, 0xcd, 0x25, 0x55, 0x55, 0x55, 0x04, 0x08, 0x08, 0x00, 0x00, 0x40,
@@ -280,13 +281,6 @@ static void sendStatus(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, c
     sendStatusTag(2, fblock, inst, fkt, op, p, n, dst);
 }
 
-static void respond() {
-    std::vector<uint8_t> resp;
-    putLe32(resp, 93);
-    putLe16(resp, 0x205D);
-    fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
-}
-
 static std::vector<LocationFix> g_fixes;
 static void onFix(const LocationFix& f, void* user) {
     assert(user == &g_fixes);
@@ -325,7 +319,7 @@ static void testConsumer() {
     assert(c.start("NBTAAD_MOST"));     // GPS alone is enough for the client to start (NBT_KNOB=0)
     assert(fake_dsi::opened());
     fake_dsi::attach();
-    respond();
+    registered();
 
     // It adds no keys, so request 1 is skipped: the server logs an error for an empty list.
     for (size_t i = 0; i < fake_dsi::calls.size(); ++i)
@@ -491,7 +485,7 @@ static void testAccuracyOnEachFix() {
     assert(gps.attach(c, 0, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
-    respond();
+    registered();
     sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
 
     sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
@@ -647,7 +641,7 @@ static void testSpeedOnEachFix() {
     assert(gps.attach(c, 0, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
-    respond();
+    registered();
     sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
 
     std::vector<uint8_t> p = tick(39);
@@ -681,7 +675,7 @@ static void testOneRouteFits() {
     assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
-    respond();
+    registered();
     sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
     assert(g_fixes.empty());
 }
@@ -815,7 +809,7 @@ static void testHeadingConsumer() {
     assert(gps.attach(c, 0, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
-    respond();
+    registered();
 
     // One message per receiver, the car's two tags among them: one bearing, with no position or status seen at all.
     sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);
@@ -862,7 +856,7 @@ static void testTwoRoutesFit() {
     assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
-    respond();
+    registered();
     sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
     sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
     sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);

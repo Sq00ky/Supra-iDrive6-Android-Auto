@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for car/vehicle: the wheel speed scale, copies, invalid frames and direction, then CarVehicle on most::Client with
-// the fake DsiClient, from DSI frame to the callback. All values are made up.
+// Host test for car/vehicle: the wheel speed scale, copies, invalid frames and direction, the gear and parking brake codes and
+// their changes, then CarVehicle on most::Client with the fake DsiClient, from DSI frame to the callback. All values are made up.
 #include "car/vehicle.hpp"
-#include "fake_dsi_client.hpp"
+#include "most_fixture.hpp"
 #include "most/ids.hpp"
 #include "most/msg.hpp"
 
@@ -14,6 +14,7 @@
 using namespace nbt;
 using namespace nbt::car;
 using namespace nbt::most;
+using most_fixture::startClient;
 
 typedef CarSpeedFilter::Result Result;
 
@@ -156,12 +157,109 @@ static void testStopReports() {
     }
 }
 
+// Every code the byte can hold: only the four known groups say anything.
+static void testGearCodes() {
+    assert(gearToAa(1) == AA_GEAR_NEUTRAL);
+    assert(gearToAa(2) == AA_GEAR_REVERSE);
+    assert(gearToAa(3) == AA_GEAR_PARK);
+    for (int raw = 4; raw <= 14; ++raw) assert(gearToAa(raw) == AA_GEAR_DRIVE);
+    assert(gearToAa(0) == -1);
+    for (int raw = 15; raw <= 255; ++raw) assert(gearToAa(raw) == -1);
+    assert(gearToAa(-1) == -1);     // the iDrive app's value when its text has no number
+}
+
+static void testParkingBrakeCodes() {
+    assert(parkingBrakeToAa(1) == 0);
+    assert(parkingBrakeToAa(2) == 1);
+    assert(parkingBrakeToAa(0) == -1);
+    assert(parkingBrakeToAa(3) == -1);
+    assert(parkingBrakeToAa(255) == -1);
+}
+
+// Copies and forward gears are not changes, an unknown value keeps the state, and each log line comes once.
+static void testStateFilter() {
+    CarStateFilter f(&gearToAa);
+    typedef CarStateFilter::Result R;
+    uint8_t b = 3;
+    R r = f.feed(&b, 1);
+    assert(r.known && r.changed && r.value == AA_GEAR_PARK && r.raw == 3);
+    r = f.feed(&b, 1);                  // another receiver's copy
+    assert(r.known && !r.changed);
+    b = 5;
+    assert(f.feed(&b, 1).changed);
+    b = 6;
+    r = f.feed(&b, 1);                  // a forward gear to the next is still DRIVE
+    assert(r.known && !r.changed && r.value == AA_GEAR_DRIVE);
+    b = 15;
+    r = f.feed(&b, 1);
+    assert(!r.known && !r.changed && r.logUnknown && r.raw == 15);
+    r = f.feed(&b, 1);
+    assert(!r.known && !r.logUnknown);  // logged once for this value
+    b = 0;
+    assert(f.feed(&b, 1).logUnknown);   // and once for another
+    b = 7;
+    r = f.feed(&b, 1);                  // the unknown ones did not lose the state
+    assert(r.known && !r.changed);
+    // A malformed frame says nothing, and is logged once.
+    const uint8_t two[2] = { 2, 2 };
+    r = f.feed(two, 2);
+    assert(!r.known && !r.changed && r.logBadLength);
+    r = f.feed(two, 0);
+    assert(!r.known && !r.logBadLength);
+    r = f.feed(NULL, 1);
+    assert(!r.known && !r.logBadLength);
+    b = 2;
+    r = f.feed(&b, 1);
+    assert(r.changed && r.value == AA_GEAR_REVERSE);
+    // The first value is always a change, even one whose value is 0.
+    CarStateFilter n(&gearToAa);
+    assert(n.feedRaw(1).changed);
+    CarStateFilter brake(&parkingBrakeToAa);
+    r = brake.feedRaw(1);
+    assert(r.changed && r.value == 0);
+    assert(!brake.feedRaw(1).changed);
+    assert(brake.feedRaw(2).changed);
+    r = brake.feedRaw(3);               // invalid: still on
+    assert(!r.known && !r.changed);
+    r = brake.feedRaw(2);
+    assert(r.known && !r.changed);
+}
+
 // ---- CarVehicle on the client ------------------------------------------------------------------------------------------
 
 static std::vector<CarSpeedSample> g_speeds;
+static std::vector<int> g_gears;
+static std::vector<bool> g_brakes;
+
 static void onSpeed(const CarSpeedSample& s, void* user) {
     assert(user == &g_speeds);
     g_speeds.push_back(s);
+}
+
+static void onGear(int gear, void* user) {
+    assert(user == &g_speeds);
+    g_gears.push_back(gear);
+}
+
+static void onBrake(bool on, void* user) {
+    assert(user == &g_speeds);
+    g_brakes.push_back(on);
+}
+
+static CarVehicleCallbacks allCallbacks() {
+    CarVehicleCallbacks cb;
+    cb.speed = &onSpeed;
+    cb.gear = &onGear;
+    cb.parkingBrake = &onBrake;
+    cb.user = &g_speeds;
+    return cb;
+}
+
+static void resetCaptured() {
+    fake_dsi::reset();
+    g_speeds.clear();
+    g_gears.clear();
+    g_brakes.clear();
 }
 
 static void send(uint16_t fkt, uint8_t op, const uint8_t* p, size_t n, uint8_t fblock = kVehicleFBlock, uint8_t inst = kVehicleInst) {
@@ -173,22 +271,17 @@ static void send(uint16_t fkt, uint8_t op, const uint8_t* p, size_t n, uint8_t f
     fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
 }
 
-static void respond() {
-    std::vector<uint8_t> resp;
-    putLe32(resp, 93);
-    putLe16(resp, 0x205D);
-    fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
-}
+static void noHandler(const View&, void*) {}
 
 static void testConsumer() {
-    fake_dsi::reset();
-    g_speeds.clear();
+    resetCaptured();
     Client c;
     CarVehicle v;
-    assert(v.attach(c, &onSpeed, &g_speeds));
-    assert(c.start("NBTAAD_MOST"));     // speed alone is enough for the client to start
-    fake_dsi::attach();
-    respond();
+    CarVehicleCallbacks speedOnly;
+    speedOnly.speed = &onSpeed;
+    speedOnly.user = &g_speeds;
+    assert(v.attach(c, speedOnly));
+    startClient(c);                     // speed alone is enough for the client to start
     // Observe only: no keys, so nothing but the client's own subscriptions and setup goes out.
     for (size_t i = 0; i < fake_dsi::calls.size(); ++i)
         assert(!(fake_dsi::calls[i].kind == fake_dsi::Call::kRequest && fake_dsi::calls[i].id == kReqRegisterDevCtrls));
@@ -224,29 +317,178 @@ static void testConsumer() {
     nanosleep(&nap, NULL);
     send(kCarSpeedFkt, kOpStatus, forward, 2);
     assert(g_speeds.back().speed_e3 == -6944);
+    assert(g_gears.empty() && g_brakes.empty());        // both off: the gear route is there for the speed's direction only
 
     fake_dsi::detach();
 }
 
-// With no room, the callback stays silent even for the routes that fitted.
-static void testNoRoom() {
-    fake_dsi::reset();
-    g_speeds.clear();
+static void sendByte(uint16_t fkt, uint8_t value) { send(fkt, kOpStatus, &value, 1); }
+
+// From DSI frame to callback: P, R, N, D and the forward gears, with copies, and the hand brake.
+static void testGearAndBrake() {
+    resetCaptured();
     Client c;
-    static int dummy;
-    struct H { static void none(const View&, void*) {} };
-    while (c.addRoute(0x77, kAny, kAny, kAny, &H::none, &dummy)) {
-        if (dummy++ == Router::kMaxRoutes - 2) break;   // leaves room for one of the three
+    CarVehicle v;
+    assert(v.attach(c, allCallbacks()));
+    startClient(c);
+
+    // Nothing is made up before the car has reported.
+    assert(g_gears.empty() && g_brakes.empty());
+
+    sendByte(kVehicleGearFkt, 3);
+    sendByte(kVehicleGearFkt, 3);                       // another receiver's copy
+    assert(g_gears.size() == 1 && g_gears[0] == AA_GEAR_PARK);
+    sendByte(kVehicleGearFkt, 2);
+    sendByte(kVehicleGearFkt, 1);
+    sendByte(kVehicleGearFkt, 5);
+    assert(g_gears.size() == 4 && g_gears[1] == AA_GEAR_REVERSE && g_gears[2] == AA_GEAR_NEUTRAL && g_gears[3] == AA_GEAR_DRIVE);
+    sendByte(kVehicleGearFkt, 6);                       // up through the forward gears: still DRIVE
+    sendByte(kVehicleGearFkt, 11);
+    sendByte(kVehicleGearFkt, 15);                      // says nothing
+    assert(g_gears.size() == 4);
+
+    sendByte(kParkingBrakeFkt, 2);
+    sendByte(kParkingBrakeFkt, 2);                      // a copy
+    assert(g_brakes.size() == 1 && g_brakes[0]);
+    sendByte(kParkingBrakeFkt, 1);
+    assert(g_brakes.size() == 2 && !g_brakes[1]);
+    sendByte(kParkingBrakeFkt, 0);                      // not coded, and invalid: released stays
+    sendByte(kParkingBrakeFkt, 3);
+    assert(g_brakes.size() == 2);
+
+    // Not ours: another op, instance, FBlock or function, and a malformed payload.
+    const uint8_t on = 2;
+    send(kParkingBrakeFkt, kOpGet, &on, 1);
+    send(kParkingBrakeFkt, kOpStatus, &on, 1, kVehicleFBlock, 0x01);
+    send(kParkingBrakeFkt, kOpStatus, &on, 1, 0x06);
+    send(0x210, kOpStatus, &on, 1);
+    const uint8_t two[2] = { 2, 2 };
+    send(kParkingBrakeFkt, kOpStatus, two, 2);
+    assert(g_brakes.size() == 2);
+
+    // The speed still takes its direction from the same gear route. 626 has said nothing here.
+    sendByte(kVehicleGearFkt, 2);
+    const uint8_t moving[2] = { 0x06, 0x40 };
+    send(kCarSpeedFkt, kOpStatus, moving, 2);
+    assert(g_speeds.size() == 1 && g_speeds[0].speed_e3 == -6944);
+
+    fake_dsi::detach();
+}
+
+// The app gives a gear before the first shift, and stops counting once the car has said something. A shift the app reports
+// after the car does is neither sent twice nor sent late.
+static void testGearFromApp() {
+    resetCaptured();
+    Client c;
+    CarVehicle v;
+    v.gearFromApp(3);                                   // before attach: the app's file is read again after it
+    assert(g_gears.empty());
+    assert(v.attach(c, allCallbacks()));
+    startClient(c);
+
+    v.gearFromApp(3);
+    assert(g_gears.size() == 1 && g_gears[0] == AA_GEAR_PARK);
+    v.gearFromApp(3);                                   // no change
+    assert(g_gears.size() == 1);
+    v.gearFromApp(-1);                                  // its text had no number: says nothing
+    v.gearFromApp(2);
+    assert(g_gears.size() == 2 && g_gears[1] == AA_GEAR_REVERSE);
+
+    // A value from the car that says nothing does not take over from the app.
+    sendByte(kVehicleGearFkt, 15);
+    v.gearFromApp(1);
+    assert(g_gears.size() == 3 && g_gears[2] == AA_GEAR_NEUTRAL);
+
+    // The car's first value, the same as the app's: no second event, but the car has taken over now.
+    sendByte(kVehicleGearFkt, 1);
+    assert(g_gears.size() == 3);
+    v.gearFromApp(3);
+    assert(g_gears.size() == 3);
+    sendByte(kVehicleGearFkt, 5);
+    assert(g_gears.size() == 4 && g_gears[3] == AA_GEAR_DRIVE);
+    v.gearFromApp(5);
+    v.gearFromApp(2);
+    assert(g_gears.size() == 4);
+
+    fake_dsi::detach();
+}
+
+// With the gear off, the app's value and the route's go nowhere, and the speed still gets its direction.
+static void testSignalsOff() {
+    resetCaptured();
+    Client c;
+    CarVehicle v;
+    CarVehicleCallbacks cb = allCallbacks();
+    cb.gear = NULL;
+    cb.parkingBrake = NULL;
+    assert(v.attach(c, cb));
+    startClient(c);
+    v.gearFromApp(3);
+    sendByte(kVehicleGearFkt, kVehicleGearReverse);
+    sendByte(kParkingBrakeFkt, 2);
+    assert(g_gears.empty() && g_brakes.empty());
+    const uint8_t moving[2] = { 0x06, 0x40 };
+    send(kCarSpeedFkt, kOpStatus, moving, 2);
+    assert(g_speeds.size() == 1 && g_speeds[0].speed_e3 == -6944);
+    fake_dsi::detach();
+
+    // Speed off: only the routes the others need.
+    resetCaptured();
+    Client c2;
+    CarVehicle v2;
+    cb = allCallbacks();
+    cb.speed = NULL;
+    assert(v2.attach(c2, cb));
+    startClient(c2);
+    send(kCarSpeedFkt, kOpStatus, moving, 2);
+    assert(g_speeds.empty());
+    sendByte(kVehicleGearFkt, 3);
+    sendByte(kParkingBrakeFkt, 2);
+    assert(g_gears.size() == 1 && g_brakes.size() == 1);
+    fake_dsi::detach();
+
+    // All off: nothing to route, and not an error.
+    resetCaptured();
+    Client c3;
+    CarVehicle v3;
+    assert(v3.attach(c3, CarVehicleCallbacks()));
+}
+
+// How many free routes the three signals together need: speed 621 and 626, gear 228, brake CB5.
+enum { kVehicleRoutes = 4 };
+
+// With no room, every callback stays silent even for the routes that fitted. freeRoutes is how many are left for it.
+static void checkNoRoom(int freeRoutes) {
+    resetCaptured();
+    Client c;
+    int added = 0;
+    while (added < Router::kMaxRoutes - freeRoutes) {
+        assert(c.addRoute(0x77, kAny, kAny, kAny, &noHandler, NULL));
+        ++added;
     }
     CarVehicle v;
-    assert(!v.attach(c, &onSpeed, &g_speeds));
-    assert(c.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    respond();
+    assert(!v.attach(c, allCallbacks()));
+    startClient(c);
     const uint8_t forward[2] = { 0x06, 0x40 };
     send(kCarSpeedFkt, kOpStatus, forward, 2);
-    assert(g_speeds.empty());
+    sendByte(kVehicleGearFkt, 3);
+    sendByte(kParkingBrakeFkt, 2);
+    v.gearFromApp(3);
+    assert(g_speeds.empty() && g_gears.empty() && g_brakes.empty());
     fake_dsi::detach();
+}
+
+static void testNoRoom() {
+    for (int freeRoutes = 0; freeRoutes < kVehicleRoutes; ++freeRoutes) checkNoRoom(freeRoutes);
+}
+
+// Exactly enough room is enough, so the counts above are right.
+static void testExactRoom() {
+    resetCaptured();
+    Client c;
+    for (int i = 0; i < Router::kMaxRoutes - kVehicleRoutes; ++i) assert(c.addRoute(0x77, kAny, kAny, kAny, &noHandler, NULL));
+    CarVehicle v;
+    assert(v.attach(c, allCallbacks()));
 }
 
 int main() {
@@ -257,8 +499,15 @@ int main() {
     testDirection();
     testSignedSample();
     testStopReports();
+    testGearCodes();
+    testParkingBrakeCodes();
+    testStateFilter();
     testConsumer();
+    testGearAndBrake();
+    testGearFromApp();
+    testSignalsOff();
     testNoRoom();
+    testExactRoom();
     printf("test_car_vehicle OK\n");
     return 0;
 }
