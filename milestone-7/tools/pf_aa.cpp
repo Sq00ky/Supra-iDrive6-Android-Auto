@@ -17,6 +17,7 @@
 #include "pf_aa.hpp"
 
 #include <errno.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +38,7 @@ const char* const kBackupDefault = "/opt/aa/pf.bak";
 #define NBT_PFCTL "/bin/pfctl"   // host smoke test: -DNBT_PFCTL=<fake>
 #endif
 const char* const kPfctl = NBT_PFCTL;
-#define PF_AA_VERSION "1.2"   // 1.2: --load (apply now), live status in --check; 1.1: /dev/shmem check copy fix
+#define PF_AA_VERSION "1.3"   // 1.3: SIGCHLD reset (started from the HMI, which ignores it); 1.2: --load (apply now), live status in --check; 1.1: /dev/shmem check copy fix
 const char* const kMountPoint = "/fs/sda0";
 #ifndef NBT_PF_CHECKFILE
 #define NBT_PF_CHECKFILE "/dev/shmem/pf_aa-check.conf"   // parse-only copy for pfctl -n (RAM)
@@ -430,6 +431,9 @@ int uninstall(const char* pf, const char* env, const char* backup) {
 // The whole tool. Its own main() below, or nbt-aad --pf-install / --pf-check / --pf-uninstall (src/pf_aa_embed.cpp
 // builds this file into the daemon with NBT_PF_AA_EMBEDDED, so no separate pf_aa has to be copied to the car).
 int nbt::pfaa::run(int argc, char** argv) {
+    // Started from the iDrive app, SIGCHLD arrives ignored (inherited from the HMI): children are then reaped by the
+    // system and pclose() returns -1 for every pfctl / mount, so each would look failed. Default handling back.
+    signal(SIGCHLD, SIG_DFL);
     enum { NONE, INSTALL, CHECK, UNINSTALL } mode = NONE;
     const char* pf = NULL;
     const char* env = kEnvDefault;

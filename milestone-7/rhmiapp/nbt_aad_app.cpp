@@ -1958,20 +1958,26 @@ bool onPfUninstallRow(void*, const bmw::Parcel&) { startPfOp(kPfUninstall); retu
 void servicePfOps(bmw::PluginApp* app) {
     const uint32_t now = nowMs();
     if (g_pfPid > 0) {
+        // The HMI ignores SIGCHLD, so the system reaps our child and waitpid() fails at once with ECHILD: the process
+        // is finished only when it no longer exists (kill 0 -> ESRCH); its result is its last line, "pf_aa-exit: N".
         int st = 0;
         pid_t r = waitpid(g_pfPid, &st, WNOHANG);
-        if (r == 0 && time(NULL) - g_pfStart <= 60) return;
+        bool gone = r == g_pfPid || (r < 0 && kill(g_pfPid, 0) < 0 && errno == ESRCH);
+        bool timedOut = !gone && time(NULL) - g_pfStart > 60;
+        if (!gone && !timedOut) return;
         FILE* f = fopen(kPfAaOut, "r");
         char line[200];
-        int n = 0;
-        while (f && fgets(line, sizeof(line), f) && n < 80) {
+        int n = 0, marker = -1;
+        bool haveMarker = false;
+        while (f && fgets(line, sizeof(line), f)) {
             line[strcspn(line, "\r\n")] = 0;
-            if (line[0]) { alog("pf_aa: %s", line); ++n; }
+            if (!strncmp(line, "pf_aa-exit: ", 12)) { marker = atoi(line + 12); haveMarker = true; continue; }
+            if (line[0] && n < 80) { alog("pf_aa: %s", line); ++n; }
         }
         if (f) fclose(f);
-        int rc = (r == g_pfPid && WIFEXITED(st)) ? WEXITSTATUS(st) : -1;
-        if (r == 0) alog("pf_aa (pid %d) still running after 60 s: no longer waiting for it", (int)g_pfPid);
-        else if (r != g_pfPid) alog("pf_aa (pid %d): exit status not available (reaped elsewhere)", (int)g_pfPid);
+        int rc = (r == g_pfPid && WIFEXITED(st)) ? WEXITSTATUS(st) : haveMarker ? marker : -1;
+        if (timedOut) alog("pf_aa (pid %d) still running after 60 s: no longer waiting for it", (int)g_pfPid);
+        else if (r != g_pfPid && !haveMarker) alog("pf_aa (pid %d) ended without a result line", (int)g_pfPid);
         g_pfPid = 0;
         unsigned first = kTxtPfFailed, second = 0;
         if (g_pfOp == kPfInstall) {

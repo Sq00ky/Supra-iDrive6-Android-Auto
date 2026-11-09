@@ -1792,7 +1792,11 @@ int main(int argc, char* argv[]) {
         static char mode[32];
         snprintf(mode, sizeof(mode), "--%s", argv[1] + 5);
         argv[1] = mode;
-        return nbt::pfaa::run(argc, argv);
+        int rc = nbt::pfaa::run(argc, argv);
+        // Last line for the iDrive app: it cannot wait for us (the HMI ignores SIGCHLD), so it reads the result here.
+        printf("pf_aa-exit: %d\n", rc);
+        fflush(stdout);
+        return rc;
     }
     if (argc > 1 && (!strcmp(argv[1], "--license") || !strcmp(argv[1], "--licence"))) {
         nbt::printNbtAadLicense();
