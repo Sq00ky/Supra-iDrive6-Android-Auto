@@ -358,13 +358,15 @@ const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
 const char* const kLciMediaManual  = "/opt/aa/lci-media";
 // "Firewall rules for Android Auto (pf_aa)" (rhmiapp-47): <checkbox action="132" id="135" model="133" textModel="134">.
 // Ticked = pf_aa's rules are in the car's pf.conf and NBT_KEEP_PF=1 is in nbt-aad.env (rhmiapp/pf_menu.hpp). Pressing
-// runs /opt/aa/pf_aa --install or --uninstall (from the USB stick if /opt/aa has none) in the background; its output
-// goes to the app log. The car loads pf.conf at its next start, so the head unit needs a restart afterwards.
+// runs `nbt-aad --pf-install` / `--pf-uninstall` (pf_aa is built into the daemon since v1.9.44) in the background; an
+// older daemon without it falls back to a separate /opt/aa/pf_aa (or the USB stick's). Output goes to the app log. The
+// car loads pf.conf at its next start, so the head unit needs a restart afterwards.
 const unsigned    kActPfAa         = 132;
 const unsigned    kPfAaModel       = 133;
 const char* const kPfAaTool        = "/opt/aa/pf_aa";
 const char* const kPfConf          = "/fs/sda0/etc/pf.conf";
 const char* const kPfAaOut         = "/dev/shmem/nbt-aad-pf_aa.out";
+const char* const kPfAaEmbedMark   = "(built into nbt-aad)";   // in nbt-aad's pf_aa banner (src/pf_aa_embed.cpp)
 const char* const kGctxProperty    = "hmi.graphicalContext";
 const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
 // DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
@@ -1873,8 +1875,33 @@ void showPfAa(bmw::PluginApp* app) {
     g_pfAaShown = true;
 }
 
-// pf_aa from /opt/aa, else from the first USB stick that carries one (the release's root).
-bool findPfAa(char* out, size_t n) {
+// nbt-aad carries pf_aa (v1.9.44+): its binary holds the embedded banner text. Read once per press; ~1 MB.
+bool daemonHasPfAa() {
+    FILE* f = fopen(kDaemon, "rb");
+    if (!f) return false;
+    static char buf[65536 + 32];
+    const size_t m = strlen(kPfAaEmbedMark);
+    size_t keep = 0;
+    bool found = false;
+    for (;;) {
+        size_t got = fread(buf + keep, 1, sizeof(buf) - 32 - keep, f);
+        if (!got) break;
+        size_t len = keep + got;
+        for (size_t i = 0; i + m <= len && !found; ++i)
+            if (buf[i] == kPfAaEmbedMark[0] && !memcmp(buf + i, kPfAaEmbedMark, m)) found = true;
+        if (found) break;
+        keep = len < m - 1 ? len : m - 1;               // a match may straddle two reads
+        memmove(buf, buf + len - keep, keep);
+    }
+    fclose(f);
+    return found;
+}
+
+// The tool: nbt-aad itself when it carries pf_aa (embedded = true), else a standalone pf_aa from /opt/aa or the first
+// USB stick that carries one (the release's root).
+bool findPfAa(char* out, size_t n, bool* embedded) {
+    *embedded = false;
+    if (daemonHasPfAa()) { snprintf(out, n, "%s", kDaemon); *embedded = true; return true; }
     if (fileExists(kPfAaTool)) { snprintf(out, n, "%s", kPfAaTool); return true; }
     char stick[128];
     if (nbt::usblog::findStick(stick, sizeof(stick))) {
@@ -1892,14 +1919,16 @@ bool onPfAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     }
     const bool installed = pfAaInstalled();
     char tool[160];
-    if (!findPfAa(tool, sizeof(tool))) {
-        alog("menu: Firewall rules for Android Auto: no pf_aa in %s or on a USB stick: copy pf_aa from the release to "
-             "%s (chmod 755) and press again", kPfAaTool, kPfAaTool);
+    bool embedded = false;
+    if (!findPfAa(tool, sizeof(tool), &embedded)) {
+        alog("menu: Firewall rules for Android Auto: %s has no pf_aa built in (older than v1.9.44) and there is no "
+             "pf_aa in %s or on a USB stick: update nbt-aad", kDaemon, kPfAaTool);
         if (g_runApp) showPfAa(g_runApp);
         return true;
     }
     g_pfAaInstall = !installed;
-    const char* mode = g_pfAaInstall ? "--install" : "--uninstall";
+    const char* mode = embedded ? (g_pfAaInstall ? "--pf-install" : "--pf-uninstall")
+                                : (g_pfAaInstall ? "--install" : "--uninstall");
     char* argv[] = { tool, const_cast<char*>(mode), NULL };
     // The HMI's LD_PRELOAD (graphics libraries) is no use to pf_aa, pfctl or mount.
     char* envp[96];

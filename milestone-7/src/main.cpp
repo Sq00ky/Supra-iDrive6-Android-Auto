@@ -117,6 +117,7 @@
 #include "usb_log.hpp"
 #include "spp_rereg.hpp"
 #include "spp_link_policy.hpp"
+#include "../tools/pf_aa.hpp"
 #include "spp_direction.hpp"
 #include "neutral_resume.hpp"
 #include "cluster/nav_core.hpp"
@@ -1687,7 +1688,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.43-cargear"
+#define NBT_AAD_BUILD "v1.9.44-pfaa"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -1785,6 +1786,14 @@ static void serviceUsbLog(bool atStart) {
 }
 
 int main(int argc, char* argv[]) {
+    // pf_aa built in (src/pf_aa_embed.cpp): nbt-aad --pf-install | --pf-check | --pf-uninstall [--pf/--env/--backup f].
+    // Before any of the daemon's start-up (log redirection, control port), so it never starts a second daemon.
+    if (argc > 1 && !strncmp(argv[1], "--pf-", 5)) {
+        static char mode[32];
+        snprintf(mode, sizeof(mode), "--%s", argv[1] + 5);
+        argv[1] = mode;
+        return nbt::pfaa::run(argc, argv);
+    }
     if (argc > 1 && (!strcmp(argv[1], "--license") || !strcmp(argv[1], "--licence"))) {
         nbt::printNbtAadLicense();
         return 0;

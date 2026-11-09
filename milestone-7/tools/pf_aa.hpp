@@ -194,6 +194,10 @@ inline std::string dropKeepPf(const std::string& env, int* removed) {
     return out;
 }
 
+// tools/pf_aa.cpp: the command line (--install | --check | --uninstall [--pf/--env/--backup <file>]); pf_aa's main()
+// and nbt-aad's --pf-* options both call it. Returns the exit status.
+int run(int argc, char** argv);
+
 } // namespace pfaa
 } // namespace nbt
 

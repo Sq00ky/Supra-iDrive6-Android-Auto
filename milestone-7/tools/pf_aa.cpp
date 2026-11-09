@@ -175,6 +175,9 @@ void printCoverage(const nbt::pfaa::Coverage& c) {
 }
 
 int usage() {
+#ifdef NBT_PF_AA_EMBEDDED
+    printf("usage: nbt-aad --pf-install | --pf-check | --pf-uninstall   (pf_aa built into nbt-aad)\n");
+#endif
     printf("usage: pf_aa --install | --check | --uninstall\n"
            "  --install    back up pf.conf to /opt/aa/pf.bak, add the Android Auto rules, set NBT_KEEP_PF=1\n"
            "  --check      report only\n"
@@ -385,7 +388,9 @@ int uninstall(const char* pf, const char* env, const char* backup) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+// The whole tool. Its own main() below, or nbt-aad --pf-install / --pf-check / --pf-uninstall (src/pf_aa_embed.cpp
+// builds this file into the daemon with NBT_PF_AA_EMBEDDED, so no separate pf_aa has to be copied to the car).
+int nbt::pfaa::run(int argc, char** argv) {
     enum { NONE, INSTALL, CHECK, UNINSTALL } mode = NONE;
     const char* pf = NULL;
     const char* env = kEnvDefault;
@@ -405,8 +410,16 @@ int main(int argc, char** argv) {
         struct stat st;
         pf = stat(kPfDefault, &st) == 0 ? kPfDefault : kPfFallback;
     }
+#ifdef NBT_PF_AA_EMBEDDED
+    printf("pf_aa " PF_AA_VERSION " (built into nbt-aad): Android Auto (TCP 5277) in the car's packet filter, %s\n", pf);
+#else
     printf("pf_aa " PF_AA_VERSION ": Android Auto (TCP 5277) in the car's packet filter, %s\n", pf);
+#endif
     if (mode == INSTALL) return install(pf, env, backup);
     if (mode == CHECK) return check(pf, env, backup);
     return uninstall(pf, env, backup);
 }
+
+#ifndef NBT_PF_AA_EMBEDDED
+int main(int argc, char** argv) { return nbt::pfaa::run(argc, argv); }
+#endif
