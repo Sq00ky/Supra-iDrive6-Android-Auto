@@ -27,7 +27,8 @@ std::vector<uint8_t> serializeManifest(const ServiceDiscovery& manifest);
 
 // Corrects the sensor channel for a real car: drops the gyroscope and toll card, and has unleaded with no EV connector in
 // place of the DHU's unleaded + electric and supercharger. This is what the phone is offered, not what it gets: of these,
-// AASession sends only location, compass, night mode, driving status and GPS satellites, and only acknowledges the others.
+// AASession sends only location, compass, car speed, night mode, driving status and GPS satellites, and only acknowledges the
+// others.
 // Returns true if anything was changed (prints the result).
 bool configureSensors(ServiceDiscovery& manifest);
 // The same with "Use Phone GPS" given (configureSensors(m) reads phoneGpsEnabled()): phoneGps leaves out every sensor

@@ -5,7 +5,10 @@
 #include "stub_cryptor.hpp"
 #include "aa_session.cpp"
 #include <assert.h>
+#include <atomic>
+#include <errno.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -294,6 +297,223 @@ static void testCompassAcrossSessions() {
     endSession(s, sv);
 }
 
+static std::vector<uint8_t> speedEvent(int32_t speed_e3) {
+    std::vector<uint8_t> want;
+    buildCarSpeedEvent(speed_e3, want);
+    return want;
+}
+
+static CarSpeedSample speedNow(int32_t speed_e3, uint32_t ageMs = 0) {
+    CarSpeedSample s;
+    s.speed_e3 = speed_e3;
+    s.rx_ms = testNowMs() - ageMs;
+    return s;
+}
+
+// Sensor 3 with nothing from the car: answered, and silent. That also covers NBT_CAR_SPEED=0, which posts nothing.
+static void testSpeedNoData() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    endSession(s, sv);
+}
+
+// Nothing until the phone starts it. Then the newest on start and on each post, with the sign. An old moving speed stays home.
+static void testSpeedPosted() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(6944));
+    assert(!nextSensorFrame(sv[1], 300, p));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(6944));
+    s->postCarSpeed(speedNow(-1388));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(-1388));
+    // A moving speed is not repeated: silence does not become a claim about now.
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    s->postCarSpeed(speedNow(6944, kCarSpeedMaxAgeMs + 1));
+    assert(!nextSensorFrame(sv[1], 500, p));
+    endSession(s, sv);
+}
+
+// A start with an old moving speed sends nothing, and the next reading goes out as usual.
+static void testSpeedStaleAtStart() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(6944, kCarSpeedMaxAgeMs + 1));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    s->postCarSpeed(speedNow(7000));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(7000));
+    endSession(s, sv);
+}
+
+// A 0 has no age limit and repeats about once a second with the car silent, until the car moves again.
+static void testSpeedZeroRepeats() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(0, 60000));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
+    uint32_t t0 = testNowMs();
+    for (int i = 0; i < 2; ++i) {
+        assert(nextSensorFrame(sv[1], 2500, p) && p == speedEvent(0));
+        uint32_t t1 = testNowMs();
+        assert(t1 - t0 >= 800);                 // about once a second, not on every pass of the loop
+        t0 = t1;
+    }
+    s->postCarSpeed(speedNow(6944));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(6944));
+    assert(!nextSensorFrame(sv[1], 1300, p));
+    endSession(s, sv);
+}
+
+// The speed survives a new session, but the phone must start the sensor again first.
+static void testSpeedNewSession() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    s->postCarSpeed(speedNow(0));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
+    s->stop();
+    close(sv[1]);
+    assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+    assert(s->start(sv[0]));
+    uint8_t ch = 0xFF;
+    assert(readFrame(sv[1], 2000, ch, p));      // the VersionRequest
+    assert(!nextSensorFrame(sv[1], 1300, p));   // no repeat left over from the last session
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == speedEvent(0));
+    endSession(s, sv);
+}
+
+// Satellites keep their timer while speed posts keep waking the session and the phone says nothing.
+static void testSatellitesWhileSpeedWakes() {
+    int sv[2];
+    AASession* s = newSession(sv);
+    std::vector<uint8_t> p;
+    sendStart(sv[1], 21, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    assert(nextSensorFrame(sv[1], 2000, p) && p == satEvent(0));
+    sendStart(sv[1], 3, period0());
+    assert(nextSensorFrame(sv[1], 2000, p) && isStartResponse(p));
+    int sats = 0, speeds = 0;
+    const uint32_t start = testNowMs();
+    while (testNowMs() - start < 3500) {
+        s->postCarSpeed(speedNow(6944));
+        const uint32_t until = testNowMs() + 300;
+        while ((int)(until - testNowMs()) > 0 && nextSensorFrame(sv[1], (int)(until - testNowMs()), p)) {
+            if (p == satEvent(0)) ++sats;
+            else if (p == speedEvent(6944)) ++speeds;
+        }
+    }
+    printf("satellites while speed wakes: %d satellite and %d speed events in 3.5 s\n", sats, speeds);
+    assert(sats >= 2 && sats <= 5);             // about once a second, not once per wake
+    assert(speeds >= 8);
+    endSession(s, sv);
+}
+
+// A phone sending pings: one every periodMs, or with periodMs 0 as many as the socket holds, so bytes are always waiting.
+struct PingPhone {
+    int fd;
+    int periodMs;
+    std::atomic<bool> stop;
+};
+
+static void* pingPhone(void* arg) {
+    PingPhone* ph = static_cast<PingPhone*>(arg);
+    const uint8_t ping[] = { 0x00, 0x03, 0x00, 0x04, 0x00, 0x0B, 0x08, 0x01 };
+    std::vector<uint8_t> block(ph->periodMs ? sizeof(ping) : 8192 * sizeof(ping));
+    for (size_t i = 0; i < block.size(); ++i) block[i] = ping[i % sizeof(ping)];
+    size_t off = 0;
+    while (!ph->stop) {
+        if (ph->periodMs) usleep((useconds_t)ph->periodMs * 1000u);
+        struct pollfd pf;
+        pf.fd = ph->fd;
+        pf.events = POLLOUT;
+        pf.revents = 0;
+        if (poll(&pf, 1, 50) <= 0) continue;
+        const ssize_t n = send(ph->fd, &block[off], block.size() - off, MSG_DONTWAIT);
+        if (n < 0 && errno != EAGAIN) break;
+        if (n > 0) off = (off + (size_t)n) % block.size();
+    }
+    return NULL;
+}
+
+struct RepeatCount {
+    int speeds, sats;
+    uint32_t speedGapMs, satGapMs;      // the longest gap between two of them
+};
+
+// A 0 speed and satellites running for this long with the phone sending pings. readerDelayUs holds the session back: its
+// replies fill the socket, so it cannot catch up with what the phone sent.
+static RepeatCount repeatsWithPings(int periodMs, int readerDelayUs, uint32_t ms) {
+    int sv[2];
+    AASession* s = newSession(sv);
+    s->postCarSpeed(speedNow(0));
+    sendStart(sv[1], 3, period0());
+    sendStart(sv[1], 21, period0());
+    PingPhone ph;
+    ph.fd = sv[1];
+    ph.periodMs = periodMs;
+    ph.stop = false;
+    pthread_t t;
+    assert(pthread_create(&t, NULL, &pingPhone, &ph) == 0);
+    RepeatCount c = RepeatCount();
+    const std::vector<uint8_t> speed0 = speedEvent(0), sat0 = satEvent(0);
+    uint32_t lastSpeed = 0, lastSat = 0;
+    uint8_t ch = 0xFF;
+    std::vector<uint8_t> p;
+    const uint32_t start = testNowMs();
+    while (testNowMs() - start < ms) {
+        if (readerDelayUs) usleep((useconds_t)readerDelayUs);
+        if (!readFrame(sv[1], 200, ch, p) || ch != 1) continue;
+        const uint32_t now = testNowMs();
+        if (p == speed0) {
+            if (c.speeds++ && now - lastSpeed > c.speedGapMs) c.speedGapMs = now - lastSpeed;
+            lastSpeed = now;
+        } else if (p == sat0) {
+            if (c.sats++ && now - lastSat > c.satGapMs) c.satGapMs = now - lastSat;
+            lastSat = now;
+        }
+    }
+    ph.stop = true;
+    assert(pthread_join(t, NULL) == 0);
+    while (readFrame(sv[1], 100, ch, p)) { }    // what the session still has to answer, so that it can stop
+    endSession(s, sv);
+    return c;
+}
+
+// A phone frame just before a repeat is due must not put it off by a whole select tick. 800 ms makes that happen on most
+// repeats; with a phone at exactly 1 s it depends on which side of the second each frame lands.
+static void testRepeatsOnTimeWhilePhoneTalks() {
+    const RepeatCount c = repeatsWithPings(800, 0, 6000);
+    printf("repeats with a ping every 800 ms: %d speed (longest gap %u ms), %d satellite (%u ms) in 6 s\n", c.speeds, c.speedGapMs,
+           c.sats, c.satGapMs);
+    assert(c.speeds >= 5 && c.speedGapMs <= 1300);
+    assert(c.sats >= 5 && c.satGapMs <= 1300);
+}
+
+// With the phone's bytes always waiting, select never times out and nothing wakes it, so only the drain at the top of the
+// session loop is left. Slower pings would not show that: select's own deadline covers them.
+static void testRepeatsWhilePhoneBytesAlwaysWaiting() {
+    const RepeatCount c = repeatsWithPings(0, 100, 6000);
+    printf("repeats with the phone's bytes always waiting: %d speed, %d satellite in 6 s\n", c.speeds, c.sats);
+    assert(c.speeds >= 4);
+    assert(c.sats >= 4);
+}
+
 // The period parser: present, the -1 of a 10-byte varint, absent, and a message it should stop on.
 static void testPeriod() {
     const uint8_t a[] = { 0x80, 0x01, 0x08, 0x01, 0x10, 0xE8, 0x07 };
@@ -336,6 +556,14 @@ int main() {
     testCompassRepeatsThroughWakes();
     testCompassAcrossSessions();
     testStartWithMinusOne();
+    testSpeedNoData();
+    testSpeedPosted();
+    testSpeedStaleAtStart();
+    testSpeedZeroRepeats();
+    testSpeedNewSession();
+    testSatellitesWhileSpeedWakes();
+    testRepeatsOnTimeWhilePhoneTalks();
+    testRepeatsWhilePhoneBytesAlwaysWaiting();
     printf("test_session_sensors OK\n");
     return 0;
 }

@@ -88,6 +88,9 @@ public:
     // started that sensor, and repeated if nothing new comes (kCompassRepeatMs). It has no age limit: the car's value stays
     // true while the car stands still, and how often the car sends it then is not known yet. Thread-safe.
     void postCarCompass(int32_t bearing_e6);
+    // The newest wheel speed: sent to the phone as a CAR_SPEED (sensor 3) event once it has started that sensor, unless
+    // carSpeedSendable() says no by then. While the newest is 0 the session repeats it on a timer. Thread-safe.
+    void postCarSpeed(const CarSpeedSample& speed);
     // Car microphone PCM (16 kHz mono S16LE) for the phone. Thread-safe (capture thread); queued and sent on
     // ch 14 by the session thread while the phone has the mic open, dropped otherwise.
     void postMicData(const uint8_t* pcm, size_t len);
@@ -163,6 +166,17 @@ private:
     uint32_t compass_last_ms_;                     // session thread: when the last one went out
     bool compassRunning();                         // the phone started sensor 2 and there is a heading to send
     void drainCompass();                           // session thread: repeat COMPASS when one is due
+    CarSpeedSample car_speed_;                     // guarded by touch_mutex_: latest speed
+    bool have_speed_;                              // guarded by touch_mutex_: car_speed_ is set (kept across sessions)
+    bool speed_started_;                           // guarded by touch_mutex_: phone started sensor 3 this session
+    bool pending_speed_;                           // guarded by touch_mutex_: send a CAR_SPEED event on next drain
+    uint32_t speed_sent_;                          // session thread: CAR_SPEED events this session
+    uint32_t speed_last_ms_;                       // session thread: when the last one went out
+    bool speed_last_zero_;                         // session thread: it carried 0, so another is due on the timer
+    void drainSpeed();                             // session thread: repeat a CAR_SPEED of 0 when one is due
+    void drainPeriodic();                          // session thread: everything that is due on time, whatever woke it
+    uint32_t periodicTickMs();                     // session thread: how long select may sleep before something is due
+    uint32_t last_rx_ms_;                          // session thread: when the last byte from the phone arrived
     VideoFocusCallback focus_cb_;
     void* focus_user_data_;
     MicRequestCallback mic_cb_;

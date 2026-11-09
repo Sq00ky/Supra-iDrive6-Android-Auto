@@ -52,6 +52,7 @@ set(SOURCES
     src/car/input_activity.cpp
     src/car/geoid.cpp
     src/car/gps.cpp
+    src/car/vehicle.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
     src/cluster/j29_client.cpp
