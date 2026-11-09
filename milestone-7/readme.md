@@ -206,7 +206,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
-> **v1.9.44-pfaa + rhmiapp-47-pfaa (not car-verified): pf_aa built into nbt-aad and in the iDrive menu.**
+> **v1.9.44-pfaa + rhmiapp-47-pfaa (car-verified on a GR Supra, NBTevo_T21424I): pf_aa built into nbt-aad and in the iDrive menu.**
 > `nbt-aad --pf-install | --pf-check | --pf-uninstall [--load]` is `pf_aa` (1.2) without the separate binary. The
 > Settings page gets **Install PF Rules**, **Check PF Rules** and **Uninstall PF Rules** rows that show each step in
 > their own text; install / uninstall apply to the running filter at once (`--load`), no restart. pf_aa's output goes
