@@ -98,6 +98,7 @@ private:
     NavView next_;
     double next_since_;
     Stage stage_;
+    bool timed_;            // it was shown by the time rule (not the distance fallback): it stays until the next one
     bool remind_;           // the main prompt is due on the maneuver shown
     bool fallback_;
 };

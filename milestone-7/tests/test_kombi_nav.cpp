@@ -248,7 +248,7 @@ static void testTimeApproach() {
         assert(countLog("MAIN") == 0);
         n.pos(380, 19);
         r.feed(n.m, 4.0);
-        assert(countLog("MAIN") == 1 && hasLog("MAIN type 8: 19 s, 380 m: shown again"));
+        assert(countLog("MAIN") == 1 && hasLog("MAIN type 8: 19 s, 380 m"));
         n.pos(300, 70);                                              // stuck in traffic: the seconds go up
         r.feed(n.m, 5.0);
         assert(r.core.shown() && countLog("APPROACH") == 0);
@@ -311,7 +311,7 @@ static void testTimeApproach() {
         assert(r.core.shown() && hasLog("WARN type 24: 120 s, 1990 m (motorway distance)"));
         n.pos(990, 60);
         r.feed(n.m, 3.0);
-        assert(hasLog("MAIN type 24: 60 s, 990 m: shown again"));
+        assert(hasLog("MAIN type 24: 60 s, 990 m"));
     }
     // an on-ramp is not a motorway turn: time only
     {
@@ -339,6 +339,52 @@ static void testTimeApproach() {
         n.pos(100, 5);
         r.feed(n.m, 2.0);
         assert(countLog("MAIN") == 0 && hasLog("WARN type 8: 40 s, 800 m (time)"));
+    }
+    // an unnamed road and a road longer than the cluster's 40 characters: the shown turn still counts as the same one
+    // (warned once, its main prompt, kept when the seconds go up)
+    for (int k = 0; k < 2; ++k) {
+        Rig r(timeApproach());
+        Nav n;
+        const char* road = k == 0 ? "" : "AN INVENTED ROAD NAME THAT GOES ON FOR WELL OVER FORTY CHARACTERS";
+        n.step(8, road);
+        n.pos(900, 45);
+        r.feed(n.m, 0.0);
+        assert(r.core.shown() && countLog("WARN") == 1);
+        n.pos(800, 40);
+        r.feed(n.m, 1.0);
+        n.pos(400, 19);
+        r.feed(n.m, 2.0);
+        assert(countLog("WARN") == 1 && countLog("MAIN") == 1);
+        n.pos(350, 60);
+        r.feed(n.m, 3.0);
+        assert(r.core.shown() && countLog("APPROACH") == 0 && countLog("SHOW ") == 1);
+    }
+    // a shown turn whose position comes once without seconds stays (the 1 mi rule would hide it at 1.15 mi)
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(8, "FAST RD");
+        n.pos(1800, 48);
+        r.feed(n.m, 0.0);
+        assert(r.core.shown());
+        n.pos(1900, 0);
+        r.feed(n.m, 1.0);
+        assert(r.core.shown() && countLog("APPROACH") == 0);
+        assert(r.core.takeFallback());                               // still noted: a position without seconds
+        n.pos(1700, 45);
+        r.feed(n.m, 2.0);
+        assert(r.core.shown() && countLog("SHOW ") == 1);
+    }
+    // a route's first step before any position: not a fallback (no "no seconds" line for every route start)
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(8, "START RD");
+        r.feed(n.m, 0.0);
+        assert(!r.core.takeFallback());
+        n.pos(600, 30);
+        r.feed(n.m, 1.0);
+        assert(r.core.shown() && !r.core.takeFallback());
     }
     // no seconds from the phone: the 1 mi distance rule, and the core says so
     {
