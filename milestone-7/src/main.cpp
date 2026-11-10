@@ -714,10 +714,10 @@ static const uint32_t kUsbByeWaitMs = 500;     // of the 3 s before the iDrive a
 // window group (vis 0): a black CarPlay until the head unit restarted (#156 log: "mm-renderer's video window joined our
 // group"). Stopping takes the session, the decoder context, our windows and the group with it, so CarPlay starts from
 // the state it has with no Android Auto. The Android Auto entry starts nbt-aad again.
-// Opt-in (NBT_CP_YIELD=1) since v1.9.49: the factory CarPlay creates its cpvideoctx once at boot and cannot create it
-// again once ours replaced it, so destroying our context may leave CarPlay with no decoder. The default is the hand-over
-// with CarPlay's window top-level (VideoManager::retuneForCarPlay, no wingrp), which keeps the context.
-static bool cpYieldEnabled() { return nbt::envFlag("NBT_CP_YIELD") == 1; }
+// On by default in this test build (v1.9.49-cpgroup3); NBT_CP_YIELD=0 falls back to the hand-over with CarPlay's window
+// top-level (VideoManager::retuneForCarPlay, no wingrp), which keeps the context. Risk being tested: the factory CarPlay
+// creates its cpvideoctx once at boot and may not create it again once ours is destroyed.
+static bool cpYieldEnabled() { return nbt::envFlag("NBT_CP_YIELD") != 0; }
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
@@ -1707,7 +1707,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.49-cpgroup2"
+#define NBT_AAD_BUILD "v1.9.49-cpgroup3"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -2307,7 +2307,7 @@ int main(int argc, char* argv[]) {
         if (cp_shows && cpYieldEnabled()) {
             printf("[Main] CarPlay took the screen while Android Auto is still connected: Android Auto yields to CarPlay "
                    "completely (session ended, decoder context and windows released, nbt-aad stops; the Android Auto "
-                   "entry starts it again; NBT_CP_YIELD=1)\n");
+                   "entry starts it again; NBT_CP_YIELD=0: hand-over instead)\n");
             g_userExit = 1;
             g_carExit = 1;                               // nothing may cover CarPlay on the way out
             g_session.postVideoFocus(false);             // phone stops streaming at once
