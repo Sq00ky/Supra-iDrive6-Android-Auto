@@ -206,6 +206,14 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **v1.9.54-panel (not car-verified; issue #169): a car without CarPlay takes its screen size from the display.**
+> With no `carplay.ini` (CarPlay never coded) the screen was the 1280x480 default, so on a larger panel Android Auto
+> filled only the top-left part of the screen. The display size from LayerManager (`get screen 0`), until now used only
+> to enlarge a smaller coded CarPlay picture, is used in that case too. Log:
+> `[Car] ... screen 1440x540 (display size (no carplay.ini))`; `(default)` there means LayerManager gave no size.
+> `NBT_SCREEN=<w>x<h>` still overrides. The vehicle name has no second source and stays Toyota without `carplay.ini`:
+> `NBT_VEHICLE=bmw`.
+>
 > **v1.9.45-camctx + rhmiapp-48-camctx (confirmed by two testers on the v1.9.43-camctx build): Android Auto steps aside for the 360 / Top View camera
 > opened with the camera button.** It had no signal for it (no reverse, no park-assist value), and the iDrive screen
 > watch skipped it because the full-screen camera reports only `GFXIDENTIFIER_INVALID`: the screen hold took it for the
@@ -704,7 +712,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_KNOB_INST` | 03 | CCS35up controller instance (hex) |
 | `NBT_KNOB_CCS_INST` | 01 | Older CCS controller instance (hex) |
 | `NBT_VEHICLE` | from `carplay.ini` (CarPlay logo, then Manufacturer) | `toyota`, `bmw`, `mini` or `rollsroyce`: the car make Android Auto shows (exit icon) |
-| `NBT_SCREEN` | from `carplay.ini` (a `1180_480` coding counts as a 1280x480 panel) | Panel size, e.g. `1440x540` (BMW 10.25") |
+| `NBT_SCREEN` | from `carplay.ini` (a `1180_480` coding counts as a 1280x480 panel); without one, the display size LayerManager reports (v1.9.54), else 1280x480 | Panel size, e.g. `1440x540` (BMW 10.25") |
 
 ### Features you can turn off (all on by default)
 
@@ -1257,7 +1265,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_session_sensors` | Sensor channel in `aa_session` over a socket with the stub cryptor: SensorStartRequest, the events it starts, the satellite timer, old data |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
-| `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE, driver's side |
+| `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE, the display size with and without a coded size, driver's side |
 | `test_video_geometry` (+ `src/sdr_builder.cpp`) | 480p, 720p and 1080p at 30 / 60 fps / unset across screen sizes: aspect ratio, phone insets, DPI, MINI calibration and touch coordinates |
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates); drift loops P and PI in a one-hour closed loop at -300..+300 ppm |
