@@ -175,6 +175,13 @@ osd1281probe: tools/osd1281probe.cpp
 lmrestore: tools/lmrestore.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/lmrestore.cpp -lang-c++
 
+# ricprobe: one text model to the KOMBI's list service (SOME/IP 0xB00E), to see whether it takes frames from a second
+# client (see tools/ricprobe.cpp). Not part of `all`.
+ricprobe: tools/ricprobe.cpp src/cluster/ric_list.hpp src/cluster/j29_graph.hpp
+	@echo [CXX] tools/ricprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/ricprobe.cpp -lsocket -lang-c++
+	@echo [DONE] Built $@
+
 # kdprobe: the supported overlay path -- KD window + EGL/GLES surface (see tools/kdprobe.cpp).
 kdprobe: tools/kdprobe.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/kdprobe.cpp -L./lib -lscreen -lKD -lEGL -lGLESv2 -lang-c++ -lm
