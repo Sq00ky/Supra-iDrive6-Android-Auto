@@ -27,6 +27,7 @@
       <raAction id="132"/>
       <raAction id="136"/>
       <raAction id="137"/>
+      <raAction id="155"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -144,6 +145,10 @@
       <textIdModel id="154" textId="43">
         <synonyms/>
       </textIdModel>
+      <raBoolModel id="156"/>
+      <textIdModel id="157" textId="44">
+        <synonyms/>
+      </textIdModel>
     </models>
     <events>
       <focusEvent id="50" targetModel="40"/>
@@ -225,6 +230,7 @@
           <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network" textModel="93"/>
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
           <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
+          <checkbox action="155" id="158" model="156" text="Short press voice button for Assistant" textModel="157"/>
           <separator id="142"/>
           <button action="132" id="135" model="134" text="Install PF Rules"/>
           <button action="136" id="140" model="138" text="Check PF Rules"/>

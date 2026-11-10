@@ -31,7 +31,7 @@ CcsEvent makeMflCcsEvent(const MflEvent& e) {
 
 } // namespace
 
-CcsInput::CcsInput() : pttAssistant_(false), pttShort_(false), cb_(NULL), user_(NULL), statusLogged_(0), ccsLogged_(0) {}
+CcsInput::CcsInput() : pttAssistant_(false), pttShort_(false), pttShortFollowsFlag_(false), cb_(NULL), user_(NULL), statusLogged_(0), ccsLogged_(0) {}
 
 bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb, void* user) {
     cb_ = cb;
@@ -39,10 +39,15 @@ bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb,
     applyCcsConfig(cfg, dec_);
     pttAssistant_ = cfg.pttAssistant;
     pttShort_ = cfg.pttShort;
+    pttShortFollowsFlag_ = cfg.pttShortFollowsFlag;
     printf("[Knob] iDrive controller input: instance %02X (CCS35up C46/C47) or %02X (CCS C10/C20), rotary%s, keys:",
            cfg.inst, cfg.ccsInst, cfg.invert ? " inverted" : "");
     for (int s = 0; s < CCS_SLOTS; ++s) printf(" %s=%u", CcsDecoder::slotName(s), dec_.slotKey(s));
     printf("\n");
+    printf("[PTT] voice button Assistant: long=%s, short=%s\n",
+           pttAssistant_ ? "on (NBT_PTT_ASSISTANT)" : "off",
+           pttShort_ ? (pttShortFollowsFlag_ ? "on (Settings checkbox)" : "on (nbt-aad.env)")
+                     : (pttShortFollowsFlag_ ? "off (tick Short press voice button for Assistant, or NBT_PTT_SHORT=1)" : "off (NBT_PTT_SHORT=0)"));
 
     // Steering wheel media keys (car/mfl.hpp): fkt (+ value for the roller) -> key, read from NBT_MFL_*. One broad route
     // on the block covers whatever the wheel sends; onMfl skips the voice button, which pttTramp handles.
@@ -83,8 +88,8 @@ void CcsInput::onLink(most::LinkState s) {
     }
 }
 
-// The steering-wheel voice button: see car/ptt.hpp. Observe-only unless NBT_PTT_ASSISTANT=1, which sends the Assistant
-// key (AA keycode 84 SEARCH, advertised on input channel 7) after a long press.
+// The steering-wheel voice button: see car/ptt.hpp. Observe-only unless NBT_PTT_ASSISTANT=1 (long press) or the
+// Settings checkbox / NBT_PTT_SHORT=1 (short press) is on, sending the Assistant key (AA keycode 84 SEARCH, advertised on input channel 7).
 void CcsInput::onPtt(const most::View& m) {
     if (m.len == 0) return;
     unsigned v = m.data[0];
@@ -97,7 +102,7 @@ void CcsInput::onPtt(const most::View& m) {
     if (r.kind == PttTracker::kCancelled) { printf("[PTT] voice button cancelled\n"); return; }
     bool lng = r.kind == PttTracker::kReleasedLong;
     bool shrt = r.kind == PttTracker::kReleasedShort;
-    bool trigger = (lng && pttAssistant_) || (shrt && pttShort_);
+    bool trigger = (lng && pttAssistant_) || (shrt && (pttShortFollowsFlag_ ? nbt::pttShortFlagFileSet() : pttShort_));
     printf("[PTT] voice button released after %u ms (%s press%s)\n", (unsigned)r.heldMs, lng ? "long" : "short",
            trigger ? ": Google Assistant" : (lng ? "; NBT_PTT_ASSISTANT=1 would start the Assistant" : ": iDrive voice"));
     if (trigger && cb_) {

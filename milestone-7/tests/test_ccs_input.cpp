@@ -128,7 +128,22 @@ int main(int argc, char** argv) {
     {
         Client c;
         CcsInput in;
-        start(c, in, CcsConfig());                // NBT_PTT_ASSISTANT off
+        CcsConfig cfg;
+        cfg.pttShort = true;
+        start(c, in, cfg);
+        sendPtt(1);
+        sendPtt(0);                               // short: starts Google Assistant
+        assert(g_seq == "PTT+ PTT-");
+        g_seq.clear();
+        sendPtt(1);
+        usleep(800000);
+        sendPtt(0);                               // long with pttAssistant=false: ignored
+        assert(g_seq.empty());
+    }
+    {
+        Client c;
+        CcsInput in;
+        start(c, in, CcsConfig());                // NBT_PTT_ASSISTANT / NBT_PTT_SHORT off
         sendPtt(1);
         usleep(800000);
         sendPtt(0);

@@ -26,7 +26,8 @@ int main() {
     clearAll();
     {
         CcsConfig c = readCcsConfig();
-        assert(c.inst == 0x03 && c.ccsInst == 0x01 && !c.invert && !c.pttAssistant && !c.pttShort);
+        assert(c.inst == 0x03 && c.ccsInst == 0x01 && !c.invert && !c.pttAssistant && !c.pttShort &&
+               c.pttShortFollowsFlag);
         for (int s = 0; s < CCS_SLOTS; ++s) assert(!c.slotSet[s]);
         CcsDecoder d;
         applyCcsConfig(c, d);
@@ -43,7 +44,8 @@ int main() {
         setenv("NBT_KEY_MEDIA", "0x55", 1);    // base 0: hex and decimal both work
         setenv("NBT_KEY_COM", "0", 1);         // 0 is a value: this key stays with iDrive
         CcsConfig c = readCcsConfig();
-        assert(c.inst == 0x1f && c.ccsInst == 0x02 && c.invert && c.pttAssistant && c.pttShort);
+        assert(c.inst == 0x1f && c.ccsInst == 0x02 && c.invert && c.pttAssistant && c.pttShort &&
+               !c.pttShortFollowsFlag);
         CcsDecoder d;
         applyCcsConfig(c, d);
         assert(d.slotKey(CcsDecoder::slotByName("MEDIA")) == 0x55);
@@ -60,13 +62,13 @@ int main() {
     {
         setenv("NBT_PTT_ASSISTANT", "both", 1);
         CcsConfig c = readCcsConfig();
-        assert(c.pttAssistant && c.pttShort);
+        assert(c.pttAssistant && c.pttShort && !c.pttShortFollowsFlag);
     }
     clearAll();
     {
         setenv("NBT_PTT_ASSISTANT", "short", 1);
         CcsConfig c = readCcsConfig();
-        assert(!c.pttAssistant && c.pttShort);
+        assert(!c.pttAssistant && c.pttShort && !c.pttShortFollowsFlag);
     }
     clearAll();
     {
@@ -76,8 +78,20 @@ int main() {
         setenv("NBT_PTT_ASSISTANT", "0", 1);
         setenv("NBT_PTT_SHORT", "0", 1);
         CcsConfig c = readCcsConfig();
-        assert(c.inst == 0x03 && !c.slotSet[CcsDecoder::slotByName("BACK")] && !c.invert && !c.pttAssistant && !c.pttShort);
+        assert(c.inst == 0x03 && !c.slotSet[CcsDecoder::slotByName("BACK")] && !c.invert && !c.pttAssistant &&
+               !c.pttShort && !c.pttShortFollowsFlag);
     }
+    // UI checkbox flag precedence: .env wins when set; otherwise follows the flag file live.
+    assert(!pttShortSettingOn(NULL, NULL, false) && !pttShortEnvPinned(NULL, NULL));
+    assert(pttShortSettingOn(NULL, NULL, true) && !pttShortEnvPinned(NULL, NULL));
+    assert(pttShortSettingOn(NULL, "1", true) && !pttShortEnvPinned(NULL, "1"));
+    assert(!pttShortSettingOn(NULL, "1", false) && !pttShortEnvPinned(NULL, "1"));
+    assert(!pttShortSettingOn("0", NULL, true) && pttShortEnvPinned("0", NULL));
+    assert(!pttShortSettingOn("off", "both", true) && pttShortEnvPinned("off", "both"));
+    assert(pttShortSettingOn("1", NULL, false) && pttShortEnvPinned("1", NULL));
+    assert(pttShortSettingOn("on", NULL, false) && pttShortEnvPinned("on", NULL));
+    assert(pttShortSettingOn(NULL, "short", false) && pttShortEnvPinned(NULL, "short"));
+    assert(pttShortSettingOn(NULL, "both", false) && pttShortEnvPinned(NULL, "both"));
     printf("test_ccs_config OK\n");
     return 0;
 }

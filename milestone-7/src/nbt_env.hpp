@@ -121,6 +121,25 @@ static const char* const kLciMediaManualFile = "/opt/aa/lci-media";
 inline bool lciMediaFlagFileSet() { return access(kLciMediaFlagFile, F_OK) == 0 || access(kLciMediaManualFile, F_OK) == 0; }
 inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"), lciMediaFlagFileSet()); }
 
+// "Short press voice button for Assistant" (iDrive Settings checkbox; flag file kPttShortFlagFile, a hand-made
+// kPttShortManualFile also counts; NBT_PTT_SHORT=1/0 or NBT_PTT_ASSISTANT=short/both win). Off by default so native
+// iDrive voice control stays untouched unless enabled. Checked live on voice-button release when not pinned by env.
+static const char* const kPttShortFlagFile = "/var/opt/aa/ptt-short";
+static const char* const kPttShortManualFile = "/opt/aa/ptt-short";
+inline bool pttShortFlagFileSet() { return access(kPttShortFlagFile, F_OK) == 0 || access(kPttShortManualFile, F_OK) == 0; }
+inline bool pttShortEnvPinned(const char* shortEnv, const char* assistantEnv) {
+    if (shortEnv && *shortEnv) return true;
+    return assistantEnv && (!strcmp(assistantEnv, "short") || !strcmp(assistantEnv, "both"));
+}
+inline bool pttShortSettingOn(const char* shortEnv, const char* assistantEnv, bool flagFile) {
+    if (shortEnv && *shortEnv) return usbSettingOn(shortEnv, false);
+    if (assistantEnv && (!strcmp(assistantEnv, "short") || !strcmp(assistantEnv, "both"))) return true;
+    return flagFile;
+}
+inline bool pttShortEnabled() {
+    return pttShortSettingOn(getenv("NBT_PTT_SHORT"), getenv("NBT_PTT_ASSISTANT"), pttShortFlagFileSet());
+}
+
 // With Android Auto over USB on (usbEnabled()), read the phone through libusbdi, not devc-serusb-aoap (which it
 // stops for the phone): see usb_direct.hpp. On by default, since the /dev/oap* path loses TLS records whenever another
 // client reads the node and the phone ends the session; NBT_USB_DIRECT=0 / off / no / false goes back to /dev/oap*.
