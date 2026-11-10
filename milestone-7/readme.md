@@ -206,6 +206,12 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **rhmiapp-51-edrive (not car-verified): Show iDrive warnings steps aside for Max eDRIVE.** iDrive's 'eDRIVE mode'
+> screen (context 1534) reports no widget type for Max eDRIVE (`GFXIDENTIFIER_INVALID`), which the warnings watch took
+> for iDrive moving between screens and ignored, so Android Auto was put back over it. A titled screen now counts even
+> without a widget; untitled ones and Android Auto's own states are still skipped. Battery Control / Auto eDRIVE
+> already reported a widget and worked.
+>
 > **v1.9.45-camctx + rhmiapp-48-camctx (confirmed by two testers on the v1.9.43-camctx build): Android Auto steps aside for the 360 / Top View camera
 > opened with the camera button.** It had no signal for it (no reverse, no park-assist value), and the iDrive screen
 > watch skipped it because the full-screen camera reports only `GFXIDENTIFIER_INVALID`: the screen hold took it for the

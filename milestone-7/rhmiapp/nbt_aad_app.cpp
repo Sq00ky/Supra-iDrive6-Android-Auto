@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-48-camctx (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-51-edrive (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -1131,7 +1131,7 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     uint32_t now = nowMs();
     bool knobCounts = !g_aaFocused && (uint32_t)(now - g_aaFocusLostMs) > 500u;
     bool input = aa && (driverInputNow(d) || (knobCounts && knobInputNow(d)));
-    g_ow.onContext(vc, !strcmp(widget, "GFXIDENTIFIER_INVALID"), input, aa, now, knobCounts);
+    g_ow.onContext(vc, nbt::betweenScreens(vc, widget, title), input, aa, now, knobCounts);   // titled = real screen (rhmiapp-51)
     return true;
 }
 

@@ -26,10 +26,22 @@
 //
 // Pure logic, no I/O: times are monotonic ms from the caller, unit test tests/test_overlay_watch.cpp.
 
+#include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 namespace nbt {
+
+// hmi.graphicalContext reported with widget GFXIDENTIFIER_INVALID: true = iDrive between two screens (skipped by the
+// watch), false = a real screen that just reports no widget. Untitled ones and our own states (50000+, "Android Auto")
+// are transitions; a titled iDrive screen is real: Max eDRIVE's 'eDRIVE mode' (context 1534, NBTevo_Y21272I,
+// 2026-11-09) never reported a widget, so the watch never saw it and the hold put Android Auto back over it. The other
+// eDRIVE modes reported LT_Button_1Row and worked.
+inline bool betweenScreens(int vc, const char* widget, const char* title) {
+    if (!widget || strcmp(widget, "GFXIDENTIFIER_INVALID") != 0) return false;
+    if (!title || !title[0]) return true;
+    return vc >= 50000;
+}
 
 class OverlayWatch {
 public:
