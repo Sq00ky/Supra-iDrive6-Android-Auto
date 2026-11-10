@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "video_manager.hpp"
+#include "nbt_env.hpp"
 #include "car_config.hpp"
 #include "lm_geometry.hpp"
 #include <stdio.h>
@@ -894,9 +895,21 @@ bool VideoManager::retuneForCarPlay() {
     }
     // CarPlay plays through this context with CarPlay's own window id (carplay.ini WindowName=1280), so iDrive shows
     // it on surface 1280 as usual - never on Android Auto's surface.
+    // No wingrp (v1.9.49, issue #156): with "&wingrp=<our group>" CarPlay's window 1280 was created as a CHILD of our
+    // window, which is hidden whenever Android Auto is not shown, so CarPlay stayed black ("mm-renderer's video window
+    // joined our group ... vis 0") until the head unit restarted - after a clean Android Auto disconnect as well as
+    // over a live session. carplay.ini's own VideoURL has no wingrp: the factory window is top-level. NBT_CP_WINGRP=1
+    // restores the old URL.
     char out_url[256];
-    snprintf(out_url, sizeof(out_url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d&wingrp=%s",
-             NBT_SCREEN_WINDOW_ID, w, h, grp_name_.c_str());
+    const bool inGroup = nbt::envFlag("NBT_CP_WINGRP") == 1;
+    if (inGroup)
+        snprintf(out_url, sizeof(out_url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d&wingrp=%s",
+                 NBT_SCREEN_WINDOW_ID, w, h, grp_name_.c_str());
+    else
+        snprintf(out_url, sizeof(out_url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d",
+                 NBT_SCREEN_WINDOW_ID, w, h);
+    printf("[VideoManager] CarPlay output window: %s (%s)\n", out_url,
+           inGroup ? "in our window group, NBT_CP_WINGRP=1" : "top-level, like carplay.ini's VideoURL");
     int r_out = fn_out_attach(mmr_ctxt_, out_url, "video");
     if (r_out >= 0) mmr_output_id_ = r_out;
     int r_outp = -9999;
