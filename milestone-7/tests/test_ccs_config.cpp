@@ -14,6 +14,7 @@ static void clearAll() {
     unsetenv("NBT_KNOB_CCS_INST");
     unsetenv("NBT_KNOB_INVERT");
     unsetenv("NBT_PTT_ASSISTANT");
+    unsetenv("NBT_PTT_SHORT");
     for (int s = 0; s < CCS_SLOTS; ++s) {
         char name[32];
         snprintf(name, sizeof(name), "NBT_KEY_%s", CcsDecoder::slotName(s));
@@ -25,7 +26,7 @@ int main() {
     clearAll();
     {
         CcsConfig c = readCcsConfig();
-        assert(c.inst == 0x03 && c.ccsInst == 0x01 && !c.invert && !c.pttAssistant);
+        assert(c.inst == 0x03 && c.ccsInst == 0x01 && !c.invert && !c.pttAssistant && !c.pttShort);
         for (int s = 0; s < CCS_SLOTS; ++s) assert(!c.slotSet[s]);
         CcsDecoder d;
         applyCcsConfig(c, d);
@@ -38,10 +39,11 @@ int main() {
         setenv("NBT_KNOB_CCS_INST", "02", 1);
         setenv("NBT_KNOB_INVERT", "1", 1);
         setenv("NBT_PTT_ASSISTANT", "1", 1);
+        setenv("NBT_PTT_SHORT", "1", 1);
         setenv("NBT_KEY_MEDIA", "0x55", 1);    // base 0: hex and decimal both work
         setenv("NBT_KEY_COM", "0", 1);         // 0 is a value: this key stays with iDrive
         CcsConfig c = readCcsConfig();
-        assert(c.inst == 0x1f && c.ccsInst == 0x02 && c.invert && c.pttAssistant);
+        assert(c.inst == 0x1f && c.ccsInst == 0x02 && c.invert && c.pttAssistant && c.pttShort);
         CcsDecoder d;
         applyCcsConfig(c, d);
         assert(d.slotKey(CcsDecoder::slotByName("MEDIA")) == 0x55);
@@ -56,12 +58,25 @@ int main() {
     }
     clearAll();
     {
+        setenv("NBT_PTT_ASSISTANT", "both", 1);
+        CcsConfig c = readCcsConfig();
+        assert(c.pttAssistant && c.pttShort);
+    }
+    clearAll();
+    {
+        setenv("NBT_PTT_ASSISTANT", "short", 1);
+        CcsConfig c = readCcsConfig();
+        assert(!c.pttAssistant && c.pttShort);
+    }
+    clearAll();
+    {
         setenv("NBT_KNOB_INST", "", 1);        // empty keeps the default
         setenv("NBT_KEY_BACK", "", 1);
         setenv("NBT_KNOB_INVERT", "0", 1);     // present but off
         setenv("NBT_PTT_ASSISTANT", "0", 1);
+        setenv("NBT_PTT_SHORT", "0", 1);
         CcsConfig c = readCcsConfig();
-        assert(c.inst == 0x03 && !c.slotSet[CcsDecoder::slotByName("BACK")] && !c.invert && !c.pttAssistant);
+        assert(c.inst == 0x03 && !c.slotSet[CcsDecoder::slotByName("BACK")] && !c.invert && !c.pttAssistant && !c.pttShort);
     }
     printf("test_ccs_config OK\n");
     return 0;

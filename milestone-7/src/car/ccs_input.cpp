@@ -31,13 +31,14 @@ CcsEvent makeMflCcsEvent(const MflEvent& e) {
 
 } // namespace
 
-CcsInput::CcsInput() : pttAssistant_(false), cb_(NULL), user_(NULL), statusLogged_(0), ccsLogged_(0) {}
+CcsInput::CcsInput() : pttAssistant_(false), pttShort_(false), cb_(NULL), user_(NULL), statusLogged_(0), ccsLogged_(0) {}
 
 bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb, void* user) {
     cb_ = cb;
     user_ = user;
     applyCcsConfig(cfg, dec_);
     pttAssistant_ = cfg.pttAssistant;
+    pttShort_ = cfg.pttShort;
     printf("[Knob] iDrive controller input: instance %02X (CCS35up C46/C47) or %02X (CCS C10/C20), rotary%s, keys:",
            cfg.inst, cfg.ccsInst, cfg.invert ? " inverted" : "");
     for (int s = 0; s < CCS_SLOTS; ++s) printf(" %s=%u", CcsDecoder::slotName(s), dec_.slotKey(s));
@@ -95,9 +96,11 @@ void CcsInput::onPtt(const most::View& m) {
     if (r.kind == PttTracker::kIgnored) { printf("[PTT] voice button state %u (ignored)\n", v); return; }
     if (r.kind == PttTracker::kCancelled) { printf("[PTT] voice button cancelled\n"); return; }
     bool lng = r.kind == PttTracker::kReleasedLong;
+    bool shrt = r.kind == PttTracker::kReleasedShort;
+    bool trigger = (lng && pttAssistant_) || (shrt && pttShort_);
     printf("[PTT] voice button released after %u ms (%s press%s)\n", (unsigned)r.heldMs, lng ? "long" : "short",
-           lng ? (pttAssistant_ ? ": Google Assistant" : "; NBT_PTT_ASSISTANT=1 would start the Assistant") : ": iDrive voice");
-    if (lng && pttAssistant_ && cb_) {
+           trigger ? ": Google Assistant" : (lng ? "; NBT_PTT_ASSISTANT=1 would start the Assistant" : ": iDrive voice"));
+    if (trigger && cb_) {
         CcsEvent ev;
         ev.kind = 1; ev.keycode = AAK_SEARCH; ev.delta = 0; ev.what = "PTT"; ev.cancel = 0;
         ev.down = 1; cb_(ev, user_);

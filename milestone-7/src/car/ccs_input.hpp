@@ -44,6 +44,7 @@ private:
     MflDecoder mfl_;
     PttTracker ptt_;
     bool pttAssistant_;
+    bool pttShort_;
     CcsEventCb cb_;
     void* user_;
     unsigned statusLogged_;    // CCS35up status messages seen, for the first few log lines
