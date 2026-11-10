@@ -100,6 +100,7 @@
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
+#include "keyframe_ask.hpp"
 #include "touch_probe.hpp"
 #include "aa_keys.hpp"
 #include "car/ccs_config.hpp"
@@ -483,7 +484,7 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
-// The iDrive app's "Start with the car" bootloop guard (rhmiapp-20): it records each autostart here and skips the
+// The iDrive app's "Start automatically" bootloop guard (rhmiapp-20): it records each autostart here and skips the
 // autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
 static const char* const kBootGuardFile = "/var/opt/aa/bootguard";
 static void writeUiState(const char* state, int overlay) {
@@ -522,14 +523,18 @@ static nbt::VideoManager* g_video = NULL;       // for the session callbacks (va
 static nbt::AudioBackend* g_audioBackend = NULL;
 
 // Prints the Wi-Fi clients the head unit currently knows on the AP subnet (ARP table), so a log
-// shows whether the phone actually joined the CarPlay network.
+// shows whether the phone actually joined the network it was offered: the /24 of the address the daemon listens on
+// (CarPlay hotspot 172.16.224.x, Wi-Fi Direct 172.16.222.x, or NBT_AP_IP's). It used to look for 172.16.224. only and
+// so reported "none" for every Wi-Fi Direct run.
 static void logStations(const char* tag) {
+    std::string net = nbt::subnetPrefix24(nbt::wirelessListenIp());
+    if (net.empty()) net = "172.16.224.";
     FILE* p = popen("arp -an", "r");
     if (!p) return;
     char line[256];
     int n = 0;
     while (fgets(line, sizeof(line), p)) {
-        if (strstr(line, "172.16.224.")) {
+        if (strstr(line, net.c_str())) {
             size_t l = strlen(line);
             while (l && (line[l - 1] == '\n' || line[l - 1] == '\r')) line[--l] = 0;
             printf("[Wireless] AP client (%s): %s\n", tag, line);
@@ -537,7 +542,7 @@ static void logStations(const char* tag) {
         }
     }
     pclose(p);
-    if (!n) printf("[Wireless] AP clients (%s): none in ARP table\n", tag);
+    if (!n) printf("[Wireless] AP clients (%s): none in ARP table (%sx)\n", tag, net.c_str());
 }
 
 // The head unit numbers its SPP links /dev/btspp0, 1, ... in connect order, so another Bluetooth
@@ -1399,6 +1404,13 @@ static void onCarVolume(int level, int max, void*) {
 
 static uint32_t g_idrWaitMs = 0;   // decoder rebuilt on the way back: waiting for the phone's keyframe since
 static unsigned g_idrAsks = 0;
+// A dropped video frame: ask the phone for a keyframe (keyframe_ask.hpp). On unless NBT_DROP_IDR=0.
+static nbt::KeyframeAsk g_keyframeAsk;   // main loop only
+static bool dropIdrEnabled() {
+    static int s = -1;
+    if (s < 0) s = nbt::envFlag("NBT_DROP_IDR") != 0 ? 1 : 0;
+    return s == 1;
+}
 // Take the pill's surface out of the Android Auto layer's order first, then remove its window: the order never names a
 // surface whose window is gone.
 static void volOsdDown(nbt::VideoManager& vm) {
@@ -1696,7 +1708,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.45-camctx"
+#define NBT_AAD_BUILD "v1.9.53-fixes"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -1939,6 +1951,8 @@ int main(int argc, char* argv[]) {
     // 3. Input: the iDrive controller (ZBE) is read observe-only over MOSTSubSystem.DSYSMOSTServer by
     //    g_most and g_ccs (started below); iDrive keeps receiving every knob event itself.
 
+    if (!dropIdrEnabled())
+        printf("[Main] NBT_DROP_IDR=0: no keyframe request after a dropped video frame\n");
     // 3b. Volume overlay (NBT_VOL_OSD=1). Off by default: it creates an extra Screen window, so it is opt-in until the
     //     compositing is confirmed on the car. It mirrors the car's own volume (AudioMaster 0x20/0x0C08); there is no
     //     synthetic sweep and no env var for one.
@@ -2339,6 +2353,22 @@ int main(int argc, char* argv[]) {
             if (video.decoderParked()) { g_idrWaitMs = monoMs() | 1u; g_idrAsks = 0; }
             video.prepareForSession();
             g_session.postVideoFocus(true);
+        }
+        // A video frame was lost (queue full, or mdev did not take it): everything up to the phone's next keyframe
+        // decodes against the missing one. Ask for a keyframe the way the decoder rebuild above does (video focus off,
+        // on again 500 ms later): at most once in 10 s, not in a session's first 5 s, not while iDrive has the screen.
+        {
+            const bool settled = act && overlay_on && !g_idrWaitMs && upSec() - g_sessionStartS >= 5.0;
+            const nbt::KeyframeAsk::Action ka =
+                g_keyframeAsk.step(monoMs(), dropIdrEnabled() && video.keyframeWanted(), want && settled, want && act, act);
+            if (ka == nbt::KeyframeAsk::kFocusOff) {
+                printf("[Main] [%9.3f] a video frame was dropped: asking the phone for a keyframe (video focus off/on)\n",
+                       upSec());
+                video.clearKeyframeWanted();
+                g_session.postVideoFocus(false);
+            } else if (ka == nbt::KeyframeAsk::kFocusOn) {
+                g_session.postVideoFocus(true);
+            }
         }
         g_inputToPhone = (want && act) ? 1 : 0;
         nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen

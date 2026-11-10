@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <sys/time.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/select.h>
 
@@ -224,13 +225,18 @@ void fillApNetworkInfo(const char* ifname, ApInfo& ap) {
     printf("[Wireless] %s: ip='%s' bssid='%s'\n", ifname, ap.ip.c_str(), ap.bssid.c_str());
 }
 
+// Milliseconds on the monotonic clock. The handshake timeouts are measured with it, so they do not move when the head
+// unit sets its clock (the wall clock, taken modulo 100000 s, did: a step forward ended a handshake early, a step back
+// or the wrap kept one from timing out).
+static long long nowMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 static bool writeAll(int fd, const std::vector<uint8_t>& d) {
     size_t off = 0;
-    {
-        struct timeval tv;
-        gettimeofday(&tv, NULL);
-        printf("[Wireless] RAW TX t=%ld +%u\n", (long)(tv.tv_sec % 100000) * 1000 + tv.tv_usec / 1000, (unsigned)d.size());
-    }
+    printf("[Wireless] RAW TX t=%lld +%u\n", nowMs(), (unsigned)d.size());
     while (off < d.size()) {
         ssize_t n = write(fd, &d[off], d.size() - off);
         if (n < 0) {
@@ -244,12 +250,6 @@ static bool writeAll(int fd, const std::vector<uint8_t>& d) {
 }
 
 static int g_lastReadEnd = 0;   // 0 = ok, 1 = timeout, 2 = closed by peer, 3 = error
-
-static long nowMs() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (long)(tv.tv_sec % 100000) * 1000 + tv.tv_usec / 1000;
-}
 
 // ---- buffered RFCOMM reader --------------------------------------------------------------------
 // The head unit's btspp device behaves message-oriented: a read() with a buffer smaller than the
@@ -313,7 +313,7 @@ static int rxFill(int fd, int timeout_ms) {
     ssize_t k = read(fd, tmp, sizeof(tmp));
     if (k == 0) { g_lastReadEnd = 2; return -1; }
     if (k < 0) { if (errno == EINTR || errno == EAGAIN) return 0; g_lastReadEnd = 3; return -1; }
-    printf("[Wireless] RAW RX t=%ld +%d:", nowMs(), (int)k);
+    printf("[Wireless] RAW RX t=%lld +%d:", nowMs(), (int)k);
     for (ssize_t i = 0; i < k && i < 48; ++i) printf(" %02x", tmp[i]);
     printf("\n");
     // Only the first message of a new link is inspected. Once an Android Auto frame has been
@@ -448,8 +448,8 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
     }
     int startRespSeen = 0;
     bool startAcked = false;
-    long tStart = nowMs();
-    long tInfo = sentInfo ? tStart : 0;
+    long long tStart = nowMs();
+    long long tInfo = sentInfo ? tStart : 0;
     int resends = 0;
     for (;;) {
         uint16_t id; std::vector<uint8_t> pl;
@@ -476,7 +476,7 @@ bool runWirelessHandshake(int fd, const ApInfo& ap, uint16_t port, int timeout_m
             return false;
         }
         if (f == 0) {
-            long now = nowMs();
+            long long now = nowMs();
             if (sentInfo) {
                 if (startAcked && now - tInfo > 45000) {
                     printf("[Wireless] phone accepted the Wi-Fi start; waiting for its TCP connection\n");

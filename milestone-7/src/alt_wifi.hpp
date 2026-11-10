@@ -330,6 +330,17 @@ inline bool wfdSameSubnetStr(const std::string& a, const std::string& b) {
     return wfdSameSubnet(ntohl(x.s_addr), ntohl(y.s_addr));
 }
 
+// "172.16.222.1" -> "172.16.222.": the /24 of an address as it starts in an `arp -an` line. Empty when ip is not an
+// IPv4 address.
+inline std::string subnetPrefix24(const char* ip) {
+    struct in_addr a;
+    if (!ip || !*ip || !inet_aton(ip, &a)) return std::string();
+    const unsigned h = ntohl(a.s_addr);
+    char b[20];
+    snprintf(b, sizeof(b), "%u.%u.%u.", (h >> 24) & 255u, (h >> 16) & 255u, (h >> 8) & 255u);
+    return b;
+}
+
 // ---- listener address ------------------------------------------------------------------------------
 // Where the daemon listens for the phone, which has to be the interface the phone was told about: on
 // 2026-11-03 the phone joined the DIRECT group and connected to nothing, because the listener was bound to

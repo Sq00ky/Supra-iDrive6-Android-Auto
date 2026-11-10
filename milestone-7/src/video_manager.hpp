@@ -48,6 +48,10 @@ public:
     // jittery, wrong-colour garbage (G30, v1.9.15). Frames are dropped until the first IDR. releaseKeyframeWait()
     // gives up waiting (the phone never sent one).
     bool waitingForKeyframe();
+    // A frame was lost on the way to the decoder (queue full, or mdev did not take it) and no keyframe has been queued
+    // since: the picture stays damaged until one comes. The main loop asks the phone for it (keyframe_ask.hpp).
+    bool keyframeWanted();
+    void clearKeyframeWanted();
     // NBT_MMR_WIN_HIDE=1 (experiment): mm-renderer's winid=1280 window joins our window group, so our context gets a
     // SCREEN_EVENT_CREATE with its handle. pollScreenEvents() (main loop) records it; hideVideoWindow() sets it
     // VISIBLE 0 at the background z-order with the decoder left open, setVisible(true) restores what was read.
@@ -153,6 +157,7 @@ private:
     int mmr_saved_vis_, mmr_saved_z_;
     int screen_events_logged_;
     uint32_t idr_dropped_;          // guarded by queue_mutex_
+    bool idr_wanted_;               // guarded by queue_mutex_: a frame was lost and no keyframe was queued since
     volatile uint32_t decoder_gen_;     // +1 per decoder context created
     volatile uint32_t frames_in_gen_;   // frames sent to mdev since the current context was created
     volatile bool window_ready_;    // createWindow() finished (setVisible() is a no-op before)

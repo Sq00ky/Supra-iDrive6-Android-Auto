@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 //
-// "Start with the car" bootloop guard: pure decision logic (host-tested in tests/test_boot_guard.cpp).
+// "Start automatically" bootloop guard: pure decision logic (host-tested in tests/test_boot_guard.cpp).
 //
 // The guard file holds one stamp per autostart. It only ever holds boots that went wrong: the daemon deletes it after
 // 10 min of uptime or on a clean exit, menu Start deletes it, and the iDrive app deletes it once it has stayed up

@@ -493,7 +493,9 @@ void VolumeOsd::loop() {
             ms += 100;
             continue;
         }
+        // dirty_ is cleared before the level is read: a change that lands in between sets it again for the next pass.
         const bool want = dirty_;
+        if (want) dirty_ = false;
         const int pct = pct_;
         if (want && pct != cur) {
             Canvas cv;
@@ -512,8 +514,11 @@ void VolumeOsd::loop() {
             shown = true;
             cur = pct;
             shown_at_ms = (uint64_t)ms;
-            dirty_ = false;
             ++frame;
+        } else if (want && shown) {
+            // The same level reported again while the pill is up: nothing to redraw, the pill stays up from now. The
+            // flag used to stay set here, and drew the pill again on the pass after it had been hidden.
+            shown_at_ms = (uint64_t)ms;
         }
         if (shown && ((uint64_t)ms - shown_at_ms) >= kHideMs) {
             // Clear the pill with a fully transparent frame; the surface stays in the layer's order (no LayerManager

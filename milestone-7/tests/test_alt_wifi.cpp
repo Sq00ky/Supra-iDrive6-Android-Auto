@@ -221,6 +221,13 @@ int main() {
     CHECK(ifip == "172.16.222.1");
     ifip.clear();
     CHECK(!nbt::parseIfconfigIpv4("wfd0: flags=8843<UP>\n\taddress: 3a:b8:00:48:90:c3\n", ifip));
+    // The /24 of an address as `arp -an` lines start it (the "AP clients" log)
+    CHECK(nbt::subnetPrefix24("172.16.222.1") == "172.16.222.");
+    CHECK(nbt::subnetPrefix24("172.16.224.1") == "172.16.224.");
+    CHECK(nbt::subnetPrefix24("10.0.5.77") == "10.0.5.");
+    CHECK(nbt::subnetPrefix24("") == "");
+    CHECK(nbt::subnetPrefix24(NULL) == "");
+    CHECK(nbt::subnetPrefix24("wfd0") == "");
     unsetenv("NBT_ALT_WIFI");                          // unset = today's behaviour = CarPlay
 
     // ---- loadWfdAp: file -> ApInfo -----------------------------------------------

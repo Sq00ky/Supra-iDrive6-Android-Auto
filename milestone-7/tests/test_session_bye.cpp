@@ -117,6 +117,27 @@ int main() {
     close(phone);
     printf("next session: ok\n");
 
+    // A broken encrypted stream ends an established session: 16 frames in a row that do not decrypt. Fewer, then one
+    // that does, start the count again.
+    establish(s, &phone);
+    const uint8_t bad[6] = { 0, 0x0B, 0, 2, 0xEE, 0xEE };    // stub_cryptor.hpp refuses a payload that starts 0xEE
+    const uint8_t good[6] = { 0, 0x0B, 0, 2, 0x7F, 0x7F };
+    const int before = __sync_fetch_and_add(&g_ended, 0);
+    for (int i = 0; i < 15; ++i) assert(write(phone, bad, sizeof(bad)) == (ssize_t)sizeof(bad));
+    assert(write(phone, good, sizeof(good)) == (ssize_t)sizeof(good));
+    for (int i = 0; i < 15; ++i) assert(write(phone, bad, sizeof(bad)) == (ssize_t)sizeof(bad));
+    usleep(100000);
+    assert(s.isActive());                                     // 15, one good, 15: never 16 in a row
+    assert(__sync_fetch_and_add(&g_ended, 0) == before);
+    assert(write(phone, bad, sizeof(bad)) == (ssize_t)sizeof(bad));
+    for (int w = 0; w < 400 && __sync_fetch_and_add(&g_ended, 0) == before; ++w) usleep(5000);
+    assert(__sync_fetch_and_add(&g_ended, 0) == before + 1);
+    assert(!s.isActive());
+    assert(s.outcome() == AASession::kEstablished);           // it was up: not a stale phone, no USB reset
+    s.stop();
+    close(phone);
+    printf("broken stream: ok\n");
+
     printf("test_session_bye OK\n");
     return 0;
 }

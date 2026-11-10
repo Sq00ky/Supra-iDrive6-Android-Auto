@@ -37,7 +37,8 @@ static uint32_t monoMs() {
 }
 
 // Under a second of video from a phone in an earlier session. A few are let through in case the first frames of a
-// session are ever not application data.
+// session are ever not application data. The same count ends a session that was up: once one TLS record is lost or
+// damaged none of the following decrypt, so that many in a row means the stream will not recover.
 static const uint32_t kMaxUndecrypted = 16;
 
 AASession::AASession()
@@ -1276,14 +1277,20 @@ void AASession::sessionLoop() {
                     reassembly_wire_.erase(channel);
                     // A phone still streaming an earlier session never answers this one, and its frames keep the
                     // no-data timeout from firing: without this the session would sit here for as long as it streams.
-                    if (!decrypted_any_ && ++undecrypted_ >= kMaxUndecrypted) {
-                        printf("[AASession] none of the first %u encrypted frames could be decrypted: the phone is "
-                               "still in an earlier session, ending this one\n", (unsigned)undecrypted_);
+                    // Mid-session it is the same trap: the frames that no longer decrypt keep arriving.
+                    if (++undecrypted_ >= kMaxUndecrypted) {
+                        if (decrypted_any_)
+                            printf("[AASession] %u encrypted frames in a row could not be decrypted: the encrypted stream "
+                                   "is broken, ending the session\n", (unsigned)undecrypted_);
+                        else
+                            printf("[AASession] none of the first %u encrypted frames could be decrypted: the phone is "
+                                   "still in an earlier session, ending this one\n", (unsigned)undecrypted_);
                         break;
                     }
                     continue;
                 }
                 decrypted_any_ = true;
+                undecrypted_ = 0;
             } else {
                 decrypted_chunk = payload;
             }

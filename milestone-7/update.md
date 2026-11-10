@@ -10,7 +10,7 @@ We're swapping out two things for their newer versions:
 1. The Android Auto Daemon (`nbt-aad`)
 2. The iDrive6 plugin (the "Android Auto" entry in Media/Radio)
 
-Your settings stay where they are. The settings file (`/opt/aa/nbt-aad.env`, if you have one) and the "Start with the car" checkbox are not touched by the update.
+Your settings stay where they are. The settings file (`/opt/aa/nbt-aad.env`, if you have one) and the "Start automatically" checkbox are not touched by the update.
 
 **The golden rule:** never copy a new file over one that's in use. The head unit can crash if you overwrite a running program. Instead, we *move* the old file out of the way (renaming it to `.old`), copy the new one in, and reboot. As a bonus, the `.old` copies are your undo button if something goes wrong.
 
