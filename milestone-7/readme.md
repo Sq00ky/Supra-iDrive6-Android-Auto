@@ -206,9 +206,10 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
-> **v1.9.56-fixes-panel + rhmiapp-53-edrive-fixes (not car-verified):** v1.9.54-panel and v1.9.53-fixes (with
-> rhmiapp-51-edrive) in one build, without the handshake-clock change that v1.9.53 / v1.9.55 carried: v1.9.55 did not
-> connect on a GR Supra, and which change caused that is not established.
+> **v1.9.56-fixes-panel + rhmiapp-53-edrive-fixes (connects on a GR Supra, NBTevo_T21424I; the individual fixes below
+> are not car-verified):** v1.9.54-panel and v1.9.53-fixes (with rhmiapp-51-edrive) in one build, without the
+> handshake-clock change that v1.9.53 / v1.9.55 carried. With it (v1.9.55) the phone took the Wi-Fi details and never
+> connected on that car; the same build without it connects. Why is not known.
 >
 > **v1.9.54-panel (not car-verified; issue #169): a car without CarPlay takes its screen size from the display.**
 > With no `carplay.ini` (CarPlay never coded) the screen was the 1280x480 default, so on a larger panel Android Auto
