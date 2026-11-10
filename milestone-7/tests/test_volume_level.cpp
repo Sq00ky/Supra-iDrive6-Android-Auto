@@ -29,7 +29,7 @@ int main() {
         }
         printf("test_volume_level car capture OK\n");
     }
-    {   // Not a level message.
+    {   // Not a level message or non-entertainment channel.
         VolumeLevel v;
         int lv = -1, mx = -1;
         uint8_t bad[5] = { 0x01, 0x00, 0x05, 0x00, 0x00 };            // MAX 0
@@ -38,6 +38,11 @@ int main() {
         assert(!v.feed(NULL, 5, 0, lv, mx));
         uint8_t over[5] = { 0x01, 0x00, 0x65, 0x00, 0x64 };           // level above MAX
         assert(!v.feed(over, 5, 0, lv, mx));
+        // Issue #160: Navigation prompt (0x02) and Gong/PDC (0x06) channels must not trigger volume level changes
+        uint8_t nav[5] = { 0x02, 0x00, 0x19, 0x00, 0x64 };            // Nav prompt volume: 25% (channel 0x02)
+        assert(!v.feed(nav, 5, 100, lv, mx));
+        uint8_t gong[5] = { 0x06, 0x00, 0x32, 0x00, 0x64 };           // Gong/PDC volume: 50% (channel 0x06)
+        assert(!v.feed(gong, 5, 100, lv, mx));
         assert(lv == -1 && mx == -1);                                 // untouched
     }
     {   // reset: the next level is new even if it repeats the last one.
