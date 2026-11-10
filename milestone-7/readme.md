@@ -206,6 +206,41 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **v1.9.56-fixes-panel + rhmiapp-53-edrive-fixes (connects on a GR Supra, NBTevo_T21424I; the individual fixes below
+> are not car-verified):** v1.9.54-panel and v1.9.53-fixes (with rhmiapp-51-edrive) in one build, without the
+> handshake-clock change that v1.9.53 / v1.9.55 carried. With it (v1.9.55) the phone took the Wi-Fi details and never
+> connected on that car; the same build without it connects. Why is not known.
+>
+> **v1.9.54-panel (not car-verified; issue #169): a car without CarPlay takes its screen size from the display.**
+> With no `carplay.ini` (CarPlay never coded) the screen was the 1280x480 default, so on a larger panel Android Auto
+> filled only the top-left part of the screen. The display size from LayerManager (`get screen 0`), until now used only
+> to enlarge a smaller coded CarPlay picture, is used in that case too. Log:
+> `[Car] ... screen 1440x540 (display size (no carplay.ini))`; `(default)` there means LayerManager gave no size.
+> `NBT_SCREEN=<w>x<h>` still overrides. The vehicle name has no second source and stays Toyota without `carplay.ini`:
+> `NBT_VEHICLE=bmw`.
+>
+> **v1.9.53-fixes + rhmiapp-53-edrive-fixes (not car-verified; includes rhmiapp-51-edrive): fixes from a code review.**
+> - **Use Native Audio instead of Bluetooth** did nothing on a car without `/opt/aa/nbt-aad.env`: the iDrive app added
+>   `NBT_AUDIO_BT=1` to the daemon's environment in that case, and that setting outranks the checkbox (the log said
+>   `audio mode: bt (... from nbt-aad.env)` with no such file). **Media Controls for LCI Steering Wheels** was dead with
+>   it. The app no longer adds it; Bluetooth is still the default.
+> - A session whose encrypted stream breaks ends: 16 frames in a row that do not decrypt
+>   (`encrypted frames in a row could not be decrypted: the encrypted stream is broken`). Before, only a session that
+>   had never decrypted a frame gave up; an established one stayed up and logged every frame.
+> - The volume pill no longer comes back right after it hid when the car reported the same level twice.
+> - A video frame that had to be dropped (queue full, or the decoder did not take it within 250 ms) is followed by a
+>   keyframe request (video focus off, on again 500 ms later; at most once in 10 s, not in a session's first 5 s).
+>   Log: `a video frame was dropped: asking the phone for a keyframe`. `NBT_DROP_IDR=0` turns it off.
+> - `AP clients ...` looks at the subnet the phone was offered. With Wi-Fi Direct (172.16.222.x) or `NBT_AP_IP` it
+>   always said `none in ARP table`.
+> - The update guides name the checkbox **Start automatically**, as the menu does.
+>
+> **rhmiapp-51-edrive (not car-verified): Show iDrive warnings steps aside for Max eDRIVE.** iDrive's 'eDRIVE mode'
+> screen (context 1534) reports no widget type for Max eDRIVE (`GFXIDENTIFIER_INVALID`), which the warnings watch took
+> for iDrive moving between screens and ignored, so Android Auto was put back over it. A titled screen now counts even
+> without a widget; untitled ones and Android Auto's own states are still skipped. Battery Control / Auto eDRIVE
+> already reported a widget and worked.
+>
 > **v1.9.45-camctx + rhmiapp-48-camctx (confirmed by two testers on the v1.9.43-camctx build): Android Auto steps aside for the 360 / Top View camera
 > opened with the camera button.** It had no signal for it (no reverse, no park-assist value), and the iDrive screen
 > watch skipped it because the full-screen camera reports only `GFXIDENTIFIER_INVALID`: the screen hold took it for the
@@ -704,7 +739,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_KNOB_INST` | 03 | CCS35up controller instance (hex) |
 | `NBT_KNOB_CCS_INST` | 01 | Older CCS controller instance (hex) |
 | `NBT_VEHICLE` | from `carplay.ini` (CarPlay logo, then Manufacturer) | `toyota`, `bmw`, `mini` or `rollsroyce`: the car make Android Auto shows (exit icon) |
-| `NBT_SCREEN` | from `carplay.ini` (a `1180_480` coding counts as a 1280x480 panel) | Panel size, e.g. `1440x540` (BMW 10.25") |
+| `NBT_SCREEN` | from `carplay.ini` (a `1180_480` coding counts as a 1280x480 panel); without one, the display size LayerManager reports (v1.9.54), else 1280x480 | Panel size, e.g. `1440x540` (BMW 10.25") |
 
 ### Features you can turn off (all on by default)
 
@@ -712,6 +747,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 |---|---|---|
 | `NBT_WIRELESS` | `0` | HU-hosted wireless. Off = old mode where the daemon scans for a phone running "Start head unit server" |
 | `NBT_AUDIO_BT` | `0` | Only read when `NBT_AUDIO_MODE` is unset. Media over Bluetooth A2DP (the default again since v1.8.66); `0` = experimental A2I pipeline (see below). Browser audio: `NBT_AUDIO_MODE=browser` |
+| `NBT_DROP_IDR` | `0` | v1.9.53: after a dropped video frame the daemon asks the phone for a keyframe (video focus off, on again 500 ms later, at most once in 10 s). `0` = never ask: the picture then stays damaged until the phone's next keyframe |
 | `NBT_GUIDANCE_BT` | `0` | Bluetooth mode only: nav prompts mixed into the Bluetooth audio (sink declared as system audio) |
 | `NBT_VOICE_SCENARIO` | `0` | Car mic routed to the Assistant via the `Carplay_Siri_1mic` speech scenario. Without it the Assistant hears silence |
 | `NBT_BT_REFOCUS` | `0` | Request the car's Bluetooth source again after the Assistant closes the mic, so the reply is heard |
@@ -1257,11 +1293,12 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_session_sensors` | Sensor channel in `aa_session` over a socket with the stub cryptor: SensorStartRequest, the events it starts, the satellite timer, old data |
 | `test_ctl_wizard` | Wizard logic and env output |
 | `test_voice_scenario` | Voice scenario default / off switch |
-| `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE, driver's side |
+| `test_car_config` | `carplay.ini` parsing, NBT_SCREEN / NBT_VEHICLE, the display size with and without a coded size, driver's side |
 | `test_video_geometry` (+ `src/sdr_builder.cpp`) | 480p, 720p and 1080p at 30 / 60 fps / unset across screen sizes: aspect ratio, phone insets, DPI, MINI calibration and touch coordinates |
 | `test_pcm` | Ring buffer + resampler |
 | `test_audio_mixer` | Browser mode mixer: ducking ramps, hold, saturation, gains; stream rate (declared / measured among the offered rates); drift loops P and PI in a one-hour closed loop at -300..+300 ppm |
 | `test_audio_acks` | The session's deferred acks and underflow reports: off / on, sent guidance-media-system, a failed send, leftovers at a new stream, ack times, forced acks, `NBT_AA_MAX_UNACKED` |
+| `test_keyframe_ask` | Keyframe request after a dropped video frame: focus off then on 500 ms later, once in 10 s, held back while iDrive has the screen, dropped when the session ends |
 | `test_audio_config` | The audio settings: defaults, ranges and parsing of each browser / Bluetooth setting, `NBT_AUDIO_MODE` / `NBT_AUDIO_BT` precedence |
 | `test_audio_channels` | The AA audio channel table: 8 / 9 / 16 <-> stream, other channels rejected, names, log order |
 | `test_media_ack` | Deferred audio acks: acked once consumed, forced acks and skipped bytes, window-full count, a phone held to its window |

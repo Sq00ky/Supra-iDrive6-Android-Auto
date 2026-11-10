@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test for rhmiapp/boot_guard.hpp: the "Start with the car" bootloop guard.
+// Host test for rhmiapp/boot_guard.hpp: the "Start automatically" bootloop guard.
 #include "../rhmiapp/boot_guard.hpp"
 #include <assert.h>
 #include <stdio.h>

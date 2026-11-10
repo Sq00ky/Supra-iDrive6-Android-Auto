@@ -154,6 +154,7 @@ VideoManager::VideoManager()
       mmr_saved_z_(0),
       screen_events_logged_(0),
       idr_dropped_(0),
+      idr_wanted_(false),
       decoder_gen_(0), frames_in_gen_(0), window_ready_(false), overlay_surface_(0), overlay_verified_(false),
       overlay_failed_(false), aa_surface_seen_(false), aa_surface_logged_(false), aa_surface_ticks_(0) {
     memset(&sink_, 0, sizeof(sink_));
@@ -951,6 +952,19 @@ bool VideoManager::waitingForKeyframe() {
     return w;
 }
 
+bool VideoManager::keyframeWanted() {
+    pthread_mutex_lock(&queue_mutex_);
+    bool w = idr_wanted_;
+    pthread_mutex_unlock(&queue_mutex_);
+    return w;
+}
+
+void VideoManager::clearKeyframeWanted() {
+    pthread_mutex_lock(&queue_mutex_);
+    idr_wanted_ = false;
+    pthread_mutex_unlock(&queue_mutex_);
+}
+
 void VideoManager::releaseKeyframeWait() {
     pthread_mutex_lock(&queue_mutex_);
     if (wait_idr_) printf("[VideoManager] no keyframe after the decoder rebuild (%u frames dropped): passing frames on\n",
@@ -1486,8 +1500,15 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
         for (std::vector<VideoQueueItem>::iterator it = frame_queue_.begin(); it != frame_queue_.end(); ++it) {
             if (!it->is_config && !it->is_idr) {   // never sacrifice a keyframe
                 dropped_size = it->data.size();
-                frame_queue_.erase(it);
+                it = frame_queue_.erase(it);
                 dropped = true;
+                // Every frame up to the next keyframe decodes against the missing one. A keyframe already queued behind
+                // it repairs the picture by itself; otherwise the phone has to be asked (keyframeWanted()).
+                bool idr_behind = false;
+                for (; it != frame_queue_.end(); ++it) {
+                    if (it->is_idr) { idr_behind = true; break; }
+                }
+                if (!idr_behind) idr_wanted_ = true;
                 break;
             }
         }
@@ -1516,6 +1537,7 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
     item.pts = pts;
     item.is_config = false;
     item.is_idr = looksLikeIdr(data, length);
+    if (item.is_idr) idr_wanted_ = false;   // the phone's keyframe repairs whatever was lost before it
     frame_queue_.push_back(item);
     pthread_cond_signal(&queue_cond_);
     pthread_mutex_unlock(&queue_mutex_);
@@ -1626,6 +1648,16 @@ void VideoManager::workerLoop() {
 
                 frame_count++;
                 if (ret == 0) ++frames_in_gen_;
+                if (ret != 0) {
+                    // mdev did not take the frame: it is lost like a queue-full drop (see postVideoFrame).
+                    pthread_mutex_lock(&queue_mutex_);
+                    bool idr_behind = false;
+                    for (size_t i = 0; i < frame_queue_.size(); ++i) {
+                        if (frame_queue_[i].is_idr) { idr_behind = true; break; }
+                    }
+                    if (!idr_behind) idr_wanted_ = true;
+                    pthread_mutex_unlock(&queue_mutex_);
+                }
                 if (ret != 0 || frame_count <= 35 || (frame_count % 30) == 0) {
                     printf("[VideoManager] mdev frame #%u END (%u bytes%s, raw=%u, cfg=%u, pts=%llu, elapsed=%llu us) -> MsgSendvs_r ret=%d (status: %s)\n",
                            frame_count, static_cast<unsigned int>(item.data.size()),

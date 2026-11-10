@@ -186,6 +186,43 @@ int main() {
     c = carcfg_detail::load();
     CHECK(!c.bmw && c.screenW == 1280 && c.screenH == 480);
     CHECK(strcmp(c.vehicleFrom, "default") == 0);
+    CHECK(strcmp(c.screenFrom, "default") == 0);
+
+    // no file, but LayerManager knows the panel (issue #169: a car that never had CarPlay): the panel's size. The
+    // vehicle has no other source and stays the default.
+    setenv("NBT_DISPLAY_SIZE", "1440x540", 1);
+    c = carcfg_detail::load();
+    CHECK(c.screenW == 1440 && c.screenH == 540 && c.iniW == 0 && c.iniH == 0 && c.dispW == 1440 && c.dispH == 540);
+    CHECK(strcmp(c.screenFrom, "display size (no carplay.ini)") == 0);
+    CHECK(!c.bmw && strcmp(c.vehicleFrom, "default") == 0);
+    setenv("NBT_SCREEN", "1280x480", 1);                               // NBT_SCREEN still wins
+    c = carcfg_detail::load();
+    CHECK(c.screenW == 1280 && c.screenH == 480 && strcmp(c.screenFrom, "NBT_SCREEN") == 0);
+    unsetenv("NBT_SCREEN");
+    setenv("NBT_DISPLAY_SIZE", "0x0", 1);                              // LayerManager gave nothing usable: default
+    c = carcfg_detail::load();
+    CHECK(c.screenW == 1280 && c.screenH == 480 && strcmp(c.screenFrom, "default") == 0);
+    setenv("NBT_DISPLAY_SIZE", "100x100", 1);
+    c = carcfg_detail::load();
+    CHECK(c.screenW == 1280 && c.screenH == 480 && strcmp(c.screenFrom, "default") == 0);
+    // a carplay.ini without a [Screen] size: the same
+    writeFile("/tmp/nbt_cfg_noscreen.ini", "[General]\nManufacturer=BMW\n");
+    setenv("NBT_CARPLAY_INI", "/tmp/nbt_cfg_noscreen.ini", 1);
+    setenv("NBT_DISPLAY_SIZE", "1440x540", 1);
+    c = carcfg_detail::load();
+    CHECK(c.bmw && c.screenW == 1440 && c.screenH == 540);
+    CHECK(strcmp(c.screenFrom, "display size (carplay.ini has no screen size)") == 0);
+    // with a coded size the rule is as before: the display counts only when it is larger than the coded picture
+    setenv("NBT_CARPLAY_INI", "/tmp/nbt_cfg_bmw.ini", 1);
+    c = carcfg_detail::load();
+    CHECK(c.screenW == 1440 && c.screenH == 540 && strcmp(c.screenFrom, "carplay.ini") == 0);   // same size
+    setenv("NBT_DISPLAY_SIZE", "1280x480", 1);
+    c = carcfg_detail::load();
+    CHECK(c.screenW == 1440 && c.screenH == 540 && strcmp(c.screenFrom, "carplay.ini") == 0);   // smaller: not used
+    setenv("NBT_DISPLAY_SIZE", "1920x720", 1);
+    c = carcfg_detail::load();
+    CHECK(c.screenW == 1920 && c.screenH == 720 && c.iniW == 1440);                             // larger: the display
+    unsetenv("NBT_DISPLAY_SIZE");
 
     // Process-wide config for the rest: BMW 1440x540 from the ini
     setenv("NBT_CARPLAY_INI", "/tmp/nbt_cfg_bmw.ini", 1);

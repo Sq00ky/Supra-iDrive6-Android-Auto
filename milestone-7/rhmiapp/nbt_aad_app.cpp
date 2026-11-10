@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-48-camctx (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-53-edrive-fixes (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -499,11 +499,10 @@ pid_t launchDaemon() {
             envp[ne++] = envbuf[nb++];
         }
         fclose(f);
-    } else {
-        strcpy(envbuf[1], "NBT_AUDIO_BT=1");
-        envp[ne++] = envbuf[1];
-        nb = 2;
     }
+    // No env file: nothing is added, the daemon's own defaults apply (Bluetooth audio unless "Use Native Audio instead
+    // of Bluetooth" is ticked). Until rhmiapp-51 NBT_AUDIO_BT=1 was added here, and since that setting outranks the
+    // checkbox, the checkbox (and the LCI media keys behind it) did nothing on a car without an env file.
     for (char** e = environ; e && *e && ne < (int)(sizeof(envp) / sizeof(envp[0])) - 1; ++e) {
         if (strncmp(*e, "PATH=", 5) == 0) continue;
         envp[ne++] = *e;
@@ -1131,7 +1130,7 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     uint32_t now = nowMs();
     bool knobCounts = !g_aaFocused && (uint32_t)(now - g_aaFocusLostMs) > 500u;
     bool input = aa && (driverInputNow(d) || (knobCounts && knobInputNow(d)));
-    g_ow.onContext(vc, !strcmp(widget, "GFXIDENTIFIER_INVALID"), input, aa, now, knobCounts);
+    g_ow.onContext(vc, nbt::betweenScreens(vc, widget, title), input, aa, now, knobCounts);   // titled = real screen (rhmiapp-51)
     return true;
 }
 
@@ -2100,7 +2099,7 @@ bool onMenuIdriveToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-// ---- "Start with the car" bootloop guard -------------------------------------------------------------------------
+// ---- "Start automatically" bootloop guard -------------------------------------------------------------------------
 // A tester's head unit reset 5 times in a row (2026-10-29): each boot autostarted nbt-aad, the phone connected and the
 // unit reset again. Each autostart is recorded (wall-clock seconds, persistent flash file); after kBootGuardMax of them
 // within kBootGuardWindowS the autostart is skipped. The daemon deletes the file on a clean exit and after 10 min of

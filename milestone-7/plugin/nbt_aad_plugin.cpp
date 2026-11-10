@@ -19,7 +19,7 @@
 //
 // Off switch: touch /opt/aa/menu.disable (or remove /opt/aa/nbt-aad), then reboot.
 // Optional /opt/aa/menu.cfg lines: text=0x.. icon=0x.. focus=0x.. order=0x.. (resource handles / ids).
-// Optional /opt/aa/nbt-aad.env: one NAME=value per line for the daemon (default NBT_AUDIO_BT=1).
+// Optional /opt/aa/nbt-aad.env: one NAME=value per line for the daemon (without it the daemon's defaults apply).
 // Logs: /dev/shmem/nbt-aad-plugin.log (+ slog major 0x4e41), daemon output appends to /dev/shmem/nbt-aad.log.
 #include "plugin_abi.hpp"
 #include "hmi_services.hpp"
@@ -136,10 +136,6 @@ void launchDaemon() {
             envp[ne++] = envbuf[nb++];
         }
         fclose(f);
-    } else {
-        strcpy(envbuf[1], "NBT_AUDIO_BT=1");
-        envp[ne++] = envbuf[1];
-        nb = 2;
     }
     for (char** e = environ; e && *e && ne < (int)(sizeof(envp) / sizeof(envp[0])) - 1; ++e) {
         if (strncmp(*e, "PATH=", 5) == 0) continue;

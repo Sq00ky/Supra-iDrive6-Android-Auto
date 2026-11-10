@@ -18,7 +18,12 @@ public:
     bool processHandshakeData(const uint8_t*, size_t, std::vector<uint8_t>&) { return false; }
     bool isHandshakeComplete() const { return false; }
     bool encrypt(const uint8_t* d, size_t n, std::vector<uint8_t>& o) { o.assign(d, d + n); return true; }
-    bool decrypt(const uint8_t* d, size_t n, std::vector<uint8_t>& o) { o.assign(d, d + n); return true; }
+    // A payload that starts 0xEE does not decrypt (no real message does): lets a test script a broken stream.
+    bool decrypt(const uint8_t* d, size_t n, std::vector<uint8_t>& o) {
+        if (n && d[0] == 0xEE) { o.clear(); return false; }
+        o.assign(d, d + n);
+        return true;
+    }
     const char* lastError() const { return ""; }
     size_t pendingOut() const { return 0; }
 };
