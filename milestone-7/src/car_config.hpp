@@ -12,7 +12,9 @@
 //      [Screen] Width / Height and [General] Manufacturer / Model, and the brand logo Connectivity picked for CarPlay
 //      (OEMIcon=/opt/conn/data/carplay/OEM_MINI.png or OEMIconSet=Path:.../OEM_RR.png;...; files OEM_BMW, OEM_BMWi,
 //      OEM_MINI, OEM_RR, OEM_TOYOTA). The logo wins over Manufacturer: it is the brand the car itself shows.
-//   3. defaults: 1280x480, Toyota (GR Supra J29)
+//   3. screen only, when carplay.ini gives no size (a car that never had CarPlay coded has no such file): the size
+//      LayerManager reports for screen 0, the central display
+//   4. defaults: 1280x480, Toyota (GR Supra J29)
 // NBT_CARPLAY_INI=<path> points at a different file. The factory TEMPLATE
 // /opt/conn/data/carplay/carplay.ini is never used: it lists every screen option (900x540 first).
 
@@ -51,7 +53,7 @@ struct CarConfig {
     std::string model;          // [General] Model, e.g. J29-NBTEvo-0319
     std::string coded;          // "#Coded is: ..." line
     std::string oemIcon;        // OEMIcon / OEMIconSet logo file, e.g. OEM_MINI.png
-    const char* screenFrom;     // "NBT_SCREEN", "carplay.ini", "default"
+    const char* screenFrom;     // "NBT_SCREEN", "carplay.ini", "display size (...)", "default"
     const char* vehicleFrom;    // "NBT_VEHICLE", "carplay.ini", "default"
 };
 
@@ -174,8 +176,16 @@ inline void displaySize(int& w, int& h) {
 // 1180_480 on MINI, and a non-full-screen CarPlay coding (picture on the left ~2/3, iDrive's split screen on the
 // right) on some F-series NBT Evo cars, where Android Auto then filled only that part of the screen (user photo,
 // 2026-10-29). When the display is at least as large as the coded picture in both directions, use the display.
+// With no coded size at all (no carplay.ini: CarPlay was never coded, issue #169, or a file without [Screen]) the
+// display is the only source: without it such a car got the 1280x480 default and, on a larger panel, a picture in the
+// top-left part of the screen.
 inline void applyPanel(CarConfig& c, int dw, int dh) {
-    if (!sane(dw, dh) || !c.iniW || !c.iniH) return;
+    if (!sane(dw, dh)) return;
+    if (!c.iniW || !c.iniH) {
+        c.screenW = dw; c.screenH = dh;
+        c.screenFrom = c.iniPath.empty() ? "display size (no carplay.ini)" : "display size (carplay.ini has no screen size)";
+        return;
+    }
     if (dw >= c.iniW && dh >= c.iniH && (dw != c.iniW || dh != c.iniH)) {
         c.screenW = dw; c.screenH = dh;
         c.screenFrom = "display size (carplay.ini codes a smaller CarPlay picture)";
