@@ -5,6 +5,7 @@
 
 #include "screen_video.h"
 #include "mmr_launch.hpp"
+#include "mmr_pps.hpp"
 #include <stdint.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -36,6 +37,8 @@ public:
     // Auto session starts (creates or rebuilds the decoder context). retuneForCarPlay(): main thread, a while after a
     // session ended. fixCarPlayLayer(): LayerManager layer 0x800d0000 visible and full screen (setVisible(true)).
     static bool cpHandoff();
+    // NBT_CP_PURGE=1: destroy the factory CarPlay context (cpvideoctx) as before v1.9.50 instead of detaching it.
+    static bool cpPurge();
     bool prepareForSession();
     bool retuneForCarPlay();
     bool decoderInCarPlayMode();
@@ -122,6 +125,9 @@ private:
     bool createDecoder();     // decoder_mutex_ held
     void destroyDecoder();    // decoder_mutex_ held
     void quiesceWorker();
+    bool detachFactoryContext(const char* name);   // decoder_mutex_ held
+    bool reattachFactoryContext(const char* why);  // decoder_mutex_ held; our own context already gone
+    void* makeDict(const std::vector<PpsAttr>& attrs);
     bool sendMdevSync();
     bool sendMdevFormat(uint32_t width, uint32_t height, uint32_t fps);
     bool sendMdevConfig(const uint8_t* data, size_t length);
@@ -167,6 +173,10 @@ private:
     bool aa_surface_seen_;          // main thread only: LayerManager has surface aaSurface() (it persists for the boot)
     bool aa_surface_logged_;        // ... and its state + the layer's render order were logged once while shown
     unsigned aa_surface_ticks_;     // serviceAaSurface() calls since the window was created
+    void* cp_ctx_;                  // decoder_mutex_: our handle on the factory cpvideoctx<pid> (never destroyed)
+    bool cp_detached_;              // decoder_mutex_: its input/outputs are detached while Android Auto has mdev
+    std::string cp_name_;           // decoder_mutex_: its name
+    MmrCtxSnapshot cp_snap_;        // decoder_mutex_: what it had attached (PPS) before we detached it
     void verifyOverlayOrder();
     std::vector<VideoQueueItem> frame_queue_;
     std::vector<uint8_t> cached_codec_config_;

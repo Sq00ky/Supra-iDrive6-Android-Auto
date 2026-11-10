@@ -183,6 +183,7 @@ static int g_ctlFd = -1;
 //                 pressed. NBT_PDC_ACTIVE lists the active values (default 1).
 //   g_inputToPhone - touch / knob events reach the phone only while the overlay is up.
 static volatile sig_atomic_t g_userExit = 0;
+static volatile sig_atomic_t g_cpYielded = 0;   // CarPlay took the screen: Android Auto yielded completely (v1.9.48)
 static volatile sig_atomic_t g_carExit = 0;   // minimized by the BACK hold: only the iDrive entry / a new session undoes it
 // Phone focus and mic open/close used to be one slot. The main loop reads a value and then stores 0,
 // so a newer request written in between was lost. A short queue keeps both.
@@ -712,6 +713,17 @@ static bool cpLiveRetune() {
 static nbt::TcpServer* g_tcp = NULL;           // set once the listener runs (wireless recovery re-creates it)
 static nbt::UsbAccessory* g_usb = NULL;        // set while Android Auto over USB runs (NBT_USB=1)
 static const uint32_t kUsbByeWaitMs = 500;     // of the 3 s before the iDrive app sends SIGTERM after 'quit'
+// Full yield to CarPlay (v1.9.48, issue #156): when CarPlay takes the screen while an Android Auto session is still open,
+// nbt-aad ends the session and stops, instead of handing CarPlay its decoder context with CarPlay's settings. Once
+// Android Auto has run, CarPlay plays through OUR context, and CarPlay's video window was created inside our hidden
+// window group (vis 0): a black CarPlay until the head unit restarted (#156 log: "mm-renderer's video window joined our
+// group"). Stopping takes the session, the decoder context, our windows and the group with it, so CarPlay starts from
+// the state it has with no Android Auto. The Android Auto entry starts nbt-aad again.
+// Since v1.9.50-cpdetach the factory context is no longer destroyed - only detached while Android Auto has the decoder,
+// and re-attached when nbt-aad stops (VideoManager::detachFactoryContext / reattachFactoryContext).
+// v1.9.57-cpcompat: all of it only with the "CarPlay compatibility" Settings checkbox (nbt_env.hpp cpCompatEnabled());
+// NBT_CP_YIELD=1 / 0 in nbt-aad.env wins for the yield.
+static bool cpYieldEnabled() { return nbt::cpYieldOn(); }
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
@@ -1708,7 +1720,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.56-fixes-panel"
+#define NBT_AAD_BUILD "v1.9.57-cpcompat"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -1915,6 +1927,11 @@ int main(int argc, char* argv[]) {
     printf("[Media] steering-wheel media keys: %s\n",
            g_wheelMediaKeys ? "on (Media Controls for LCI Steering Wheels)"
                             : "off (tick Media Controls for LCI Steering Wheels, or NBT_LCI_MEDIA=1)");
+    printf("[CarPlay] CarPlay compatibility: %s - yield when CarPlay takes the screen: %s, factory CarPlay decoder "
+           "context: %s, CarPlay window after a hand-over: %s\n",
+           nbt::cpCompatEnabled() ? "on" : "off (tick CarPlay compatibility, or NBT_CP_COMPAT=1)",
+           nbt::cpYieldOn() ? "on" : "off", nbt::cpPurgeOn() ? "destroyed (as before)" : "detached, re-attached afterwards",
+           nbt::cpWinGroupOn() ? "in our window group (as before)" : "top-level");
     printf("[Media] now playing on %s, media keys to the phone: %s\n", kMediaFile,
            g_mediaKeysToPhone ? "on (audio mode is not Bluetooth)" : "off (audio mode is Bluetooth)");
     if (audio_mode == nbt::AUDIO_MODE_BROWSER) {
@@ -2308,7 +2325,16 @@ int main(int argc, char* argv[]) {
             cp_shows = v == 1 && (nbt::VideoManager::sharesCarPlaySurface() || cp_1280_last == 0);
             cp_1280_last = v;
         }
-        if (cp_shows) {
+        if (cp_shows && cpYieldEnabled()) {
+            printf("[Main] CarPlay took the screen while Android Auto is still connected: Android Auto yields to CarPlay "
+                   "completely (session ended, decoder context and windows released, nbt-aad stops; the Android Auto "
+                   "entry starts it again; CarPlay compatibility / NBT_CP_YIELD)\n");
+            g_userExit = 1;
+            g_carExit = 1;                               // nothing may cover CarPlay on the way out
+            g_session.postVideoFocus(false);             // phone stops streaming at once
+            g_cpYielded = 1;
+            g_running = 0;                               // the clean shutdown below releases everything
+        } else if (cp_shows) {
             printf("[Main] CarPlay took the screen while Android Auto is still connected: giving the decoder CarPlay's "
                    "settings (the Android Auto entry brings Android Auto back)\n");
             g_userExit = 1;
@@ -2442,10 +2468,11 @@ int main(int argc, char* argv[]) {
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back
     printf("[Main] [+%.2f s] listener stopped\n", upSec() - t0);
     // Before usb.stop(), which takes the link away. A phone that isn't told keeps streaming into the void and ignores
-    // the next daemon's session. Wireless phones just reconnect, so they are not told to quit.
-    if (g_owner.get() == nbt::kTransportUsb) {
+    // the next daemon's session. Wireless phones just reconnect, so they are not told to quit - except when yielding to
+    // CarPlay: then the Android phone is told the session is over, so it does not keep trying for the screen.
+    if (g_owner.get() == nbt::kTransportUsb || (g_cpYielded && g_session.isActive())) {
         const bool answered = g_session.byeAndWait(kUsbByeWaitMs);
-        printf("[Main] [+%.2f s] USB session: %s\n", upSec() - t0,
+        printf("[Main] [+%.2f s] %s session: %s\n", upSec() - t0, g_owner.get() == nbt::kTransportUsb ? "USB" : "wireless",
                answered ? "ended by the phone" : "no answer to the ByeByeRequest");
     }
     g_usb = NULL;              // the wireless thread stops asking it
@@ -2463,7 +2490,8 @@ int main(int argc, char* argv[]) {
     if (g_ctlFd >= 0) close(g_ctlFd);
     unlink(kUiStateFile);   // plugin falls back to the plain "Android Auto" entry
     unlink(kBootGuardFile); // clean exit: the iDrive app's autostart bootloop guard starts from zero
-    printf("[Main] [%9.3f] nbt-aad shutdown complete (%.2f s).\n", upSec(), upSec() - t0);
+    printf("[Main] [%9.3f] nbt-aad shutdown complete (%.2f s)%s.\n", upSec(), upSec() - t0,
+           g_cpYielded ? ": yielded to CarPlay (decoder context, windows and window group released)" : "");
     fflush(stdout);
     // Leave without running static destructors: detached threads (DSI sender loops, wireless bring-up) may still
     // be running, and tearing globals down under them crashed at exit (nbt-aad-21: SIGSEGV after "shutdown complete").

@@ -120,6 +120,32 @@ static const char* const kLciMediaFlagFile = "/var/opt/aa/lci-media";
 static const char* const kLciMediaManualFile = "/opt/aa/lci-media";
 inline bool lciMediaFlagFileSet() { return access(kLciMediaFlagFile, F_OK) == 0 || access(kLciMediaManualFile, F_OK) == 0; }
 inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"), lciMediaFlagFileSet()); }
+// "CarPlay compatibility" (iDrive Settings checkbox, rhmiapp-54-cpcompat; flag file kCpCompatFlagFile, a hand-made
+// kCpCompatManualFile also counts; NBT_CP_COMPAT=1 / 0 wins either way, same words as NBT_USB). Off by default: for cars
+// that use the factory CarPlay as well as Android Auto (issue #156). On = the three CarPlay fixes: Android Auto yields
+// completely when CarPlay takes the screen (NBT_CP_YIELD), the factory CarPlay decoder context is detached instead of
+// destroyed and re-attached afterwards (NBT_CP_PURGE), and CarPlay's window is top-level after a hand-over
+// (NBT_CP_WINGRP). Each of those env settings, when present, still wins over the checkbox for its own fix. Read once at
+// the start of the daemon: a change applies at the next Start / Restart.
+static const char* const kCpCompatFlagFile = "/var/opt/aa/carplay-compat";
+static const char* const kCpCompatManualFile = "/opt/aa/carplay-compat";
+inline bool cpCompatFlagFileSet() { return access(kCpCompatFlagFile, F_OK) == 0 || access(kCpCompatManualFile, F_OK) == 0; }
+inline bool cpCompatEnabled() {
+    static int s = -1;   // read once: every caller in this run gets the same answer
+    if (s < 0) s = usbSettingOn(getenv("NBT_CP_COMPAT"), cpCompatFlagFileSet()) ? 1 : 0;
+    return s == 1;
+}
+// Pure (host-tested): an on/off env value (1 on yes true / 0 off no false) wins, anything else (unset, empty, junk)
+// leaves the default.
+inline bool settingOr(const char* env, bool dflt) {
+    if (!env || !*env) return dflt;
+    if (!strcmp(env, "1") || !strcmp(env, "on") || !strcmp(env, "yes") || !strcmp(env, "true")) return true;
+    if (!strcmp(env, "0") || !strcmp(env, "off") || !strcmp(env, "no") || !strcmp(env, "false")) return false;
+    return dflt;
+}
+inline bool cpYieldOn() { return settingOr(getenv("NBT_CP_YIELD"), cpCompatEnabled()); }
+inline bool cpPurgeOn() { return settingOr(getenv("NBT_CP_PURGE"), !cpCompatEnabled()); }
+inline bool cpWinGroupOn() { return settingOr(getenv("NBT_CP_WINGRP"), !cpCompatEnabled()); }
 
 // With Android Auto over USB on (usbEnabled()), read the phone through libusbdi, not devc-serusb-aoap (which it
 // stops for the phone): see usb_direct.hpp. On by default, since the /dev/oap* path loses TLS records whenever another

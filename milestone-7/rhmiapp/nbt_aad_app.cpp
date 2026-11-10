@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-53-edrive-fixes (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-54-cpcompat (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -227,7 +227,7 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the eleven checkbox models whenever it is shown.
+// handler here, to refresh the twelve checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
 const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
@@ -355,6 +355,13 @@ const unsigned    kActLciMedia     = 124;
 const unsigned    kLciMediaModel   = 125;
 const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
 const char* const kLciMediaManual  = "/opt/aa/lci-media";
+// "CarPlay compatibility" (rhmiapp-54-cpcompat), off by default: <checkbox action="159" id="162" model="160"
+// textModel="161">. Flag file read by nbt-aad at start (nbt_env.hpp cpCompatEnabled()); NBT_CP_COMPAT in nbt-aad.env
+// wins. Ids 155-158 are left to PR #167.
+const unsigned    kActCpCompat     = 159;
+const unsigned    kCpCompatModel   = 160;
+const char* const kCpCompatFlag    = "/var/opt/aa/carplay-compat";
+const char* const kCpCompatManual  = "/opt/aa/carplay-compat";
 // Firewall (pf_aa) rows on the Settings page (rhmiapp-47), under a separator after the checkboxes, worked like Start /
 // Force Stop / Restart: <button action="132" id="135" model="134"> Install PF Rules, <button action="136" id="140"
 // model="138"> Check PF Rules, <button action="137" id="141" model="139"> Uninstall PF Rules. Each press runs
@@ -2071,6 +2078,19 @@ bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+bool g_cpCompatShown = false;
+bool cpCompatOn() { return fileExists(kCpCompatFlag) || fileExists(kCpCompatManual); }
+void showCpCompat(bmw::PluginApp* app) {
+    app->updateModel(kCpCompatModel, cpCompatOn());
+    g_cpCompatShown = true;
+}
+bool onCpCompatToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kCpCompatFlag, kCpCompatManual,
+                   "CarPlay compatibility (applies at the next Start / Restart; NBT_CP_COMPAT in nbt-aad.env wins)");
+    if (g_runApp) showCpCompat(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -2218,6 +2238,7 @@ void statusRun(void* /*self*/) {
     if (!g_wfdOnlyShown) showWfdOnly(app);
     if (!g_nativeAudioShown) showNativeAudio(app);
     if (!g_lciMediaShown) showLciMedia(app);
+    if (!g_cpCompatShown) showCpCompat(app);
     servicePfOps(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
@@ -2381,7 +2402,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the eleven checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2404,7 +2425,8 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showWfdOnly(g_app);
         showNativeAudio(g_app);
         showLciMedia(g_app);
-        alog("settings: eleven checkbox models refreshed");
+        showCpCompat(g_app);
+        alog("settings: twelve checkbox models refreshed");
     }
     return true;
 }
@@ -2444,6 +2466,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActWfdOnly, &onWfdOnlyToggle);
     addAction(self, kActNativeAudio, &onNativeAudioToggle);
     addAction(self, kActLciMedia, &onLciMediaToggle);
+    addAction(self, kActCpCompat, &onCpCompatToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);

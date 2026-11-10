@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "video_manager.hpp"
+#include "nbt_env.hpp"
 #include "car_config.hpp"
 #include "lm_geometry.hpp"
 #include <stdio.h>
@@ -156,7 +157,8 @@ VideoManager::VideoManager()
       idr_dropped_(0),
       idr_wanted_(false),
       decoder_gen_(0), frames_in_gen_(0), window_ready_(false), overlay_surface_(0), overlay_verified_(false),
-      overlay_failed_(false), aa_surface_seen_(false), aa_surface_logged_(false), aa_surface_ticks_(0) {
+      overlay_failed_(false), aa_surface_seen_(false), aa_surface_logged_(false), aa_surface_ticks_(0),
+      cp_ctx_(NULL), cp_detached_(false) {
     memset(&sink_, 0, sizeof(sink_));
     pthread_mutex_init(&queue_mutex_, NULL);
     pthread_mutex_init(&decoder_mutex_, NULL);
@@ -523,7 +525,21 @@ void VideoManager::stop() {
         if (mmr_ctxt_) {
             if (fn_stop) fn_stop(mmr_ctxt_);
             if (fn_destroy) fn_destroy(mmr_ctxt_);   // also closes the context handle
+            mmr_ctxt_ = NULL;
         }
+        pthread_mutex_lock(&decoder_mutex_);
+        if (cp_ctx_) {
+            if (cp_detached_) {
+                if (mdev_fd_ >= 0) { name_close(mdev_fd_); mdev_fd_ = -1; }   // mdev is CarPlay's again
+                usleep(50000);
+                reattachFactoryContext("nbt-aad stops");
+            }
+            typedef int (*mmr_context_close_t)(void*);
+            mmr_context_close_t fn_close = (mmr_context_close_t)dlsym(mmr_lib_, "mmr_context_close");
+            if (fn_close) fn_close(cp_ctx_);         // our handle only: mmr_context_close() never destroys the context
+            cp_ctx_ = NULL;
+        }
+        pthread_mutex_unlock(&decoder_mutex_);
         if (fn_disconn && mmr_cnx_) fn_disconn(mmr_cnx_);
         dlclose(mmr_lib_);
         mmr_lib_ = NULL;
@@ -563,6 +579,195 @@ void VideoManager::stop() {
 bool VideoManager::cpHandoff() {
     const char* e = getenv("NBT_CP_HANDOFF");
     return !(e && e[0] == '0');
+}
+
+// ---- factory CarPlay context: detach / re-attach (v1.9.50-cpdetach, issue #156) -----------------------------------
+// Destroying cpvideoctx<pid> (the purge in createDecoder) took CarPlay's decoder away for the rest of the boot: the
+// factory creates it once and cannot create it again (err 17), so after the full yield (v1.9.49-cpgroup3) CarPlay had
+// no context at all (#156 log: no cpvideoctx left at the next start). Instead we now open it, stop it and detach its
+// input and outputs - which frees mdev and its window exactly like the purge did - but the context and the factory's
+// own handle on it stay valid. The PPS objects (output<N>, input, param) are read first, and when Android Auto is done
+// (session over and idle, CarPlay taking the screen, or nbt-aad stopping) our context is destroyed and CarPlay's is
+// rebuilt from that snapshot: the factory's own URL, window id 1280 and window group cpvideogrp<pid>.
+// NBT_CP_PURGE=1 destroys it as before.
+// v1.9.57-cpcompat: only with the "CarPlay compatibility" checkbox (nbt_env.hpp); NBT_CP_PURGE=1 / 0 wins.
+bool VideoManager::cpPurge() { return nbt::cpPurgeOn(); }
+
+static const char* kMmrCtxDir = "/pps/services/multimedia/renderer/context";
+
+static std::string ppsOneLine(const std::string& text) {
+    std::string s;
+    for (size_t i = 0; i < text.size() && s.size() < 400; ++i) {
+        char c = text[i];
+        if (c == '\r') continue;
+        if (c == '\n') { if (i + 1 < text.size()) s += " | "; continue; }
+        s += c;
+    }
+    return s;
+}
+
+static void readCtxSnapshot(const std::string& name, nbt::MmrCtxSnapshot& snap) {
+    snap.clear();
+    std::string dir = std::string(kMmrCtxDir) + "/" + name;
+    DIR* d = opendir(dir.c_str());
+    if (!d) {
+        printf("[VideoManager] %s: PPS directory %s not readable (errno=%d)\n", name.c_str(), dir.c_str(), errno);
+        return;
+    }
+    struct dirent* de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        std::string text;
+        if (!nbt::ppsReadFile((dir + "/" + de->d_name).c_str(), text)) continue;
+        snap.add(de->d_name, text);
+        printf("[VideoManager] %s/%s: %s\n", name.c_str(), de->d_name, ppsOneLine(text).c_str());
+    }
+    closedir(d);
+}
+
+void* VideoManager::makeDict(const std::vector<PpsAttr>& attrs) {
+    if (attrs.empty() || !strm_lib_) return NULL;
+    typedef void* (*strm_dict_new_t)();
+    typedef void* (*strm_dict_set_t)(void*, const char*, const char*);
+    strm_dict_new_t fn_new = (strm_dict_new_t)dlsym(strm_lib_, "strm_dict_new");
+    strm_dict_set_t fn_set = (strm_dict_set_t)dlsym(strm_lib_, "strm_dict_set");
+    if (!fn_new || !fn_set) return NULL;
+    void* d = fn_new();
+    for (size_t i = 0; d && i < attrs.size(); ++i) d = fn_set(d, attrs[i].name.c_str(), attrs[i].value.c_str());
+    return d;   // mm-renderer takes ownership in mmr_*_parameters()
+}
+
+bool VideoManager::detachFactoryContext(const char* name) {
+    if (!mmr_lib_ || !mmr_cnx_ || !name) return false;
+    typedef void* (*mmr_context_open_t)(void*, const char*);
+    typedef int (*mmr_context_close_t)(void*);
+    typedef int (*mmr_stop_t)(void*);
+    typedef int (*mmr_input_detach_t)(void*);
+    typedef int (*mmr_output_detach_t)(void*, unsigned);
+    mmr_context_open_t fn_open = (mmr_context_open_t)dlsym(mmr_lib_, "mmr_context_open");
+    mmr_context_close_t fn_close = (mmr_context_close_t)dlsym(mmr_lib_, "mmr_context_close");
+    mmr_stop_t fn_stop = (mmr_stop_t)dlsym(mmr_lib_, "mmr_stop");
+    mmr_input_detach_t fn_in_det = (mmr_input_detach_t)dlsym(mmr_lib_, "mmr_input_detach");
+    mmr_output_detach_t fn_out_det = (mmr_output_detach_t)dlsym(mmr_lib_, "mmr_output_detach");
+    if (!fn_open || !fn_in_det || !fn_out_det) {
+        printf("[VideoManager] %s: MM-Renderer detach API missing\n", name);
+        return false;
+    }
+    if (cp_ctx_ && cp_name_ != name) {             // a different factory context (CarPlay engine restarted)
+        if (fn_close) fn_close(cp_ctx_);
+        cp_ctx_ = NULL;
+        cp_detached_ = false;
+        cp_snap_.clear();
+    }
+    if (cp_ctx_ && cp_detached_) {
+        printf("[VideoManager] CarPlay's decoder context %s is still detached\n", name);
+        return true;
+    }
+    nbt::MmrCtxSnapshot snap;
+    readCtxSnapshot(name, snap);
+    if (snap.hasOutput() || snap.hasInput()) cp_snap_ = snap;
+    else if (cp_snap_.hasOutput()) printf("[VideoManager] %s lists nothing attached: keeping the earlier snapshot\n", name);
+    else printf("[VideoManager] %s lists nothing attached: re-attach will use the factory window URL\n", name);
+    if (!cp_ctx_) {
+        cp_ctx_ = fn_open(mmr_cnx_, name);
+        cp_name_ = name;
+        if (!cp_ctx_) {
+            printf("[VideoManager] could not open CarPlay's decoder context %s (errno=%d)\n", name, errno);
+            return false;
+        }
+    }
+    int r_stop = fn_stop ? fn_stop(cp_ctx_) : -9999;
+    int r_in = fn_in_det(cp_ctx_);
+    std::vector<int> ids = snap.outputIds;
+    if (ids.empty()) ids.push_back(0);
+    std::string outs;
+    for (size_t i = 0; i < ids.size(); ++i) {
+        char b[32];
+        snprintf(b, sizeof(b), "%s%d:%d", i ? " " : "", ids[i], fn_out_det(cp_ctx_, (unsigned)ids[i]));
+        outs += b;
+    }
+    cp_detached_ = true;
+    printf("[VideoManager] CarPlay's decoder context %s detached, not destroyed (stop %d, input detach %d, output detach "
+           "%s): handed back when Android Auto is done (NBT_CP_PURGE=1: destroy it as before)\n",
+           name, r_stop, r_in, outs.c_str());
+    return true;
+}
+
+bool VideoManager::reattachFactoryContext(const char* why) {
+    if (!cp_ctx_ || !cp_detached_ || !mmr_lib_) return false;
+    typedef int (*mmr_context_parameters_t)(void*, void*);
+    typedef int (*mmr_output_attach_t)(void*, const char*, const char*);
+    typedef int (*mmr_output_parameters_t)(void*, int, void*);
+    typedef int (*mmr_input_parameters_t)(void*, void*);
+    typedef int (*mmr_input_attach_t)(void*, const char*, const char*);
+    typedef int (*mmr_play_t)(void*);
+    mmr_context_parameters_t fn_ctx_params = (mmr_context_parameters_t)dlsym(mmr_lib_, "mmr_context_parameters");
+    mmr_output_attach_t fn_out_attach = (mmr_output_attach_t)dlsym(mmr_lib_, "mmr_output_attach");
+    mmr_output_parameters_t fn_out_params = (mmr_output_parameters_t)dlsym(mmr_lib_, "mmr_output_parameters");
+    mmr_input_parameters_t fn_in_params = (mmr_input_parameters_t)dlsym(mmr_lib_, "mmr_input_parameters");
+    mmr_input_attach_t fn_in_attach = (mmr_input_attach_t)dlsym(mmr_lib_, "mmr_input_attach");
+    mmr_play_t fn_play = (mmr_play_t)dlsym(mmr_lib_, "mmr_play");
+    if (!fn_out_attach) {
+        printf("[VideoManager] CarPlay's decoder context %s: mmr_output_attach missing, not re-attached\n", cp_name_.c_str());
+        return false;
+    }
+    int r_ctx = -9999;
+    if (fn_ctx_params) {
+        void* d = makeDict(cp_snap_.param);
+        if (d) r_ctx = fn_ctx_params(cp_ctx_, d);
+    }
+    std::vector<std::vector<PpsAttr> > outs = cp_snap_.outputs;
+    if (!cp_snap_.hasOutput()) {
+        // Nothing captured: the factory's own URL (Supra capture in tests/test_mmr_pps.cpp), group cpvideogrp<pid>.
+        const nbt::CarConfig& cc = nbt::carConfig();
+        int w = cc.iniW > 0 ? cc.iniW : cc.screenW;
+        int h = cc.iniH > 0 ? cc.iniH : cc.screenH;
+        char url[256];
+        snprintf(url, sizeof(url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d&wingrp=cpvideogrp%s",
+                 NBT_SCREEN_WINDOW_ID, w, h, cp_name_.size() > 10 ? cp_name_.c_str() + 10 : "");
+        std::vector<PpsAttr> o;
+        PpsAttr a;
+        a.name = "mmf.SCREEN_WRITER_DISABLE_CADENCE"; a.value = "1"; o.push_back(a);
+        a.name = "mmf.SCREEN_WRITER_DISABLE_MEDIACLOCK"; o.push_back(a);
+        a.name = "mmf.SCREEN_WRITER_POST_BUFFER_NOSYNC"; o.push_back(a);
+        a.name = "type"; a.value = "video"; o.push_back(a);
+        a.name = "url"; a.value = url; o.push_back(a);
+        outs.clear();
+        outs.push_back(o);
+    }
+    std::string res;
+    int attached = 0;
+    for (size_t i = 0; i < outs.size(); ++i) {
+        std::string url = ppsGet(outs[i], "url");
+        if (url.empty()) continue;
+        std::string type = ppsGet(outs[i], "type", "video");
+        int r = fn_out_attach(cp_ctx_, url.c_str(), type.c_str());
+        int rp = -9999;
+        if (r >= 0 && fn_out_params) {
+            void* d = makeDict(ppsSettings(outs[i]));
+            if (d) rp = fn_out_params(cp_ctx_, r, d);
+        }
+        if (r >= 0) ++attached;
+        char b[400];
+        snprintf(b, sizeof(b), "%s%s -> %d (params %d)", res.empty() ? "" : "; ", url.c_str(), r, rp);
+        res += b;
+    }
+    int r_in = -9999, r_inp = -9999, r_play = -9999;
+    if (cp_snap_.hasInput() && fn_in_attach) {
+        std::string url = ppsGet(cp_snap_.input, "url");
+        std::string type = ppsGet(cp_snap_.input, "type", "track");
+        r_in = fn_in_attach(cp_ctx_, url.c_str(), type.c_str());
+        if (r_in >= 0 && fn_in_params) {
+            void* d = makeDict(ppsSettings(cp_snap_.input));
+            if (d) r_inp = fn_in_params(cp_ctx_, d);
+        }
+        if (r_in >= 0 && fn_play) r_play = fn_play(cp_ctx_);
+    }
+    cp_detached_ = false;
+    printf("[VideoManager] CarPlay's decoder context %s re-attached (%s): params %d, output %s, input %d (params %d), "
+           "play %d%s\n", cp_name_.c_str(), why, r_ctx, res.c_str(), r_in, r_inp, r_play,
+           cp_snap_.hasInput() ? "" : " (no input was attached: CarPlay attaches its own)");
+    return attached > 0;
 }
 
 void VideoManager::quiesceWorker() {
@@ -663,6 +868,10 @@ bool VideoManager::createDecoder() {
             if (!mine) {
                 printf("[VideoManager] Leaving MM-Renderer context alone: %s\n", de->d_name);
                 continue;
+            }
+            if (strncmp(de->d_name, "cpvideoctx", 10) == 0 && !cpPurge() && getenv("NBT_PURGE_ALL") == NULL) {
+                if (detachFactoryContext(de->d_name)) continue;
+                printf("[VideoManager] could not detach %s: destroying it as before\n", de->d_name);
             }
             printf("[VideoManager] Purging stale MM-Renderer context: %s\n", de->d_name);
             if (fn_ctx_open) {
@@ -851,6 +1060,17 @@ bool VideoManager::prepareForSession() {
 bool VideoManager::retuneForCarPlay() {
     if (!is_initialized_ || !cpHandoff()) return false;
     pthread_mutex_lock(&decoder_mutex_);
+    if (cp_ctx_ && cp_detached_ && !cp_mode_) {
+        // v1.9.50-cpdetach: CarPlay's own context still exists (detached, not destroyed): destroy ours - it frees mdev
+        // and the window - and give CarPlay back exactly what it had. The next Android Auto connection detaches it again.
+        destroyDecoder();
+        usleep(50000);
+        bool ok = reattachFactoryContext("Android Auto handed the decoder back");
+        cp_mode_ = true;             // prepareForSession() / the main loop: rebuild ours when Android Auto returns
+        parked_ = false;
+        pthread_mutex_unlock(&decoder_mutex_);
+        return ok;
+    }
     if (!mmr_ctxt_ || cp_mode_ || !mmr_lib_ || !strm_lib_) { pthread_mutex_unlock(&decoder_mutex_); return false; }
     typedef int (*mmr_input_detach_t)(void*);
     typedef int (*mmr_output_detach_t)(void*, unsigned);
@@ -895,9 +1115,21 @@ bool VideoManager::retuneForCarPlay() {
     }
     // CarPlay plays through this context with CarPlay's own window id (carplay.ini WindowName=1280), so iDrive shows
     // it on surface 1280 as usual - never on Android Auto's surface.
+    // No wingrp (v1.9.49, issue #156): with "&wingrp=<our group>" CarPlay's window 1280 was created as a CHILD of our
+    // window, which is hidden whenever Android Auto is not shown, so CarPlay stayed black ("mm-renderer's video window
+    // joined our group ... vis 0") until the head unit restarted - after a clean Android Auto disconnect as well as
+    // over a live session. carplay.ini's own VideoURL has no wingrp: the factory window is top-level. NBT_CP_WINGRP=1
+    // restores the old URL.
     char out_url[256];
-    snprintf(out_url, sizeof(out_url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d&wingrp=%s",
-             NBT_SCREEN_WINDOW_ID, w, h, grp_name_.c_str());
+    const bool inGroup = nbt::cpWinGroupOn();   // v1.9.57: top-level only with CarPlay compatibility; NBT_CP_WINGRP wins
+    if (inGroup)
+        snprintf(out_url, sizeof(out_url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d&wingrp=%s",
+                 NBT_SCREEN_WINDOW_ID, w, h, grp_name_.c_str());
+    else
+        snprintf(out_url, sizeof(out_url), "screen:/any?winid=%s&nodstviewport=0&dstx=0&dsty=0&dstw=%d&dsth=%d",
+                 NBT_SCREEN_WINDOW_ID, w, h);
+    printf("[VideoManager] CarPlay output window: %s (%s)\n", out_url,
+           inGroup ? "in our window group: CarPlay compatibility off / NBT_CP_WINGRP=1" : "top-level, like carplay.ini's VideoURL");
     int r_out = fn_out_attach(mmr_ctxt_, out_url, "video");
     if (r_out >= 0) mmr_output_id_ = r_out;
     int r_outp = -9999;

@@ -206,6 +206,22 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **v1.9.57-cpcompat + rhmiapp-54-cpcompat (CarPlay fixes from v1.9.48-v1.9.50, good feedback from the #156 testers;
+> the checkbox itself not car-verified): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
+> the factory CarPlay as well as Android Auto. Ticked (applies at the next Start / Restart):
+> - CarPlay taking the screen while an Android phone is still connected ends the Android Auto session and stops
+>   nbt-aad (the Android Auto entry starts it again), instead of handing CarPlay our decoder context.
+> - The factory CarPlay decoder context `cpvideoctx<pid>` is no longer destroyed when an Android phone connects: it is
+>   stopped and its input / outputs detached (its PPS objects logged first), and rebuilt from that snapshot when
+>   Android Auto is done. The factory creates it only once per boot, so destroying it left CarPlay without a picture
+>   until the head unit restarted.
+> - After a hand-over CarPlay's window is top-level instead of a child of nbt-aad's hidden window.
+>
+> Unticked, all three behave as before. `NBT_CP_COMPAT=1` / `0` in `nbt-aad.env` overrides the checkbox, and
+> `NBT_CP_YIELD`, `NBT_CP_PURGE`, `NBT_CP_WINGRP` (`1` / `0`) still override it for one fix each. Log at start:
+> `[CarPlay] CarPlay compatibility: ...`; then `CarPlay's decoder context cpvideoctx<pid> detached, not destroyed`,
+> `... re-attached (...)` and `Android Auto yields to CarPlay completely`.
+>
 > **v1.9.56-fixes-panel + rhmiapp-53-edrive-fixes (connects on a GR Supra, NBTevo_T21424I; the individual fixes below
 > are not car-verified):** v1.9.54-panel and v1.9.53-fixes (with rhmiapp-51-edrive) in one build, without the
 > handshake-clock change that v1.9.53 / v1.9.55 carried. With it (v1.9.55) the phone took the Wi-Fi details and never
@@ -832,6 +848,8 @@ Leave these unset unless you are testing.
 | `NBT_NEUTRAL_RESUME_S`, `NBT_GEAR_NEUTRAL` | Manual gearbox: seconds in neutral straight after reverse before Android Auto comes back over the park-assist view (default `5`; `0` = off). Leaving neutral or going back into reverse cancels it; not after you exited Android Auto. Gear value for N (default 1). Log: `[Gear] ... reverse -> neutral`. Not car-verified |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
 | `NBT_CP_HANDOFF=0` | Turns off the CarPlay hand-off (screen window and decoder created at start and never retuned for CarPlay, as before v1.8.32) |
+| `NBT_CP_COMPAT` | `1` / `0` overrides the **CarPlay compatibility** Settings checkbox (`/var/opt/aa/carplay-compat`), read at start (v1.9.57) |
+| `NBT_CP_YIELD`, `NBT_CP_PURGE`, `NBT_CP_WINGRP` | `1` / `0` override CarPlay compatibility for one fix: yield to CarPlay completely, destroy (1) or detach (0) the factory CarPlay decoder context, CarPlay's window in our window group (1) or top-level (0) |
 | `NBT_CP_LIVE_RETUNE=0` | Do not give the decoder CarPlay's settings when CarPlay takes the screen during a live Android Auto session (v1.8.37) |
 | `NBT_PTT_ASSISTANT=1` | Experimental: long press of the steering-wheel voice button starts the Google Assistant. Off by default (the button is only logged) |
 | `NBT_MFL_NEXT`, `NBT_MFL_PREV`, `NBT_MFL_PLAYPAUSE` | Steering-wheel buttons (MOST 15/02) that become Android's next / previous / play-pause media keys: `fkt` or `fkt:value`, hex as the recon log prints them (`511:2`), several separated by commas (`511:2,C31`). A `:value` maps one direction of a roller that carries both on one function; without it any change away from 0 is a press. Defaults (`511:2` next, `511:1` previous) come from a J29 log and are unconfirmed - swap them if the wheel skips the wrong way, and `NBT_MFL_*= ` (empty) unmaps a key. Only forwarded with **Media Controls for LCI Steering Wheels** (`NBT_LCI_MEDIA`) on and `NBT_AUDIO_MODE` not `bt`. `NBT_MFL_LOG=0` stops the per-change log line. See `car/mfl.hpp` |

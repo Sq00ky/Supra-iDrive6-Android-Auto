@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <stdio.h>
+#include <string.h>
 
 namespace nbt {
 
@@ -64,6 +65,57 @@ inline bool ppsWriteFile(const char* path, const std::string& data) {
     fclose(f);
     return ok;
 }
+
+// "output0" -> 0, "output12" -> 12; any other PPS object name of a context directory -> -1.
+inline int ppsOutputId(const char* name) {
+    if (!name || strncmp(name, "output", 6) != 0 || !name[6]) return -1;
+    int id = 0;
+    for (const char* p = name + 6; *p; ++p) {
+        if (*p < '0' || *p > '9' || id > 100000) return -1;
+        id = id * 10 + (*p - '0');
+    }
+    return id;
+}
+
+// The settings of an object (everything but url / type), to hand back through mmr_*_parameters().
+inline std::vector<PpsAttr> ppsSettings(const std::vector<PpsAttr>& a) {
+    std::vector<PpsAttr> out;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (a[i].name != "url" && a[i].name != "type") out.push_back(a[i]);
+    return out;
+}
+
+// What the factory CarPlay had attached to its decoder context (cpvideoctx<pid>) when nbt-aad detached it
+// (v1.9.50-cpdetach): Android Auto rebuilds exactly this when it hands the decoder back
+// (VideoManager::reattachFactoryContext). Outputs are kept sorted by id.
+struct MmrCtxSnapshot {
+    std::vector<int> outputIds;
+    std::vector<std::vector<PpsAttr> > outputs;   // parallel to outputIds
+    std::vector<PpsAttr> input;
+    std::vector<PpsAttr> param;
+    void clear() { outputIds.clear(); outputs.clear(); input.clear(); param.clear(); }
+    bool hasOutput() const {
+        for (size_t i = 0; i < outputs.size(); ++i)
+            if (!ppsGet(outputs[i], "url").empty()) return true;
+        return false;
+    }
+    bool hasInput() const { return !ppsGet(input, "url").empty(); }
+    // One PPS object of the context directory, by its object (file) name.
+    void add(const std::string& obj, const std::string& text) {
+        std::vector<PpsAttr> a = ppsParse(text);
+        int id = ppsOutputId(obj.c_str());
+        if (id >= 0) {
+            size_t at = 0;
+            while (at < outputIds.size() && outputIds[at] < id) ++at;
+            outputIds.insert(outputIds.begin() + at, id);
+            outputs.insert(outputs.begin() + at, a);
+        } else if (obj == "input") {
+            input = a;
+        } else if (obj == "param") {
+            param = a;
+        }
+    }
+};
 
 } // namespace nbt
 
