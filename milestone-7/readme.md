@@ -207,7 +207,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
 > **v1.9.57-cpcompat + rhmiapp-54-cpcompat (CarPlay fixes from v1.9.48-v1.9.50, good feedback from the #156 testers;
-> the checkbox itself not car-verified): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
+> the checkbox confirmed on the car on this build): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
 > the factory CarPlay as well as Android Auto. Ticked (applies at the next Start / Restart):
 > - CarPlay taking the screen while an Android phone is still connected ends the Android Auto session and stops
 >   nbt-aad (the Android Auto entry starts it again), instead of handing CarPlay our decoder context.
