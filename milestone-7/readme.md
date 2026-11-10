@@ -206,6 +206,12 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
+> **v1.9.48-cpyield (not car-verified): Android Auto yields to CarPlay completely (#156).** When CarPlay takes the
+> screen while the Android phone is still connected, nbt-aad ends the Android Auto session and stops, instead of
+> handing CarPlay its decoder: CarPlay's video window had ended up inside nbt-aad's hidden window group, a black
+> CarPlay until the head unit restarted. Choose the Android Auto entry to start it again. `NBT_CP_YIELD=0` keeps the
+> old hand-over. Log: `Android Auto yields to CarPlay completely`, then `shutdown complete (...): yielded to CarPlay`.
+>
 > **v1.9.45-camctx + rhmiapp-48-camctx (confirmed by two testers on the v1.9.43-camctx build): Android Auto steps aside for the 360 / Top View camera
 > opened with the camera button.** It had no signal for it (no reverse, no park-assist value), and the iDrive screen
 > watch skipped it because the full-screen camera reports only `GFXIDENTIFIER_INVALID`: the screen hold took it for the
