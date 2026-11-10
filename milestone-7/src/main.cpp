@@ -707,7 +707,7 @@ static bool cpLiveRetune() {
 
 static nbt::TcpServer* g_tcp = NULL;           // set once the listener runs (wireless recovery re-creates it)
 static nbt::UsbAccessory* g_usb = NULL;        // set while Android Auto over USB runs (NBT_USB=1)
-static const uint32_t kUsbByeWaitMs = 500;
+static const uint32_t kUsbByeWaitMs = 500;     // of the 3 s before the iDrive app sends SIGTERM after 'quit'
 // Full yield to CarPlay (v1.9.48, issue #156): when CarPlay takes the screen while an Android Auto session is still open,
 // nbt-aad ends the session and stops, instead of handing CarPlay its decoder context with CarPlay's settings. Once
 // Android Auto has run, CarPlay plays through OUR context, and CarPlay's video window was created inside our hidden
@@ -717,7 +717,7 @@ static const uint32_t kUsbByeWaitMs = 500;
 // Opt-in (NBT_CP_YIELD=1) since v1.9.49: the factory CarPlay creates its cpvideoctx once at boot and cannot create it
 // again once ours replaced it, so destroying our context may leave CarPlay with no decoder. The default is the hand-over
 // with CarPlay's window top-level (VideoManager::retuneForCarPlay, no wingrp), which keeps the context.
-static bool cpYieldEnabled() { return nbt::envFlag("NBT_CP_YIELD") == 1; }     // of the 3 s before the iDrive app sends SIGTERM after 'quit'
+static bool cpYieldEnabled() { return nbt::envFlag("NBT_CP_YIELD") == 1; }
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
