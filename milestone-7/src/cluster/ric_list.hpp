@@ -101,6 +101,45 @@ inline const char* replyProblem(const Bytes& m, uint16_t method, uint16_t client
     return NULL;
 }
 
+// ---- the track list (method 0x000B, list model 0x6B) as iDrive sends it ----------------------------------------------
+// Payload (after the 17-byte frame head): model id, type 0x30, 4 zero bytes, "0003 0002 0003 0002" (three rows, two
+// columns), 4 bytes, the rows' byte count (42), then three rows of <length 10> <icon id> 01 <text model id> <flag>:
+//   row 0  icon 0x07000005, text "Previous title"
+//   row 1  no icon (0xFFFFFFFF), text = the current track's title        <- the one cell this project replaces
+//   row 2  icon 0x07000006, text "Next title"
+// and a tail naming the header text and the value models.
+static const uint32_t kListModel = 0x0000006B;
+static const uint32_t kShownModel = 0x00000065;   // value: kListModel = the list is on the display, 0xFFFFFFFF = closed
+static const uint32_t kIconPrev = 0x07000005, kIconNext = 0x07000006, kNoIcon = 0xFFFFFFFF;
+
+// True when body (a whole 0x000B request body) is exactly that previous / current / next list. *titleAt = the offset
+// of the middle row's text model id. Anything else on the same model (another source's list) is not.
+inline bool trackListShape(const Bytes& b, size_t* titleAt) {
+    const size_t p = 17;
+    if (b.size() < p + 25 + 3 * 14) return false;
+    if (kombinav::getU32(b, 4) != kListModel || b[8] != 0x30) return false;
+    if (kombinav::getU32(b, 9) != b.size() - 17) return false;
+    if (kombinav::getU32(b, p) != kListModel || b[p + 4] != 0x30) return false;
+    static const uint8_t dims[8] = { 0, 3, 0, 2, 0, 3, 0, 2 };
+    for (size_t i = 0; i < 8; ++i) if (b[p + 9 + i] != dims[i]) return false;
+    if (kombinav::getU32(b, p + 21) != 3 * 14) return false;
+    for (size_t i = 0; i < 3; ++i) {
+        const size_t r = p + 25 + i * 14;
+        if (kombinav::getU32(b, r) != 10) return false;
+        if (kombinav::getU32(b, r + 4) != (i == 0 ? kIconPrev : i == 1 ? kNoIcon : kIconNext)) return false;
+        if (b[r + 9] != 0x03) return false;                 // the row's text is a text model
+    }
+    if (titleAt) *titleAt = p + 25 + 14 + 9;
+    return true;
+}
+
+// A 0x0009 request body that sets kShownModel: *value = what it is set to.
+inline bool shownValue(const Bytes& b, uint32_t* value) {
+    if (b.size() != 26 || kombinav::getU32(b, 4) != kShownModel || b[8] != 0x2E) return false;
+    *value = kombinav::getU32(b, 22);
+    return true;
+}
+
 }  // namespace riclist
 }  // namespace nbt
 

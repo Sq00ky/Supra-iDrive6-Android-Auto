@@ -122,6 +122,7 @@
 #include "spp_direction.hpp"
 #include "neutral_resume.hpp"
 #include "cluster/nav_core.hpp"
+#include "cluster/ric_media.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -154,6 +155,7 @@ static double upSec() {
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
+static nbt::riclist::KombiMedia g_kombiMedia;   // the track title in the cluster's track list (NBT_KOMBI_MEDIA=1)
 static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
 static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
 static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
@@ -1519,6 +1521,7 @@ static void resetMedia(const char* why) {
     g_media.clear();
     writeMediaRecordLocked();
     pthread_mutex_unlock(&g_mediaMutex);
+    g_kombiMedia.update(std::string(), false);
     printf("[Media] cleared (%s)\n", why);
 }
 
@@ -1529,6 +1532,7 @@ static void onMediaStatus(uint16_t msg_id, const uint8_t* body, size_t len, void
     const bool changed = nbt::mediaMerge(g_media, msg_id, body, len);
     const uint32_t now = monoMs();
     g_media.updatedMs = now;
+    g_kombiMedia.update(nbt::mediaClean(g_media.song), g_media.state == 2);   // 2 = playing
     if (changed) {
         printf("[Media] %s\n", nbt::mediaLine(g_media).c_str());
         if (g_mediaWriteMs == 0 || (uint32_t)(now - g_mediaWriteMs) >= 200) {
@@ -1720,7 +1724,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.57-cpcompat"
+#define NBT_AAD_BUILD "v1.9.58-kombimedia"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -2011,6 +2015,7 @@ int main(int argc, char* argv[]) {
     g_tcp = &tcp_server;
     g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
                                    // g_most starts: NBT_CLUSTER=6wa attaches to it
+    g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT);   // idle until the phone plays something
     {
         pthread_t t;
         if (pthread_create(&t, NULL, &mediaMailThread, NULL) == 0) pthread_detach(t);
@@ -2463,6 +2468,7 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
     if (mic_live) g_audioBackend->stopMic(mic);
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
+    g_kombiMedia.stop();
     g_kombiNav.stop();              // clears a cluster/HUD arrow (one quick attempt)
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back

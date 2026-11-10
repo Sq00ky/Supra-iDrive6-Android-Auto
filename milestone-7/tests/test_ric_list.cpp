@@ -61,6 +61,35 @@ int main() {
     assert(replyProblem(hex("b0060004000000087e01010201018000"), kMethodCommit, 0x7E01, 0x0102) != NULL);   // nav service
     assert(replyProblem(hex("b00e0004"), kMethodCommit, 0x7E01, 0x0102) != NULL);
 
+    // ---- the track list as iDrive sent it (capture session 0x000f) ---------------------------------------------
+    {
+        const Bytes list = hex("000000640000006b300000005b0000000b0000006b300000000000030002000300020700001d0000002a"
+                               "0000000a070000050103000002010000000affffffff0103000003000000000a07000006010300000401"
+                               "0a00000003000001000000700000007100000004feff0000");
+        assert(list.size() == 108);
+        size_t at = 0;
+        assert(trackListShape(list, &at) && at == 65 && kombinav::getU32(list, at) == 0x03000003);
+        assert(trackListShape(list, NULL));
+        Bytes b = list;
+        b.pop_back();                                   // cut short: the length field no longer matches
+        assert(!trackListShape(b, &at));
+        b = list; b[7] = 0x6C;                          // another list model
+        assert(!trackListShape(b, &at));
+        b = list; b[17 + 10] = 4;                       // four rows
+        assert(!trackListShape(b, &at));
+        b = list; b[17 + 25 + 14 + 4] = 0x07;           // the middle row has an icon
+        assert(!trackListShape(b, &at));
+        b = list; b[17 + 25 + 28 + 7] = 0x09;           // the last row's icon is not "next"
+        assert(!trackListShape(b, &at));
+        b = list; b[65] = 0x07;                         // the middle row's text is not a text model
+        assert(!trackListShape(b, &at));
+        assert(!trackListShape(Bytes(), &at) && !trackListShape(Bytes(40, 0), &at));
+        uint32_t v = 0;
+        assert(shownValue(hex("00000064000000652e0000000900000003000000652e0000006b"), &v) && v == kListModel);
+        assert(shownValue(hex("00000064000000652e0000000900000003000000652effffffff"), &v) && v == 0xFFFFFFFFu);
+        assert(!shownValue(hex("00000064000000702c0000000800000002000000702c00ffff"), &v));
+        assert(!shownValue(hex("00000064"), &v));
+    }
     assert(methodAllowed(0x0003) && methodAllowed(0x0004) && methodAllowed(0x0009) && methodAllowed(0x000B));
     assert(!methodAllowed(0x0001) && !methodAllowed(0x0002) && !methodAllowed(0x0005));
     printf("test_ric_list OK\n");
