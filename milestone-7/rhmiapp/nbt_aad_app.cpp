@@ -227,7 +227,7 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the eleven checkbox models whenever it is shown.
+// handler here, to refresh the twelve checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
 const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
@@ -355,6 +355,13 @@ const unsigned    kActLciMedia     = 124;
 const unsigned    kLciMediaModel   = 125;
 const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
 const char* const kLciMediaManual  = "/opt/aa/lci-media";
+// "Short press voice button for Assistant" checkbox, off by default:
+// <checkbox action="155" id="158" model="156" textModel="157">. Flag file read live on voice-button release
+// (nbt_env.hpp pttShortFlagFileSet()); NBT_PTT_SHORT or NBT_PTT_ASSISTANT=short|both in nbt-aad.env win.
+const unsigned    kActPttShort     = 155;
+const unsigned    kPttShortModel   = 156;
+const char* const kPttShortFlag    = "/var/opt/aa/ptt-short";
+const char* const kPttShortManual  = "/opt/aa/ptt-short";
 // Firewall (pf_aa) rows on the Settings page (rhmiapp-47), under a separator after the checkboxes, worked like Start /
 // Force Stop / Restart: <button action="132" id="135" model="134"> Install PF Rules, <button action="136" id="140"
 // model="138"> Check PF Rules, <button action="137" id="141" model="139"> Uninstall PF Rules. Each press runs
@@ -2072,6 +2079,36 @@ bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// ---- Short press voice button for Assistant ---------------------------------------------------------------------
+bool g_pttShortShown = false;
+bool pttShortOn() { return fileExists(kPttShortFlag) || fileExists(kPttShortManual); }
+
+void showPttShort(bmw::PluginApp* app) {
+    app->updateModel(kPttShortModel, pttShortOn());
+    g_pttShortShown = true;
+}
+
+bool onPttShortToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    bool on = pttShortOn();
+    if (on) {
+        if (fileExists(kPttShortFlag) && unlink(kPttShortFlag) != 0)
+            alog("short press voice button for Assistant: cannot remove %s (errno %d)", kPttShortFlag, errno);
+        if (fileExists(kPttShortManual) && unlink(kPttShortManual) != 0)
+            alog("short press voice button for Assistant: cannot remove %s (errno %d, read-only?): remove it by hand",
+                 kPttShortManual, errno);
+    } else {
+        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
+        int fd = open(kPttShortFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) alog("short press voice button for Assistant: cannot create %s (errno %d)", kPttShortFlag, errno);
+        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
+    }
+    bool now = pttShortOn();
+    alog("menu: short press voice button for Assistant %s -> %s (applies live; NBT_PTT_SHORT / NBT_PTT_ASSISTANT=short|both in nbt-aad.env win)",
+         on ? "on" : "off", now ? "on" : "off");
+    if (g_runApp) showPttShort(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -2219,6 +2256,7 @@ void statusRun(void* /*self*/) {
     if (!g_wfdOnlyShown) showWfdOnly(app);
     if (!g_nativeAudioShown) showNativeAudio(app);
     if (!g_lciMediaShown) showLciMedia(app);
+    if (!g_pttShortShown) showPttShort(app);
     servicePfOps(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
@@ -2382,7 +2420,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the eleven checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2405,7 +2443,8 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showWfdOnly(g_app);
         showNativeAudio(g_app);
         showLciMedia(g_app);
-        alog("settings: eleven checkbox models refreshed");
+        showPttShort(g_app);
+        alog("settings: twelve checkbox models refreshed");
     }
     return true;
 }
@@ -2445,6 +2484,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActWfdOnly, &onWfdOnlyToggle);
     addAction(self, kActNativeAudio, &onNativeAudioToggle);
     addAction(self, kActLciMedia, &onLciMediaToggle);
+    addAction(self, kActPttShort, &onPttShortToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);

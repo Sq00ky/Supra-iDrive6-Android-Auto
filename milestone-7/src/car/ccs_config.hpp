@@ -12,12 +12,16 @@
 //                          (SLOT = MENU OPTIONS BACK COM MEDIA NAV MAP;
 //                           defaults 3 HOME, 0, 4 BACK, 5 CALL, 65537 MEDIA, 65538 NAV, 65538 NAV)
 //   NBT_PTT_ASSISTANT=1    a long press of the steering-wheel voice button starts the Google Assistant
+//   NBT_PTT_SHORT=1        a short press of the steering-wheel voice button starts the Google Assistant
+//                          (also via the Settings checkbox /var/opt/aa/ptt-short, or NBT_PTT_ASSISTANT=short|both;
+//                           NBT_PTT_SHORT=1|0 in nbt-aad.env wins over the checkbox)
 
 #include "car/ccs_decoder.hpp"
 #include "nbt_env.hpp"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 namespace nbt {
 namespace car {
@@ -29,8 +33,10 @@ struct CcsConfig {
     bool     slotSet[CCS_SLOTS];    // false: the decoder's default key stays
     uint32_t slotKey[CCS_SLOTS];
     bool     pttAssistant;
+    bool     pttShort;
+    bool     pttShortFollowsFlag;   // true when not pinned by env: follow the UI checkbox flag file live
 
-    CcsConfig() : inst(0x03), ccsInst(0x01), invert(false), pttAssistant(false) {
+    CcsConfig() : inst(0x03), ccsInst(0x01), invert(false), pttAssistant(false), pttShort(false), pttShortFollowsFlag(false) {
         for (int s = 0; s < CCS_SLOTS; ++s) { slotSet[s] = false; slotKey[s] = 0; }
     }
 };
@@ -49,7 +55,11 @@ inline CcsConfig readCcsConfig() {
         if (e && *e) { c.slotSet[s] = true; c.slotKey[s] = (uint32_t)strtoul(e, NULL, 0); }
     }
     e = getenv("NBT_PTT_ASSISTANT");
-    c.pttAssistant = e && e[0] == '1';
+    c.pttAssistant = e && (e[0] == '1' || !strcmp(e, "both") || !strcmp(e, "long") || !strcmp(e, "true") ||
+                           !strcmp(e, "on") || !strcmp(e, "yes"));
+    const char* s = getenv("NBT_PTT_SHORT");
+    c.pttShort = pttShortSettingOn(s, e, pttShortFlagFileSet());
+    c.pttShortFollowsFlag = !pttShortEnvPinned(s, e);
     return c;
 }
 
