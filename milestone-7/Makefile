@@ -16,6 +16,7 @@ CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -
 LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -lm -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 SRCS = src/main.cpp \
+       src/pf_aa_embed.cpp \
        src/audio/a2i_audio.cpp \
        src/audio/config.cpp \
        src/audio/bt_audio.cpp \
@@ -52,10 +53,14 @@ SRCS = src/main.cpp \
        src/car/input_activity.cpp \
        src/car/geoid.cpp \
        src/car/gps.cpp \
+       src/car/vehicle.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
-       src/kombi_client.cpp \
-       src/kombi_nav.cpp \
+       src/cluster/j29_client.cpp \
+       src/cluster/j29_display.cpp \
+       src/cluster/nav_core.cpp \
+       src/cluster/hud_terminal.cpp \
+       src/cluster/hud6wa_display.cpp \
        src/volume_osd.cpp
 
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.

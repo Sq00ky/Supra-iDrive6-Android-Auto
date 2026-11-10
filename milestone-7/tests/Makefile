@@ -20,6 +20,10 @@ LDLIBS   := -lpthread -lssl -lcrypto -lm
 # The vendored speexdsp resampler, built as C the way the daemon builds it.
 SPEEX := $(ROOT)/src/audio/speex.c
 
+# The guidance runtime with both cluster drivers (KombiNav creates either).
+SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/cluster/nav_core.cpp \
+                 src/cluster/hud6wa_display.cpp src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_aa_proto          := src/wireless_setup.cpp
 SRC_test_aa_sensor_msg     :=
@@ -38,6 +42,7 @@ SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
 SRC_test_car_gps           := src/car/geoid.cpp src/car/gps.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+SRC_test_car_vehicle       := src/car/vehicle.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_ccs_config        :=
 SRC_test_ccs_decoder       :=
 SRC_test_ccs_input         := src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
@@ -45,13 +50,19 @@ SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
 SRC_test_entry_key         :=
+SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
+SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+SRC_test_hudterm           :=
+SRC_test_j29_golden        := $(SRC_KOMBI_NAV)
 SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_kombi_graph       :=
-SRC_test_kombi_nav         := src/kombi_client.cpp src/kombi_nav.cpp
+SRC_test_kombi_nav         := $(SRC_KOMBI_NAV)
 SRC_test_kombi_nav_msg     :=
 SRC_test_lm_geometry       :=
 SRC_test_media_ack         :=
 SRC_test_media_msgs        :=
+SRC_test_media_state       :=
+SRC_test_mfl               :=
 SRC_test_mmr_launch        :=
 SRC_test_mmr_pps           :=
 SRC_test_most_client       := src/most/client.cpp tests/fake_dsi_client.cpp
@@ -73,6 +84,7 @@ SRC_test_session_lifecycle := src/aa_cryptor.cpp src/aa_session.cpp src/audio/au
 SRC_test_session_bye       := src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_owner     :=
 SRC_test_session_sensors   := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
+SRC_test_session_rx_timeout := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_touch             := src/touch_probe.cpp
 SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
@@ -87,6 +99,7 @@ SRC_test_wpp               := src/wireless_setup.cpp
 ARGS_test_ccs_decoder := tests/fixtures/controls_2026-10-22_e5.txt
 ARGS_test_ccs_push    := tests/fixtures/controls_2026-10-23_push.txt
 ARGS_test_ccs_input   := tests/fixtures/controls_2026-10-23_push.txt
+ARGS_test_j29_golden  := tests/fixtures/j29_golden.txt
 
 TESTS := $(basename $(notdir $(wildcard test_*.cpp)))
 PY_TESTS := $(filter-out test_schema,$(basename $(notdir $(wildcard test_*.py))))
@@ -143,6 +156,7 @@ $(OUT)/libNbtAad.so: $(ROOT)/rhmiapp/nbt_aad_app.cpp | $(OUT)
 srcs = $(addprefix $(ROOT)/,$(filter-out $(SPEEX),$(SRC_$(1))))
 objs = $(if $(filter $(SPEEX),$(SRC_$(1))),$(OUT)/speex.o)
 FLAGS_test_session_bye := -include $(CURDIR)/stub_cryptor.hpp
+FLAGS_test_session_sensors := -std=gnu++11
 WORKDIR_test_wpp := $(CURDIR)/$(OUT)/wpp
 ENV_test_touch := NBT_TOUCH_CONNECT=0
 
@@ -162,8 +176,9 @@ run-test_touch_split: run-test_touch
 	@cd $(ROOT) && NBT_TOUCH_CONNECT=0 TOUCH_SPLIT=1 timeout 120s tests/$(OUT)/test_touch > tests/$(OUT)/test_touch_split.log 2>&1 \
 	  && echo "[PASS] test_touch_split" || { echo "[FAIL] test_touch_split"; tail -20 tests/$(OUT)/test_touch_split.log; exit 1; }
 
-# This test includes aa_session.cpp rather than listing it among its sources.
+# These tests include aa_session.cpp rather than listing it among their sources.
 $(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
+$(OUT)/test_session_rx_timeout: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
 
 # Not here: rhmiapp_host_test, which dlopens a host build of rhmiapp/libNbtAad.so linked against
 # rhmiapp_fake_appframework.cpp.

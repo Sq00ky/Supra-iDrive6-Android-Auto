@@ -45,6 +45,8 @@ public:
     bool attached() const { return attached_; }
     // Quiet: do not hex-dump every received event (busy interfaces such as the MOST server).
     void setQuiet(bool q) { quiet_ = q; }
+    // Quiet sends: no line per sendRequest (a client that sends often, such as the MOST client with the cluster display).
+    void setQuietTx(bool q) { quietTx_ = q; }
 
 private:
     static void* threadMain(void* arg);
@@ -54,6 +56,7 @@ private:
     char* cli_;
     volatile bool attached_;
     bool quiet_;
+    bool quietTx_;
     AttachedCb attachedCb_;
     DataCb dataCb_;
     DetachedCb detachedCb_;

@@ -18,6 +18,7 @@ include_directories(
 # so a CMake configure does not drop sources or pass -fPIC, which the readme notes produces ET_DYN.
 set(SOURCES
     src/main.cpp
+    src/pf_aa_embed.cpp
     src/audio/a2i_audio.cpp
     src/audio/config.cpp
     src/audio/bt_audio.cpp
@@ -52,10 +53,14 @@ set(SOURCES
     src/car/input_activity.cpp
     src/car/geoid.cpp
     src/car/gps.cpp
+    src/car/vehicle.cpp
     src/sdr_builder.cpp
     src/crash_handler.cpp
-    src/kombi_client.cpp
-    src/kombi_nav.cpp
+    src/cluster/j29_client.cpp
+    src/cluster/j29_display.cpp
+    src/cluster/nav_core.cpp
+    src/cluster/hud_terminal.cpp
+    src/cluster/hud6wa_display.cpp
     src/audio/speex.c
 )
 

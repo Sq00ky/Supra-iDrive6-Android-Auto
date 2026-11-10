@@ -52,22 +52,25 @@ int main() {
     CHECK(nbt::wfdPassphraseOk(std::string(63, 'a')));
 
     // ---- NBT_ALT_WIFI parsing -----------------------------------------------------
-    // default since v1.8.78: BOTH (the hotspot when the car has one, the DIRECT group behind it)
-    CHECK(nbt::parseAltWifi(NULL) == nbt::ALT_WIFI_BOTH);
-    CHECK(nbt::parseAltWifi("") == nbt::ALT_WIFI_BOTH);
+    // default: CARPLAY (v1.9.37 removed BOTH, the default since v1.8.78)
+    CHECK(nbt::parseAltWifi(NULL) == nbt::ALT_WIFI_CARPLAY);
+    CHECK(nbt::parseAltWifi("") == nbt::ALT_WIFI_CARPLAY);
     CHECK(nbt::parseAltWifi("CARPLAY") == nbt::ALT_WIFI_CARPLAY);
     CHECK(nbt::parseAltWifi("carplay") == nbt::ALT_WIFI_CARPLAY);
     CHECK(nbt::parseAltWifi("DIRECT") == nbt::ALT_WIFI_DIRECT);
     CHECK(nbt::parseAltWifi("direct") == nbt::ALT_WIFI_DIRECT);
-    CHECK(nbt::parseAltWifi("BOTH") == nbt::ALT_WIFI_BOTH);
-    CHECK(nbt::parseAltWifi("both") == nbt::ALT_WIFI_BOTH);
-    CHECK(nbt::parseAltWifi("banana") == nbt::ALT_WIFI_BOTH);      // unknown word: the default
+    CHECK(nbt::parseAltWifi(" direct ") == nbt::ALT_WIFI_DIRECT);
+    CHECK(nbt::parseAltWifi("BOTH") == nbt::ALT_WIFI_CARPLAY);     // retired: the default
+    CHECK(nbt::parseAltWifi("both") == nbt::ALT_WIFI_CARPLAY);
+    CHECK(nbt::parseAltWifi("banana") == nbt::ALT_WIFI_CARPLAY);   // unknown word: the default
+    CHECK(nbt::altWifiRetiredBoth(" Both") && !nbt::altWifiRetiredBoth("DIRECT") && !nbt::altWifiRetiredBoth(NULL));
+    CHECK(strcmp(nbt::altWifiName(nbt::ALT_WIFI_CARPLAY), "CARPLAY") == 0);
     CHECK(strcmp(nbt::altWifiName(nbt::ALT_WIFI_DIRECT), "DIRECT") == 0);
     // which source is offered first: only DIRECT puts the Wi-Fi Direct group ahead of the CarPlay hotspot
     setenv("NBT_ALT_WIFI", "CARPLAY", 1);
     CHECK(nbt::altWifiPrefersCarplay());
     setenv("NBT_ALT_WIFI", "BOTH", 1);
-    CHECK(nbt::altWifiPrefersCarplay());
+    CHECK(nbt::altWifiPrefersCarplay());              // retired BOTH = CARPLAY
     setenv("NBT_ALT_WIFI", "DIRECT", 1);
     CHECK(!nbt::altWifiPrefersCarplay());
     unsetenv("NBT_ALT_WIFI");
@@ -181,7 +184,7 @@ int main() {
     CHECK(strcmp(nbt::wirelessListenIp(), "172.16.222.9") == 0);
     unsetenv("NBT_WFD_IP");
     setenv("NBT_ALT_WIFI", "BOTH", 1);
-    CHECK(nbt::wirelessListenIp() == NULL);            // both subnets: listen on every interface
+    CHECK(nbt::wirelessListenIp() && strcmp(nbt::wirelessListenIp(), "172.16.224.1") == 0);   // retired BOTH = CARPLAY
     setenv("NBT_AP_IP", "172.16.224.7", 1);            // an explicit address still wins
     CHECK(nbt::wirelessListenIp() && strcmp(nbt::wirelessListenIp(), "172.16.224.7") == 0);
     unsetenv("NBT_AP_IP");
@@ -199,7 +202,7 @@ int main() {
     // and it works for a car that numbers wfd0 differently, e.g. 10.77.0.1 / 10.77.0.23
     CHECK(nbt::wirelessPeerAllowed(0x0A4D0017u, 0x0A4D0001u));
 
-    // BOTH binds every interface, so the filter uses the cached uap0/wfd0 networks instead of the arrival address
+    // the bind fallback listens on every interface, so the filter uses the cached uap0/wfd0 networks instead of the arrival address
     unsigned nets[2] = { 0xAC10DE00u, 0xAC10E000u };   // 172.16.222.0, 172.16.224.0
     CHECK(nbt::wfdPeerInNets(0xAC10DE64u, nets, 2, 0u));
     CHECK(nbt::wfdPeerInNets(0xAC10E064u, nets, 2, 0u));
@@ -254,6 +257,16 @@ int main() {
     CHECK(pin == "12345670");
 
     unlink(pass); unlink(wps); unlink(junk);
+
+    // "Use WiFi Direct Network" checkbox (rhmiapp-44): a set NBT_ALT_WIFI wins, unset the flag file picks DIRECT
+    CHECK(nbt::altWifiSetting(NULL, false) == nbt::ALT_WIFI_CARPLAY);
+    CHECK(nbt::altWifiSetting("", false) == nbt::ALT_WIFI_CARPLAY);
+    CHECK(nbt::altWifiSetting(NULL, true) == nbt::ALT_WIFI_DIRECT);
+    CHECK(nbt::altWifiSetting("", true) == nbt::ALT_WIFI_DIRECT);
+    CHECK(nbt::altWifiSetting("carplay", true) == nbt::ALT_WIFI_CARPLAY);
+    CHECK(nbt::altWifiSetting("both", true) == nbt::ALT_WIFI_CARPLAY);   // a set NBT_ALT_WIFI wins, even retired BOTH
+    CHECK(nbt::altWifiSetting("direct", false) == nbt::ALT_WIFI_DIRECT);
+    CHECK(strcmp(nbt::kWfdOnlyFlagFile, "/var/opt/aa/wifi-direct") == 0);
     printf(fails ? "test_alt_wifi: %d FAILED\n" : "test_alt_wifi: all passed\n", fails);
     return fails ? 1 : 0;
 }

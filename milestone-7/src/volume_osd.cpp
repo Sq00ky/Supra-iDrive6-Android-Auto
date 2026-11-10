@@ -69,7 +69,7 @@ inline void ramp(int pct, int* r, int* g, int* b) {
 
 const uint32_t kPill   = rgba(0x08, 0x0A, 0x0D, 0xD1);   // dark navy, 0.82 alpha (mockup body)
 const uint32_t kBorder = rgba(0xFF, 0xFF, 0xFF, 0x17);   // mockup: 1 px rgba(255,255,255,.09)
-const uint32_t kTrack  = rgba(0xFF, 0xFF, 0xFF, 0x24);   // white, 14%
+const uint32_t kTrack  = rgba(0x55, 0x55, 0x55, 0xFF);   // solid grey, fully opaque
 const uint32_t kGlyph  = rgba(0xCF, 0xDA, 0xE6, 0xFF);
 const uint32_t kText   = rgba(0xE8, 0xEE, 0xF4, 0xFF);
 
@@ -221,7 +221,7 @@ void drawValue(Canvas& cv, int rightX, int centreY, int pct, uint32_t c, const V
 // Bar with rounded caps. The cap inset is measured inward from the nearest end, which is what makes it round.
 void drawBar(Canvas& cv, int x0, int x1, int y, int h, int pct) {
     const int r = h / 2;
-    cv.pill(x0, y, x1, y + h, r, kTrack);            // track: white 14%
+    cv.pill(x0, y, x1, y + h, r, kTrack);            // track: solid grey
     const int fillW = (x1 - x0) * volumeClampPct(pct) / 100;
     if (fillW < 2) return;
 

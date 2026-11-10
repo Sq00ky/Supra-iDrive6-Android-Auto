@@ -61,7 +61,7 @@ static void record(Call::Kind k, uint32_t id, const std::vector<uint8_t>* payloa
 namespace nbt {
 
 DsiClient::DsiClient()
-    : lib_(NULL), conn_(NULL), cli_(NULL), attached_(false), quiet_(false),
+    : lib_(NULL), conn_(NULL), cli_(NULL), attached_(false), quiet_(false), quietTx_(false),
       attachedCb_(NULL), dataCb_(NULL), detachedCb_(NULL), user_(NULL) {}
 
 void DsiClient::setCallbacks(AttachedCb a, DataCb d, void* user) {

@@ -4,7 +4,7 @@
 // status and key releases do not, and it shares the client with CcsInput without adding keys.
 #include "car/ccs_input.hpp"
 #include "car/input_activity.hpp"
-#include "fake_dsi_client.hpp"
+#include "most_fixture.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +14,7 @@
 using namespace nbt;
 using namespace nbt::car;
 using namespace nbt::most;
+using most_fixture::registered;
 
 static std::vector<std::string> g_seen;
 static void onInput(const char* what, void* user) {
@@ -31,13 +32,6 @@ static void sendFrame(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op, co
     fake_dsi::data(kInfoMessage, &f[0], (uint32_t)f.size());
 }
 static std::vector<uint8_t> bytes(const uint8_t* p, size_t n) { return std::vector<uint8_t>(p, p + n); }
-
-static void registered(uint32_t id) {
-    std::vector<uint8_t> resp;
-    putLe32(resp, id);
-    putLe16(resp, 0x205D);
-    fake_dsi::data(kInfoClientResponse, &resp[0], (uint32_t)resp.size());
-}
 
 int main() {
     // mflPress: the volcap capture's shapes.

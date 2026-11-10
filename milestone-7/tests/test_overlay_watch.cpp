@@ -12,6 +12,20 @@ using nbt::OverlayWatch;
 static const bool AA = true, NO_AA = false;
 
 int main() {
+    // 0. Camera contexts (rhmiapp-46): default 692,1023; NBT_AA_CAMERA_CTX replaces the list
+    {
+        int l[16];
+        int n = nbt::parseCameraContexts(NULL, l, 16);
+        assert(n == 2 && nbt::isCameraContext(1023, l, n) && nbt::isCameraContext(692, l, n));
+        assert(!nbt::isCameraContext(3, l, n) && !nbt::isCameraContext(50002, l, n));
+        n = nbt::parseCameraContexts("", l, 16);
+        assert(n == 2);
+        n = nbt::parseCameraContexts("1023, 1856 ,x,0,-5,700", l, 16);
+        assert(n == 3 && l[0] == 1023 && l[1] == 1856 && l[2] == 700);
+        n = nbt::parseCameraContexts("1,2,3,4", l, 2);
+        assert(n == 2);
+        printf("camera contexts OK\n");
+    }
     // 1. Check Control appears with no driver input: step aside on the first poll >= 300 ms later, not after 25 s.
     {
         OverlayWatch w;

@@ -31,7 +31,8 @@ enum AaChannelId {
     AA_CH_MEDIA_PLAYBACK = 12,
     AA_CH_VENDOR_EXTENSION = 13,
     AA_CH_MICROPHONE = 14,
-    AA_CH_BLUETOOTH = 15
+    AA_CH_BLUETOOTH = 15,
+    AA_CH_MEDIA_BROWSER = 17    // probe only (NBT_AA_BROWSE=1, sdr_builder addMediaBrowserProbe)
 };
 
 enum AaSensorType {
@@ -53,7 +54,7 @@ enum AaSensorType {
 enum AaLocationCharacterization { LOCATION_RAW_GPS_ONLY = 256 };
 enum AaFuelType { FUEL_UNLEADED = 1, FUEL_ELECTRIC = 10 };
 enum AaEvConnector { EV_CONNECTOR_SUPERCHARGER = 8 };
-enum AaDriverPosition { DRIVER_POSITION_LEFT = 0 };
+enum AaDriverPosition { DRIVER_POSITION_LEFT = 0, DRIVER_POSITION_RIGHT = 1 };
 
 enum AaMediaCodec { CODEC_AUDIO_PCM = 1, CODEC_VIDEO_H264 = 3 };
 enum AaAudioType { AUDIO_TYPE_GUIDANCE = 1, AUDIO_TYPE_SYSTEM = 2, AUDIO_TYPE_MEDIA = 3 };
@@ -169,7 +170,7 @@ struct VendorExtensionService {
 struct AaChannel {
     enum Service {
         SENSOR_SOURCE, AUDIO_SINK, VIDEO_SINK, INPUT_SOURCE, MICROPHONE, BLUETOOTH, NAV_STATUS, MEDIA_PLAYBACK,
-        PHONE_STATUS, VENDOR_EXTENSION
+        PHONE_STATUS, VENDOR_EXTENSION, MEDIA_BROWSER
     };
     int id;
     Service service;

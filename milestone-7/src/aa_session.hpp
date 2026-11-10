@@ -32,6 +32,9 @@ typedef void (*MicRequestCallback)(bool open, void* user_data);
 // Navigation status channel (ch 10, messages 0x8000 and up): the message id and its protobuf body (after the 2-byte
 // message id). Session thread: copy what you need and return, never block.
 typedef void (*NavStatusCallback)(uint16_t msg_id, const uint8_t* body, size_t len, void* user_data);
+// Media playback channel (ch 12: 0x8001 status, 0x8003 metadata, anything else the phone sends there): the message id and
+// its protobuf body (after the 2-byte message id). Session thread: copy what you need and return, never block.
+typedef void (*MediaStatusCallback)(uint16_t msg_id, const uint8_t* body, size_t len, void* user_data);
 
 class AASession {
 public:
@@ -48,6 +51,7 @@ public:
     void setVideoFocusCallback(VideoFocusCallback cb, void* user_data = NULL);
     void setMicRequestCallback(MicRequestCallback cb, void* user_data = NULL);
     void setNavStatusCallback(NavStatusCallback cb, void* user_data = NULL);
+    void setMediaStatusCallback(MediaStatusCallback cb, void* user_data = NULL);
     bool isActive() const { return isRunning(); }   // true from start() until the session ended or stop()
     // How the phone behaved in the session. Written by the session thread: read it in the session-ended callback.
     enum Outcome {
@@ -80,6 +84,18 @@ public:
     // The newest satellite count. The session sends it as a GPS_SATELLITE (sensor 21) event about once a second once the
     // phone has started that sensor, whether or not anything was posted: with nothing recent the count is 0. Thread-safe.
     void postCarSatellites(const SatelliteStatus& status);
+    // The newest heading, degrees * 1e6, clockwise from north: sent to the phone as a COMPASS (sensor 2) event once it has
+    // started that sensor, and repeated if nothing new comes (kCompassRepeatMs). It has no age limit: the car's value stays
+    // true while the car stands still, and how often the car sends it then is not known yet. Thread-safe.
+    void postCarCompass(int32_t bearing_e6);
+    // The newest wheel speed: sent to the phone as a CAR_SPEED (sensor 3) event once it has started that sensor, unless
+    // carSpeedSendable() says no by then. While the newest is 0 the session repeats it on a timer. Thread-safe.
+    void postCarSpeed(const CarSpeedSample& speed);
+    // The gear (AaGear) and the parking brake, when they change: sent to the phone as GEAR (sensor 8) and PARKING_BRAKE
+    // (sensor 7) events once it has started that sensor, and the newest again whenever it starts one. The car only reports
+    // changes, so these have no age limit and are kept across sessions. Thread-safe.
+    void postCarGear(int aaGear);
+    void postCarParkingBrake(bool on);
     // Car microphone PCM (16 kHz mono S16LE) for the phone. Thread-safe (capture thread); queued and sent on
     // ch 14 by the session thread while the phone has the mic open, dropped otherwise.
     void postMicData(const uint8_t* pcm, size_t len);
@@ -147,12 +163,48 @@ private:
     uint32_t satellites_last_ms_;                  // session thread: when the last one went out
     uint32_t satellites_last_used_;                // session thread: the count it carried
     void drainSatellites();                        // session thread: send GPS_SATELLITE when one is due
+    int32_t car_bearing_e6_;                       // guarded by touch_mutex_: latest heading
+    bool have_compass_;                            // guarded by touch_mutex_: car_bearing_e6_ is set (kept across sessions)
+    bool compass_started_;                         // guarded by touch_mutex_: phone started sensor 2 this session
+    bool pending_compass_;                         // guarded by touch_mutex_: send a COMPASS event on next drain
+    uint32_t compass_sent_;                        // session thread: COMPASS events this session
+    uint32_t compass_last_ms_;                     // session thread: when the last one went out
+    bool compassRunning();                         // the phone started sensor 2 and there is a heading to send
+    void drainCompass();                           // session thread: repeat COMPASS when one is due
+    CarSpeedSample car_speed_;                     // guarded by touch_mutex_: latest speed
+    bool have_speed_;                              // guarded by touch_mutex_: car_speed_ is set (kept across sessions)
+    bool speed_started_;                           // guarded by touch_mutex_: phone started sensor 3 this session
+    bool pending_speed_;                           // guarded by touch_mutex_: send a CAR_SPEED event on next drain
+    uint32_t speed_sent_;                          // session thread: CAR_SPEED events this session
+    uint32_t speed_last_ms_;                       // session thread: when the last one went out
+    bool speed_last_zero_;                         // session thread: it carried 0, so another is due on the timer
+    void drainSpeed();                             // session thread: repeat a CAR_SPEED of 0 when one is due
+    // A state sensor: gear or parking brake. Guarded by touch_mutex_, apart from sent.
+    struct CarState {
+        int value;                                 // the newest
+        bool have;                                 // value is set (kept across sessions)
+        bool started;                              // phone started this sensor this session
+        bool pending;                              // send an event on next drain
+        uint32_t sent;                             // session thread: events this session
+        CarState() : value(0), have(false), started(false), pending(false), sent(0) {}
+    };
+    CarState gear_;
+    CarState parking_brake_;
+    void postCarState(CarState& state, int value);
+    void startCarState(CarState& state);           // session thread: the phone started this sensor
+    void resetCarState(CarState& state);           // with touch_mutex_ held: a session starts or ends, nothing is started
+    bool takeCarStatePending(CarState& state);     // with touch_mutex_ held: an event is due, and now it is not
+    void drainPeriodic();                          // session thread: everything that is due on time, whatever woke it
+    uint32_t periodicTickMs();                     // session thread: how long select may sleep before something is due
+    uint32_t last_rx_ms_;                          // session thread: when the last byte from the phone arrived
     VideoFocusCallback focus_cb_;
     void* focus_user_data_;
     MicRequestCallback mic_cb_;
     void* mic_user_data_;
     NavStatusCallback nav_cb_;
     void* nav_user_data_;
+    MediaStatusCallback media_cb_;
+    void* media_user_data_;
     bool mic_open_;                                // guarded by touch_mutex_
     std::vector<std::vector<uint8_t> > mic_queue_; // guarded by touch_mutex_
     uint32_t mic_sent_;                            // session thread

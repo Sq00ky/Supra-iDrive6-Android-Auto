@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test: kombi_nav graph builder (src/kombi_graph.hpp). The SHA-256 vectors were produced by the test client
+// Host test: kombi_nav graph builder (src/cluster/j29_graph.hpp). The SHA-256 vectors were produced by the test client
 // (Python) that drove a J29 cluster + HUD route-free with this graph (same template, same inputs), so a match means
 // byte-identical frames.
-#include "kombi_graph.hpp"
+#include "cluster/j29_graph.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

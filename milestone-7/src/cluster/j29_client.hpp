@@ -7,17 +7,17 @@
 // - Queued KOMBI messages (SOME/IP magic cookies, about every 10 s) are drained before each request and skipped
 //   while waiting for a reply.
 // - The cancel always runs on a fresh connection, with the state-0 frame alone as a fallback.
-// - Only whitelisted methods are sent (kombi_graph.hpp methodAllowed): never create / dispose.
+// - Only whitelisted methods are sent (cluster/j29_graph.hpp methodAllowed): never create / dispose.
 // - emergencyCancel() is async-signal-safe (plain syscalls on a prebuilt buffer) for the fatal-signal handler.
-#ifndef KOMBI_CLIENT_HPP
-#define KOMBI_CLIENT_HPP
+#ifndef CLUSTER_J29_CLIENT_HPP
+#define CLUSTER_J29_CLIENT_HPP
 
 #include <stdint.h>
 #include <stddef.h>
 #include <string>
 #include <vector>
 
-#include "kombi_graph.hpp"
+#include "cluster/j29_graph.hpp"
 
 namespace nbt {
 namespace kombinav {

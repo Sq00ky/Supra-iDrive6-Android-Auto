@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 namespace nbt {
 
@@ -32,15 +33,33 @@ namespace nbt {
 //   a2i      the old staged A2I pipeline (a2i_audio.cpp, NBT_AUDIO_STAGE); not audible on the car
 enum AudioMode { AUDIO_MODE_BT = 0, AUDIO_MODE_BROWSER = 1, AUDIO_MODE_A2I = 2 };
 
-inline AudioMode audioMode() {
-    const char* m = getenv("NBT_AUDIO_MODE");
-    if (m && *m) {
-        if (strcmp(m, "browser") == 0) return AUDIO_MODE_BROWSER;
-        if (strcmp(m, "a2i") == 0) return AUDIO_MODE_A2I;
-        if (strcmp(m, "bt") == 0) return AUDIO_MODE_BT;
+// "Use Native Audio instead of Bluetooth" (iDrive Settings checkbox, rhmiapp-45; flag file kNativeAudioFlagFile, a
+// hand-made kNativeAudioManualFile also counts): browser mode, i.e. Android Auto sound over the Android Auto connection
+// through the car's own audio instead of Bluetooth A2DP. Only when neither NBT_AUDIO_MODE nor NBT_AUDIO_BT is set in
+// nbt-aad.env (those win). Read once per daemon run, so a change applies at the next Start / Restart.
+static const char* const kNativeAudioFlagFile = "/var/opt/aa/native-audio";
+static const char* const kNativeAudioManualFile = "/opt/aa/native-audio";
+
+// Pure part (host-tested): NBT_AUDIO_MODE's value (NULL = unset), envFlag("NBT_AUDIO_BT") (-1 = unset) and the flag file.
+inline AudioMode audioModeSetting(const char* mode, int bt, bool nativeFlag) {
+    if (mode && *mode) {
+        if (strcmp(mode, "browser") == 0) return AUDIO_MODE_BROWSER;
+        if (strcmp(mode, "a2i") == 0) return AUDIO_MODE_A2I;
+        if (strcmp(mode, "bt") == 0) return AUDIO_MODE_BT;
     }
-    int bt = envFlag("NBT_AUDIO_BT");
-    return bt == 0 ? AUDIO_MODE_A2I : AUDIO_MODE_BT;
+    if (bt >= 0) return bt == 0 ? AUDIO_MODE_A2I : AUDIO_MODE_BT;
+    return nativeFlag ? AUDIO_MODE_BROWSER : AUDIO_MODE_BT;
+}
+
+// The checkbox is read once: every audioMode() caller in a run must see the same mode, even if the box is flipped.
+inline bool nativeAudioFlagSet() {
+    static int s = -1;
+    if (s < 0) s = (access(kNativeAudioFlagFile, F_OK) == 0 || access(kNativeAudioManualFile, F_OK) == 0) ? 1 : 0;
+    return s == 1;
+}
+
+inline AudioMode audioMode() {
+    return audioModeSetting(getenv("NBT_AUDIO_MODE"), envFlag("NBT_AUDIO_BT"), nativeAudioFlagSet());
 }
 
 inline const char* audioModeName(AudioMode m) {

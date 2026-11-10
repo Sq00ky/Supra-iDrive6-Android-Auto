@@ -25,10 +25,17 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id);
 // The manifest as ServiceDiscoveryResponse protobuf, without the message id.
 std::vector<uint8_t> serializeManifest(const ServiceDiscovery& manifest);
 
-// Corrects the sensor channel for a real car: no compass, gyroscope or toll card, which have no source in the car, and
-// unleaded with no EV connector in place of the DHU's unleaded + electric and supercharger. Returns true if anything
-// was changed (prints the result).
+// Corrects the sensor channel for a real car: drops the gyroscope and toll card, and has unleaded with no EV connector in
+// place of the DHU's unleaded + electric and supercharger. This is what the phone is offered, not what it gets: of these,
+// AASession sends only location, compass, car speed, parking brake, gear, night mode, driving status and GPS satellites, and only
+// acknowledges the others.
+// Returns true if anything was changed (prints the result).
 bool configureSensors(ServiceDiscovery& manifest);
+// The same with "Use Phone GPS" given (configureSensors(m) reads phoneGpsEnabled()): phoneGps leaves out every sensor
+// that comes from the car's GPS / position (isCarPositionSensor: location, compass, GPS satellites, accelerometer,
+// gyroscope), so the phone uses its own. For cars without the navigation antenna, which have no MOST GPS or heading.
+bool configureSensors(ServiceDiscovery& manifest, bool phoneGps);
+bool isCarPositionSensor(int sensor);
 
 // The main display's VideoConfig. Environment (all optional):
 //   NBT_VID_RES  = VideoResolution enum (1 = 800x480, 2 = 1280x720, 3 = 1920x1080); unset or invalid = 2. Decoder
@@ -77,6 +84,10 @@ int retypeGuidanceSink(ServiceDiscovery& manifest);
 // NBT_SYSTEM_SINK=0 leaves it out. Returns 1 if added. Does nothing if channel 16 already exists.
 int addSystemAudioSink(ServiceDiscovery& manifest);
 
+// NBT_AA_BROWSE=1 (experiment, off): adds the media browser service (channel 17, descriptor field 11) with an empty
+// config, so the session logs whatever the phone sends there. Returns 1 if added.
+int addMediaBrowserProbe(ServiceDiscovery& manifest);
+
 // Keeps only the AudioConfigs with this sample rate in `channel`'s audio sink. Does nothing when no offer has that
 // rate, or when it is the only rate offered. Returns the number of offers removed.
 int keepAudioSinkRate(ServiceDiscovery& manifest, unsigned channel, uint32_t rate);
@@ -85,6 +96,10 @@ int keepAudioSinkRate(ServiceDiscovery& manifest, unsigned channel, uint32_t rat
 // The DHU template offers 16 and 48 kHz and the phone picks without asking (car 2026-11-01: 48 kHz), so one offer
 // leaves no doubt about the rate. Other modes unchanged. Returns the number of offers removed.
 int limitGuidanceOffers(ServiceDiscovery& manifest);
+
+// The side the phone is told the driver sits on: NBT_DRIVER_SIDE = left or right. Unset or anything else is left, what the
+// phone always heard before. Returns true if the manifest changed. Logs the side.
+bool configureDriverPosition(ServiceDiscovery& manifest);
 
 // Pure helper used by dropSdrChannels (host-tested): parses "8, 9,14" into ids (max 16).
 size_t parseChannelList(const char* s, int* ids, size_t max_ids);

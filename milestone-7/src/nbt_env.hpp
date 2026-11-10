@@ -41,6 +41,22 @@ inline bool carGpsEnabled() {
     return envFlag("NBT_CAR_GPS") != 0;
 }
 
+// The car's wheel speed (MOST 05/00 fkt 621, car/vehicle), default on. NBT_CAR_SPEED=0 / off / no disables it.
+inline bool carSpeedEnabled() {
+    return envFlag("NBT_CAR_SPEED") != 0;
+}
+
+// The car's gear (MOST 05/00 fkt 228, or the iDrive app until that reports, car/vehicle), default on. NBT_CAR_GEAR=0 / off / no
+// disables the sensor. The reverse-gear handling has its own switch, NBT_GEAR_ACTION.
+inline bool carGearEnabled() {
+    return envFlag("NBT_CAR_GEAR") != 0;
+}
+
+// The car's parking brake (MOST 05/00 fkt CB5, car/vehicle), default on. NBT_CAR_PARKING_BRAKE=0 / off / no disables it.
+inline bool carParkingBrakeEnabled() {
+    return envFlag("NBT_CAR_PARKING_BRAKE") != 0;
+}
+
 // Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
 // the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
 inline int videoResolution() {
@@ -86,13 +102,34 @@ inline bool usbSettingOn(const char* env, bool flagFile) {
 inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
 inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
 
-// NBT_USB_DIRECT=1 (with NBT_USB=1, experimental): read the phone through libusbdi, not devc-serusb-aoap (which it
-// stops for the phone): see usb_direct.hpp.
-inline bool usbDirectEnabled() {
-    const char* e = getenv("NBT_USB_DIRECT");
-    if (!e || !*e) return false;
-    return strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 || strcmp(e, "true") == 0;
+// "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag file kPhoneGpsFlagFile, a hand-made kPhoneGpsManualFile
+// also counts; NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna,
+// which have no MOST GPS fix or heading: the car's GPS is not read, and the ServiceDiscovery leaves out the location,
+// compass, GPS satellite and accelerometer sensors, so the phone uses its own GPS, compass and motion sensors for
+// everything built on them. Off = the car's GPS and heading go to the phone as before. Read at the start of the daemon
+// (car GPS) and of each session (ServiceDiscovery): a change applies at the next Start / Restart.
+static const char* const kPhoneGpsFlagFile = "/var/opt/aa/phone-gps";
+static const char* const kPhoneGpsManualFile = "/opt/aa/phone-gps";
+inline bool phoneGpsFlagFileSet() { return access(kPhoneGpsFlagFile, F_OK) == 0 || access(kPhoneGpsManualFile, F_OK) == 0; }
+inline bool phoneGpsEnabled() { return usbSettingOn(getenv("NBT_PHONE_GPS"), phoneGpsFlagFileSet()); }
+// "Media Controls for LCI Steering Wheels" (iDrive Settings checkbox, rhmiapp-45; flag file kLciMediaFlagFile, a
+// hand-made kLciMediaManualFile also counts; NBT_LCI_MEDIA=1 / 0 wins either way, same words as NBT_USB). Off by
+// default: the steering wheel's previous / next / play-pause (MOST 15/02, car/mfl.hpp, NBT_MFL_*) become Android media
+// keys only with it on, and still only in a non-Bluetooth audio mode. Read at the start of the daemon.
+static const char* const kLciMediaFlagFile = "/var/opt/aa/lci-media";
+static const char* const kLciMediaManualFile = "/opt/aa/lci-media";
+inline bool lciMediaFlagFileSet() { return access(kLciMediaFlagFile, F_OK) == 0 || access(kLciMediaManualFile, F_OK) == 0; }
+inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"), lciMediaFlagFileSet()); }
+
+// With Android Auto over USB on (usbEnabled()), read the phone through libusbdi, not devc-serusb-aoap (which it
+// stops for the phone): see usb_direct.hpp. On by default, since the /dev/oap* path loses TLS records whenever another
+// client reads the node and the phone ends the session; NBT_USB_DIRECT=0 / off / no / false goes back to /dev/oap*.
+// Pure part (host-tested): NBT_USB_DIRECT's value (NULL = unset).
+inline bool usbDirectSettingOn(const char* env) {
+    if (!env || !*env) return true;
+    return !(strcmp(env, "0") == 0 || strcmp(env, "off") == 0 || strcmp(env, "no") == 0 || strcmp(env, "false") == 0);
 }
+inline bool usbDirectEnabled() { return usbDirectSettingOn(getenv("NBT_USB_DIRECT")); }
 
 // NBT_USB_CLAIM_DRIVER=0: with NBT_USB_DIRECT, stop devc-serusb-aoap after it has started instead of keeping it from
 // starting (usb_direct.hpp). On by default.

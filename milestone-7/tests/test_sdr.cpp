@@ -81,10 +81,11 @@ int main() {
         printf("touch config 720 OK\n");
     }
     {
-        // Exact sensor channel: sensors 1,3,5,6,7,8,10,13,19,21, raw GPS location, unleaded, no connector.
+        // Exact sensor channel: sensors 1,2,3,5,6,7,8,10,13,19,21, raw GPS location, unleaded, no connector.
         const uint8_t sensors[] = {
-            0x0a, 0x31, 0x08, 0x01, 0x12, 0x2d,
-            0x0a, 0x02, 0x08, 0x01, 0x0a, 0x02, 0x08, 0x03, 0x0a, 0x02, 0x08, 0x05, 0x0a, 0x02, 0x08, 0x06,
+            0x0a, 0x35, 0x08, 0x01, 0x12, 0x31,
+            0x0a, 0x02, 0x08, 0x01, 0x0a, 0x02, 0x08, 0x02,
+            0x0a, 0x02, 0x08, 0x03, 0x0a, 0x02, 0x08, 0x05, 0x0a, 0x02, 0x08, 0x06,
             0x0a, 0x02, 0x08, 0x07, 0x0a, 0x02, 0x08, 0x08, 0x0a, 0x02, 0x08, 0x0a, 0x0a, 0x02, 0x08, 0x0d,
             0x0a, 0x02, 0x08, 0x13, 0x0a, 0x02, 0x08, 0x15,
             0x10, 0x80, 0x02, 0x18, 0x01
@@ -102,6 +103,28 @@ int main() {
         const std::vector<uint8_t> session = serializeManifest(sessionManifest(dhuIdentity()));
         assert(memcmp(&session[0], sensors, sizeof(sensors)) == 0);
         printf("sensor channel OK (%u bytes)\n", (unsigned)bytes.size());
+    }
+    {
+        // Use Phone GPS (rhmiapp-44): every car position sensor is left out, the rest stays in order
+        ServiceDiscovery v = referenceManifest(dhuIdentity());
+        assert(configureSensors(v, true));
+        const AaChannel* c = NULL;
+        for (size_t i = 0; i < v.channels.size(); ++i)
+            if (v.channels[i].service == AaChannel::SENSOR_SOURCE) c = &v.channels[i];
+        assert(c);
+        const int want[] = { SENSOR_CAR_SPEED, SENSOR_ODOMETER, SENSOR_FUEL_LEVEL, SENSOR_PARKING_BRAKE, SENSOR_GEAR,
+                             SENSOR_NIGHT_MODE, SENSOR_DRIVING_STATUS };
+        assert(c->sensors.sensors == std::vector<int>(want, want + sizeof(want) / sizeof(want[0])));
+        for (size_t i = 0; i < c->sensors.sensors.size(); ++i) assert(!isCarPositionSensor(c->sensors.sensors[i]));
+        assert(!configureSensors(v, true));                          // a second run changes nothing
+        assert(configureSensors(v, false));                          // off again: the full list comes back
+        assert(isCarPositionSensor(SENSOR_LOCATION) && isCarPositionSensor(SENSOR_COMPASS) &&
+               isCarPositionSensor(SENSOR_GPS_SATELLITE) && !isCarPositionSensor(SENSOR_NIGHT_MODE));
+        assert(!phoneGpsEnabled() || getenv("NBT_PHONE_GPS"));      // the host has no flag file
+        // Media Controls for LCI Steering Wheels (rhmiapp-45): off without the flag file, NBT_LCI_MEDIA wins
+        assert(!lciMediaKeysEnabled() || getenv("NBT_LCI_MEDIA"));
+        assert(usbSettingOn("1", false) && !usbSettingOn("0", true) && usbSettingOn(NULL, true));
+        printf("phone GPS sensor channel OK\n");
     }
     {
         // NBT_RAIL_HIDE -> ServiceDiscoveryResponse field 13 (session_configuration)

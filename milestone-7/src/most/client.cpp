@@ -41,7 +41,7 @@ const char* linkStateName(LinkState s) {
 }
 
 Client::Client()
-    : nKeys_(0), nListeners_(0), tap_(NULL), tapUser_(NULL), infoTap_(NULL), infoTapUser_(NULL), started_(false), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
+    : nKeys_(0), nListeners_(0), nRegListeners_(0), nSendKeys_(0), tap_(NULL), tapUser_(NULL), infoTap_(NULL), infoTapUser_(NULL), started_(false), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
       attached_(false), answered_(false), clientId_(kClientRefused), deviceId_(0), haveComm_(false), comm_(0),
       commOkSeen_(false), longestWindowMs_(0), lastHealthMs_(0) {
     name_[0] = 0;
@@ -49,6 +49,7 @@ Client::Client()
     memset(&total_, 0, sizeof(total_));
     memset(&lastHealth_, 0, sizeof(lastHealth_));
     pthread_mutex_init(&lock_, NULL);
+    pthread_mutex_init(&sendLock_, NULL);
 }
 
 bool Client::addRoute(uint8_t fblock, int inst, int fkt, int op, Handler h, void* user) {
@@ -70,6 +71,24 @@ bool Client::addLinkListener(LinkCb cb, void* user) {
     listeners_[nListeners_].cb = cb;
     listeners_[nListeners_].user = user;
     ++nListeners_;
+    return true;
+}
+
+bool Client::addRegistryListener(RegistryCb cb, void* user) {
+    if (started_ || !cb || nRegListeners_ >= kMaxRegistryListeners) return false;
+    regListeners_[nRegListeners_].cb = cb;
+    regListeners_[nRegListeners_].user = user;
+    ++nRegListeners_;
+    return true;
+}
+
+bool Client::allowSend(uint8_t fblock, uint8_t inst) {
+    if (started_) return false;
+    uint16_t key = registryKey(fblock, inst);
+    for (int i = 0; i < nSendKeys_; ++i)
+        if (sendKeys_[i] == key) return true;
+    if (nSendKeys_ >= kMaxSendKeys) return false;
+    sendKeys_[nSendKeys_++] = key;
     return true;
 }
 
@@ -99,6 +118,7 @@ bool Client::start(const char* clientName) {
     started_ = true;
     lastHealthMs_ = nowMs();
     dsi_.setQuiet(!rawLog_);
+    dsi_.setQuietTx(!rawLog_);
     dsi_.setCallbacks(&Client::attachedTramp, &Client::dataTramp, this);
     dsi_.setDetachCallback(&Client::detachedTramp);
     if (!dsi_.open(kServerInterface, kServerRole, kInterfaceMajor, kInterfaceMinor)) {
@@ -147,6 +167,60 @@ ClientStats Client::stats() const {
     return s;
 }
 
+uint16_t Client::selfAddress() const {
+    pthread_mutex_lock(&lock_);
+    uint16_t a = (attached_ && answered_ && clientId_ != kClientRefused) ? (uint16_t)deviceId_ : 0;
+    pthread_mutex_unlock(&lock_);
+    return a;
+}
+
+bool Client::request(DsiClient* c, uint32_t id, const std::vector<uint8_t>& p) {
+    pthread_mutex_lock(&sendLock_);
+    bool ok = c->sendRequest(id, p);
+    pthread_mutex_unlock(&sendLock_);
+    return ok;
+}
+
+bool Client::notify(DsiClient* c, uint32_t attr) {
+    pthread_mutex_lock(&sendLock_);
+    bool ok = c->setNotification(attr);
+    pthread_mutex_unlock(&sendLock_);
+    return ok;
+}
+
+// The DSI library's comment says a send belongs on the connection thread. Sending from another thread, with one lock
+// around every send, is what tools/hud_probe did on the car, and the cluster answered every call.
+bool Client::send(const Msg& m) {
+    bool allowed = false;
+    uint16_t key = registryKey(m.fblock, m.inst);
+    for (int i = 0; i < nSendKeys_; ++i)
+        if (sendKeys_[i] == key) allowed = true;
+    bool shape = m.opType <= kOpStartAck && m.dst >= 0x0100 && m.dst <= 0x0FFF;
+    pthread_mutex_lock(&lock_);
+    bool up = started_ && state_ == kUp && clientId_ != kClientRefused && deviceId_ != 0;
+    uint32_t client = clientId_;
+    uint16_t self = (uint16_t)deviceId_;
+    if (!allowed || !shape || !up) {
+        ++total_.sendRefused;
+        pthread_mutex_unlock(&lock_);
+        return false;
+    }
+    pthread_mutex_unlock(&lock_);
+
+    Msg out = m;
+    out.src = self;
+    std::vector<uint8_t> req;
+    putLe32(req, client);
+    std::vector<uint8_t> body = buildMessage(out);
+    req.insert(req.end(), body.begin(), body.end());
+    bool ok = request(&dsi_, kReqProcessMessage, req);
+    pthread_mutex_lock(&lock_);
+    if (ok) ++total_.sent;
+    else ++total_.sendRefused;
+    pthread_mutex_unlock(&lock_);
+    return ok;
+}
+
 void Client::onAttached(DsiClient* c) {
     printf("[MOST] attached to %s.%s: registering client %s\n", kServerRole, kServerInterface, name_);
     pthread_mutex_lock(&lock_);
@@ -158,8 +232,8 @@ void Client::onAttached(DsiClient* c) {
     std::vector<uint8_t> p;
     DsiClient::putString(p, name_);
     stage_ = 1;
-    c->sendRequest(kReqRegisterClient, p);
-    for (size_t i = 0; i < (size_t)kClientSubscriptionCount; ++i) c->setNotification(kClientSubscriptions[i]);
+    request(c, kReqRegisterClient, p);
+    for (size_t i = 0; i < (size_t)kClientSubscriptionCount; ++i) notify(c, kClientSubscriptions[i]);
 }
 
 // Routes and keys persist: the next attach registers again and gets new ids.
@@ -180,6 +254,12 @@ void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
         return;
     }
     if (infoTap_) infoTap_(id, p, len, infoTapUser_);
+    if (id == kAttrRegistry && nRegListeners_ > 0) {
+        std::vector<RegistryEntry> reg;
+        if (decodeRegistry(p, len, reg))
+            for (int i = 0; i < nRegListeners_; ++i) regListeners_[i].cb(reg, regListeners_[i].user);
+        return;
+    }
     if (id == kInfoClientResponse && len >= 6) {
         uint32_t client = rdLe32(p);
         unsigned dev = rdLe16(p + 4);
@@ -191,11 +271,11 @@ void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
         deviceId_ = dev;
         updateStateLocked();
         if (refused || stage_ >= 2) return;
-        c->setNotification(kAttrCommState);
+        notify(c, kAttrCommState);
         stage_ = 2;
         if (nKeys_ == 0) return;     // the vendor client skips it too, and the server logs an error for an empty list
         std::vector<uint16_t> keys(keys_, keys_ + nKeys_);
-        c->sendRequest(kReqRegisterDevCtrls, buildRegisterDevCtrls(client, keys));
+        request(c, kReqRegisterDevCtrls, buildRegisterDevCtrls(client, keys));
         printf("[MOST] registerDevCtrls sent (%d keys)\n", nKeys_);
         return;
     }
@@ -294,10 +374,10 @@ void Client::logHealth() {
     if (haveComm) snprintf(commText, sizeof(commText), "%u", comm);
     else snprintf(commText, sizeof(commText), "?");
     printf("[MOST] %u s: %u msgs (normal %u, seg %u, txstatus %u, noinfo %u), routed %u, non-normal on routes %u, "
-           "joined %u, seg lost %u, bad %u, longest handler %u ms, link %s, comm %s, client %u dev 0x%04X\n",
+           "joined %u, seg lost %u, bad %u, longest handler %u ms, sent %u, send refused %u, link %s, comm %s, client %u dev 0x%04X\n",
            secs, t.msgs - l.msgs, t.normal - l.normal, t.seg - l.seg, t.txStatus - l.txStatus, t.noInfo - l.noInfo,
            t.routed - l.routed, t.routedNonNormal - l.routedNonNormal, t.joined - l.joined, t.segLost - l.segLost,
-           t.bad - l.bad, longest, linkStateName(st), commText, client, dev);
+           t.bad - l.bad, longest, t.sent - l.sent, t.sendRefused - l.sendRefused, linkStateName(st), commText, client, dev);
 }
 
 } // namespace most

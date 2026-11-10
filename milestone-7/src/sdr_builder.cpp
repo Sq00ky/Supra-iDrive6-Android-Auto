@@ -317,7 +317,7 @@ ProtoWriter encode(const VendorExtensionService& s) {
 ProtoWriter encode(const AaChannel& c) {
     enum {
         F_ID = 1, F_SENSOR_SOURCE = 2, F_MEDIA_SINK = 3, F_INPUT_SOURCE = 4, F_MICROPHONE = 5, F_BLUETOOTH = 6,
-        F_NAV_STATUS = 8, F_MEDIA_PLAYBACK = 9, F_PHONE_STATUS = 10, F_VENDOR_EXTENSION = 12
+        F_NAV_STATUS = 8, F_MEDIA_PLAYBACK = 9, F_PHONE_STATUS = 10, F_MEDIA_BROWSER = 11, F_VENDOR_EXTENSION = 12
     };
     enum { F_BLUETOOTH_ADDRESS = 1 };
     ProtoWriter w;
@@ -331,6 +331,7 @@ ProtoWriter encode(const AaChannel& c) {
     case AaChannel::NAV_STATUS:       w.message(F_NAV_STATUS, encode(c.navStatus)); break;
     case AaChannel::MEDIA_PLAYBACK:   w.message(F_MEDIA_PLAYBACK, ProtoWriter()); break;
     case AaChannel::PHONE_STATUS:     w.message(F_PHONE_STATUS, ProtoWriter()); break;
+    case AaChannel::MEDIA_BROWSER:    w.message(F_MEDIA_BROWSER, ProtoWriter()); break;
     case AaChannel::VENDOR_EXTENSION: w.message(F_VENDOR_EXTENSION, encode(c.vendorExtension)); break;
     case AaChannel::BLUETOOTH: {
         ProtoWriter bluetooth;
@@ -441,8 +442,26 @@ ServiceDiscovery referenceManifest(const SdrIdentity& id) {
     return m;
 }
 
+bool configureDriverPosition(ServiceDiscovery& m) {
+    const int was = m.driverPosition;
+    const char* side = getenv("NBT_DRIVER_SIDE");
+    if (side && strcmp(side, "right") == 0) {
+        m.driverPosition = DRIVER_POSITION_RIGHT;
+        printf("[SDR] driver's side: right (NBT_DRIVER_SIDE)\n");
+    } else if (side && strcmp(side, "left") == 0) {
+        m.driverPosition = DRIVER_POSITION_LEFT;
+        printf("[SDR] driver's side: left (NBT_DRIVER_SIDE)\n");
+    } else {
+        if (side && *side) printf("[SDR] NBT_DRIVER_SIDE='%s' ignored: use left or right.\n", side);
+        m.driverPosition = DRIVER_POSITION_LEFT;
+        printf("[SDR] driver's side: left (default)\n");
+    }
+    return m.driverPosition != was;
+}
+
 ServiceDiscovery sessionManifest(const SdrIdentity& id) {
     ServiceDiscovery m = referenceManifest(id);
+    configureDriverPosition(m);
     configureSensors(m);
     configureMainVideo(m);
     configureRailHide(m);
@@ -451,7 +470,23 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id) {
     retypeGuidanceSink(m);
     addSystemAudioSink(m);
     limitGuidanceOffers(m);
+    addMediaBrowserProbe(m);
     return m;
+}
+
+// NBT_AA_BROWSE=1 (experiment, off): advertises the media browser service (descriptor field 11, channel 17) with an empty
+// config and logs whatever the phone does with it. Google's head unit integration guide documents only media playback
+// status, and the Android Auto 16.1 phone app was found to have no handler for the browser service - the car app's
+// browse UI is drawn by the phone. This is the one-run check of whether that is still true (ch 12 status / metadata is
+// what we use either way, audio/media_state.hpp). Harmless when the phone ignores it: nothing else reads channel 17.
+int addMediaBrowserProbe(ServiceDiscovery& manifest) {
+    if (nbt::envFlag("NBT_AA_BROWSE") != 1) return 0;
+    for (size_t i = 0; i < manifest.channels.size(); ++i)
+        if (manifest.channels[i].id == AA_CH_MEDIA_BROWSER) return 0;
+    manifest.channels.push_back(AaChannel(AA_CH_MEDIA_BROWSER, AaChannel::MEDIA_BROWSER));
+    printf("[SDR] channel %u: media browser probe (NBT_AA_BROWSE=1), empty config - every message on it is logged\n",
+           (unsigned)AA_CH_MEDIA_BROWSER);
+    return 1;
 }
 
 std::vector<uint8_t> serializeManifest(const ServiceDiscovery& m) {
@@ -599,15 +634,25 @@ bool envInt(const char* n, int& v) {
 
 } // namespace
 
-bool configureSensors(ServiceDiscovery& m) {
+bool isCarPositionSensor(int sensor) {
+    return sensor == SENSOR_LOCATION || sensor == SENSOR_COMPASS || sensor == SENSOR_GPS_SATELLITE ||
+           sensor == SENSOR_ACCELEROMETER || sensor == SENSOR_GYROSCOPE;
+}
+
+bool configureSensors(ServiceDiscovery& m) { return configureSensors(m, phoneGpsEnabled()); }
+
+bool configureSensors(ServiceDiscovery& m, bool phoneGps) {
     static const int kSensors[] = {
-        SENSOR_LOCATION, SENSOR_CAR_SPEED, SENSOR_ODOMETER, SENSOR_FUEL_LEVEL, SENSOR_PARKING_BRAKE, SENSOR_GEAR,
-        SENSOR_NIGHT_MODE, SENSOR_DRIVING_STATUS, SENSOR_ACCELEROMETER, SENSOR_GPS_SATELLITE
+        SENSOR_LOCATION, SENSOR_COMPASS, SENSOR_CAR_SPEED, SENSOR_ODOMETER, SENSOR_FUEL_LEVEL, SENSOR_PARKING_BRAKE,
+        SENSOR_GEAR, SENSOR_NIGHT_MODE, SENSOR_DRIVING_STATUS, SENSOR_ACCELEROMETER, SENSOR_GPS_SATELLITE
     };
     static const int kFuelTypes[] = { FUEL_UNLEADED };
     AaChannel* c = findChannel(m, AA_CH_SENSORS);
     if (!c || c->service != AaChannel::SENSOR_SOURCE) return false;
-    const std::vector<int> sensors = listOf(kSensors), fuelTypes = listOf(kFuelTypes);
+    const std::vector<int> all = listOf(kSensors), fuelTypes = listOf(kFuelTypes);
+    std::vector<int> sensors;
+    for (size_t i = 0; i < all.size(); ++i)
+        if (!phoneGps || !isCarPositionSensor(all[i])) sensors.push_back(all[i]);
     if (c->sensors.sensors == sensors && c->sensors.fuelTypes == fuelTypes && c->sensors.evConnectors.empty())
         return false;
     c->sensors.sensors = sensors;
@@ -615,7 +660,8 @@ bool configureSensors(ServiceDiscovery& m) {
     c->sensors.evConnectors.clear();
     printf("[SDR] sensors advertised: ");
     for (size_t i = 0; i < sensors.size(); ++i) printf("%s%d", i ? "," : "", sensors[i]);
-    printf("; fuel: unleaded; EV connectors: none\n");
+    printf("; fuel: unleaded; EV connectors: none%s\n",
+           phoneGps ? " (Use Phone GPS: location, compass, GPS satellites and accelerometer are left to the phone)" : "");
     return true;
 }
 

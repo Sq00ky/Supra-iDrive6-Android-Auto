@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#include "aa_manifest.hpp"
 #include "aa_control_msgs.hpp"
 #include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
@@ -80,13 +81,29 @@ AASession::AASession()
     satellites_sent_ = 0;
     satellites_last_ms_ = 0;
     satellites_last_used_ = 0;
+    memset(&car_speed_, 0, sizeof(car_speed_));
+    have_speed_ = false;
+    speed_started_ = false;
+    pending_speed_ = false;
+    speed_sent_ = 0;
+    speed_last_ms_ = 0;
+    speed_last_zero_ = false;
+    last_rx_ms_ = 0;
     pending_bye_ = false;
+    car_bearing_e6_ = 0;
+    have_compass_ = false;
+    compass_started_ = false;
+    pending_compass_ = false;
+    compass_sent_ = 0;
+    compass_last_ms_ = 0;
     focus_cb_ = NULL;
     focus_user_data_ = NULL;
     mic_cb_ = NULL;
     mic_user_data_ = NULL;
     nav_cb_ = NULL;
     nav_user_data_ = NULL;
+    media_cb_ = NULL;
+    media_user_data_ = NULL;
     mic_open_ = false;
     mic_sent_ = 0;
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
@@ -188,6 +205,59 @@ void AASession::postCarSatellites(const SatelliteStatus& status) {
     pthread_mutex_unlock(&touch_mutex_);
 }
 
+void AASession::postCarCompass(int32_t bearing_e6) {
+    pthread_mutex_lock(&touch_mutex_);
+    car_bearing_e6_ = bearing_e6;
+    have_compass_ = true;
+    if (compass_started_) pending_compass_ = true;
+    bool wake = pending_compass_;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake) wakeSessionThread();
+}
+
+void AASession::postCarSpeed(const CarSpeedSample& speed) {
+    pthread_mutex_lock(&touch_mutex_);
+    car_speed_ = speed;
+    have_speed_ = true;
+    if (speed_started_) pending_speed_ = true;
+    bool wake = pending_speed_;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake) wakeSessionThread();
+}
+
+void AASession::postCarState(CarState& state, int value) {
+    pthread_mutex_lock(&touch_mutex_);
+    state.value = value;
+    state.have = true;
+    if (state.started) state.pending = true;
+    bool wake = state.pending;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake) wakeSessionThread();
+}
+
+void AASession::postCarGear(int aaGear) { postCarState(gear_, aaGear); }
+
+void AASession::postCarParkingBrake(bool on) { postCarState(parking_brake_, on ? 1 : 0); }
+
+void AASession::startCarState(CarState& state) {
+    pthread_mutex_lock(&touch_mutex_);
+    state.started = true;
+    state.pending = false;      // the event that goes with the start carries the newest
+    pthread_mutex_unlock(&touch_mutex_);
+}
+
+void AASession::resetCarState(CarState& state) {
+    state.started = false;
+    state.pending = false;
+    state.sent = 0;
+}
+
+bool AASession::takeCarStatePending(CarState& state) {
+    const bool due = state.pending && state.started;
+    state.pending = false;
+    return due;
+}
+
 void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
     mic_cb_ = cb;
     mic_user_data_ = user_data;
@@ -196,6 +266,11 @@ void AASession::setMicRequestCallback(MicRequestCallback cb, void* user_data) {
 void AASession::setNavStatusCallback(NavStatusCallback cb, void* user_data) {
     nav_cb_ = cb;
     nav_user_data_ = user_data;
+}
+
+void AASession::setMediaStatusCallback(MediaStatusCallback cb, void* user_data) {
+    media_cb_ = cb;
+    media_user_data_ = user_data;
 }
 
 bool AASession::micOpen() {
@@ -366,7 +441,13 @@ bool AASession::start(int client_fd) {
     pending_night_ = false;
     location_started_ = false;
     pending_location_ = false;
+    speed_started_ = false;
+    pending_speed_ = false;
+    resetCarState(gear_);
+    resetCarState(parking_brake_);
     pending_bye_ = false;
+    compass_started_ = false;
+    pending_compass_ = false;
     mic_open_ = false;
     mic_queue_.clear();
     pthread_mutex_unlock(&touch_mutex_);
@@ -374,6 +455,10 @@ bool AASession::start(int client_fd) {
     location_sent_ = 0;
     satellites_started_ = false;
     satellites_sent_ = 0;
+    compass_sent_ = 0;
+    compass_last_ms_ = 0;
+    speed_sent_ = 0;
+    speed_last_zero_ = false;
     media_frames_ = 0;
     rx_seq_next_ = 0;
     rx_seq_known_ = false;
@@ -499,7 +584,8 @@ uint32_t AASession::rxTimeoutMs() {
         // sessions on brief wireless gaps. The phone pings exactly once a second (car log 2026-10-24: 78 pings, max gap
         // 1.005 s) and sends ch12 status every second even while iDrive owns the screen, so silence still means the
         // Wi-Fi link is gone: without a timeout a sudden drop never ended the session (no RST arrives) and the last
-        // frame stayed on screen. The check runs on 1 s select ticks, so the real cut-off is 5-6 s.
+        // frame stayed on screen. It is checked each time select returns, at least once a second, so the real cut-off
+        // is 5-6 s.
         // NBT_RX_TIMEOUT_S=0 disables.
         cached = (e && *e) ? (uint32_t)atoi(e) * 1000u : 5000u;
     }
@@ -508,7 +594,6 @@ uint32_t AASession::rxTimeoutMs() {
 
 bool AASession::readExact(uint8_t* buffer, size_t length) {
     size_t total = 0;
-    uint32_t idle_ms = 0;
     const uint32_t limit_ms = rxTimeoutMs();
     const bool have_wake = wake_pipe_[0] >= 0;
     const bool need_select = (limit_ms != 0) || have_wake;
@@ -524,8 +609,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 FD_SET(wake_pipe_[0], &rf);
                 if (wake_pipe_[0] > maxfd) maxfd = wake_pipe_[0];
             }
-            // 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time.
-            const uint32_t tick_ms = acks_.hasPending() ? 250u : 1000u;
+            const uint32_t tick_ms = periodicTickMs();
             struct timeval tv;
             tv.tv_sec = tick_ms / 1000u;
             tv.tv_usec = (tick_ms % 1000u) * 1000u;
@@ -534,29 +618,26 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
                 if (errno == EINTR) continue;
                 return false;
             }
-            if (r == 0) {
-                drainAcks();
-                drainSatellites();
-                if (limit_ms) {
-                    idle_ms += tick_ms;
-                    if (idle_ms >= limit_ms) {
-                        printf("[AASession] No data from phone for %u s: treating session as dead.\n",
-                               (unsigned)(idle_ms / 1000));
-                        dumpRxNotes();
-                        return false;
-                    }
+            const bool readable = r > 0 && FD_ISSET(fd, &rf);
+            const bool woke = r > 0 && have_wake && FD_ISSET(wake_pipe_[0], &rf);
+            // Timed from the last byte and not counted in select timeouts, because other threads wake this one at any
+            // rate. Only with nothing waiting: after a stall on this thread, the phone's bytes may be queued unread.
+            if (!readable && limit_ms) {
+                const uint32_t silent_ms = monoMs() - last_rx_ms_;
+                if (silent_ms >= limit_ms) {
+                    printf("[AASession] No data from phone for %u s: treating session as dead.\n",
+                           (unsigned)(silent_ms / 1000));
+                    dumpRxNotes();
+                    return false;
                 }
-                continue;
             }
-            if (have_wake && FD_ISSET(wake_pipe_[0], &rf)) {
+            if (woke) {
                 char junk[64];
                 while (read(wake_pipe_[0], junk, sizeof(junk)) > 0) { }
                 drainTouch();
-                drainAcks();
-                drainUnderflows();
-                if (!FD_ISSET(fd, &rf)) continue;
             }
-            idle_ms = 0;
+            if (r == 0 || woke) drainPeriodic();
+            if (!readable) continue;
         }
         ssize_t n = recv(fd, buffer + total, length - total, 0);
         if (n < 0 && errno == EINTR) continue;
@@ -564,6 +645,7 @@ bool AASession::readExact(uint8_t* buffer, size_t length) {
             return false;
         }
         total += static_cast<size_t>(n);
+        last_rx_ms_ = monoMs();
     }
     return total == length;
 }
@@ -691,8 +773,14 @@ void AASession::drainTouch() {
     pending_night_ = false;
     bool location = pending_location_ && location_started_;
     pending_location_ = false;
+    bool speed = pending_speed_ && speed_started_;
+    pending_speed_ = false;
+    bool gear = takeCarStatePending(gear_);
+    bool parking_brake = takeCarStatePending(parking_brake_);
     bool bye = pending_bye_;
     pending_bye_ = false;
+    bool compass = pending_compass_ && compass_started_;
+    pending_compass_ = false;
     std::vector<std::vector<uint8_t> > mic;
     mic.swap(mic_queue_);
     pthread_mutex_unlock(&touch_mutex_);
@@ -706,6 +794,10 @@ void AASession::drainTouch() {
     }
     if (night && !sendSensorEvent(10)) printf("[AASession] NIGHT_MODE event: SEND FAILED\n");
     if (location && !sendSensorEvent(1)) printf("[AASession] LOCATION event: SEND FAILED\n");
+    if (compass && !sendSensorEvent(2)) printf("[AASession] COMPASS event: SEND FAILED\n");
+    if (speed && !sendSensorEvent(3)) printf("[AASession] CAR_SPEED event: SEND FAILED\n");
+    if (gear && !sendSensorEvent(8)) printf("[AASession] GEAR event: SEND FAILED\n");
+    if (parking_brake && !sendSensorEvent(7)) printf("[AASession] PARKING_BRAKE event: SEND FAILED\n");
     if (focus) {
         bool ok = sendVideoFocusIndication(6, focus == 1, true);
         printf("[AASession] video focus -> phone: %s (unrequested) %s\n", focus == 1 ? "FOCUSED/projected" : "UNFOCUSED/native", ok ? "sent" : "SEND FAILED");
@@ -896,7 +988,8 @@ bool AASession::sendAudioFocusResponse(uint8_t focus_state) {
 // SensorStartResponse 0x8002 {status=1}, SensorEventIndication 0x8003 with repeated
 // LocationData location_data=1 (aa_sensor_msg.hpp), NightMode night_mode=10 {is_night=1} and
 // DrivingStatus driving_status=13 {status=1}.
-// LocationData location_data=1 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
+// LocationData location_data=1, CompassData compass_data=2, CarSpeedData car_speed=3, ParkingBrakeData parking_brake=7,
+// GearData gear=8 and GpsSatelliteData gps_satellite=21 are built in aa_sensor_msg.hpp.
 // Env: NBT_NIGHT_MODE (0/1, default 0), NBT_DRIVING_STATUS (0=unrestricted, default 0).
 using proto::pbFirstVarint;
 
@@ -957,6 +1050,20 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
                    location_sent_, f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.accuracy_e3 / 1000.0, f.speed_e3 / 1000.0,
                    f.has_speed ? "" : " not sent", f.bearing_e6 / 1e6, f.has_bearing ? "" : " not sent",
                    f.altitude_e2 / 100.0, f.has_altitude ? "" : " not sent");
+    } else if (sensor_type == 2) { // COMPASS: the newest heading (postCarCompass)
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = have_compass_;
+        int32_t bearing_e6 = car_bearing_e6_;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have) {
+            printf("[AASession] >>> Sensor COMPASS: no heading from the car yet (sent when one arrives)\n");
+            return true;
+        }
+        buildCompassEvent(bearing_e6, plain);
+        // Set before sending: a failing send must not run again on every pass of the session loop.
+        compass_last_ms_ = monoMs();
+        if (compass_sent_++ % 60 == 0)
+            printf("[AASession] >>> Sensor COMPASS event #%u (bearing %.1f)\n", compass_sent_, bearing_e6 / 1e6);
     } else if (sensor_type == 21) { // GPS_SATELLITE: the newest count (postCarSatellites), 0 with nothing recent
         const uint32_t now = monoMs();
         pthread_mutex_lock(&touch_mutex_);
@@ -970,6 +1077,38 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         if (satellites_sent_++ % 60 == 0 || used != satellites_last_used_)
             printf("[AASession] >>> Sensor GPS_SATELLITE event #%u (used=%u)\n", satellites_sent_, used);
         satellites_last_used_ = used;
+    } else if (sensor_type == 3) { // CAR_SPEED: the newest wheel speed (postCarSpeed)
+        const uint32_t now = monoMs();
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = have_speed_;
+        CarSpeedSample s = car_speed_;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have || !carSpeedSendable(s, now)) {
+            printf("[AASession] >>> Sensor CAR_SPEED: no recent wheel speed (sent when one arrives)\n");
+            speed_last_zero_ = false;
+            return true;
+        }
+        buildCarSpeedEvent(s.speed_e3, plain);
+        // Set before sending: a failing send must not run again on every pass of the session loop.
+        speed_last_ms_ = now;
+        speed_last_zero_ = s.speed_e3 == 0;
+        if (speed_sent_++ % 60 == 0)
+            printf("[AASession] >>> Sensor CAR_SPEED event #%u (%.2f m/s)\n", speed_sent_, s.speed_e3 / 1000.0);
+    } else if (sensor_type == 8 || sensor_type == 7) { // GEAR, PARKING_BRAKE: the newest state (postCarGear, postCarParkingBrake)
+        CarState& state = sensor_type == 8 ? gear_ : parking_brake_;
+        const char* name = sensor_type == 8 ? "GEAR" : "PARKING_BRAKE";
+        pthread_mutex_lock(&touch_mutex_);
+        bool have = state.have;
+        int value = state.value;
+        pthread_mutex_unlock(&touch_mutex_);
+        if (!have) {
+            printf("[AASession] >>> Sensor %s: nothing from the car yet (sent when it reports)\n", name);
+            return true;
+        }
+        if (sensor_type == 8) buildGearEvent(value, plain);
+        else buildParkingBrakeEvent(value != 0, plain);
+        // Only on a change or a start, so every one is logged.
+        printf("[AASession] >>> Sensor %s event #%u (%d)\n", name, ++state.sent, value);
     } else {
         return true; // no data source for other sensors: ack only
     }
@@ -985,8 +1124,60 @@ void AASession::drainSatellites() {
     if (!sendSensorEvent(21)) printf("[AASession] GPS_SATELLITE event: SEND FAILED\n");
 }
 
+bool AASession::compassRunning() {
+    pthread_mutex_lock(&touch_mutex_);
+    const bool running = compass_started_ && have_compass_;
+    pthread_mutex_unlock(&touch_mutex_);
+    return running;
+}
+
+void AASession::drainCompass() {
+    if (!compassRepeatDue(compass_last_ms_, monoMs()) || !compassRunning()) return;
+    if (!sendSensorEvent(2)) printf("[AASession] COMPASS event: SEND FAILED\n");
+}
+
+void AASession::drainSpeed() {
+    if (!speed_last_zero_ || monoMs() - speed_last_ms_ < kCarSpeedRepeatZeroEveryMs) return;
+    if (!sendSensorEvent(3)) printf("[AASession] CAR_SPEED event: SEND FAILED\n");
+}
+
+void AASession::drainPeriodic() {
+    drainAcks();
+    drainUnderflows();
+    drainSatellites();
+    drainCompass();
+    drainSpeed();
+}
+
+static uint32_t msLeft(uint32_t last_ms, uint32_t every_ms, uint32_t now) {
+    const uint32_t elapsed = now - last_ms;
+    return elapsed >= every_ms ? 0 : every_ms - elapsed;
+}
+
+// 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time, and never past the next timed
+// sensor event: a phone frame just before one is due would otherwise put it off by a whole tick, and at 1 s ticks a quiet
+// phone would stretch a compass repeat to 2 s. A 0 here cannot spin, because sendSensorEvent stamps the time before it sends.
+uint32_t AASession::periodicTickMs() {
+    uint32_t tick = acks_.hasPending() ? 250u : 1000u;
+    const uint32_t now = monoMs();
+    if (satellites_started_) {
+        const uint32_t left = msLeft(satellites_last_ms_, kSatelliteSendEveryMs, now);
+        if (left < tick) tick = left;
+    }
+    if (compassRunning()) {
+        const uint32_t left = msLeft(compass_last_ms_, kCompassRepeatMs, now);
+        if (left < tick) tick = left;
+    }
+    if (speed_last_zero_) {
+        const uint32_t left = msLeft(speed_last_ms_, kCarSpeedRepeatZeroEveryMs, now);
+        if (left < tick) tick = left;
+    }
+    return tick;
+}
+
 void AASession::sessionLoop() {
     printf("[AASession] Protocol thread active on fd %d.\n", client_fd_);
+    last_rx_ms_ = monoMs();     // the phone's silence counts from here
 
     // Step 1: Send Android Auto VersionRequest (Major 1, Minor NBT_AA_MINOR = 6 by default)
     // Frame: Channel 0 (Control), Flags 0x03 (First | Last, Unencrypted)
@@ -1012,9 +1203,7 @@ void AASession::sessionLoop() {
     // Step 2: Read incoming frames from the phone
     while (isRunning()) {
         // Forced acks are due on time even while video keeps select() from ever timing out.
-        drainAcks();
-        drainUnderflows();
-        drainSatellites();
+        drainPeriodic();
         uint8_t header[4];
         if (!readExact(header, 4)) {
             if (isRunning()) {
@@ -1187,7 +1376,21 @@ void AASession::sessionLoop() {
                     pending_location_ = false;
                     pthread_mutex_unlock(&touch_mutex_);
                 }
+                if (st == 2) {
+                    pthread_mutex_lock(&touch_mutex_);
+                    compass_started_ = true;
+                    pending_compass_ = false;
+                    pthread_mutex_unlock(&touch_mutex_);
+                }
                 if (st == 21) satellites_started_ = true;
+                if (st == 3) {
+                    pthread_mutex_lock(&touch_mutex_);
+                    speed_started_ = true;
+                    pending_speed_ = false;
+                    pthread_mutex_unlock(&touch_mutex_);
+                }
+                if (st == 8) startCarState(gear_);
+                if (st == 7) startCarState(parking_brake_);
                 if (st != 0xFFFFFFFFu) sendSensorEvent(st);
             } else if (channel == 14 && msg_id == 0x8005) { // AVInputOpenRequest {open=1, anc=2, ec=3, max_unacked=4}
                 uint32_t open = pbFirstVarint(frame_data, 2, 1);
@@ -1203,8 +1406,11 @@ void AASession::sessionLoop() {
                 if (mic_cb_) mic_cb_(on, mic_user_data_);
             } else if (channel == 14 && msg_id == 0x8004) { // AVMediaAck for our mic frames: nothing to do
             } else if (msg_id == 7) { // ChannelOpenRequest (sent by phone on the channel being opened!)
-                printf("[AASession] >>> Received ChannelOpenRequest on Channel %u! Sending ChannelOpenResponse (SUCCESS)...\n",
-                       channel);
+                // { service_type = 1, channel_id = 2 }: the service type is the phone's own number for what it is opening,
+                // which is what tells the media browser probe that the phone knew the service.
+                printf("[AASession] >>> Received ChannelOpenRequest on Channel %u (service type %u, channel id %u)! "
+                       "Sending ChannelOpenResponse (SUCCESS)...\n", channel, pbFirstVarint(frame_data, 2, 1),
+                       pbFirstVarint(frame_data, 2, 2));
                 uint8_t open_resp[4] = { 0x00, 0x08, 0x08, 0x00 }; // Msg ID 8 (ChannelOpenResponse), Status 0 (OK)
                 std::vector<uint8_t> enc_resp;
                 if (cryptor_.encrypt(open_resp, sizeof(open_resp), enc_resp)) {
@@ -1224,9 +1430,10 @@ void AASession::sessionLoop() {
                     nav_cb_(msg_id, frame_data.size() > 2 ? &frame_data[2] : NULL,
                             frame_data.size() > 2 ? frame_data.size() - 2 : 0, nav_user_data_);
             } else if (channel == 12 && msg_id >= 0x8000) {
-                // Media playback status channel: 0x8001 = {state, source name e.g. "Apple Music", position} every
-                // second, 0x8003 = track metadata + album art. Informational only. Before v1.6.6 the generic AV
-                // handler below logged every 0x8001 as "AV START_INDICATION on Channel 12". Log state changes only.
+                // Media playback channel: 0x8001 = {state, source name e.g. "Apple Music", position} about once a
+                // second, 0x8003 = track metadata + album art. The merge and the record the iDrive app reads live in
+                // audio/media_state.hpp (behind media_cb_). Before v1.6.6 the generic AV handler below logged every
+                // 0x8001 as "AV START_INDICATION on Channel 12"; keep logging the state changes here.
                 static uint32_t last_state = 0xFFFFFFFFu;
                 if (msg_id == 0x8001) {
                     uint32_t st = pbFirstVarint(frame_data, 2, 1);
@@ -1234,7 +1441,21 @@ void AASession::sessionLoop() {
                         last_state = st;
                         printf("[AASession] media status ch12: state %u\n", st);
                     }
+                } else if (msg_id != 0x8003) {
+                    printf("[AASession] media channel 12: msg 0x%04X (%u bytes)\n", msg_id,
+                           (unsigned)frame_data.size());
                 }
+                if (media_cb_)
+                    media_cb_(msg_id, frame_data.size() > 2 ? &frame_data[2] : NULL,
+                              frame_data.size() > 2 ? frame_data.size() - 2 : 0, media_user_data_);
+            } else if (channel == AA_CH_MEDIA_BROWSER) {
+                // Media browser probe (NBT_AA_BROWSE=1, sdr_builder addMediaBrowserProbe): the phone only opens this
+                // channel if it still serves the service. Log everything it sends, so one drive answers whether a browse
+                // tree (the play queue) is available at all.
+                printf("[AASession] media browser ch%u: msg 0x%04X (%u bytes):", channel, msg_id,
+                       (unsigned)frame_data.size());
+                for (size_t i = 0; i < frame_data.size() && i < 24; ++i) printf(" %02x", frame_data[i]);
+                printf("%s\n", frame_data.size() > 24 ? " ..." : "");
             } else if (msg_id == 0x8000) { // AV SETUP_REQUEST (Phone requests AV configuration on Video/Audio channel)
                 // Only focus/open the main dashboard display. Advertising/focusing all
                 // DHU display channels makes the phone encode several H.264 streams; we
@@ -1503,6 +1724,18 @@ void AASession::finishSession() {
     // asked it to, release the fd here, then tell the owner if nobody requested the stop.
     bool ended_on_its_own = exchangeRunningOff();
     releaseSocket();
+    // The position, heading, wheel speed, gear and parking brake keep coming with no phone connected: with these set, each one
+    // would write to a wake pipe nobody reads.
+    pthread_mutex_lock(&touch_mutex_);
+    location_started_ = false;
+    pending_location_ = false;
+    compass_started_ = false;
+    pending_compass_ = false;
+    speed_started_ = false;
+    pending_speed_ = false;
+    resetCarState(gear_);
+    resetCarState(parking_brake_);
+    pthread_mutex_unlock(&touch_mutex_);
     if (ended_on_its_own && disconnect_cb_) {
         disconnect_cb_(disconnect_user_data_);
     }

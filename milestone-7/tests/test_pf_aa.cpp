@@ -109,6 +109,14 @@ int main() {
     assert(!nbt::pfaa::syncedOk(-1, EIO));
     assert(!nbt::pfaa::syncedOk(-1, ENOSPC));
 
+    // 10. pfctl -s info -> status (the --check / --load verdicts and the iDrive app's Check PF Rules row)
+    assert(nbt::pfaa::pfStatus("Status: Enabled for 0 days 00:01:02           Debug: Urgent\n") == 1);
+    assert(nbt::pfaa::pfStatus("No ALTQ support in kernel\nStatus: Disabled for 0 days\n") == 0);
+    assert(nbt::pfaa::pfStatus("pfctl: /dev/pf: No such file\n") == -1);
+    // ... and pfctl -s rules output ("port = 5277") is read by the same coverage()
+    c = nbt::pfaa::coverage("pass in quick on uap0 inet proto tcp from 172.16.224.0/24 to 172.16.224.1 port = 5277 flags S/SA keep state\n"
+                            "pass out quick on wfd0 inet proto tcp from 172.16.222.1 port = 5277 to <wfd> keep state\n");
+    assert(c.uap0 && c.wfd0);
     printf("test_pf_aa: all passed\n");
     return 0;
 }

@@ -66,7 +66,7 @@
 #include <sys/slogcodes.h>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-40-usb (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-48-camctx (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -227,7 +227,7 @@ const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
 const unsigned    kStatusPollMs   = 1000;
 // Android Auto menu (NbtAad.xml): hmiState 10 with three rows, plus the Settings row (hmiState 14, the checkboxes)
 // and the About row (hmiState 12). Both sub-pages are pure XML (hmiAction 80 / 25); only the Settings page has a focus
-// handler here, to refresh the seven checkbox models whenever it is shown.
+// handler here, to refresh the eleven checkbox models whenever it is shown.
 const unsigned    kMenuState      = 10;      // <hmiState id="10">
 const unsigned    kSettingsState  = 14;      // <hmiState id="14" parentId="10">, "Settings": the checkboxes
 const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start Android Auto"
@@ -331,6 +331,47 @@ const unsigned    kActUsbAa        = 83;
 const unsigned    kUsbAaModel      = 84;
 const char* const kUsbAaFlag       = "/var/opt/aa/usb-aa";
 const char* const kUsbAaManual     = "/opt/aa/usb-aa";
+// "Use Phone GPS" and "Use WiFi Direct Network" checkboxes (rhmiapp-44) on the Settings page, both off by default:
+// <checkbox action="87" id="90" model="88" textModel="89"> and <checkbox action="91" id="94" model="92" textModel="93">.
+// Flag files read by nbt-aad at start (nbt_env.hpp phoneGpsEnabled(), alt_wifi.hpp altWifiMode()); NBT_PHONE_GPS /
+// NBT_ALT_WIFI in nbt-aad.env win either way, so a change applies at the next Start / Restart.
+const unsigned    kActPhoneGps     = 87;
+const unsigned    kPhoneGpsModel   = 88;
+const char* const kPhoneGpsFlag    = "/var/opt/aa/phone-gps";
+const char* const kPhoneGpsManual  = "/opt/aa/phone-gps";
+const unsigned    kActWfdOnly      = 91;
+const unsigned    kWfdOnlyModel    = 92;
+const char* const kWfdOnlyFlag     = "/var/opt/aa/wifi-direct";
+const char* const kWfdOnlyManual   = "/opt/aa/wifi-direct";
+// "Use Native Audio instead of Bluetooth" and "Media Controls for LCI Steering Wheels" (rhmiapp-45), both off by default:
+// <checkbox action="120" id="123" model="121" textModel="122"> and <checkbox action="124" id="127" model="125"
+// textModel="126">. Flag files read by nbt-aad at start (audio/config.hpp nativeAudioFlagSet(), nbt_env.hpp
+// lciMediaKeysEnabled()); NBT_AUDIO_MODE / NBT_AUDIO_BT and NBT_LCI_MEDIA in nbt-aad.env win.
+const unsigned    kActNativeAudio  = 120;
+const unsigned    kNativeAudioModel = 121;
+const char* const kNativeAudioFlag = "/var/opt/aa/native-audio";
+const char* const kNativeAudioManual = "/opt/aa/native-audio";
+const unsigned    kActLciMedia     = 124;
+const unsigned    kLciMediaModel   = 125;
+const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
+const char* const kLciMediaManual  = "/opt/aa/lci-media";
+// Firewall (pf_aa) rows on the Settings page (rhmiapp-47), under a separator after the checkboxes, worked like Start /
+// Force Stop / Restart: <button action="132" id="135" model="134"> Install PF Rules, <button action="136" id="140"
+// model="138"> Check PF Rules, <button action="137" id="141" model="139"> Uninstall PF Rules. Each press runs
+// `nbt-aad --pf-install --load` / `--pf-check` / `--pf-uninstall --load` (pf_aa is built into the daemon, v1.9.44+) in
+// the background; the row's own text shows the steps ("Writing rules..." -> "Rules successfully written" -> "Rules
+// active") with iDrive's busy ring, then goes back to its label. pf_aa's output goes to the app log.
+const unsigned    kActPfInstall    = 132;
+const unsigned    kActPfCheck      = 136;
+const unsigned    kActPfUninstall  = 137;
+const unsigned    kPfRowModel[3]   = { 134, 138, 139 };   // textIdModels: install, check, uninstall
+const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
+const unsigned    kPfRowLabel[3]   = { 29, 30, 31 };      // Install / Check / Uninstall PF Rules
+enum { kTxtPfWriting = 32, kTxtPfWritten = 33, kTxtPfActive = 34, kTxtPfChecking = 35, kTxtPfInPlace = 36,
+       kTxtPfInPlaceIdle = 37, kTxtPfMissing = 38, kTxtPfRemoving = 39, kTxtPfRemoved = 40, kTxtPfStockOff = 41,
+       kTxtPfNotActive = 42, kTxtPfFailed = 43 };
+const char* const kPfAaOut         = "/dev/shmem/nbt-aad-pf_aa.out";
+const char* const kPfAaEmbedMark   = "(built into nbt-aad)";   // in nbt-aad's pf_aa banner (src/pf_aa_embed.cpp)
 const char* const kGctxProperty    = "hmi.graphicalContext";
 const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
 // DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
@@ -435,11 +476,11 @@ bool fileExists(const char* p) {
 // ---- launching the daemon (same as plugin/nbt_aad_plugin.cpp) ---------------------------------------------------
 time_t g_lastLaunch = 0;
 
-void launchDaemon() {
+pid_t launchDaemon() {
     time_t now = time(NULL);
-    if (g_lastLaunch && now - g_lastLaunch < 3) { alog("launch ignored (pressed again within 3 s)"); return; }
+    if (g_lastLaunch && now - g_lastLaunch < 3) { alog("launch ignored (pressed again within 3 s)"); return -1; }
     g_lastLaunch = now;
-    if (!fileExists(kDaemon)) { alog("launch: %s not found", kDaemon); return; }
+    if (!fileExists(kDaemon)) { alog("launch: %s not found", kDaemon); return -1; }
 
     static char envbuf[16][160];
     char* envp[16 + 64];
@@ -476,7 +517,7 @@ void launchDaemon() {
         alog("launch: cannot open /dev/null or %s (errno %d)", kDaemonLog, errno);
         if (in >= 0) close(in);
         if (out >= 0) close(out);
-        return;
+        return -1;
     }
 #ifdef __QNX__
     int fdmap[3] = { in, out, out };
@@ -502,6 +543,7 @@ void launchDaemon() {
     close(out);
     if (pid < 0) alog("launch: spawn %s failed (errno %d)", kDaemon, e);
     else alog("launch: started %s pid %d (%d env overrides, output -> %s)", kDaemon, (int)pid, nb, kDaemonLog);
+    return pid;
 }
 
 // ---- car gear -> daemon ---------------------------------------------------------------------------------------
@@ -577,7 +619,14 @@ int g_lastPdc = -1000;
 // PDCStatus changes. Without this, PDCStatus staying 1 for 47 s after reversing made the safety button "during park
 // assist: left to that logic" and Android Auto stayed over the safety menu (car 2026-11-05).
 bool g_pdcDismissed = false;
-bool pdcOwnsScreen() { return g_lastPdc == kPdcActive && !g_pdcDismissed; }
+// Camera screen (rhmiapp-46): the iDrive context of a camera view (NBT_AA_CAMERA_CTX, default 692,1023) is up. Counted
+// with park assist everywhere below, so nothing re-holds over the camera and Android Auto stepping aside for it does not
+// send iDrive to its main menu (which would close the camera). Dismissed like park assist when the driver picks the
+// Android Auto entry over it.
+int g_cameraCtx = 0;              // the camera context that is up, 0 = none
+bool g_cameraDismissed = false;
+bool cameraOwnsScreen() { return g_cameraCtx > 0 && !g_cameraDismissed; }
+bool pdcOwnsScreen() { return (g_lastPdc == kPdcActive && !g_pdcDismissed) || cameraOwnsScreen(); }
 
 bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) {
     char text[160];
@@ -604,6 +653,10 @@ bool onPdcChanged(void* /*app*/, const bmw::BasicString<unsigned short>& value) 
 
 // Every "show" goes through here: the daemon takes it as the driver choosing Android Auto, over park assist too.
 void sendShow() {
+    if (cameraOwnsScreen()) {
+        g_cameraDismissed = true;
+        alog("camera: Android Auto chosen over iDrive's camera view (context %d): kept until that view closes", g_cameraCtx);
+    }
     if (g_lastPdc == kPdcActive && !g_pdcDismissed) {
         g_pdcDismissed = true;
         alog("park assist on: Android Auto chosen over it, so iDrive screens make it step aside again until park assist ends");
@@ -904,6 +957,8 @@ bool g_settingsFocused = false; // focus notification of hmiState 14 (the Settin
 bool inOurMenu() { return g_menuFocused || g_settingsFocused; }
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
 bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
+pid_t g_autostartPid = 0;     // automatic launch waiting for its first projection handoff
+unsigned g_autostartMenuTries = 0;
 time_t g_startTime = 0;
 char g_prevState[24] = "idle";
 // Stop / restart in progress.
@@ -996,6 +1051,53 @@ void owInit() {
 // views and the safety menus get learned - but it only acts with "Show iDrive warnings" ticked: see overlay_watch.hpp.
 // (rhmiapp-32..35 acted only on widgets named *popup* while state 13 was visible; Check Control is
 // LT_ScrollLabel_CCM_Details, so it waited ~25 s for another path - F31 bench, 2026-11-05.)
+// Camera views (rhmiapp-46): whatever the checkboxes, a camera context makes the daemon step aside ("camera <ctx>", like
+// park assist) and the next other context brings Android Auto back ("camera 0"). A widgetless, untitled context that
+// is not in the list is logged as a candidate, so a car whose camera uses another id shows it in one capture.
+void onCameraContext(int vc, const char* widget, const char* title) {
+    static int s_list[16];
+    static int s_n = -1;
+    if (s_n < 0) {
+        FILE* f = fopen(kDaemonEnv, "r");
+        char line[160];
+        char list[160] = "";
+        while (f && fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "NBT_AA_CAMERA_CTX=", 18) == 0) snprintf(list, sizeof(list), "%s", line + 18);
+        }
+        if (f) fclose(f);
+        list[strcspn(list, "\r\n")] = 0;
+        s_n = nbt::parseCameraContexts(list, s_list, 16);
+        char shown[96] = "";
+        for (int i = 0; i < s_n; ++i) {
+            size_t l = strlen(shown);
+            snprintf(shown + l, sizeof(shown) - l, "%s%d", i ? "," : "", s_list[i]);
+        }
+        alog("camera: iDrive contexts %s are camera views: Android Auto steps aside for them and comes back after%s",
+             shown, list[0] ? " (NBT_AA_CAMERA_CTX)" : " (default; NBT_AA_CAMERA_CTX in nbt-aad.env changes it)");
+    }
+    if (vc <= 0) return;
+    const bool cam = nbt::isCameraContext(vc, s_list, s_n);
+    if (cam && g_cameraCtx != vc) {
+        const bool was = g_cameraCtx > 0;
+        g_cameraCtx = vc;
+        if (!was) g_cameraDismissed = false;             // a new camera episode
+        alog("camera: iDrive camera view (context %d) is up: Android Auto steps aside until it closes", vc);
+        char msg[32];
+        snprintf(msg, sizeof(msg), "camera %d", vc);
+        sendToDaemon(msg);
+    } else if (!cam && g_cameraCtx > 0) {
+        alog("camera: iDrive left the camera view (context %d -> %d): Android Auto comes back%s", g_cameraCtx, vc,
+             g_cameraDismissed ? " (it was already chosen over the camera)" : "");
+        g_cameraCtx = 0;
+        g_cameraDismissed = false;
+        sendToDaemon("camera 0");
+    } else if (!cam && !title[0] && !strcmp(widget, "GFXIDENTIFIER_INVALID") && vc < 50000 && vc != 3 &&
+               g_aaVisible) {
+        alog("camera: context %d (no widget, no title) came up over Android Auto: if this was a camera view, add it to "
+             "NBT_AA_CAMERA_CTX in nbt-aad.env", vc);
+    }
+}
+
 bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     char text[300];
     size_t n = 0;
@@ -1015,6 +1117,7 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
          warningsOn() ? "" : " (Show iDrive warnings is off)");
     FILE* f = fopen(kGctxFile, "w");
     if (f) { fprintf(f, "vc %d\n%s\n", vc, text); fclose(f); }
+    onCameraContext(vc, widget, title);
     // Fed to the overlay watch whether or not iDrive took our state 13 (on some units it never does - F31 bench
     // 2026-11-05 - so the old "popup widget while state 13 is visible" rule waited ~25 s for another path). The step-aside
     // itself is decided on the next status poll (>= 300 ms later), once a hard key's input has reached the state file.
@@ -1267,6 +1370,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
                      "steps aside until it closes", g_ow.aside());
                 return;
             }
+            if (cameraOwnsScreen()) return;              // a camera view took the focus: the daemon steps aside
             fireHold(app, "state lost focus (OPTIONS panel?)");
         }
         return;
@@ -1350,6 +1454,7 @@ void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
 }
 
 void startDaemonOrShow() {
+    g_autostartPid = 0;                               // the driver is taking over the automatic handoff
     g_popupAside = false;                            // the driver asked for Android Auto: clear a warning step-aside
     g_ow.reset(nowMs());
     DaemonState d = readDaemonState();
@@ -1372,6 +1477,7 @@ void startDaemonOrShow() {
 }
 
 void beginStop(bool restart) {
+    g_autostartPid = 0;
     DaemonState d = readDaemonState();
     g_restartAfterStop = restart;
     if (d.pid == 0) {
@@ -1741,6 +1847,231 @@ bool onUsbAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// ---- Use Phone GPS / Use WiFi Direct Network (rhmiapp-44) ---------------------------------------------------------
+// Flip a checkbox flag: remove both files when on, create the /var one when off. Returns the new state.
+bool toggleFlagFile(const char* flag, const char* manual, const char* what) {
+    bool on = fileExists(flag) || fileExists(manual);
+    if (on) {
+        if (fileExists(flag) && unlink(flag) != 0) alog("%s: cannot remove %s (errno %d)", what, flag, errno);
+        if (fileExists(manual) && unlink(manual) != 0)
+            alog("%s: cannot remove %s (errno %d, read-only?): remove it by hand", what, manual, errno);
+    } else {
+        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
+        int fd = open(flag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) alog("%s: cannot create %s (errno %d)", what, flag, errno);
+        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
+    }
+    bool now = fileExists(flag) || fileExists(manual);
+    alog("menu: %s %s -> %s (applies at the next Start / Restart)", what, on ? "on" : "off", now ? "on" : "off");
+    return now;
+}
+
+bool g_phoneGpsShown = false;
+bool phoneGpsOn() { return fileExists(kPhoneGpsFlag) || fileExists(kPhoneGpsManual); }
+void showPhoneGps(bmw::PluginApp* app) {
+    app->updateModel(kPhoneGpsModel, phoneGpsOn());
+    g_phoneGpsShown = true;
+}
+bool onPhoneGpsToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kPhoneGpsFlag, kPhoneGpsManual, "Use Phone GPS (NBT_PHONE_GPS in nbt-aad.env wins)");
+    if (g_runApp) showPhoneGps(g_runApp);
+    return true;
+}
+
+bool g_wfdOnlyShown = false;
+bool wfdOnlyOn() { return fileExists(kWfdOnlyFlag) || fileExists(kWfdOnlyManual); }
+void showWfdOnly(bmw::PluginApp* app) {
+    app->updateModel(kWfdOnlyModel, wfdOnlyOn());
+    g_wfdOnlyShown = true;
+}
+bool onWfdOnlyToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kWfdOnlyFlag, kWfdOnlyManual, "Use WiFi Direct Network (NBT_ALT_WIFI in nbt-aad.env wins)");
+    if (g_runApp) showWfdOnly(g_runApp);
+    return true;
+}
+
+// ---- Use Native Audio instead of Bluetooth / Media Controls for LCI Steering Wheels (rhmiapp-45) -----------------
+bool g_nativeAudioShown = false;
+bool nativeAudioOn() { return fileExists(kNativeAudioFlag) || fileExists(kNativeAudioManual); }
+void showNativeAudio(bmw::PluginApp* app) {
+    app->updateModel(kNativeAudioModel, nativeAudioOn());
+    g_nativeAudioShown = true;
+}
+bool onNativeAudioToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kNativeAudioFlag, kNativeAudioManual,
+                   "Use Native Audio instead of Bluetooth (NBT_AUDIO_MODE / NBT_AUDIO_BT in nbt-aad.env win)");
+    if (g_runApp) showNativeAudio(g_runApp);
+    return true;
+}
+
+bool g_lciMediaShown = false;
+bool lciMediaOn() { return fileExists(kLciMediaFlag) || fileExists(kLciMediaManual); }
+void showLciMedia(bmw::PluginApp* app) {
+    app->updateModel(kLciMediaModel, lciMediaOn());
+    g_lciMediaShown = true;
+}
+// ---- Firewall (pf_aa) rows (rhmiapp-47) ------------------------------------------------------------------------
+// One operation at a time. Row text: label -> working text (busy ring) -> result (-> second result) -> label again.
+enum PfOp { kPfInstall = 0, kPfCheck = 1, kPfUninstall = 2 };
+int g_pfOp = -1;                  // the row whose operation is running or whose result is showing, -1 = none
+pid_t g_pfPid = 0;                // its nbt-aad --pf-* process
+time_t g_pfStart = 0;
+unsigned g_pfNext = 0;            // a second result text to show at g_pfNextMs (0 = none)
+uint32_t g_pfNextMs = 0;
+uint32_t g_pfLabelMs = 0;         // when the row goes back to its label (0 = not scheduled)
+
+void pfRowText(bmw::PluginApp* app, int op, unsigned text, bool busy) {
+    if (!app || op < 0) return;
+    bmw::TextID t(text);
+    app->updateModel(kPfRowModel[op], t);
+    bmw::Parcel p(busy);
+    app->setProperty(kPfRowButton[op], kPropWaiting, p);
+}
+
+// nbt-aad carries pf_aa (v1.9.44+): its binary holds the embedded banner text. Read on each press; ~1 MB.
+bool daemonHasPfAa() {
+    FILE* f = fopen(kDaemon, "rb");
+    if (!f) return false;
+    static char buf[65536 + 32];
+    const size_t m = strlen(kPfAaEmbedMark);
+    size_t keep = 0;
+    bool found = false;
+    for (;;) {
+        size_t got = fread(buf + keep, 1, sizeof(buf) - 32 - keep, f);
+        if (!got) break;
+        size_t len = keep + got;
+        for (size_t i = 0; i + m <= len && !found; ++i)
+            if (buf[i] == kPfAaEmbedMark[0] && !memcmp(buf + i, kPfAaEmbedMark, m)) found = true;
+        if (found) break;
+        keep = len < m - 1 ? len : m - 1;               // a match may straddle two reads
+        memmove(buf, buf + len - keep, keep);
+    }
+    fclose(f);
+    return found;
+}
+
+void startPfOp(int op) {
+    static const char* const kNames[3] = { "Install PF Rules", "Check PF Rules", "Uninstall PF Rules" };
+    if (g_pfPid > 0) {
+        alog("menu: %s ignored: %s is still running", kNames[op], kNames[g_pfOp]);
+        return;
+    }
+    if (g_pfOp >= 0 && g_pfOp != op) pfRowText(g_runApp, g_pfOp, kPfRowLabel[g_pfOp], false);   // old result off
+    g_pfOp = op;
+    g_pfNext = 0;
+    g_pfLabelMs = 0;
+    if (!daemonHasPfAa()) {
+        alog("menu: %s: %s has no pf_aa built in (older than v1.9.44): update nbt-aad", kNames[op], kDaemon);
+        pfRowText(g_runApp, op, kTxtPfFailed, false);
+        g_pfLabelMs = nowMs() + 8000;
+        return;
+    }
+    char* argv[4];
+    argv[0] = const_cast<char*>(kDaemon);
+    argv[1] = const_cast<char*>(op == kPfInstall ? "--pf-install" : op == kPfCheck ? "--pf-check" : "--pf-uninstall");
+    argv[2] = op == kPfCheck ? NULL : const_cast<char*>("--load");
+    argv[3] = NULL;
+    // The HMI's LD_PRELOAD (graphics libraries) is no use to pf_aa, pfctl or mount.
+    char* envp[96];
+    int ne = 0;
+    static char path[] = "PATH=/bin:/usr/bin:/sbin:/usr/sbin:/opt/os/bin:/opt/sys/bin";
+    envp[ne++] = path;
+    for (char** e = environ; e && *e && ne < 95; ++e) {
+        if (!strncmp(*e, "LD_PRELOAD=", 11) || !strncmp(*e, "PATH=", 5)) continue;
+        envp[ne++] = *e;
+    }
+    envp[ne] = NULL;
+    int in = open("/dev/null", O_RDONLY);
+    int out = open(kPfAaOut, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    pid_t pid = -1;
+    if (in >= 0 && out >= 0) {
+        posix_spawn_file_actions_t fa;
+        posix_spawn_file_actions_init(&fa);
+        posix_spawn_file_actions_adddup2(&fa, in, 0);
+        posix_spawn_file_actions_adddup2(&fa, out, 1);
+        posix_spawn_file_actions_adddup2(&fa, out, 2);
+        if (posix_spawn(&pid, kDaemon, &fa, NULL, argv, envp) != 0) pid = -1;
+        posix_spawn_file_actions_destroy(&fa);
+    }
+    int err = errno;
+    if (in >= 0) close(in);
+    if (out >= 0) close(out);
+    if (pid <= 0) {
+        alog("menu: %s: cannot start %s %s (errno %d)", kNames[op], kDaemon, argv[1], err);
+        pfRowText(g_runApp, op, kTxtPfFailed, false);
+        g_pfLabelMs = nowMs() + 8000;
+        return;
+    }
+    g_pfPid = pid;
+    g_pfStart = time(NULL);
+    alog("menu: %s -> %s %s%s (pid %d)", kNames[op], kDaemon, argv[1], argv[2] ? " --load" : "", (int)pid);
+    pfRowText(g_runApp, op, op == kPfInstall ? kTxtPfWriting : op == kPfCheck ? kTxtPfChecking : kTxtPfRemoving, true);
+}
+
+bool onPfInstallRow(void*, const bmw::Parcel&) { startPfOp(kPfInstall); return true; }
+bool onPfCheckRow(void*, const bmw::Parcel&) { startPfOp(kPfCheck); return true; }
+bool onPfUninstallRow(void*, const bmw::Parcel&) { startPfOp(kPfUninstall); return true; }
+
+// Status poll: the process ended -> its output into the app log, the row shows the outcome; timed text changes.
+// pf_aa exit codes: 0 done (with --load: the running filter is as intended), 8 written but not active, --check:
+// 0 in place and active, 9 in place but not active, 7 missing; anything else failed.
+void servicePfOps(bmw::PluginApp* app) {
+    const uint32_t now = nowMs();
+    if (g_pfPid > 0) {
+        // The HMI ignores SIGCHLD, so the system reaps our child and waitpid() fails at once with ECHILD: the process
+        // is finished only when it no longer exists (kill 0 -> ESRCH); its result is its last line, "pf_aa-exit: N".
+        int st = 0;
+        pid_t r = waitpid(g_pfPid, &st, WNOHANG);
+        bool gone = r == g_pfPid || (r < 0 && kill(g_pfPid, 0) < 0 && errno == ESRCH);
+        bool timedOut = !gone && time(NULL) - g_pfStart > 60;
+        if (!gone && !timedOut) return;
+        FILE* f = fopen(kPfAaOut, "r");
+        char line[200];
+        int n = 0, marker = -1;
+        bool haveMarker = false;
+        while (f && fgets(line, sizeof(line), f)) {
+            line[strcspn(line, "\r\n")] = 0;
+            if (!strncmp(line, "pf_aa-exit: ", 12)) { marker = atoi(line + 12); haveMarker = true; continue; }
+            if (line[0] && n < 80) { alog("pf_aa: %s", line); ++n; }
+        }
+        if (f) fclose(f);
+        int rc = (r == g_pfPid && WIFEXITED(st)) ? WEXITSTATUS(st) : haveMarker ? marker : -1;
+        if (timedOut) alog("pf_aa (pid %d) still running after 60 s: no longer waiting for it", (int)g_pfPid);
+        else if (r != g_pfPid && !haveMarker) alog("pf_aa (pid %d) ended without a result line", (int)g_pfPid);
+        g_pfPid = 0;
+        unsigned first = kTxtPfFailed, second = 0;
+        if (g_pfOp == kPfInstall) {
+            if (rc == 0) { first = kTxtPfWritten; second = kTxtPfActive; }
+            else if (rc == 8) { first = kTxtPfWritten; second = kTxtPfNotActive; }
+        } else if (g_pfOp == kPfUninstall) {
+            if (rc == 0) { first = kTxtPfRemoved; second = kTxtPfStockOff; }
+            else if (rc == 8) { first = kTxtPfRemoved; second = kTxtPfNotActive; }
+        } else {
+            first = rc == 0 ? kTxtPfInPlace : rc == 9 ? kTxtPfInPlaceIdle : rc == 7 ? kTxtPfMissing : kTxtPfFailed;
+        }
+        alog("pf_aa exit %d: row shows text %u%s", rc, first, second ? " then a second result" : "");
+        pfRowText(app, g_pfOp, first, false);
+        if (second) { g_pfNext = second; g_pfNextMs = now + 2000; g_pfLabelMs = now + 12000; }
+        else g_pfLabelMs = now + 10000;
+        return;
+    }
+    if (g_pfNext && (int32_t)(now - g_pfNextMs) >= 0) {
+        pfRowText(app, g_pfOp, g_pfNext, false);
+        g_pfNext = 0;
+    }
+    if (g_pfLabelMs && (int32_t)(now - g_pfLabelMs) >= 0 && g_pfOp >= 0) {
+        pfRowText(app, g_pfOp, kPfRowLabel[g_pfOp], false);
+        g_pfLabelMs = 0;
+        g_pfOp = -1;
+    }
+}
+
+bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kLciMediaFlag, kLciMediaManual, "Media Controls for LCI Steering Wheels (NBT_LCI_MEDIA in nbt-aad.env wins)");
+    if (g_runApp) showLciMedia(g_runApp);
+    return true;
+}
+
 bool g_menuIdriveShown = false;
 bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
 
@@ -1840,9 +2171,38 @@ void serviceAutostart() {
     if (d.pid != 0) { alog("start with the car: nbt-aad already running (pid %d)", d.pid); return; }
     if (!bootGuardAllows()) return;
     alog("start with the car: launching nbt-aad (%s)", fileExists(kAutostartFile) ? kAutostartFile : kAutostartManual);
-    launchDaemon();                                      // no "show", no menu navigation: it waits for the phone
+    pid_t pid = launchDaemon();
+    if (pid > 0) {
+        g_autostartPid = pid;                             // wait for this daemon's first projection
+        g_autostartMenuTries = 0;
+    }
     g_autostartMono = monoSec();
     if (!g_autostartMono) g_autostartMono = 1;
+}
+
+// Return true while the automatic launch is waiting to hand focus to the regular state-13 hold.
+bool serviceAutostartHandoff(bmw::PluginApp* app, const DaemonState& d, bool connected) {
+    if (!g_autostartPid) return false;
+    if (!holdEnabled() || (d.pid > 0 && d.pid != g_autostartPid) || !pidAlive(g_autostartPid)) {
+        g_autostartPid = 0;
+        return false;
+    }
+    if (d.pid != g_autostartPid || !connected || !d.overlay ||
+        g_lastGear == kReverseGear || pdcOwnsScreen() || callActive()) return true;
+
+    if (!inOurMenu() && !g_aaFocused) {
+        // Event 53 opens our app. Give iDrive a poll to report menu focus before asking for state 13.
+        if (g_autostartMenuTries < 3) {
+            ++g_autostartMenuTries;
+            app->triggerEvent(kEvOpenMenu);
+            alog("autostart: connected, event %u -> our menu (try %u)", kEvOpenMenu, g_autostartMenuTries);
+            return true;
+        }
+        alog("autostart: menu focus unconfirmed, trying state %u directly", kAaState);
+    }
+    g_autostartPid = 0;
+    g_prevOverlay = 0;                                   // run the normal initial hold and its retries
+    return false;
 }
 
 void statusRun(void* /*self*/) {
@@ -1855,6 +2215,11 @@ void statusRun(void* /*self*/) {
     if (!g_kombiNavShown) showKombiNav(app);
     if (!g_warningsShown) showWarnings(app);
     if (!g_usbAaShown) showUsbAa(app);
+    if (!g_phoneGpsShown) showPhoneGps(app);
+    if (!g_wfdOnlyShown) showWfdOnly(app);
+    if (!g_nativeAudioShown) showNativeAudio(app);
+    if (!g_lciMediaShown) showLciMedia(app);
+    servicePfOps(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
     serviceAutostart();
@@ -1877,7 +2242,7 @@ void statusRun(void* /*self*/) {
         alog("start row text -> %u (%s)", row, d.state);
         g_shownRow = row;
     }
-    serviceHold(app, d);
+    if (!serviceAutostartHandoff(app, d, connected)) serviceHold(app, d);
     if (connected && strcmp(g_prevState, "connected") != 0 && g_entryStart) {
         g_entryStart = false;                            // one shot, before the return-to-menu step below moves iDrive
         if (time(NULL) - g_startTime <= kHomeWindowS &&
@@ -2017,7 +2382,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the seven checkbox models are refreshed from their flag files every time
+// focus notification is used for two things: the eleven checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2036,7 +2401,11 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showKombiNav(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
-        alog("settings: seven checkbox models refreshed");
+        showPhoneGps(g_app);
+        showWfdOnly(g_app);
+        showNativeAudio(g_app);
+        showLciMedia(g_app);
+        alog("settings: eleven checkbox models refreshed");
     }
     return true;
 }
@@ -2072,6 +2441,13 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActKombiNav, &onKombiNavToggle);
     addAction(self, kActWarnings, &onWarningsToggle);
     addAction(self, kActUsbAa, &onUsbAaToggle);
+    addAction(self, kActPhoneGps, &onPhoneGpsToggle);
+    addAction(self, kActWfdOnly, &onWfdOnlyToggle);
+    addAction(self, kActNativeAudio, &onNativeAudioToggle);
+    addAction(self, kActLciMedia, &onLciMediaToggle);
+    addAction(self, kActPfInstall, &onPfInstallRow);
+    addAction(self, kActPfCheck, &onPfCheckRow);
+    addAction(self, kActPfUninstall, &onPfUninstallRow);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;

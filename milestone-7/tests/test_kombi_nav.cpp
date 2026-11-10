@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: kombi_nav state machine + SOME/IP client against a fake KOMBI on 127.0.0.1, the iDrive-route watch,
-// and the daemon runtime end to end (src/kombi_nav.cpp, src/kombi_client.cpp).
-// Build: g++ -std=gnu++98 -Iinclude -Isrc -Itests tests/test_kombi_nav.cpp src/kombi_nav.cpp src/kombi_client.cpp -lpthread
-#include "kombi_nav.hpp"
+// and the daemon runtime end to end (src/cluster/nav_core.cpp, src/cluster/j29_client.cpp).
+// Build: g++ -std=gnu++98 -Iinclude -Isrc -Itests tests/test_kombi_nav.cpp src/cluster/nav_core.cpp src/cluster/j29_client.cpp -lpthread
+#include "cluster/nav_core.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <assert.h>
 #include <errno.h>
@@ -26,133 +26,7 @@ static double monoS() {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-// ---- fake KOMBI --------------------------------------------------------------------------------------------------
-struct Seen { uint16_t method; Bytes body; };
-
-class FakeKombi {
-public:
-    enum Reject { kNone, kNth, kUntil };
-    FakeKombi() : reject_(kNone), nth_(0), until_(0), cookie_ms_(0), stop_(false) {
-        pthread_mutex_init(&mu_, NULL);
-        srv_ = socket(AF_INET, SOCK_STREAM, 0);
-        int one = 1;
-        setsockopt(srv_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-        struct sockaddr_in a;
-        memset(&a, 0, sizeof(a));
-        a.sin_family = AF_INET;
-        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        assert(bind(srv_, (struct sockaddr*)&a, sizeof(a)) == 0 && listen(srv_, 8) == 0);
-        socklen_t l = sizeof(a);
-        getsockname(srv_, (struct sockaddr*)&a, &l);
-        port_ = ntohs(a.sin_port);
-        pthread_create(&acc_, NULL, &FakeKombi::acceptStub, this);
-    }
-    ~FakeKombi() {
-        pthread_mutex_lock(&mu_);
-        stop_ = true;
-        pthread_mutex_unlock(&mu_);
-        shutdown(srv_, SHUT_RDWR);
-        close(srv_);
-        pthread_join(acc_, NULL);
-        dropAll();
-        usleep(50000);
-    }
-    uint16_t port() const { return port_; }
-    void rejectNth(size_t n) { pthread_mutex_lock(&mu_); reject_ = kNth; nth_ = n; pthread_mutex_unlock(&mu_); }
-    void rejectUntil(double t) { pthread_mutex_lock(&mu_); reject_ = kUntil; until_ = t; pthread_mutex_unlock(&mu_); }
-    void cookies(int ms) { pthread_mutex_lock(&mu_); cookie_ms_ = ms; pthread_mutex_unlock(&mu_); }
-    bool stopping() { pthread_mutex_lock(&mu_); bool s = stop_; pthread_mutex_unlock(&mu_); return s; }
-    std::vector<Seen> seen() { pthread_mutex_lock(&mu_); std::vector<Seen> s = seen_; pthread_mutex_unlock(&mu_); return s; }
-    size_t count() { pthread_mutex_lock(&mu_); size_t n = seen_.size(); pthread_mutex_unlock(&mu_); return n; }
-    void dropAll() {   // the KOMBI closes every connection (link blip)
-        pthread_mutex_lock(&mu_);
-        for (size_t i = 0; i < conns_.size(); ++i) shutdown(conns_[i], SHUT_RDWR);
-        pthread_mutex_unlock(&mu_);
-    }
-
-private:
-    static void* acceptStub(void* p) { static_cast<FakeKombi*>(p)->acceptLoop(); return NULL; }
-    void acceptLoop() {
-        while (!stopping()) {
-            int c = accept(srv_, NULL, NULL);
-            if (c < 0) return;
-            pthread_mutex_lock(&mu_);
-            conns_.push_back(c);
-            int cookie_ms = cookie_ms_;
-            pthread_mutex_unlock(&mu_);
-            Conn* k = new Conn;
-            k->self = this; k->fd = c;
-            pthread_t t;
-            pthread_create(&t, NULL, &FakeKombi::connStub, k);
-            pthread_detach(t);
-            if (cookie_ms) {
-                Conn* k2 = new Conn;
-                k2->self = this; k2->fd = c;
-                pthread_create(&t, NULL, &FakeKombi::cookieStub, k2);
-                pthread_detach(t);
-            }
-        }
-    }
-    struct Conn { FakeKombi* self; int fd; };
-    static bool rd(int fd, uint8_t* p, size_t n) {
-        while (n) { ssize_t r = recv(fd, p, n, 0); if (r <= 0) return false; p += r; n -= r; }
-        return true;
-    }
-    static void* connStub(void* p) {
-        Conn* k = static_cast<Conn*>(p);
-        FakeKombi* s = k->self;
-        int fd = k->fd;
-        delete k;
-        for (;;) {
-            uint8_t h[16];
-            if (!rd(fd, h, 16)) break;
-            uint32_t len = ((uint32_t)h[4] << 24) | (h[5] << 16) | (h[6] << 8) | h[7];
-            Bytes body(len - 8);
-            if (len > 8 && !rd(fd, &body[0], body.size())) break;
-            Seen x;
-            x.method = (uint16_t)((h[2] << 8) | h[3]);
-            x.body = body;
-            pthread_mutex_lock(&s->mu_);
-            s->seen_.push_back(x);
-            size_t n = s->seen_.size();
-            bool bad = (s->reject_ == kNth && n == s->nth_) || (s->reject_ == kUntil && monoS() < s->until_);
-            pthread_mutex_unlock(&s->mu_);
-            uint8_t r[16];
-            memcpy(r, h, 16);
-            r[4] = 0; r[5] = 0; r[6] = 0; r[7] = 8; r[14] = 0x80; r[15] = bad ? 1 : 0;
-            if (send(fd, r, 16, MSG_NOSIGNAL) != 16) break;
-        }
-        close(fd);
-        return NULL;
-    }
-    static void* cookieStub(void* p) {
-        Conn* k = static_cast<Conn*>(p);
-        FakeKombi* s = k->self;
-        int fd = k->fd;
-        delete k;
-        const uint8_t cookie[16] = { 0xFF, 0xFF, 0x80, 0x00, 0, 0, 0, 8, 0xDE, 0xAD, 0xBE, 0xEF, 1, 1, 2, 0 };
-        pthread_mutex_lock(&s->mu_);
-        int ms = s->cookie_ms_;
-        pthread_mutex_unlock(&s->mu_);
-        while (!s->stopping()) {
-            usleep(ms * 1000);
-            if (send(fd, cookie, 16, MSG_NOSIGNAL) != 16) break;
-        }
-        return NULL;
-    }
-
-    int srv_;
-    uint16_t port_;
-    pthread_t acc_;
-    pthread_mutex_t mu_;
-    std::vector<Seen> seen_;
-    std::vector<int> conns_;
-    Reject reject_;               // guarded by mu_ (like everything below)
-    size_t nth_;
-    double until_;
-    int cookie_ms_;
-    bool stop_;
-};
+#include "fake_kombi.hpp"
 
 // ---- harness -------------------------------------------------------------------------------------------------------
 struct TestLink {
@@ -202,9 +76,10 @@ struct Rig {
     Graph g;
     KombiClient c;
     TestLink l;
+    J29Display d;
     Core core;
     explicit Rig(const Settings& s = noApproach())
-        : g(0xC8, 255), c("127.0.0.1", k.port()), l(c, g), core(g, l.link, s, &logFn, NULL) {
+        : g(0xC8, 255), c("127.0.0.1", k.port()), l(c, g), d(g, l.link), core(d, s, &logFn, NULL) {
         g_log.clear();
     }
     void feed(const NavMessages& m, double t) {
@@ -654,7 +529,8 @@ int main() {
         KombiClient c("127.0.0.1", 9, 500);
         TestLink l(c, g);
         g_log.clear();
-        Core core(g, l.link, noApproach(), &logFn, NULL);
+        J29Display d(g, l.link);
+        Core core(d, noApproach(), &logFn, NULL);
         std::vector<Tick> drive = demoDrive(demoRoute());
         NavView v;
         assert(viewFromMessages(drive[1].m, v));
