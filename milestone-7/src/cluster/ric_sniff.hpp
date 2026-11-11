@@ -190,6 +190,30 @@ inline void kombiFilter(uint32_t ip, FilterInsn* f) {
     f[14] = filterStmt(0x06, 0);            // drop
 }
 
+// The records of one read() from a BPF device: <header> <captured frame>, padded to `align` bytes, repeated. The header
+// is struct bpf_hdr on this 32-bit target: 8 bytes of timestamp, the captured length at 8, the original length at 12,
+// the header's own length at 16. That length MUST be taken from the record: the kernel writes 18 bytes
+// (SIZEOF_BPF_HDR) where the compiler pads sizeof(struct bpf_hdr) to 20, and a check against sizeof drops every packet
+// (v1.9.58 did exactly that on the car).
+enum { kBpfHdrMin = 18 };
+inline int bpfRecords(const uint8_t* buf, size_t n, size_t align, std::vector<Bytes>* frames) {
+    size_t o = 0;
+    int count = 0;
+    while (n - o >= (size_t)kBpfHdrMin) {
+        uint32_t cap = 0;
+        uint16_t hl = 0;
+        memcpy(&cap, buf + o + 8, 4);
+        memcpy(&hl, buf + o + 16, 2);
+        if (hl < (unsigned)kBpfHdrMin || hl > n - o || cap > n - o - hl) break;
+        frames->push_back(Bytes(buf + o + hl, buf + o + hl + cap));
+        ++count;
+        const size_t step = ((size_t)hl + cap + align - 1) & ~(align - 1);
+        if (step > n - o) break;
+        o += step;
+    }
+    return count;
+}
+
 }  // namespace riclist
 }  // namespace nbt
 

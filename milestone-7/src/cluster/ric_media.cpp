@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,6 +112,10 @@ bool readMessage(int fd, Bytes& m) {
 }
 
 #ifdef __QNXNTO__
+// bpfRecords() (cluster/ric_sniff.hpp) reads the record header by offset: these are the offsets it assumes.
+typedef char bpf_caplen_is_at_8[offsetof(struct bpf_hdr, bh_caplen) == 8 ? 1 : -1];
+typedef char bpf_hdrlen_is_at_16[offsetof(struct bpf_hdr, bh_hdrlen) == 16 ? 1 : -1];
+
 // The head unit's own traffic to the KOMBI, read from a BPF device on its interface. Not promiscuous, receive only.
 class BpfSource : public FrameSource {
 public:
@@ -162,17 +167,7 @@ public:
         if (fd_ < 0) return -1;
         const ssize_t n = ::read(fd_, &buf_[0], buf_.size());
         if (n < 0) return (errno == EINTR || errno == EAGAIN || errno == ETIMEDOUT) ? 0 : -1;
-        size_t o = 0;
-        int count = 0;
-        while (o + sizeof(struct bpf_hdr) <= (size_t)n) {
-            const struct bpf_hdr* h = (const struct bpf_hdr*)(const void*)&buf_[o];
-            const size_t hl = h->bh_hdrlen, cl = h->bh_caplen;
-            if (hl < sizeof(struct bpf_hdr) || o + hl + cl > (size_t)n) break;
-            frames->push_back(Bytes(buf_.begin() + (long)(o + hl), buf_.begin() + (long)(o + hl + cl)));
-            ++count;
-            o += BPF_WORDALIGN(hl + cl);
-        }
-        return count;
+        return bpfRecords(&buf_[0], (size_t)n, BPF_ALIGNMENT, frames);
     }
 
     virtual void close() {
@@ -355,6 +350,9 @@ void KombiMedia::worker() {
     bool open = false, dead = false;
     uint32_t idleSince = 0;
     unsigned seenLists = 0, seenOthers = 0, seenMoved = 0, base = 0;
+    unsigned long packets = 0, onPort = 0, healthPackets = 0;   // what the capture has delivered since it opened
+    uint32_t openedMs = 0, healthMs = 0;
+    bool silentLogged = false;
     uint32_t seenHandle = 0;
     std::vector<Bytes> frames;
     std::vector<SomeipMsg> msgs;
@@ -386,6 +384,9 @@ void KombiMedia::worker() {
             seenHandle = 0;
             base = 0;
             idleSince = 0;
+            packets = onPort = healthPackets = 0;
+            silentLogged = false;
+            openedMs = healthMs = nowMs();
             printf("[KombiMedia] listening on %s for iDrive's track list\n", if_.c_str());
         }
 
@@ -404,7 +405,10 @@ void KombiMedia::worker() {
         for (size_t i = 0; i < frames.size(); ++i) {
             TcpSeg seg;
             if (frames[i].empty() || !parseTcp(&frames[i][0], frames[i].size(), &seg)) continue;
-            if (seg.dst != ip_ || seg.dport != port_) continue;
+            if (seg.dst != ip_) continue;
+            if (packets++ == 0) printf("[KombiMedia] the capture works: first packet to the KOMBI seen\n");
+            if (seg.dport != port_) continue;
+            ++onPort;
             msgs.clear();
             sniff.feed(seg, &msgs);
             for (size_t k = 0; k < msgs.size(); ++k) logic.onSniffed(msgs[k], &out);
@@ -448,11 +452,22 @@ void KombiMedia::worker() {
         }
 
         const uint32_t now = nowMs();
+        if (packets == 0 && !silentLogged && (uint32_t)(now - openedMs) > 30000u) {
+            silentLogged = true;
+            printf("[KombiMedia] no packet to the KOMBI seen on %s in 30 s (iDrive sends it a keep-alive about every "
+                   "10 s): the capture is not working\n", if_.c_str());
+        }
+        if (packets != healthPackets && (uint32_t)(now - healthMs) > 60000u) {
+            healthMs = now;
+            healthPackets = packets;
+            printf("[KombiMedia] capture: %lu packets to the KOMBI, %lu on the list port, iDrive's lists %u, answered %u\n",
+                   packets, onPort, logic.lists(), logic.answered());
+        }
         if (show) idleSince = 0;
         else if (!idleSince) idleSince = now | 1u;
         else if ((uint32_t)(now - idleSince) > 10000u) {       // nothing has played for 10 s: stop listening
-            printf("[KombiMedia] stopped listening (nothing playing): answered %u of iDrive's %u lists\n",
-                   logic.answered(), logic.lists());
+            printf("[KombiMedia] stopped listening (nothing playing): answered %u of iDrive's %u lists, %lu packets seen\n",
+                   logic.answered(), logic.lists(), packets);
             src_->close();
             closeLink();
             open = false;

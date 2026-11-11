@@ -6,6 +6,7 @@
 #include "ric_frames.hpp"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 using namespace nbt::riclist;
 using namespace ricf;
 
@@ -134,6 +135,45 @@ int main() {
     assert(runFilter(flt, kFilterLen, Bytes(20, 0)) == 0);                                                // runt
     for (int i = 0; i < kFilterLen; ++i)        // every jump lands inside the program
         if (flt[i].code == 0x15) assert(i + 1 + flt[i].jt < kFilterLen && i + 1 + flt[i].jf < kFilterLen);
+
+    // ---- the records of a BPF read -------------------------------------------------------------------------------
+    {
+        // the header as the kernel writes it on the car: 18 bytes (not sizeof(struct bpf_hdr) = 20), records padded to 4
+        Bytes buf;
+        for (int r = 0; r < 3; ++r) {
+            const Bytes& fr = r == 1 ? msg : pkt;                   // 178, 20, 178 bytes
+            const uint32_t cap = (uint32_t)fr.size();
+            const uint16_t hl = 18;
+            Bytes rec(18, 0xAA);
+            memcpy(&rec[8], &cap, 4);
+            memcpy(&rec[12], &cap, 4);
+            memcpy(&rec[16], &hl, 2);
+            rec.insert(rec.end(), fr.begin(), fr.end());
+            while (rec.size() % 4) rec.push_back(0xBB);
+            buf.insert(buf.end(), rec.begin(), rec.end());
+        }
+        std::vector<Bytes> got;
+        assert(bpfRecords(&buf[0], buf.size(), 4, &got) == 3 && got.size() == 3);
+        assert(got[0] == pkt && got[1] == msg && got[2] == pkt);
+        got.clear();
+        assert(bpfRecords(&buf[0], buf.size() - 1, 4, &got) == 2);   // the last record is cut: not delivered
+        got.clear();
+        assert(bpfRecords(&buf[0], 17, 4, &got) == 0 && bpfRecords(&buf[0], 0, 4, &got) == 0);
+        Bytes bad = buf;
+        bad[16] = 4;                                                 // a header length no record can have
+        assert(bpfRecords(&bad[0], bad.size(), 4, &got) == 0);
+        bad = buf;
+        bad[11] = 0x7F;                                              // a captured length past the buffer
+        assert(bpfRecords(&bad[0], bad.size(), 4, &got) == 0 && got.empty());
+        // a 20-byte header (a kernel that pads it) works the same way
+        Bytes rec(20, 0);
+        const uint32_t cap = (uint32_t)msg.size();
+        const uint16_t hl = 20;
+        memcpy(&rec[8], &cap, 4);
+        memcpy(&rec[16], &hl, 2);
+        rec.insert(rec.end(), msg.begin(), msg.end());
+        assert(bpfRecords(&rec[0], rec.size(), 4, &got) == 1 && got[0] == msg);
+    }
     printf("test_ric_sniff OK\n");
     return 0;
 }

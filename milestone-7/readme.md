@@ -206,7 +206,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
-> **v1.9.58-kombimedia (first car test pending; off unless `NBT_KOMBI_MEDIA=1` is in `nbt-aad.env`): the Android Auto
+> **v1.9.59-kombimedia (first car test pending; off unless `NBT_KOMBI_MEDIA=1` is in `nbt-aad.env`): the Android Auto
 > track title in the instrument cluster's track list (GR Supra).** With the phone's music on the car's own audio source
 > (Use Native Audio), the list the thumb wheel brings up - Previous title / the track / Next title - kept showing the
 > last Bluetooth track. iDrive re-sends that list to the KOMBI on every thumb-wheel step (SOME/IP service `0xB00E`, the
@@ -220,7 +220,11 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > findings behind it (2026-11-10): the capture decoded in `src/cluster/ric_list.hpp`, and `tools/ricprobe` changing
 > each row from a second connection. Log: `[KombiMedia] track title in the cluster list: on ...`,
 > `[KombiMedia] iDrive's track list seen: handle 0x64, ...`, `[KombiMedia] cluster list: '<title>' ...`,
-> `[KombiMedia] the KOMBI did not take the title: ...`.
+> `[KombiMedia] the KOMBI did not take the title: ...`. v1.9.58 never saw a packet on the car: it checked each BPF
+> record's header against `sizeof(struct bpf_hdr)` (20) where the kernel writes 18 bytes, so every record was dropped.
+> v1.9.59 takes the length from the record (host-tested now) and says what the capture sees:
+> `[KombiMedia] the capture works: first packet to the KOMBI seen`, or after 30 s without one
+> `[KombiMedia] no packet to the KOMBI seen on vlan73 ...`.
 >
 > **v1.9.57-cpcompat + rhmiapp-54-cpcompat (CarPlay fixes from v1.9.48-v1.9.50, good feedback from the #156 testers;
 > the checkbox confirmed on the car on this build): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
