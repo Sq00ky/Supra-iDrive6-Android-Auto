@@ -35,6 +35,10 @@ namespace car {
 
 enum { kMflBindings = 6 };
 
+// The thumb-wheel press is not a key of its own: the daemon asks the cluster list which row the cursor is on
+// (cluster/ric_media.hpp). Its events carry this value, which is never sent to the phone.
+static const uint32_t kMflWheelKey = 0x7E000031u;
+
 // One mapping: a function (and optionally a value) -> a key. value < 0: any change away from 0 is the press.
 struct MflBinding {
     int fkt;
@@ -106,6 +110,13 @@ inline MflConfig readMflConfig() {
     if (getenv("NBT_MFL_PLAYPAUSE")) {
         mflDropKey(c, AAK_MEDIA_PLAY_PAUSE);
         mflParseBindings(getenv("NBT_MFL_PLAYPAUSE"), c.b, kMflBindings, &c.n, AAK_MEDIA_PLAY_PAUSE, "MFL_PLAYPAUSE");
+    }
+    // Thumb-wheel press (J29: fkt C31, 01 down / 00 up), only with the cluster track title on. The wheel's rotation
+    // (C30) is deliberately not here. NBT_KOMBI_MEDIA_PRESS=<fkt[:value]> names another function, =0 turns it off.
+    const char* km = getenv("NBT_KOMBI_MEDIA");
+    if (km && !strcmp(km, "1")) {
+        const char* p = getenv("NBT_KOMBI_MEDIA_PRESS");
+        mflParseBindings(p ? p : "C31", c.b, kMflBindings, &c.n, kMflWheelKey, "MFL_WHEEL");
     }
     c.log = envFlag("NBT_MFL_LOG") != 0;
     return c;

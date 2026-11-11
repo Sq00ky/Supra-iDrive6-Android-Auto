@@ -121,6 +121,39 @@ int main() {
         unsetenv("NBT_MFL_NEXT"); unsetenv("NBT_MFL_PREV"); unsetenv("NBT_MFL_PLAYPAUSE");
     }
 
+    // ---- the thumb-wheel press exists only with the cluster track title on, and the rotation is never a key
+    {
+        unsetenv("NBT_KOMBI_MEDIA_PRESS");
+        setenv("NBT_KOMBI_MEDIA", "1", 1);
+        MflConfig c = readMflConfig();
+        CHECK(c.n == 3);
+        CHECK(c.b[2].fkt == 0xC31 && c.b[2].value < 0 && c.b[2].key == kMflWheelKey && !strcmp(c.b[2].what, "MFL_WHEEL"));
+        MflDecoder d;
+        d.setConfig(c);
+        MflEvent ev[2];
+        const uint8_t notch[1] = { 0x7e };
+        const uint8_t rest[1] = { 0x7f };
+        CHECK(d.feed(0xC31, 0xC, zero, 1, ev, 2) == 0);
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2) == 1 && ev[0].down == 1 && ev[0].keycode == kMflWheelKey &&
+              !strcmp(ev[0].what, "MFL_WHEEL"));
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2) == 0);          // held: one press
+        CHECK(d.feed(0xC31, 0xC, zero, 1, ev, 2) == 1 && ev[0].down == 0);
+        CHECK(d.feed(0xC30, 0xC, rest, 1, ev, 2) == 0);
+        CHECK(d.feed(0xC30, 0xC, notch, 1, ev, 2) == 0);        // turning the wheel sends nothing
+        CHECK(d.feed(0xC30, 0xC, rest, 1, ev, 2) == 0);
+        CHECK(d.feed(0x511, 0xC, two, 1, ev, 2) == 1 && ev[0].keycode == AAK_MEDIA_NEXT);   // the skip buttons as before
+        setenv("NBT_KOMBI_MEDIA_PRESS", "0", 1);
+        CHECK(readMflConfig().n == 2);
+        setenv("NBT_KOMBI_MEDIA_PRESS", "C40:1", 1);
+        c = readMflConfig();
+        CHECK(c.n == 3 && c.b[2].fkt == 0xC40 && c.b[2].value == 1 && c.b[2].key == kMflWheelKey);
+        unsetenv("NBT_KOMBI_MEDIA_PRESS");
+        setenv("NBT_KOMBI_MEDIA", "0", 1);
+        CHECK(readMflConfig().n == 2);
+        unsetenv("NBT_KOMBI_MEDIA");
+        CHECK(readMflConfig().n == 2);
+    }
+
     if (fails) { printf("%d check(s) failed\n", fails); return 1; }
     printf("test_mfl: all checks passed\n");
     return 0;

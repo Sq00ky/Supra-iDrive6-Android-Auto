@@ -1663,6 +1663,19 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         }
         return;                                   // st == 2: the hold already minimized AA, swallow the release
     }
+    if (ev.what && !strcmp(ev.what, "MFL_WHEEL")) {   // thumb-wheel press: the row under the cluster list's cursor
+        if (!ev.down) return;
+        if (!g_wheelMediaKeys) {
+            printf("[Media] thumb-wheel press ignored: Media Controls for LCI Steering Wheels is off\n");
+            return;
+        }
+        std::string why;
+        const int a = g_kombiMedia.wheelPress(&why);
+        if (a == nbt::riclist::kPressNext) sendMediaKey(nbt::AAK_MEDIA_NEXT, "thumb-wheel press on Next title");
+        else if (a == nbt::riclist::kPressPrev) sendMediaKey(nbt::AAK_MEDIA_PREVIOUS, "thumb-wheel press on Previous title");
+        else printf("[KombiMedia] thumb-wheel press: nothing sent (%s)\n", why.c_str());
+        return;   // never reaches the phone as a key of its own
+    }
     if (ev.what && (!strcmp(ev.what, "MFL_NEXT") || !strcmp(ev.what, "MFL_PREV") ||
                     !strcmp(ev.what, "MFL_PLAYPAUSE"))) {   // steering-wheel media keys (car/mfl.hpp)
         if (!g_wheelMediaKeys) {
@@ -1724,7 +1737,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.60-kombimedia"
+#define NBT_AAD_BUILD "v1.9.61-kombimedia"
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag

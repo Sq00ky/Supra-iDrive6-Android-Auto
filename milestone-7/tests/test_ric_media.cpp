@@ -140,6 +140,51 @@ static void listModeTests() {
 }
 
 // The default: the title goes into the text model iDrive's own list names for the middle row.
+// The thumb-wheel press: iDrive's cursor (value 0x71) and whether the list is up decide previous / next / nothing.
+static void wheelTests() {
+    static const char* const kCursor0 = "0000006400000071" "13" "00000007" "00000001" "00000071130000";
+    std::vector<OutFrame> out;
+    const char* why = NULL;
+    unsigned row = 9;
+    assert(cursorValue(hex(kValue71), &row) && row == 2);
+    assert(cursorValue(hex(kCursor0), &row) && row == 0);
+    assert(!cursorValue(hex(kValue70), &row) && !cursorValue(hex(kShown), &row) && !cursorValue(hex(kCommit), &row));
+    MediaList l;
+    assert(l.cursor() == -1 && !l.open());
+    assert(wheelPressAction(l.open(), 5000, l.cursor(), &why) == kPressNone && why && *why);
+    l.onSniffed(req(0x0009, kValue71), &out);           // a cursor before any track list is nobody's choice
+    assert(l.cursor() == -1);
+    group(l, &out);                                     // the captured group: one notch down, cursor on row 2
+    assert(l.open() && l.cursor() == 2);
+    assert(wheelPressAction(l.open(), 5000, l.cursor(), &why) == kPressNext && !*why);
+    assert(wheelPressAction(true, kPressSettleMs - 1, 2, &why) == kPressNone && *why);   // the press that opened it
+    assert(wheelPressAction(true, kPressSettleMs, 2, &why) == kPressNext);
+    l.onSniffed(req(0x000B, kListBody), &out);          // one notch up: the next group carries row 0
+    l.onSniffed(req(0x0009, kValue70), &out);
+    l.onSniffed(req(0x0009, kCursor0), &out);
+    l.onSniffed(req(0x0009, kShown), &out);
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(l.open() && l.cursor() == 0);
+    assert(wheelPressAction(l.open(), 5000, l.cursor(), &why) == kPressPrev && !*why);
+    assert(wheelPressAction(true, 5000, 1, &why) == kPressNone && *why);
+    assert(wheelPressAction(true, 5000, -1, &why) == kPressNone && wheelPressAction(true, 5000, 3, &why) == kPressNone);
+    l.onSniffed(req(0x0009, kValue71, 0x7E01), &out);   // our own client's frames are not iDrive's cursor
+    assert(l.cursor() == 0);
+    l.onSniffed(req(0x0009, kValue71, 0x0001, 0xB006), &out);   // nor is another service
+    assert(l.cursor() == 0);
+    l.onSniffed(req(0x0009, kClosed), &out);            // the list goes away about 4 s after the last step
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(!l.open());
+    assert(wheelPressAction(l.open(), 5000, l.cursor(), &why) == kPressNone && *why);
+    l.onSniffed(req(0x000B, "000000640000006b3000000000"), &out);   // another list on the same model
+    assert(l.others() == 1 && l.cursor() == -1);
+    l.onSniffed(req(0x0009, kValue71), &out);
+    l.onSniffed(req(0x0009, kShown), &out);
+    assert(l.open() && l.cursor() == -1);               // up, but its cursor is not ours to act on
+    assert(wheelPressAction(l.open(), 5000, l.cursor(), &why) == kPressNone);
+    assert(out.empty());                                // nothing was playing: none of this sent a frame
+}
+
 static void slotModeTests() {
     Bytes text;
     std::vector<OutFrame> out;
@@ -396,6 +441,24 @@ static void endToEnd() {
     assert(g_kombi.size() == 2 && g_kombi[0].method == 0x0003 && g_kombi[0].body == text && g_kombi[1].method == 0x0004);
     g_kombi.clear();
     pthread_mutex_unlock(&g_mu);
+    // a thumb-wheel press now: the list has been up for a while with the cursor on row 2 ("Next title")
+    {
+        std::string why;
+        assert(km.wheelPress(&why) == kPressNext && why.empty());
+        wire(0x0009, kClosed, 0x7F000001, port);    // iDrive closes the list: a press only brings it back
+        wire(0x0004, kCommit, 0x7F000001, port);
+        int a = kPressNext;
+        for (int i = 0; i < 100 && a != kPressNone; ++i) { usleep(10000); a = km.wheelPress(&why); }
+        assert(a == kPressNone && !why.empty());
+        wireGroup(port);                            // ... and a press right after it reopened does nothing yet
+        for (int i = 0; i < 100 && why != "the cluster list had only just opened"; ++i) { usleep(2000); km.wheelPress(&why); }
+        assert(why == "the cluster list had only just opened");
+        a = kPressNone;
+        for (int i = 0; i < 200 && a != kPressNext; ++i) { usleep(10000); a = km.wheelPress(&why); }
+        assert(a == kPressNext);
+        usleep(100000);
+        assert(kombiCount() == 0);                  // the title was in place: the extra group wrote nothing
+    }
     // frames to another host or port are not iDrive's list traffic
     wire(0x000B, kListBody, 0x7F000009, port);
     wire(0x0004, kCommit, 0x7F000009, port);
@@ -412,12 +475,14 @@ static void endToEnd() {
     assert(km.answered() >= 2);
     km.stop();
     km.stop();
+    assert(km.wheelPress(NULL) == kPressNone);      // stopped: a press is nobody's
     close(g_listen);
     pthread_join(t, NULL);
 }
 
 int main() {
     listModeTests();
+    wheelTests();
     slotModeTests();
     endToEnd();
     printf("test_ric_media OK\n");

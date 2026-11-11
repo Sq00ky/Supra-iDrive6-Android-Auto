@@ -206,7 +206,8 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
-> **v1.9.60-kombimedia (first working car test pending; off unless `NBT_KOMBI_MEDIA=1` is in `nbt-aad.env`): the Android Auto
+> **v1.9.61-kombimedia (the title is confirmed on the car with v1.9.60, the thumb-wheel press of v1.9.61 is not car-tested;
+> off unless `NBT_KOMBI_MEDIA=1` is in `nbt-aad.env`): the Android Auto
 > track title in the instrument cluster's track list (GR Supra).** With the phone's music on the car's own audio source
 > (Use Native Audio), the list the thumb wheel brings up - Previous title / the track / Next title - kept showing the
 > last Bluetooth track. iDrive re-sends that list to the KOMBI on every thumb-wheel step (SOME/IP service `0xB00E`, the
@@ -231,6 +232,15 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > changes rather than when the driver looks. iDrive remembers that model as the text of its last Bluetooth track,
 > so that one track shows the last Android Auto title if it comes back over Bluetooth before the head unit restarts.
 > `NBT_KOMBI_MEDIA_MODE=list` is the v1.9.59 way, now with iDrive's three value frames replayed after the list.
+> v1.9.60 on the car (2026-11-10): the list shows the Android Auto title and follows every skip.
+> v1.9.61: pressing the thumb wheel on "Previous title" / "Next title" skips on the phone. iDrive's own skip from that
+> list goes to its Bluetooth player, which is not what is playing. Each of iDrive's groups to the KOMBI carries the
+> list's cursor (value model `0x71`: row 0 or row 2, the track's own row is not selectable), so a press of the wheel
+> (MOST 15/02 fkt `C31`) is turned into Android's previous / next key for the row the cursor is on - only while the list
+> was already on the display for 300 ms, so the press that brings the list up skips nothing. The wheel's rotation is not
+> mapped to anything: it moves iDrive's cursor. Needs "Media Controls for LCI Steering Wheels" like the skip buttons.
+> `NBT_KOMBI_MEDIA_PRESS=0` turns it off, `=<fkt[:value]>` names another function. Log:
+> `[Media] thumb-wheel press on Next title -> AA key 87`, or `[KombiMedia] thumb-wheel press: nothing sent (<why>)`.
 >
 > **v1.9.57-cpcompat + rhmiapp-54-cpcompat (CarPlay fixes from v1.9.48-v1.9.50, good feedback from the #156 testers;
 > the checkbox confirmed on the car on this build): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
@@ -889,6 +899,7 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_NAV` | `1` / `0` forces the cluster/HUD arrows on / off, whatever the menu checkbox says (default: the checkbox) |
 | `NBT_KOMBI_MEDIA=1` | Show the Android Auto track title in the instrument cluster's track list (off by default; not in Bluetooth audio mode) |
 | `NBT_KOMBI_MEDIA_MODE` | `slot` (default): the title is written into iDrive's own title text model. `list`: iDrive's list is answered with a list naming a text model of our own (not shown by the cluster so far) |
+| `NBT_KOMBI_MEDIA_PRESS` | With `NBT_KOMBI_MEDIA=1`: the steering-wheel function whose press picks the row under the cluster list's cursor (default `C31`, the thumb-wheel press; `0` = off; `fkt[:value]` hex as the `[MFL]` log prints it) |
 | `NBT_KOMBI_MEDIA_IF`, `NBT_KOMBI_MEDIA_INDEX` | The interface iDrive's requests to the KOMBI are read from (default `vlan73`) and the index of our own text model (default `0x7E01`) |
 | `NBT_KOMBI_NAV_APPROACH_MI` | Show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once) |
 | `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |

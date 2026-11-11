@@ -206,7 +206,8 @@ FrameSource* defaultSource(const std::string& ifname, uint32_t ip) {
 }  // namespace
 
 KombiMedia::KombiMedia()
-    : running_(false), stop_(false), show_(false), answered_(0), port_(30502), ip_(0), index_(kDefaultTextIndex),
+    : running_(false), stop_(false), show_(false), answered_(0), listOpen_(false), openSinceMs_(0), cursor_(-1),
+      port_(30502), ip_(0), index_(kDefaultTextIndex),
       mode_(MediaList::kSlot), src_(NULL), ownSrc_(false), fd_(-1), session_(0x0100), fails_(0) {
     pthread_mutex_init(&mu_, NULL);
     pthread_cond_init(&cv_, NULL);
@@ -270,6 +271,13 @@ void KombiMedia::start(bool audioModeOk, FrameSource* source) {
         printf("[KombiMedia] track title in the cluster list: on (NBT_KOMBI_MEDIA=1), mode list "
                "(NBT_KOMBI_MEDIA_MODE): iDrive's list answered with our own text model 0x%08X - listens on %s while "
                "Android Auto plays, KOMBI %s:%u\n", 0x03000000u | index_, if_.c_str(), host_.c_str(), (unsigned)port_);
+    e = getenv("NBT_KOMBI_MEDIA_PRESS");
+    if (e && !strcmp(e, "0"))
+        printf("[KombiMedia] thumb-wheel press on Previous title / Next title: off (NBT_KOMBI_MEDIA_PRESS=0)\n");
+    else
+        printf("[KombiMedia] thumb-wheel press on Previous title / Next title: previous / next to the phone, while the "
+               "list is on the display (NBT_KOMBI_MEDIA_PRESS=0 turns it off; needs Media Controls for LCI Steering "
+               "Wheels)\n");
 }
 
 void KombiMedia::stop() {
@@ -302,6 +310,22 @@ unsigned KombiMedia::answered() {
     const unsigned n = answered_;
     pthread_mutex_unlock(&mu_);
     return n;
+}
+
+int KombiMedia::wheelPress(std::string* why) {
+    if (!running_) {
+        if (why) *why = "the cluster track title is not running";
+        return kPressNone;
+    }
+    pthread_mutex_lock(&mu_);
+    const bool up = listOpen_;
+    const uint32_t since = openSinceMs_;
+    const int cursor = cursor_;
+    pthread_mutex_unlock(&mu_);
+    const char* w = "";
+    const int a = wheelPressAction(up, up ? (uint32_t)(nowMs() - since) : 0, cursor, &w);
+    if (why) *why = w;
+    return a;
 }
 
 void* KombiMedia::workerStub(void* self) {
@@ -407,6 +431,7 @@ void KombiMedia::worker() {
             open = false;
             dead = true;
             pthread_mutex_lock(&mu_);
+            listOpen_ = false;
             continue;
         }
         for (size_t i = 0; i < frames.size(); ++i) {
@@ -483,6 +508,12 @@ void KombiMedia::worker() {
         pthread_mutex_lock(&mu_);
         answered_ += logic.answered() - base;       // base = what of this logic's count is already in answered_
         base = logic.answered();
+        {                                           // for wheelPress(): is iDrive's list up, since when, cursor where
+            const bool up = open && logic.open();
+            if (up && !listOpen_) openSinceMs_ = now;
+            listOpen_ = up;
+            cursor_ = logic.cursor();
+        }
     }
     pthread_mutex_unlock(&mu_);
     if (open) src_->close();

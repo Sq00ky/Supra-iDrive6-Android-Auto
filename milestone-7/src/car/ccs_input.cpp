@@ -51,7 +51,8 @@ bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb,
         printf("[MFL] steering-wheel keys:");
         if (!mc.n) printf(" none mapped");
         for (int i = 0; i < mc.n; ++i) {
-            if (mc.b[i].value < 0) printf(" %s=%03X->%u", mc.b[i].what, mc.b[i].fkt, mc.b[i].key);
+            if (mc.b[i].key == kMflWheelKey) printf(" %s=%03X->the cluster list's row", mc.b[i].what, mc.b[i].fkt);
+            else if (mc.b[i].value < 0) printf(" %s=%03X->%u", mc.b[i].what, mc.b[i].fkt, mc.b[i].key);
             else printf(" %s=%03X:%02X->%u", mc.b[i].what, mc.b[i].fkt, (unsigned)mc.b[i].value, mc.b[i].key);
         }
         printf(", recon log %s\n", mc.log ? "on (NBT_MFL_LOG=0 silences)" : "off");
@@ -112,7 +113,8 @@ void CcsInput::onMfl(const most::View& m) {
     MflEvent ev[2];
     int n = mfl_.feed(m.fkt, m.op, m.len ? m.data : NULL, m.len, ev, 2);
     for (int i = 0; i < n; ++i) {
-        printf("[MFL] %s %s -> AA key %u\n", ev[i].what, ev[i].down ? "down" : "up", ev[i].keycode);
+        if (ev[i].keycode == kMflWheelKey) printf("[MFL] %s %s\n", ev[i].what, ev[i].down ? "down" : "up");
+        else printf("[MFL] %s %s -> AA key %u\n", ev[i].what, ev[i].down ? "down" : "up", ev[i].keycode);
         if (cb_) cb_(makeMflCcsEvent(ev[i]), user_);
     }
 }

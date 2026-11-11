@@ -21,6 +21,13 @@
 //   - Handle, list and text model are taken from what iDrive just sent, never from constants. A list that is not
 //     that three-row list (another source's list, another car's layout) is left alone.
 //
+//   - Thumb-wheel press (v1.9.61): iDrive's skip from that list acts on its Bluetooth player, so nothing happens
+//     with the music on the browser source. Each of iDrive's groups carries the list's cursor (value model 0x71:
+//     row 0 "Previous title" or row 2 "Next title"), so a press of the wheel (MOST 15/02 fkt C31, car/mfl.hpp) is
+//     turned into Android's previous / next key for the row the cluster shows the cursor on - only while the list
+//     was already on the display, so the press that merely brings the list up skips nothing. The wheel's rotation
+//     is never mapped: it moves iDrive's cursor, and that is all it should do.
+//
 // MediaList is the decision logic (no I/O, host-tested in tests/test_ric_media.cpp); KombiMedia is the worker that
 // listens (cluster/ric_sniff.hpp), and sends on its own connection to the KOMBI.
 #ifndef CLUSTER_RIC_MEDIA_HPP
@@ -48,6 +55,23 @@ struct OutFrame {
     OutFrame(uint16_t m, const Bytes& b) : method(m), body(b) {}
 };
 
+// What a thumb-wheel press means, from what iDrive last told the KOMBI. listOpen / openForMs: the list is on the
+// display and has been for that long (a press that only just opened it does nothing: the driver has not seen the
+// cursor yet, and iDrive's group for that press may reach us before or after the press itself). *why says why not.
+enum PressAction { kPressNone = 0, kPressPrev = 1, kPressNext = 2 };
+enum { kPressSettleMs = 300 };
+inline int wheelPressAction(bool listOpen, uint32_t openForMs, int cursor, const char** why) {
+    const char* w = "";
+    int a = kPressNone;
+    if (!listOpen) w = "the cluster list was not open";
+    else if (openForMs < (uint32_t)kPressSettleMs) w = "the cluster list had only just opened";
+    else if (cursor == 0) a = kPressPrev;
+    else if (cursor == 2) a = kPressNext;
+    else w = "the cursor is on neither Previous title nor Next title";
+    if (why) *why = w;
+    return a;
+}
+
 class MediaList {
 public:
     enum Mode { kSlot = 0, kList = 1 };
@@ -55,7 +79,7 @@ public:
     explicit MediaList(Mode mode = kSlot, uint32_t index = kDefaultTextIndex, uint16_t ownClient = kOwnClient)
         : mode_(mode), own_(ownClient), base_(index), index_(index), show_(false), handle_(0), titleAt_(0),
           idriveTitle_(0), pending_(false), open_(false), sentValid_(false), sentId_(0), lists_(0), others_(0),
-          answered_(0), moved_(0) {}
+          answered_(0), moved_(0), cursor_(-1) {}
 
     // A message seen on the wire to the KOMBI. Frames to send are appended to out.
     void onSniffed(const SomeipMsg& m, std::vector<OutFrame>* out) {
@@ -86,11 +110,14 @@ public:
                 other_ = m.body;
                 list_.clear();
                 pending_ = false;
+                cursor_ = -1;                       // that list's cursor is not a previous / next choice
                 ++others_;
             }
         } else if (m.method == kMethodValue) {
             uint32_t v = 0;
             if (shownValue(m.body, &v)) open_ = v == kListModel;
+            unsigned row = 0;
+            if (!list_.empty() && cursorValue(m.body, &row)) cursor_ = (int)row;    // only the track list's cursor
             if (pending_ && values_.size() < 8) values_.push_back(m.body);     // the values of this group
         } else if (m.method == kMethodCommit) {
             if (!pending_ || kombinav::getU32(m.body, 0) != handle_) return;
@@ -124,6 +151,7 @@ public:
     unsigned answered() const { return answered_; }
     unsigned moved() const { return moved_; }
     bool open() const { return open_; }
+    int cursor() const { return cursor_; }      // the row iDrive's cursor is on (0 previous, 2 next), -1 = not known
     const Bytes& otherList() const { return other_; }
 
 private:
@@ -164,6 +192,7 @@ private:
     uint32_t sentId_;
     std::string sentTitle_;
     unsigned lists_, others_, answered_, moved_;
+    int cursor_;
 };
 
 // Where the frames come from: /dev/bpf on the car, a fake in the host test.
@@ -191,6 +220,9 @@ public:
     // The phone's current song and whether it is playing. Any thread, never blocks on I/O.
     void update(const std::string& song, bool playing);
     unsigned answered();
+    // A press of the thumb wheel just arrived (any thread): kPressPrev / kPressNext when the cluster list is up with
+    // its cursor on that row, kPressNone otherwise (*why then says why).
+    int wheelPress(std::string* why);
 
 private:
     static void* workerStub(void* self);
@@ -205,6 +237,9 @@ private:
     std::string title_;
     bool show_;
     unsigned answered_;
+    bool listOpen_;             // under mu_: what the worker last saw of iDrive's list, for wheelPress()
+    uint32_t openSinceMs_;
+    int cursor_;
 
     std::string host_, if_;
     uint16_t port_;

@@ -140,6 +140,18 @@ inline bool shownValue(const Bytes& b, uint32_t* value) {
     return true;
 }
 
+// The list's cursor: value model 0x71 (type 0x13, a 16-bit row number), sent in every group. Car captures
+// (2026-11-10): 2 after a thumb-wheel notch down, 0 after a notch up, never 1 - the middle row (the track itself) is
+// not selectable, so the cursor sits on "Previous title" (row 0) or "Next title" (row 2).
+static const uint32_t kCursorModel = 0x00000071;
+
+// A 0x0009 request body that sets kCursorModel: *row = the row the cursor is on.
+inline bool cursorValue(const Bytes& b, unsigned* row) {
+    if (b.size() != 24 || kombinav::getU32(b, 4) != kCursorModel || b[8] != 0x13) return false;
+    *row = ((unsigned)b[22] << 8) | b[23];
+    return true;
+}
+
 }  // namespace riclist
 }  // namespace nbt
 
