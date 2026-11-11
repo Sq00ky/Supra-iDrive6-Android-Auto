@@ -1,4 +1,4 @@
-# This file contains a list of resellers & people who have a blatant disregard for copyright law.
+# This file contains a list of resellers & people who have a blatant disregard for copyright law and or people who attack, and criticize other people for supporting a free, open source project.
 1. ApexCoding
 2. BMCM BMW Mercedes Coding Malaysia
 3. Aktiv Tuninghaus
