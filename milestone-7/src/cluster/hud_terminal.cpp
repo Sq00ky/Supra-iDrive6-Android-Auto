@@ -50,8 +50,8 @@ const char* submitResultName(SubmitResult r) {
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
 Core::Core(const Config& cfg)
-    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), routeOn_(false),
-      frameOff_(false),
+    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(cfg.initialNavActive),
+      routeOn_(cfg.initialNavActive), frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
@@ -110,6 +110,7 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
     if (!up) {
         if (!linkUp_) return;
         linkUp_ = false;          // self_ stays, so late answers to our old address are not taken for the navigation
+        if (cfg_.initialNavActive) { navActive_=true; routeOn_=true; frameOff_=false; sizes_.clear(); }
         refresh("link down", now);
         return;
     }
@@ -122,6 +123,8 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
     if (linkUp_ && self == self_) return;
     linkUp_ = true;
     self_ = self;
+    if (cfg_.initialNavActive) { navActive_=true; routeOn_=true; frameOff_=false; }
+    sizes_.clear();
     failed_ = false;
     dropWork(now);
     char why[48];
@@ -137,10 +140,12 @@ void Core::setHost(uint16_t host, uint32_t now) {
     else snprintf(why, sizeof(why), "no 82/00 host on a ring node in the registry");
     host_ = host;
     failed_ = false;
-    navActive_ = false;
-    routeOn_ = false;
+    navActive_ = cfg_.initialNavActive;
+    routeOn_ = cfg_.initialNavActive;
     frameOff_ = false;
+    sizes_.clear();
     recent_.clear();
+    echoes_.clear();
     dropWork(now);
     dropped_.clear();                          // answers from the old host are not ours to match
     refresh(why, now);
@@ -160,7 +165,7 @@ SubmitResult Core::submit(const Batch& b, uint32_t) {
     }
     for (size_t i = 0; i < b.calls.size(); ++i) {
         const Call& c = b.calls[i];
-        if (callOk(c, cfg_.handles)) continue;
+        if (callOk(c, cfg_.handles, cfg_.extendedCalls)) continue;
         ++stats_.refused;
         printf("[HudTerm] batch '%s' refused: call %u, %03X %s handle %u, %u bytes, breaks a limit\n", b.label.c_str(),
                (unsigned)i, c.fkt, fktName(c.fkt), c.handle(), (unsigned)c.payload.size());
@@ -221,11 +226,13 @@ bool Core::next(uint32_t now, most::Msg& out) {
     if (status_ != kReady || !haveCurrent_ || nextCall_ >= current_.calls.size()) return false;
     if (inFlight_.size() >= cfg_.maxInFlight) return false;
     const Call& c = current_.calls[nextCall_];
-    if (!buildCall(host_, c, tag_, cfg_.handles, out)) {   // checked at submit: only a host change could do this
+    if (!buildCall(host_, c, tag_, cfg_.handles, out, cfg_.extendedCalls)) {   // checked at submit: only a host change could do this
         fail("a queued call no longer builds", now);
         return false;
     }
     if (nextCall_ == 0) batchStartMs_ = now;
+    out.txType = c.txType >= 0 ? (uint32_t)c.txType : cfg_.txType;
+    if (cfg_.useFixedTag) out.hdrTag = cfg_.fixedTag;
     ++tag_;
     ++nextCall_;
     InFlight f;
@@ -234,6 +241,11 @@ bool Core::next(uint32_t now, most::Msg& out) {
     f.sentMs = now;
     inFlight_.push_back(f);
     recent_.add(c.fkt, f.handle, now);
+    if(cfg_.strictAnswers) {
+        Echo e; e.fkt=c.fkt; e.ms=now; e.payload=c.payload;
+        if(echoes_.size()>=128)echoes_.erase(echoes_.begin());
+        echoes_.push_back(e);
+    }
     ++stats_.calls;
     return true;
 }
@@ -266,11 +278,38 @@ void Core::onMessage(const most::View& m, uint32_t now) {
         return;
     }
     if (m.src != host_ && m.dst != host_) return;             // not this terminal
-    if (m.src == host_ && recent_.isCopy(m.fkt, m.data, m.len, now)) {
+    if (cfg_.acceptMirroredAnswers && m.src==host_ && ownEcho(m,now)) {
+        // Some NBT terminals mirror results only to the original navigation client.
+        // Accept only matching function+handle AND method-specific payload, never an arbitrary host packet.
+        onAnswer(m,now); ++stats_.copies; return;
+    }
+    if (!cfg_.strictAnswers && m.src == host_ && recent_.isCopy(m.fkt, m.data, m.len, now)) {
         ++stats_.copies;
         return;
     }
     onNav(m, now);
+}
+
+bool Core::ownEcho(const most::View& m,uint32_t now) const {
+    if(m.len<2)return false;
+    for(size_t i=echoes_.size();i>0;--i) {
+        const Echo& e=echoes_[i-1];
+        if(e.fkt!=m.fkt || now-e.ms>cfg_.replyMs || e.payload.size()<2 ||
+           e.payload[0]!=m.data[0] || e.payload[1]!=m.data[1])continue;
+        if(m.op==most::kOpErrorAck)return m.len>=3;
+        if(m.op!=most::kOpResultAck && m.op!=most::kOpStatus &&
+           m.op!=most::kOpProcessingAck && m.op!=most::kOpProcessing)return false;
+        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing)return true;
+        if(m.fkt==kGetSize)return m.len==7 && m.data[2]==1;
+        if(m.fkt==0xC05)return m.len==4 && e.payload.size()>=10 && m.data[2]==e.payload[9] && m.data[3]==1;
+        size_t n=e.payload.size();
+        if(m.fkt==kTextareaSetText) {
+            if(n>=4 && e.payload[2]==1 && m.len==n-1) --n;
+            else if(n>=5 && e.payload[2]==0 && m.len==n-2) n-=2;
+        }
+        if(m.len==n && !memcmp(m.data,&e.payload[0],n))return true;
+    }
+    return false;
 }
 
 // ErrorAck (9) carries the handle first, like every answer to an Ack method; Error (F) does not, so it matches on the
@@ -278,6 +317,10 @@ void Core::onMessage(const most::View& m, uint32_t now) {
 // an answer to a call we dropped a moment ago is let go (see the header).
 void Core::onAnswer(const most::View& m, uint32_t now) {
     if (m.op == most::kOpProcessingAck || m.op == most::kOpProcessing) return;   // still working: the timeout stands
+    if (cfg_.strictAnswers && m.len < 2) { fail("short method answer", now); return; }
+    if (cfg_.strictAnswers && (m.op==most::kOpResultAck || m.op==most::kOpStatus) && !ownEcho(m,now)) {
+        fail("method answer does not match the sent payload",now);return;
+    }
     bool error = m.op != most::kOpResultAck && m.op != most::kOpStatus;
     bool byHandle = m.op != most::kOpError && m.len >= 2;
     uint16_t h = byHandle ? rdBe16(m.data) : 0;
@@ -306,6 +349,12 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
         ++stats_.strays;
         return;
     }
+    if (cfg_.strictAnswers && m.fkt == kGetSize && m.len == 7 && m.data[2] == 1) {
+        Size sz; sz.handle=h; sz.width=rdBe16(m.data+3); sz.height=rdBe16(m.data+5);
+        if (!sz.width || !sz.height) { fail("zero image size", now); return; }
+        size_t k=0; while(k<sizes_.size() && sizes_[k].handle!=h) ++k;
+        if(k==sizes_.size()) sizes_.push_back(sz); else sizes_[k]=sz;
+    } else if (m.fkt == kGetSize && cfg_.strictAnswers) { fail("unexpected ImageGetSize format", now); return; }
     ++stats_.answers;
     finishIfDone(now);
 }
@@ -370,6 +419,11 @@ uint32_t Core::msUntilDeadline(uint32_t now) const {
     return d;
 }
 
+bool Core::imageSize(uint16_t h, uint16_t& w, uint16_t& height) const {
+    for(size_t i=0;i<sizes_.size();++i) if(sizes_[i].handle==h) { w=sizes_[i].width; height=sizes_[i].height; return true; }
+    return false;
+}
+
 bool Core::takeStatusChange(Status& s) {
     if (!changed_) return false;
     changed_ = false;
@@ -381,7 +435,7 @@ bool Core::takeStatusChange(Status& s) {
 
 HudTerminal::HudTerminal(const Config& cfg)
     : core_(cfg), client_(NULL), send_(NULL), sendUser_(NULL), statusCb_(NULL), statusUser_(NULL), running_(false),
-      stop_(false) {
+      stop_(false), registeredTag_(cfg.useFixedTag && cfg.fixedTag == 0xffffu) {
     memset(&lastHealth_, 0, sizeof(lastHealth_));
     pthread_mutex_init(&lock_, NULL);
     pthread_condattr_t a;
@@ -493,6 +547,12 @@ bool HudTerminal::waitIdle(uint32_t ms) {
     }
 }
 
+bool HudTerminal::imageSize(uint16_t h, uint16_t& w, uint16_t& height) const {
+    pthread_mutex_lock(&lock_);
+    bool ok=core_.imageSize(h,w,height);
+    pthread_mutex_unlock(&lock_);return ok;
+}
+
 TerminalStats HudTerminal::stats() const {
     pthread_mutex_lock(&lock_);
     TerminalStats s = core_.stats();
@@ -552,7 +612,7 @@ void HudTerminal::regTramp(const std::vector<most::RegistryEntry>& reg, void* se
 
 bool HudTerminal::clientSend(const most::Msg& m, void* self) {
     HudTerminal* t = static_cast<HudTerminal*>(self);
-    return t->client_ && t->client_->send(m);
+    return t->client_ && t->client_->send(m, t->registeredTag_);
 }
 
 void* HudTerminal::threadMain(void* self) {

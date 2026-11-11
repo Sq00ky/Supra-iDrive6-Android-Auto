@@ -61,6 +61,8 @@ enum Status { kOffline, kReady, kNavActive, kFailed };
 const char* statusName(Status s);
 
 struct Config {
+    uint32_t txType, fixedTag;
+    bool useFixedTag, initialNavActive, strictAnswers, acceptMirroredAnswers, extendedCalls;
     HandleSet handles;       // the only handles calls may use
     int navFrame;            // the factory navigation's frame instance: SetVisibility(navFrame, 0) ends a route
     uint32_t replyMs;        // per call, and the copy window
@@ -68,7 +70,9 @@ struct Config {
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false) {}
+    Config() : txType(0), fixedTag(0), useFixedTag(false), initialNavActive(false), strictAnswers(false),
+               acceptMirroredAnswers(false), extendedCalls(false), navFrame(-1), replyMs(1500), navQuietMs(5000),
+               maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
 struct Batch {
@@ -115,6 +119,7 @@ public:
     bool busy() const { return haveCurrent_ || havePending_; }
     bool waiting() const { return havePending_; }  // a batch waits behind the one in progress
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
+    bool imageSize(uint16_t handle, uint16_t& width, uint16_t& height) const;
     uint16_t host() const { return host_; }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
@@ -123,6 +128,11 @@ public:
     TerminalStats stats() const { return stats_; }
 
 private:
+    struct Echo { uint16_t fkt; uint32_t ms; std::vector<uint8_t> payload; };
+    std::vector<Echo> echoes_;
+    bool ownEcho(const most::View& m, uint32_t now) const;
+    struct Size { uint16_t handle, width, height; };
+    std::vector<Size> sizes_;
     struct InFlight { uint16_t fkt, handle; uint32_t sentMs; };
 
     void onAnswer(const most::View& m, uint32_t now);
@@ -159,6 +169,7 @@ private:
 class Port {
 public:
     virtual ~Port() {}
+    virtual bool imageSize(uint16_t, uint16_t&, uint16_t&) const { return false; }
     virtual SubmitResult submit(const Batch& b) = 0;
     virtual Status status() const = 0;
     virtual uint32_t epoch() const = 0;
@@ -193,6 +204,7 @@ public:
     uint32_t epoch() const;
     bool waiting() const;
     bool waitIdle(uint32_t ms);
+    bool imageSize(uint16_t handle, uint16_t& width, uint16_t& height) const;
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop
 
@@ -219,7 +231,7 @@ private:
     mutable pthread_mutex_t lock_;
     pthread_cond_t cond_;
     pthread_t thread_;
-    bool running_, stop_;
+    bool running_, stop_, registeredTag_;
     TerminalStats lastHealth_;
 };
 

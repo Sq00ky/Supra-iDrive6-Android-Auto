@@ -1,0 +1,180 @@
+# Experimental BMW 6WB guidance over MOST HUDTerminal
+
+This backend adds `NBT_CLUSTER=6wb` to the existing Android Auto navigation
+pipeline. It targets F-series BMWs with NBT EVO and an original 6WB, initially
+an F31 LCI (2018), without changing the J29 or 6WA backend defaults.
+**It has not been compiled with the QNX ARM toolchain or tested on that car.**
+
+## Implementation and provenance
+
+The path is unchanged: Android Auto channel 10 → `NavMessages`/`NavView` →
+navigation state machine → `ClusterDisplay` → `Hud6wbDisplay` → `HudTerminal`
+→ `most::Client` → the existing NBT EVO DSI client. This extends Tom-Pryor's
+upstream PR #134 implementation rather than importing another MOST transport.
+The subsequent upstream 6WA fixes and time-based approach logic are retained.
+The new 6WB selection shows guidance immediately, with full distance text;
+the other selections retain their upstream approach settings.
+
+The profile and wire-format references come from
+[JayJay3071/nbt-android-auto](https://github.com/JayJay3071/nbt-android-auto),
+commit `0fb9fd2759e8cea8790465cd9ed8b60504eb5f09`:
+`src/android_auto/knob/nbt_cluster.cpp`,
+`src/android_auto/knob/ref/most/client.cpp` and `docs/CLUSTER-HUDTERMINAL.md`.
+That project's README reports operation on an F07 (2014), NBT **x86**;
+this is not evidence of operation on F31/NBT EVO ARM.
+The outline-arrow geometry and RLE32 encoding adapt that work. Its standalone
+application, x86 dependencies, hard-coded destination and benchmark commands
+are not imported. The existing PolyForm Noncommercial 1.0.0 license and Required
+Notices apply; retain these attributions when distributing the adapted code.
+
+| File | Responsibility |
+| --- | --- |
+| `src/cluster/hud6wb_profile.hpp` | Explicit handles, dimensions, placement and limits |
+| `src/cluster/hud6wb_resources.hpp` | Query and verify documented image surfaces |
+| `src/cluster/hud6wb_display.*` | Rendering, buffering, shadow logging and cleanup |
+| `src/cluster/hud6wb_artwork.*` | Maneuver outlines, roundabouts, exits and lanes |
+| `src/cluster/hud6wb_codec.*` | Text, distance bar, ABGR RLE32 and optional road shields |
+| `tests/test_hud6wb.cpp` | Host tests with fake MOST/DSI and a synthetic cluster |
+
+## Selection and shadow mode
+
+```text
+NBT_CLUSTER=6wb
+NBT_HUDTERM=log
+NBT_KOMBI_NAV=1
+```
+
+The existing iDrive turn-arrows setting can be used instead of
+`NBT_KOMBI_NAV=1`. For 6WB only, every `NBT_HUDTERM` value except the exact
+string `on`, including an unset variable, means **shadow**. It renders the
+indications and logs complete intended payloads, including size queries and
+bitmaps, without submitting HUDTerminal calls or acquiring send rights.
+It leaves the shown-picture marker untouched. The observer still registers
+and subscribes to DSI/MOST: this is not a claim of zero local IPC traffic.
+
+`NBT_HUDTERM=on` explicitly opts into the experimental live path. It does not
+bypass resource validation or OEM priority. No configuration files are written
+by selecting this backend, and no installer is provided.
+
+## Data and layout
+
+| Role | Handle(s) | Dimensions reported by the reference |
+| --- | --- | --- |
+| Navigation frame | `0x17` | 309 × 330 |
+| Upper images | `0x18/0x19` | 305 × 44 |
+| Street, distance, unit | `0x1A/0x1B/0x1C` | Text instances |
+| Main perspective drawing | `0x1F/0x20` | 221 × 158 |
+| Lane images | `0x23/0x24` | 283 × 40 |
+| Distance bar | `0x35` | 28 × 113 |
+
+These are logical navigation resources, **not** the physical panel resolution
+or permission to draw over the whole cluster. They are an experimental profile,
+not measurements of the target F31. No critical instrument regions are targeted.
+The main glyph placement below the perspective horizon needs vehicle validation.
+
+Implemented inputs are the current AA maneuver, street, distance/unit, lane
+directions/highlights, roundabout angle and exit number (when present), plus a
+second-step icon only when a second AA step exists. A missing roundabout angle
+does not produce an invented exit direction. No second-step distance, speed
+limit, ETA or other unavailable data is synthesized. Invalid lane shapes hide
+the lane row. `NBT_KOMBI_NAV_LANES=0` disables it.
+
+Text is converted to ISO-8859-15 with bounded lengths and replacement of
+unrepresentable characters. The bar uses measured distance, full at/above the
+profile's 1000 m range and hidden when distance is unknown. Main, lane and upper
+images have separate buffer pairs; distance-only updates do not flip them.
+
+Road-shield bitmap generation is implemented, but inference from explicit
+`A 45`/`B 45` road prefixes is disabled unless `NBT_6WB_ROAD_SHIELDS=1`.
+The blue/yellow design is a German-style heuristic, not structured AA sign data
+or a universal road classification. No BMW bitmap assets are included.
+
+## Transport and fail-closed behavior
+
+The recipient is resolved from the MOST registry key `0x8200`; `0x0101` is not
+assumed. The sender and return-routing header tag come from DSI registration.
+6WB calls use FBlock `82/00`, StartResultAck (`6`), `varTag=1`, `varVal=0`,
+vector `txType=4` and bitmap `txType=0`. Registered header tags and request
+padding are opt-ins; the existing 6WA tag/transport defaults are unchanged.
+
+Live operation requires all of the following:
+
+1. OEM activity starts as unknown/active. Observe the factory switching frame
+   `0x17` off, then five seconds of quiet, before submitting even size queries.
+   A timeout alone never declares the OEM navigation idle. A reconnect/host
+   change requires a fresh observed route end.
+2. Query the eight documented image handles with `ImageGetSize` (`0xC04`,
+   `[handle BE16][01]`). Require acknowledged positive dimensions exactly
+   matching the selected profile before drawing. Text instances are not queried.
+3. Send only whitelisted functions/handles, with one call in flight. Do not
+   replace pending drawing batches or reuse their buffer state prematurely.
+4. Yield when foreign navigation traffic is observed; drop queued work without
+   sending cleanup over the OEM navigation. Correlate replies by method,
+   handle and method-specific payload, including narrowly matched mirrored
+   replies. Unexpected replies, timeouts and ErrorAck stop drawing.
+
+No instance allocation, resolution switching, handle scan or guessed session
+initialization is attempted. Error `0x41` is not assigned an unproven meaning
+and does not trigger a reset to force access. Cleanup waits for acknowledgements
+and is withheld when ownership/readiness is uncertain. Crash/SIGKILL cleanup
+cannot be guaranteed; the existing marker mechanism remains in use.
+
+The protocol does not let the observer distinguish identical requests from
+two clients with absolute certainty. A command already in flight cannot be
+withdrawn atomically when OEM activity begins. This is conservative arbitration,
+not a guarantee of exclusive ownership.
+
+Bitmap calls (`0xC05`) contain a complete surface, format 1, one application
+segment, ABGR RLE32 and padding. Payloads over 4096 bytes are omitted, never
+truncated. Existing RX reassembly is reused; async bitmap transport and large
+application-level TX segmentation remain disabled pending EVO evidence.
+There is no live map or arbitrary full-panel drawing.
+
+## Build and validation
+
+No new proprietary dependency is introduced. Use the existing QNX 6.5 ARMv7LE
+Makefile and a valid SDK/license, with `QNX_HOST`, `QNX_TARGET` and SDK `PATH`
+configured for the actual installation:
+
+```sh
+qcc -V
+cd milestone-7
+make QCC="$QNX_HOST/usr/bin/qcc" TARGET_ARCH=-Vgcc_ntoarmv7le_cpp nbt-aad
+file nbt-aad
+readelf -h -A -l nbt-aad
+```
+
+The inherited ABI flags are `-march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp`;
+the qcc C++ setting is `-Wc,-std=gnu++0x`. Target libraries remain a2i_client,
+socket, ssl, crypto, screen, usbdi, ang-c++ and m, plus the existing runtime-loaded
+BMW DSI library `libsys_dsi_colibry.cpp-ne.so.8` and its dependencies.
+No proprietary libraries or binaries are added. Do not use `make all` when
+only the daemon is wanted: it also builds plugins and tools.
+
+Host verification uses Linux g++, fake transports and synthetic inputs:
+
+```sh
+make -C milestone-7/tests check
+```
+
+The new tests cover text/RLE round trips, geometry, payloads, buffer/visibility
+sequences, mismatched resources, registered DSI headers, replies, timeouts,
+OEM priority, reconnection and zero HUDTerminal submissions in default/log
+mode. Existing 6WA, J29 golden and MOST tests are retained. C++98 syntax checks
+and an ARM Makefile dry-run are additional checks, not a QNX compilation.
+
+Preparation results on Linux: 71 normal host tests (70 C++ and one Python) passed, including the new
+6WB test and the unchanged 6WA/J29 regressions. The aggregate `check` command
+returned failure because this container disallows `setarch -R`; the same
+ThreadSanitizer lifecycle binary passed when run directly with
+`TSAN_OPTIONS=halt_on_error=1`. The schema and 32-bit host tests were skipped
+because `protoc` and a `-m32` toolchain are absent. C++98 syntax checks passed
+for the changed cluster/MOST implementation, as did `git diff --check`.
+Make/CMake source lists were checked and `make -n nbt-aad` included all new
+sources. Neither `cmake` nor `qcc` is available here: CMake configuration and
+QNX ARM compilation have not been completed.
+
+Outstanding vehicle work: verify F31 handles/dimensions, route-end visibility,
+return routing, method reply formats, access permissions, palette/font,
+perspective placement and bitmap behavior. Until then, this contribution is
+implemented and host-tested software, **not vehicle-confirmed 6WB support**.

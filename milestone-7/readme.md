@@ -861,6 +861,8 @@ Leave these unset unless you are testing.
 | `NBT_CARPLAY_INI` | Read a different `carplay.ini` (never the factory template in `/opt/conn/data/carplay/`) |
 | `NBT_CTL_PORT` | Control port (default 52790) |
 | `NBT_KOMBI_NAV` | `1` / `0` forces the cluster/HUD arrows on / off, whatever the menu checkbox says (default: the checkbox) |
+| `NBT_CLUSTER` | Cluster backend: `j29` (default), `6wa`, or experimental `6wb`. See [BMW 6WB guidance](docs/BMW_6WB.md) for the unverified F31 profile and required resource checks |
+| `NBT_HUDTERM` | `log` computes/logs HUDTerminal commands without sending them. For `6wb`, shadow is the default and only the exact value `on` enables the guarded live path. Existing `6wa` defaults are unchanged |
 | `NBT_KOMBI_NAV_APPROACH` | When a maneuver shows: `time` (default; by the phone's seconds to it), `distance` (within `NBT_KOMBI_NAV_APPROACH_MI`, hidden again a little further out) or `off` (at once) |
 | `NBT_KOMBI_NAV_WARN_S`, `NBT_KOMBI_NAV_MAIN_S` | `time`: seconds before the maneuver it shows (default `50`, `10`..`120`) and is shown again (default `20`, `0`..`60`, below the first; `0` = never again). Shown again turns the 6WA's nav panel back on, if it was dismissed with the stalk button |
 | `NBT_KOMBI_NAV_MWAY_WARN_M`, `NBT_KOMBI_NAV_MWAY_MAIN_M` | `time`: off-ramps and forks also show this many metres before them (default `2000`) and again at (default `1000`), `200`..`5000` |

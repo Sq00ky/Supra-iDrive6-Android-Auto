@@ -95,7 +95,7 @@ public:
 
     // Sends one command (see the top of this file), from any thread. m.src is ignored: the registered address is used.
     // False when refused here or not handed to the server; the answer, if any, arrives on a route like any message.
-    bool send(const Msg& m);
+    bool send(const Msg& m, bool registeredHeaderTag = false);
 
     // One line with the counters since the last call, so a silent client still shows. From main's loop, every 60 s.
     void logHealth();

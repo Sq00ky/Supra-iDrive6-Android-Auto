@@ -190,7 +190,7 @@ bool Client::notify(DsiClient* c, uint32_t attr) {
 
 // The DSI library's comment says a send belongs on the connection thread. Sending from another thread, with one lock
 // around every send, is what tools/hud_probe did on the car, and the cluster answered every call.
-bool Client::send(const Msg& m) {
+bool Client::send(const Msg& m, bool registeredHeaderTag) {
     bool allowed = false;
     uint16_t key = registryKey(m.fblock, m.inst);
     for (int i = 0; i < nSendKeys_; ++i)
@@ -209,10 +209,12 @@ bool Client::send(const Msg& m) {
 
     Msg out = m;
     out.src = self;
+    if (registeredHeaderTag) out.hdrTag = client; // JayJay: return routing tag, scoped opt-in for 6WB
     std::vector<uint8_t> req;
     putLe32(req, client);
     std::vector<uint8_t> body = buildMessage(out);
     req.insert(req.end(), body.begin(), body.end());
+    if (registeredHeaderTag) while (req.size() % 4) req.push_back(0);
     bool ok = request(&dsi_, kReqProcessMessage, req);
     pthread_mutex_lock(&lock_);
     if (ok) ++total_.sent;
