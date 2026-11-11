@@ -486,6 +486,65 @@ static void testRenewedStep() {
     }
 }
 
+// A DEPART at 0 m (route start, each reroute) is never drawn: the arrow shown stays through the reroute, and goes
+// after the grace time if nothing else comes.
+static void testDepart() {
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(1, "TOWARDS START RD");
+        n.pos(0, 0);
+        r.feed(n.m, 0.0);
+        r.feed(n.m, 0.25);
+        assert(!r.core.shown() && r.k.count() == 0 && countLog("DEPART") == 1 && hasLog("DEPART at 0 m: not shown"));
+        n.step(8, "FIRST RD");
+        n.pos(400, 20);
+        r.feed(n.m, 1.0);
+        assert(r.core.shown() && r.core.current().aa_type == 8 && countLog("SHOW ") == 1);
+        assert(!r.core.takeFallback());                              // the DEPART had no seconds: not a fallback
+        // a reroute: off, then a DEPART, then the new route's first turn
+        n.guidance(2);
+        r.feed(n.m, 2.0);
+        n.guidance(1);
+        n.step(1, "TOWARDS NEW RD");
+        n.pos(0, 0);
+        r.feed(n.m, 2.5);
+        assert(r.core.shown() && r.core.current().aa_type == 8 && countLog("SHOW ") == 1 && countLog("CLEAR") == 0);
+        assert(hasLog("DEPART at 0 m: not shown, the arrow shown stays"));
+        n.step(7, "NEW RD");
+        n.pos(300, 15);
+        r.feed(n.m, 3.0);
+        assert(r.core.shown() && r.core.current().aa_type == 7 && countLog("SHOW ") == 2);
+    }
+    // a DEPART that stays: the arrow shown goes after the grace time, counted from guidance off
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(8, "FIRST RD");
+        n.pos(400, 20);
+        r.feed(n.m, 0.0);
+        n.guidance(2);
+        r.feed(n.m, 1.0);
+        n.guidance(1);
+        n.step(1, "TOWARDS NEW RD");
+        n.pos(0, 0);
+        r.feed(n.m, 2.0);
+        r.feed(n.m, 8.9);
+        assert(r.core.shown());
+        r.feed(n.m, 9.1);
+        assert(!r.core.shown() && hasLog("CLEAR (depart only)"));
+    }
+    // a DEPART with a distance of its own is drawn as before
+    {
+        Rig r;
+        Nav n;
+        n.step(1, "TOWARDS START RD");
+        n.pos(200, 15);
+        r.feed(n.m, 0.0);
+        assert(r.core.shown() && countLog("DEPART") == 0);
+    }
+}
+
 int main() {
     // in-place (default on the car): the first maneuver is the full graph; each next maneuver is the template's own
     // maneuver-0 update block (no route-start state 1), patched; a guidance gap (reroute) gets the full graph again;
@@ -1013,6 +1072,7 @@ int main() {
     yieldThroughChild(7u, -1);                                               // nothing starts: no yield, AA carries on
     testTimeApproach();
     testRenewedStep();
+    testDepart();
     printf("test_kombi_nav OK\n");
     return 0;
 }

@@ -49,7 +49,7 @@ Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
     : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
       no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning), have_next_(false), next_since_(0),
       stage_(kHidden), timed_(false), remind_(false), fallback_(false), drawn_step_seq_(0), has_min_m_(false),
-      min_m_(0), renew_(false) {
+      min_m_(0), renew_(false), depart_(false) {
     d_.setSettings(s);
     d_.setLog(log, log_user);
 }
@@ -171,6 +171,15 @@ bool Core::distanceHold(const NavView& v) {
 
 void Core::step(const NavView* in, double now, const char* why_none) {
     if (stop_ != kRunning) return;
+    // A DEPART at 0 m counts as no guidance: after a reroute the arrow shown stays through it (and goes after grace_s,
+    // as in any gap) instead of a straight arrow at 0 yd for a second, drawn and then replaced or cleared.
+    bool depart = in && departHere(*in);
+    if (depart) {
+        if (!depart_) log("DEPART at 0 m: not shown%s", has_shown_ ? ", the arrow shown stays" : "");
+        in = NULL;
+        why_none = "depart only";
+    }
+    depart_ = depart;
     if (!in) {
         no_dist_ = false;
         if (!has_shown_) return;

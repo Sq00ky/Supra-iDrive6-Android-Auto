@@ -440,6 +440,14 @@ inline bool distanceMetres(const NavView& v, double& m) {
     return true;
 }
 
+// Maneuver TYPE_DEPART at 0 m: what Maps sends for about a second when guidance starts or after each reroute, before
+// the first real turn. Nothing to show (a straight arrow at 0 yd). One with no distance yet is left to the usual
+// wait for a distance.
+inline bool departHere(const NavView& v) {
+    double m;
+    return v.aa_type == 1 && distanceMetres(v, m) && m < 1.0;
+}
+
 // UTF-8 prefix of at most n code points (never splits a character).
 inline std::string utf8Prefix(const std::string& s, size_t n) {
     size_t i = 0, cps = 0;

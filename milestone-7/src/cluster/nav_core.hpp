@@ -112,6 +112,7 @@ private:
     bool has_min_m_;
     double min_m_;              // the nearest the maneuver shown got since it was drawn
     bool renew_;
+    bool depart_;               // the last step was a DEPART at 0 m (logged once per run of them)
 };
 
 // iDrive route detection from the system log (NavNBTEvoController / MapViewer lines, car-seen 2026-10-31):
