@@ -206,7 +206,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
-> **v1.9.61-kombimedia (the title is confirmed on the car with v1.9.60, the thumb-wheel press of v1.9.61 is not car-tested;
+> **v1.9.61-kombimedia (title and thumb-wheel press confirmed on the car, GR Supra, 2026-11-10;
 > off unless `NBT_KOMBI_MEDIA=1` is in `nbt-aad.env`): the Android Auto
 > track title in the instrument cluster's track list (GR Supra).** With the phone's music on the car's own audio source
 > (Use Native Audio), the list the thumb wheel brings up - Previous title / the track / Next title - kept showing the
@@ -241,6 +241,8 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > mapped to anything: it moves iDrive's cursor. Needs "Media Controls for LCI Steering Wheels" like the skip buttons.
 > `NBT_KOMBI_MEDIA_PRESS=0` turns it off, `=<fkt[:value]>` names another function. Log:
 > `[Media] thumb-wheel press on Next title -> AA key 87`, or `[KombiMedia] thumb-wheel press: nothing sent (<why>)`.
+> v1.9.61 on the car (2026-11-10): eight presses on "Next title" and four on "Previous title" each skipped on the
+> phone, and the list showed the new title.
 >
 > **v1.9.57-cpcompat + rhmiapp-54-cpcompat (CarPlay fixes from v1.9.48-v1.9.50, good feedback from the #156 testers;
 > the checkbox confirmed on the car on this build): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
