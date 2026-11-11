@@ -3,6 +3,6 @@
 2. BMCM BMW Mercedes Coding Malaysia
 3. Aktiv Tuninghaus
 4. APEX Garaj Timişoara
-5. Codemybm Téch
+5. Codemybm Téch / CodeMyBM_UK
 
 If you find any other resellers, please submit an issue. They'll be listed here for all eternity.
