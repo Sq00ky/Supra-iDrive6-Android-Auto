@@ -382,6 +382,23 @@ static void testTimeApproach() {
         r.feed(n.m, 2.0);
         assert(r.core.shown() && countLog("SHOW ") == 1);
     }
+    // a shown turn's position at the turn without seconds: not a fallback (the phone sends them, just not at 0 m)
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(7, "AT RD");
+        n.pos(300, 15);
+        r.feed(n.m, 0.0);
+        assert(r.core.shown());
+        n.pos(0, -1);                                                // no seconds field (-1: never > 0)
+        r.feed(n.m, 1.0);
+        n.pos(40, -1);
+        r.feed(n.m, 1.5);
+        assert(r.core.shown() && !r.core.takeFallback());
+        n.pos(60, -1);                                               // further out it still counts
+        r.feed(n.m, 2.0);
+        assert(r.core.takeFallback());
+    }
     // a route's first step before any position: not a fallback (no "no seconds" line for every route start)
     {
         Rig r(timeApproach());

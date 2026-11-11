@@ -124,7 +124,9 @@ bool Core::timeHold(const NavView& v, double now) {
     double m = 0;
     bool has_m = distanceMetres(v, m), mway = motorwayTurn(v.aa_type) && has_m;
     if (!v.has_step_s && !mway) {                     // nothing to time it by
-        if (v.pos_seq != 0) fallback_ = true;         // a position without seconds (not a step still waiting for one)
+        // A position without seconds (not a step still waiting for one), away from the turn: at it the phone often
+        // leaves them out, which says nothing about whether it sends them.
+        if (v.pos_seq != 0 && (!has_m || m >= kNoSecondsM)) fallback_ = true;
         if (same && timed_) return false;             // shown by time: one position without seconds doesn't hide it
         return distanceHold(v);                       // the distance rule
     }
