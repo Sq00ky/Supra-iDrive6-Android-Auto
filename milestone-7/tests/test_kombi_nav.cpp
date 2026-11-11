@@ -56,7 +56,14 @@ static bool hasLog(const char* s) {
 }
 
 // The tests below pin the full-graph path (NBT_KOMBI_NAV_INPLACE=0); the in-place path has its own tests (inPlace()).
-static Settings noApproach() { Settings s; s.approach_mi = 0; s.min_update_s = 0; s.inplace = 0; return s; }
+static Settings noApproach() {
+    Settings s;
+    s.approach = kApproachOff;
+    s.approach_mi = 0;
+    s.min_update_s = 0;
+    s.inplace = 0;
+    return s;
+}
 static Settings inPlace(int mode = 1) { Settings s = noApproach(); s.inplace = mode; return s; }
 
 // method + model type of every frame (0x0004 init has no model)
@@ -201,6 +208,198 @@ static void yieldThroughChild(unsigned skip, int expect) {
     unlink(flag.c_str());
     unlink(shown.c_str());
     rmdir(dir);
+}
+
+// The daemon keeps the newest message of each kind; this does the same, so a new step can meet the old position.
+struct Nav {
+    NavMessages m;
+    Nav() { Bytes s = status(1); m.store(0x8003, &s[0], s.size()); }
+    void step(int type, const char* road) { Bytes ns = navState(type, road); m.store(0x8006, &ns[0], ns.size()); }
+    void pos(int64_t metres, int secs) {
+        std::string d;
+        int u;
+        mapsDisplay((double)metres, d, u);
+        Bytes cp = curPos(metres, d, u, secs);
+        m.store(0x8007, &cp[0], cp.size());
+    }
+};
+
+static Settings timeApproach() { Settings s; s.min_update_s = 0; s.inplace = 0; return s; }   // the default rule
+
+// kApproachTime (the default): warned by the phone's seconds, shown again at the main prompt, kept until the next
+// maneuver; off-ramps and forks by distance too; a new step judged only on a position of its own; no seconds = the
+// distance rule.
+static void testTimeApproach() {
+    assert(Settings().approach == kApproachTime);
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.pos(1400, 70);
+        n.step(8, "TIME RD");
+        r.feed(n.m, 0.0);                                            // first seen: waits for a position of its own
+        n.pos(1300, 65);
+        r.feed(n.m, 1.0);
+        assert(!r.core.shown() && r.k.count() == 0 && countLog("APPROACH") == 0);
+        n.pos(1000, 50);
+        r.feed(n.m, 2.0);
+        assert(r.core.shown() && hasLog("WARN type 8: 50 s, 1000 m (time)"));
+        n.pos(700, 35);
+        r.feed(n.m, 3.0);
+        assert(countLog("MAIN") == 0);
+        n.pos(380, 19);
+        r.feed(n.m, 4.0);
+        assert(countLog("MAIN") == 1 && hasLog("MAIN type 8: 19 s, 380 m"));
+        n.pos(300, 70);                                              // stuck in traffic: the seconds go up
+        r.feed(n.m, 5.0);
+        assert(r.core.shown() && countLog("APPROACH") == 0);
+        n.pos(200, 15);
+        r.feed(n.m, 6.0);
+        assert(countLog("MAIN") == 1);                               // once per maneuver
+        // the turn is made: the next step arrives before its own position, which still says 10 m / 1 s
+        n.pos(10, 1);
+        r.feed(n.m, 7.0);
+        n.step(7, "NEXT ST");
+        r.feed(n.m, 7.25);
+        assert(r.core.shown() && r.core.current().road == "TIME RD" && countLog("SHOW ") == 1);
+        n.pos(1800, 90);                                             // its own position: far, so hidden
+        r.feed(n.m, 7.5);
+        assert(!r.core.shown() && hasLog("CLEAR (approach)"));
+        n.pos(950, 48);
+        r.feed(n.m, 8.5);
+        assert(r.core.shown() && r.core.current().road == "NEXT ST" && hasLog("WARN type 7: 48 s, 950 m (time)"));
+        // a short step: due for its main prompt when first judged, so no reminder later
+        n.step(5, "SHORT AVE");
+        r.feed(n.m, 9.0);
+        n.pos(150, 12);
+        r.feed(n.m, 9.5);
+        assert(r.core.current().road == "SHORT AVE");
+        assert(hasLog("WARN type 5: 12 s, 150 m (time), main prompt already due"));
+        n.pos(100, 8);
+        r.feed(n.m, 10.0);
+        assert(countLog("MAIN") == 1);
+        assert(!r.core.takeFallback());
+    }
+    // a new step that never gets a position of its own is judged on the old one after 3 s
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(8, "A RD");
+        n.pos(400, 20);
+        r.feed(n.m, 0.0);
+        n.pos(390, 19);
+        r.feed(n.m, 0.5);
+        assert(r.core.shown());
+        n.step(7, "B RD");
+        r.feed(n.m, 1.0);
+        r.feed(n.m, 3.9);
+        assert(r.core.current().road == "A RD");
+        r.feed(n.m, 4.1);
+        assert(r.core.current().road == "B RD");
+    }
+    // motorway: an off-ramp is warned at 2 km and gets its main prompt at 1 km, whatever the seconds say
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(24, "EXIT 9");
+        n.pos(2100, 130);
+        r.feed(n.m, 0.0);
+        n.pos(2050, 125);
+        r.feed(n.m, 1.0);
+        assert(!r.core.shown());
+        n.pos(1990, 120);
+        r.feed(n.m, 2.0);
+        assert(r.core.shown() && hasLog("WARN type 24: 120 s, 1990 m (motorway distance)"));
+        n.pos(990, 60);
+        r.feed(n.m, 3.0);
+        assert(hasLog("MAIN type 24: 60 s, 990 m"));
+    }
+    // an on-ramp is not a motorway turn: time only
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(16, "RAMP RD");
+        n.pos(1900, 100);
+        r.feed(n.m, 0.0);
+        n.pos(1850, 98);
+        r.feed(n.m, 1.0);
+        assert(!r.core.shown());
+    }
+    // no main prompt with main_s 0
+    {
+        Settings s = timeApproach();
+        s.main_s = 0;
+        Rig r(s);
+        Nav n;
+        n.step(8, "NO MAIN RD");
+        n.pos(800, 40);
+        r.feed(n.m, 0.0);
+        n.pos(780, 39);
+        r.feed(n.m, 1.0);
+        assert(r.core.shown());
+        n.pos(100, 5);
+        r.feed(n.m, 2.0);
+        assert(countLog("MAIN") == 0 && hasLog("WARN type 8: 40 s, 800 m (time)"));
+    }
+    // an unnamed road and a road longer than the cluster's 40 characters: the shown turn still counts as the same one
+    // (warned once, its main prompt, kept when the seconds go up)
+    for (int k = 0; k < 2; ++k) {
+        Rig r(timeApproach());
+        Nav n;
+        const char* road = k == 0 ? "" : "AN INVENTED ROAD NAME THAT GOES ON FOR WELL OVER FORTY CHARACTERS";
+        n.step(8, road);
+        n.pos(900, 45);
+        r.feed(n.m, 0.0);
+        assert(r.core.shown() && countLog("WARN") == 1);
+        n.pos(800, 40);
+        r.feed(n.m, 1.0);
+        n.pos(400, 19);
+        r.feed(n.m, 2.0);
+        assert(countLog("WARN") == 1 && countLog("MAIN") == 1);
+        n.pos(350, 60);
+        r.feed(n.m, 3.0);
+        assert(r.core.shown() && countLog("APPROACH") == 0 && countLog("SHOW ") == 1);
+    }
+    // a shown turn whose position comes once without seconds stays (the 1 mi rule would hide it at 1.15 mi)
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(8, "FAST RD");
+        n.pos(1800, 48);
+        r.feed(n.m, 0.0);
+        assert(r.core.shown());
+        n.pos(1900, 0);
+        r.feed(n.m, 1.0);
+        assert(r.core.shown() && countLog("APPROACH") == 0);
+        assert(r.core.takeFallback());                               // still noted: a position without seconds
+        n.pos(1700, 45);
+        r.feed(n.m, 2.0);
+        assert(r.core.shown() && countLog("SHOW ") == 1);
+    }
+    // a route's first step before any position: not a fallback (no "no seconds" line for every route start)
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(8, "START RD");
+        r.feed(n.m, 0.0);
+        assert(!r.core.takeFallback());
+        n.pos(600, 30);
+        r.feed(n.m, 1.0);
+        assert(r.core.shown() && !r.core.takeFallback());
+    }
+    // no seconds from the phone: the 1 mi distance rule, and the core says so
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(7, "PLAIN RD");
+        n.pos(1700, 0);
+        r.feed(n.m, 0.0);
+        n.pos(1650, 0);
+        r.feed(n.m, 1.0);
+        assert(!r.core.shown() && r.core.takeFallback() && !r.core.takeFallback());
+        n.pos(1500, 0);
+        r.feed(n.m, 2.0);
+        assert(r.core.shown() && countLog("WARN") == 0);
+    }
 }
 
 int main() {
@@ -549,9 +748,10 @@ int main() {
         r.feed(one(7, "TEST ST", curPos(700, "0.4", 5)), 3.0);
         assert(r.k.count() == 97 + 97);
     }
-    // approach: a far maneuver is hidden until within the limit; distance text <= 3 characters
+    // approach by distance: a far maneuver is hidden until within the limit; distance text <= 3 characters
     {
         Settings s;
+        s.approach = kApproachDistance;
         s.approach_mi = 2.0;
         s.min_update_s = 0;
         Rig r(s);
@@ -583,6 +783,7 @@ int main() {
     // hysteresis applies to the same maneuver only
     {
         Settings s;
+        s.approach = kApproachDistance;
         s.approach_mi = 2.0;
         s.min_update_s = 0;
         Rig r(s);
@@ -599,6 +800,7 @@ int main() {
     // unknown distance fails open (no approach hold); shown with "-" after the 3 s wait
     {
         Settings s;
+        s.approach = kApproachDistance;
         s.approach_mi = 2.0;
         Rig r(s);
         r.feed(one(7, "X", Bytes()), 0.0);
@@ -725,6 +927,7 @@ int main() {
 #endif
     yieldThroughChild((1u << KombiNav::kWatchPosixSpawn) | (1u << KombiNav::kWatchQnxSpawn), KombiNav::kWatchPopen);
     yieldThroughChild(7u, -1);                                               // nothing starts: no yield, AA carries on
+    testTimeApproach();
     printf("test_kombi_nav OK\n");
     return 0;
 }

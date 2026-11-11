@@ -7,12 +7,18 @@
 //               SwitchVisibility(shown -> hidden), RemoveAllItems(old buffer), [the three texts switched on, the first
 //               time], street, distance and unit texts, the panel (frame) on
 //   distance    the distance text, and the unit text when it changed
-//   clear       panel off, both buffers emptied, the navigation's buffer left visible, texts emptied, street off: the
-//               state the factory navigation leaves at the end of a route
-// A maneuver or a clear is a full batch, a distance a partial one (HudTerminal merges it into a full one still waiting).
+//   remind      the panel (frame) on again, at the main prompt: the driver may have dismissed it with the stalk
+//               button, as the factory navigation's turns can be (what the cluster does with it is a car check)
+//   clear       panel off, both buffers emptied, SwitchVisibility(5 -> 6) so the navigation's buffer is on show
+//               whatever happened before, texts emptied, street off: the state the factory navigation leaves at the
+//               end of a route
+// A maneuver or a clear is a full batch, a distance or a reminder a partial one (HudTerminal merges it into a full one still waiting).
+// A maneuver is built on what the batches before it leave (which buffer is on show, whether the texts are on), so it
+// never takes the place of a waiting batch: while one waits, the maneuver is held and drawn on the next step, from the
+// newest view. A clear does not depend on what came before, so it may take a waiting batch's place.
 //
 // The transport works on its own thread, so a draw returns once the batch is queued; how the cluster took it shows on
-// the next call: a failed terminal (no answer, an error answer, a profile mismatch) stops guidance for the session
+// the next call: a failed terminal (no answer, an error answer) stops guidance for the session
 // like a rejected J29 frame, an offline one like a lost link. Work the terminal dropped (its status left ready) makes
 // the next step draw the maneuver again. While the factory navigation uses the terminal, factoryActive() is true and
 // the state machine yields; nothing is sent.
@@ -53,6 +59,7 @@ public:
     Result showManeuver(const NavView& v, double now, bool isNew, bool first);
     Result updateDistance(const NavView& v, double now);
     Result keepUp(const NavView& v, double now);
+    Result remind(const NavView& v, double now);
     void guidanceGap() {}
     bool clear(std::string* detail);
     void forget();
@@ -79,6 +86,7 @@ private:
     bool sent_any_;
     bool fresh_;             // the texts' visibility is not known: the next picture switches them on
     bool redraw_;            // the terminal dropped work since our last picture: draw it again
+    bool held_;              // a maneuver waits for the transport's queue: draw it on the next step
     uint16_t visible_;       // the buffer on show
     uint32_t epoch_;         // the terminal's epoch when our last picture was queued
     HudTexts shown_;         // the texts last queued

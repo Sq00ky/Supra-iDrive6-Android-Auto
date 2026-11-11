@@ -26,20 +26,26 @@
 // that call's payload in place, anything else is appended. So a distance update never wipes out a new maneuver that
 // has not gone out yet.
 //
-// Profile check (Config::checkNav): the driver's profile says which instances the factory navigation uses for text
-// and which pair it swaps. A navigation call that puts text anywhere else, or swaps other instances, means this
-// cluster is laid out differently from the profile: the terminal fails for good (until the daemon restarts), so we
-// never draw into instances whose role we have wrong.
-//
 // The factory navigation, as the 6WA showed it (car, S19):
+//   - what we see of it is the cluster's answers to it (host -> the navigation's address, each with its call's
+//     payload); its calls to the host are not routed to us. A call to the host would count the same way.
 //   - any FB 82 message to or from the host that is neither ours, nor an answer to us, nor the cluster's copy of an answer
-//     to us (RecentCalls) is the navigation: it is active from that message on.
-//   - quiet alone does not end it: the navigation only sends on a change, so a parked car on a route is quiet too. A
-//     route ends with SetVisibility(frame, 0), then the navigation clearing its instances, about 3 s later. So it is
-//     over once the frame was switched off and the terminal has been quiet for navQuietMs.
+//     to us (RecentCalls) is the navigation: we yield from that message on.
+//   - a route is on screen once the navigation draws: SetVisibility(frame, 1), SwitchVisibility, an item added, or a
+//     non-empty text. A route ends with SetVisibility(frame, 0), then the navigation clearing its instances (no
+//     drawing), about 3 s later. Once the frame is off, nothing but SetVisibility(frame, 1) puts a route back on
+//     screen until we are released: the clean-up may swap buffers back or set a status text, and that must not keep
+//     us yielded for good.
+//   - quiet alone does not end a route: the navigation only sends on a change, so a parked car on a route is quiet too.
+//     So the navigation is over once no route is on screen and the terminal has been quiet for navQuietMs. Traffic that
+//     never draws (a set-up, a status) ends that way too.
 //   - at start-up the navigation is taken to be idle: whether a route that is already running can be seen without
 //     traffic is a car test still to do. Its state is kept when the link drops (a route that ended meanwhile leaves us
 //     yielded until the next one ends, the safe side) and reset when the host changes.
+//
+// Answers to calls the terminal dropped (leaving kReady drops the calls in flight) can still arrive. Within replyMs of
+// the drop, a success is a stray and an error is counted (lateErrors) and does not fail the terminal: a navigation
+// taking over the instances can make a call of ours fail that was fine when it was sent.
 
 #include "cluster/hudterm.hpp"
 #include "most/client.hpp"
@@ -62,11 +68,7 @@ struct Config {
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
-    bool checkNav;           // the profile check above
-    HandleSet navTexts;      // the instances the factory navigation may put text on
-    HandleSet navBuffers;    // the instances it may swap with SwitchVisibility
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false),
-               checkNav(false) {}
+    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
 struct Batch {
@@ -89,7 +91,7 @@ const char* submitResultName(SubmitResult r);
 
 struct TerminalStats {
     uint32_t batches, batchesDone, batchesDropped, replaced, merged, refused;
-    uint32_t calls, answers, copies, strays, navMsgs, timeouts, errors;
+    uint32_t calls, answers, copies, strays, navMsgs, timeouts, errors, lateErrors;
 };
 
 class Core {
@@ -111,8 +113,8 @@ public:
 
     Status status() const { return status_; }
     bool busy() const { return haveCurrent_ || havePending_; }
+    bool waiting() const { return havePending_; }  // a batch waits behind the one in progress
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
-    bool mismatch() const { return mismatch_; }    // the profile check failed
     uint16_t host() const { return host_; }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
@@ -125,17 +127,18 @@ private:
 
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
-    void checkNav(const most::View& m, uint32_t now);
     bool merge(const Batch& b);
     void fail(const char* why, uint32_t now);
     void refresh(const char* why, uint32_t now);
-    void dropWork();
+    void dropWork(uint32_t now);
+    bool takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now);
     void finishIfDone(uint32_t now);
 
     Config cfg_;
     bool linkUp_;
     uint16_t self_, host_;
-    bool failed_, navActive_, frameOff_, mismatch_;
+    bool failed_, navActive_, routeOn_;
+    bool frameOff_;          // the navigation switched its frame off: only frame-on draws again until the release
     uint32_t lastNavMs_;
     Status status_;
     bool changed_;
@@ -145,6 +148,7 @@ private:
     size_t nextCall_;
     uint32_t batchStartMs_;
     std::vector<InFlight> inFlight_;
+    std::vector<InFlight> dropped_;   // calls in flight when work was dropped, sentMs = the drop time
     RecentCalls recent_;
     uint32_t tag_;
     uint32_t epoch_;
@@ -158,7 +162,9 @@ public:
     virtual SubmitResult submit(const Batch& b) = 0;
     virtual Status status() const = 0;
     virtual uint32_t epoch() const = 0;
-    virtual void reset() = 0;                     // leave kFailed (not after a profile mismatch)
+    // A batch waits behind the one in progress: a full batch submitted now would take its place.
+    virtual bool waiting() const = 0;
+    virtual void reset() = 0;                     // leave kFailed
     // Until everything submitted is answered: true then; false on the timeout or once the status leaves kReady.
     virtual bool waitIdle(uint32_t ms) = 0;
 };
@@ -185,6 +191,7 @@ public:
     void reset();
     Status status() const;
     uint32_t epoch() const;
+    bool waiting() const;
     bool waitIdle(uint32_t ms);
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop

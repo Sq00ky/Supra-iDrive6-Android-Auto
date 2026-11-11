@@ -200,6 +200,7 @@ static NavView withLanes(NavView v, const char* spec) {
 
 static Settings plain(int inplace) {   // no approach hold, no distance rate limit
     Settings s;
+    s.approach = kApproachOff;
     s.approach_mi = 0;
     s.min_update_s = 0;
     s.inplace = inplace;

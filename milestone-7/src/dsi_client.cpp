@@ -227,11 +227,13 @@ bool DsiClient::sendRequest(uint32_t requestId, const std::vector<uint8_t>& payl
     if (!payload.empty()) g_s.streamWrite(stream, &payload[0], (unsigned)payload.size());
     int rc = g_s.streamSend(stream, -1);
     g_s.streamDtor(stream);
-    if (!quietTx_) {
-        printf("[DsiClient] TX request id=0x%x payload=%u bytes -> send rc=%d\n", requestId, (unsigned)payload.size(), rc);
+    // 0 is the only value a send has returned on the car, so anything else is a failure, and always logged.
+    if (!quietTx_ || rc != 0) {
+        printf("[DsiClient] TX request id=0x%x payload=%u bytes -> send rc=%d%s\n", requestId, (unsigned)payload.size(), rc,
+               rc != 0 ? " (FAILED)" : "");
         fflush(stdout);
     }
-    return true;
+    return rc == 0;
 }
 
 } // namespace nbt

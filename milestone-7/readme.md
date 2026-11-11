@@ -712,7 +712,7 @@ cluster, so the arrow, distance and street show in the cluster and the windscree
 | | |
 |---|---|
 | Cars | J29 Supra (the KOMBI's guidance service, SOME/IP `0xB006` at `160.48.199.96:30502`). On any other car the KOMBI refuses the first frame or isn't there, and the feature turns itself off for the session (log: `[KombiNav] the KOMBI rejected a frame ...` / `no KOMBI at ...`) |
-| When the arrow shows | While the phone guides, once the next maneuver is within 1 mile (`NBT_KOMBI_NAV_APPROACH_MI`, `0` = at once), like a production nav HUD. Distance in the phone's units: `0.5 mi` / `450 ft`, `1.4 km` / `250 m`, or yd |
+| When the arrow shows | Like the factory navigation, which shows a turn at its first announcement and again at the main one: once the phone says the next maneuver is 50 s away, shown again 20 s before it, and kept until the next maneuver. Off-ramps and forks are also shown 2 km before them (again at 1 km), so a motorway exit in a queue is still warned early. A phone that sends no time to the turn gets the old rule: within 1 mile. See `NBT_KOMBI_NAV_APPROACH`. Distance in the phone's units: `0.5 mi` / `450 ft`, `1.4 km` / `250 m`, or yd |
 | When it clears | Guidance off for 8 s (rerouting keeps it), the phone disconnects, the box is unticked, the daemon stops (Force Stop, Restart), or the daemon crashes (cleared from the crash handler). A daemon killed with SIGKILL leaves `/dev/shmem/nbt-aad-kombi-nav.shown`; the next start sends the clear first |
 | iDrive navigation | Wins: when an iDrive route starts (seen in the system log, `sloginfo -w`), the daemon stops writing without clearing, and takes over again at the next Android Auto route. Without `sloginfo` the log says so; then don't start an iDrive route while Android Auto guides |
 | Safety | Only route-guidance model updates are sent (never create / dispose), one connection, our own SOME/IP client id; a frame the KOMBI rejects stops the feature until the next session |
@@ -861,7 +861,10 @@ Leave these unset unless you are testing.
 | `NBT_CARPLAY_INI` | Read a different `carplay.ini` (never the factory template in `/opt/conn/data/carplay/`) |
 | `NBT_CTL_PORT` | Control port (default 52790) |
 | `NBT_KOMBI_NAV` | `1` / `0` forces the cluster/HUD arrows on / off, whatever the menu checkbox says (default: the checkbox) |
-| `NBT_KOMBI_NAV_APPROACH_MI` | Show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once) |
+| `NBT_KOMBI_NAV_APPROACH` | When a maneuver shows: `time` (default; by the phone's seconds to it), `distance` (within `NBT_KOMBI_NAV_APPROACH_MI`, hidden again a little further out) or `off` (at once) |
+| `NBT_KOMBI_NAV_WARN_S`, `NBT_KOMBI_NAV_MAIN_S` | `time`: seconds before the maneuver it shows (default `50`, `10`..`120`) and is shown again (default `20`, `0`..`60`, below the first; `0` = never again). Shown again turns the 6WA's nav panel back on, if it was dismissed with the stalk button |
+| `NBT_KOMBI_NAV_MWAY_WARN_M`, `NBT_KOMBI_NAV_MWAY_MAIN_M` | `time`: off-ramps and forks also show this many metres before them (default `2000`) and again at (default `1000`), `200`..`5000` |
+| `NBT_KOMBI_NAV_APPROACH_MI` | `distance`, and `time` when the phone sends no seconds: show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once, and on its own it turns the approach `off`) |
 | `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
 | `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
 | `NBT_KOMBI_NAV_LANES=0` | No lane row in the cluster / HUD (the arrows stay) |

@@ -43,6 +43,7 @@ int main() {
         assert(viewFromMessages(m, v));
         assert(v.aa_type == 1 && v.road == "toward Main St" && v.dist_text == "0" && v.aa_unit == 6);
         assert(!v.has_step_m && v.has_dest_m && v.dest_m == 44306);
+        assert(!v.has_step_s && v.pos_seq == 1);       // no step seconds either (the destination's 1844 s is not it)
         assert(kombiDirection(v.aa_type) == 1 && kombiUnit(v.aa_unit) == 0x05);
         double mm;
         assert(distanceMetres(v, mm) && mm == 0.0);   // parsed from "0" ft
@@ -99,6 +100,43 @@ int main() {
         fStr(ev, 1, "X"); fInt(ev, 2, 3); fInt(ev, 3, 14);                      // STRAIGHT has no side
         m.store(0x8004, &ev[0], ev.size());
         assert(viewFromMessages(m, v) && v.aa_type == 36);
+    }
+    // seconds to the step: 0x8007 step_distance.seconds and 0x8005 time_s; a 0 far from the maneuver is not known
+    {
+        NavView v;
+        assert(viewFromMessages(msgs(navState(8, "TEST ST"), curPos(900, "0.6", 5, 47)), v));
+        assert(v.has_step_s && v.step_s == 47 && v.step_m == 900);
+        assert(viewFromMessages(msgs(navState(8, "TEST ST"), curPos(900, "0.6", 5, 0)), v) && !v.has_step_s);
+        assert(viewFromMessages(msgs(navState(8, "TEST ST"), curPos(30, "100", 6, 0)), v));
+        assert(v.has_step_s && v.step_s == 0);         // at the maneuver
+        assert(viewFromMessages(msgs(navState(8, "TEST ST"), Bytes()), v) && !v.has_step_s && v.pos_seq == 0);
+        NavMessages m;
+        Bytes s = status(1), ev, de;
+        m.store(0x8003, &s[0], s.size());
+        fStr(ev, 1, "ELM ST"); fInt(ev, 2, 2); fInt(ev, 3, 4);
+        fInt(de, 1, 480); fInt(de, 2, 33); fInt(de, 3, 300); fInt(de, 4, 5);
+        m.store(0x8004, &ev[0], ev.size());
+        m.store(0x8005, &de[0], de.size());
+        assert(viewFromMessages(m, v) && v.has_step_s && v.step_s == 33);
+    }
+    // pos_seq counts position bodies; step_pos_seq is pos_seq when the step last changed, so a view whose two are
+    // equal has no position stored since its step came
+    {
+        NavMessages m = msgs(navState(7, "TEST ST"), curPos(800, "0.5", 5, 53));   // step first, then its position
+        NavView v;
+        assert(m.pos_seq == 1 && viewFromMessages(m, v) && v.pos_seq == 1 && v.step_pos_seq == 0);
+        Bytes st = navState(8, "MAIN ST"), cp = curPos(20, "60", 6, 1);
+        m.store(0x8007, &cp[0], cp.size());
+        m.store(0x8006, &st[0], st.size());           // the next step, still with the old step's position
+        assert(viewFromMessages(m, v) && v.aa_type == 8 && v.pos_seq == 2 && v.step_pos_seq == 2);
+        m.store(0x8006, &st[0], st.size());           // the same step again: not a change
+        cp = curPos(1500, "0.9", 5, 95);
+        m.store(0x8007, &cp[0], cp.size());
+        assert(viewFromMessages(m, v) && v.pos_seq == 3 && v.step_pos_seq == 2 && v.step_s == 95);
+        m.store(0x8006, &st[0], st.size());
+        assert(viewFromMessages(m, v) && v.step_pos_seq == 2);
+        m.clear();
+        assert(m.pos_seq == 0 && m.step_pos_seq == 0);
     }
     // 0x8006 wins over 0x8004; a step without its 0x8007 has no distance yet
     {

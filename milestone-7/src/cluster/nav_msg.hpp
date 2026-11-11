@@ -45,7 +45,10 @@ struct NavMessages {
     std::vector<uint8_t> turn;       // 0x8004 (legacy)
     std::vector<uint8_t> turn_dist;  // 0x8005 (legacy)
     bool has_status, has_state, has_position, has_turn, has_turn_dist;
-    NavMessages() : has_status(false), has_state(false), has_position(false), has_turn(false), has_turn_dist(false) {}
+    uint32_t pos_seq;                // counts 0x8007 / 0x8005 bodies stored
+    uint32_t step_pos_seq;           // pos_seq when the step (0x8006 / 0x8004) last changed: equal = no position since
+    NavMessages() : has_status(false), has_state(false), has_position(false), has_turn(false), has_turn_dist(false),
+                    pos_seq(0), step_pos_seq(0) {}
 
     // Returns false for messages kombi_nav doesn't use.
     bool store(uint16_t msg_id, const uint8_t* body, size_t len) {
@@ -59,8 +62,11 @@ struct NavMessages {
             case 0x8005: slot = &turn_dist; has = &has_turn_dist; break;
             default: return false;
         }
+        bool changed = !*has || slot->size() != len || (len && memcmp(&(*slot)[0], body, len) != 0);
         slot->assign(body, body + len);
         *has = true;
+        if (msg_id == 0x8007 || msg_id == 0x8005) ++pos_seq;
+        if ((msg_id == 0x8006 || msg_id == 0x8004) && changed) step_pos_seq = pos_seq;
         return true;
     }
     void clear() { *this = NavMessages(); }
@@ -95,13 +101,19 @@ struct NavView {
     int aa_unit;             // 1 m, 2/3 km, 4/5 mi, 6 ft, 7 yd, 0 unknown
     bool has_step_m;
     int64_t step_m;          // metres to the maneuver
+    bool has_step_s;
+    int64_t step_s;          // seconds to the maneuver, the phone's estimate (0 far from it counts as none)
+    uint32_t pos_seq;        // NavMessages::pos_seq of the position this came from; 0 = unknown
+    // NavMessages::step_pos_seq: when it equals pos_seq, the position was stored before the step changed, so it may
+    // still be the previous step's (the newest 0x8006 and 0x8007 are kept apart)
+    uint32_t step_pos_seq;
     bool has_dest_m;
     int64_t dest_m;
     bool has_exit_angle;
     int64_t exit_angle;
     std::vector<AaLane> lanes;   // the step's lanes, left to right (the phone sends them only near the junction)
-    NavView() : aa_type(0), aa_unit(0), has_step_m(false), step_m(0), has_dest_m(false), dest_m(0),
-                has_exit_angle(false), exit_angle(0) {}
+    NavView() : aa_type(0), aa_unit(0), has_step_m(false), step_m(0), has_step_s(false), step_s(0), pos_seq(0), step_pos_seq(0),
+                has_dest_m(false), dest_m(0), has_exit_angle(false), exit_angle(0) {}
 
     bool sameManeuver(const NavView& o) const {
         return aa_type == o.aa_type && road == o.road && has_exit_angle == o.has_exit_angle &&
@@ -130,6 +142,8 @@ inline std::string fmt1(double v) {
     snprintf(b, sizeof(b), "%.1f", v);
     return b;
 }
+
+const int64_t kNoSecondsM = 50;   // a step's seconds of 0 count only this close to the maneuver
 
 // Next-step view, or false when there is nothing to show (guidance off is the caller's decision).
 inline bool viewFromMessages(const NavMessages& m, NavView& v) {
@@ -179,10 +193,12 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         return false;
     }
     PbSpan cp = NavMessages::span(m.position), de = NavMessages::span(m.turn_dist);
+    int64_t secs = -1;
     if (m.has_position && cp.len) {
-        PbSpan d = pbMsg(pbMsg(cp, 1), 1);
+        PbSpan sd = pbMsg(cp, 1), d = pbMsg(sd, 1);
         int64_t x;
         if (pbInt(d, 1, x)) { v.has_step_m = true; v.step_m = x; }
+        if (pbInt(sd, 2, x)) secs = x;
         v.dist_text = pbText(d, 2);
         if (pbInt(d, 3, x)) v.aa_unit = (int)x;
         if (pbInt(pbMsg(pbMsg(cp, 2), 1), 1, x)) { v.has_dest_m = true; v.dest_m = x; }
@@ -190,11 +206,16 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         // NextTurnDistanceEvent {1 distance_m, 2 time_s, 3 display_distance_e3, 4 display_distance_unit}
         int64_t x, e3;
         if (pbInt(de, 1, x)) { v.has_step_m = true; v.step_m = x; }
+        if (pbInt(de, 2, x)) secs = x;
         if (pbInt(de, 4, x)) v.aa_unit = (int)x;
         if (pbInt(de, 3, e3)) {
             v.dist_text = (v.aa_unit == 3 || v.aa_unit == 5) ? fmt1((double)e3 / 1000.0) : fmtInt(roundE3HalfEven(e3));
         }
     }
+    // Seconds to the step. A 0 with the maneuver further than kNoSecondsM is "not known", not "now".
+    if (secs > 0 || (secs == 0 && v.has_step_m && v.step_m < kNoSecondsM)) { v.has_step_s = true; v.step_s = secs; }
+    if ((m.has_position && cp.len) || (m.has_turn_dist && de.len)) v.pos_seq = m.pos_seq;
+    v.step_pos_seq = m.step_pos_seq;
     return true;
 }
 

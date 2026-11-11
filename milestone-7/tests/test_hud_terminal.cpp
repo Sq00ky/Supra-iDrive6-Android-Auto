@@ -51,6 +51,12 @@ static Wire answer(const most::Msg& m, uint8_t op = most::kOpResultAck) {
 static Wire copyOf(const most::Msg& m) { return Wire(kHost, kNav, m.fkt, most::kOpResultAck, answerPayload(m)); }
 static Wire navCall(uint16_t fkt, const std::vector<uint8_t>& p) { return Wire(kNav, kHost, fkt, most::kOpStartResultAck, p); }
 static Wire navAnswer(uint16_t fkt, const std::vector<uint8_t>& p) { return Wire(kHost, kNav, fkt, most::kOpResultAck, p); }
+// The cluster's answer to a navigation text: like ours, without the 00 00.
+static Wire navTextAnswer(uint16_t h, const char* t) {
+    std::vector<uint8_t> p = setText(h, t);
+    p.resize(p.size() - 2);
+    return navAnswer(kTextareaSetText, p);
+}
 
 static Core readyCore(const Config& c = config()) {
     Core k(c);
@@ -261,52 +267,6 @@ static void testEpoch() {
     assert(k.epoch() != e1);
 }
 
-// The profile check: the navigation's text or swap on instances the profile does not list stops the terminal for good.
-static void testProfileMismatch() {
-    Config c = config();
-    c.checkNav = true;
-    for (int h = 2; h <= 4; ++h) c.navTexts.allow(h);
-    c.navBuffers.allow(5);
-    c.navBuffers.allow(6);
-    {
-        Core k = readyCore(c);
-        Wire t = navCall(kTextareaSetText, setText(3, "400"));
-        Wire s = navCall(kSwitchVisibility, switchVisibility(6, 5));
-        Wire other = navCall(kRemoveAllItems, removeAllItems(9));
-        Wire ans = navAnswer(kTextareaSetText, setText(9, ""));   // the cluster's answer: only calls are checked
-        k.onMessage(t.v, 0);
-        k.onMessage(s.v, 1);
-        k.onMessage(other.v, 2);
-        k.onMessage(ans.v, 3);
-        assert(k.status() == kNavActive && !k.mismatch());
-    }
-    {
-        Core k = readyCore(c);
-        Wire t = navCall(kTextareaSetText, setText(9, "x"));
-        k.onMessage(t.v, 0);
-        assert(k.status() == kFailed && k.mismatch());
-        k.reset(1);
-        assert(k.status() == kFailed);
-        k.setLink(false, 0, 2);
-        k.setLink(true, kSelf, 3);
-        assert(k.status() == kFailed);
-        k.setHost(0x0124, 4);
-        assert(k.status() == kFailed && k.submit(batchOf(1), 5) == kNotReady);
-    }
-    {
-        Core k = readyCore(c);
-        Wire s = navCall(kSwitchVisibility, switchVisibility(6, 7));
-        k.onMessage(s.v, 0);
-        assert(k.status() == kFailed && k.mismatch());
-    }
-    {
-        Core k = readyCore();                           // the check off: anything goes
-        Wire t = navCall(kTextareaSetText, setText(9, "x"));
-        k.onMessage(t.v, 0);
-        assert(k.status() == kNavActive && !k.mismatch());
-    }
-}
-
 static void testCopiesIgnored() {
     Core k = readyCore();
     Batch b("text");
@@ -397,6 +357,113 @@ static void testNavFinishes() {
     k.onMessage(on.v, 81000);                             // then on again: a route
     k.tick(200000);
     assert(k.status() == kNavActive);
+}
+
+// Navigation traffic that never draws (a set-up, a status, clearing up) yields only until the terminal is quiet; a
+// drawing seen without its frame-on (a route already running at start-up) holds until the frame goes off.
+static void testNavWithoutRoute() {
+    Core k = readyCore();
+    Wire setup = navAnswer(kRemoveAllItems, removeAllItems(7));
+    k.onMessage(setup.v, 1000);
+    assert(k.status() == kNavActive && k.msUntilDeadline(1000) == 5000);
+    Wire empty = navTextAnswer(3, "");
+    k.onMessage(empty.v, 2000);                               // an empty text is not drawing
+    Wire other = navAnswer(kSetVisibility, setVisibility(22, true));
+    k.onMessage(other.v, 2500);                               // nor another instance switched on
+    k.tick(7499);
+    assert(k.status() == kNavActive);
+    k.tick(7500);
+    Status s;
+    assert(k.status() == kReady && k.takeStatusChange(s) && s == kReady);
+
+    Wire dist = navTextAnswer(3, "400");
+    k.onMessage(dist.v, 10000);                               // a route's text: on screen, frame-on never seen
+    k.tick(200000);
+    assert(k.status() == kNavActive && k.msUntilDeadline(200000) == 0xFFFFFFFFu);
+    Wire off = navAnswer(kSetVisibility, setVisibility(kFrame, false));
+    k.onMessage(off.v, 201000);
+    Wire clear5 = navAnswer(kRemoveAllItems, removeAllItems(5));
+    k.onMessage(clear5.v, 204000);                            // the navigation clearing up: quiet starts again
+    k.onMessage(empty.v, 204000);
+    k.tick(208999);
+    assert(k.status() == kNavActive);
+    k.tick(209000);
+    assert(k.status() == kReady);
+
+    Wire poly = navAnswer(kAddPolygon, addPolygon(6, 0, kPolygon, std::vector<Point>(3)));
+    k.onMessage(poly.v, 300000);                              // drawing alone is a route too (after the release)
+    k.tick(400000);
+    assert(k.status() == kNavActive);
+}
+
+// After the frame went off, the navigation's clean-up may swap its buffers back or set a text: that is not a route
+// on screen again, so we are released after the quiet. Frame-on is, and drawing after it holds us again.
+static void testCleanUpAfterFrameOff() {
+    Core k = readyCore();
+    Wire on = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(on.v, 1000);
+    assert(k.status() == kNavActive);
+    Wire off = navAnswer(kSetVisibility, setVisibility(kFrame, false));
+    k.onMessage(off.v, 50000);
+    Wire swap = navAnswer(kSwitchVisibility, switchVisibility(5, 6));
+    k.onMessage(swap.v, 51000);                               // clean-up: back to the buffer it leaves on show
+    Wire status = navTextAnswer(7, "1");
+    k.onMessage(status.v, 52000);                             // a text on another instance
+    k.tick(56999);
+    assert(k.status() == kNavActive);
+    k.tick(57000);
+    assert(k.status() == kReady);
+
+    k.onMessage(on.v, 60000);                                 // the next route
+    k.onMessage(off.v, 61000);
+    k.onMessage(on.v, 62000);                                 // frame on again: on screen
+    Wire dist = navTextAnswer(3, "400");
+    k.onMessage(dist.v, 63000);
+    k.tick(200000);
+    assert(k.status() == kNavActive);
+    k.onMessage(off.v, 201000);
+    k.onMessage(swap.v, 202000);
+    k.tick(207000);
+    assert(k.status() == kReady);
+}
+
+// An error answer to a call the terminal dropped when the navigation took over is not a failure, within replyMs.
+static void testLateErrorAfterTakeover() {
+    std::vector<uint8_t> err;
+    putBe16(err, 5);
+    err.push_back(0x07);                                      // invented error code
+    for (int late = 0; late <= 1; ++late) {
+        Core k = readyCore();
+        assert(k.submit(batchOf(2), 0) == kQueued);
+        most::Msg m0, m1;
+        assert(k.next(0, m0) && k.next(0, m1));
+        Wire nav = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+        k.onMessage(nav.v, 10);
+        assert(k.status() == kNavActive && k.stats().batchesDropped == 1);
+        Wire e(kHost, kSelf, m0.fkt, most::kOpErrorAck, err);
+        k.onMessage(e.v, late ? 10 + 1500 : 300);
+        if (!late) {
+            assert(k.status() == kNavActive && k.stats().errors == 0 && k.stats().lateErrors == 1);
+            k.onMessage(e.v, 310);                            // the same answer again: matches nothing any more
+            assert(k.status() == kFailed && k.stats().errors == 1);
+        } else {
+            assert(k.status() == kFailed && k.stats().errors == 1 && k.stats().lateErrors == 0);
+        }
+    }
+
+    Core k = readyCore();                                     // a success to a dropped call: a stray, as before
+    assert(k.submit(batchOf(1), 0) == kQueued);
+    most::Msg m;
+    assert(k.next(0, m));
+    Wire nav = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(nav.v, 10);
+    Wire a = answer(m);
+    k.onMessage(a.v, 20);
+    assert(k.stats().strays == 1 && k.status() == kNavActive);
+    Wire off = navAnswer(kSetVisibility, setVisibility(kFrame, false));
+    k.onMessage(off.v, 30);
+    k.tick(5030);
+    assert(k.status() == kReady);
 }
 
 static void testTimeoutAndReset() {
@@ -692,11 +759,13 @@ int main() {
     testAnswersAndQueue();
     testMerge();
     testEpoch();
-    testProfileMismatch();
     testCopiesIgnored();
     testOwnAndForeignIgnored();
     testNavTakeoverMidBatch();
     testNavFinishes();
+    testNavWithoutRoute();
+    testCleanUpAfterFrameOff();
+    testLateErrorAfterTakeover();
     testTimeoutAndReset();
     testErrorAnswers();
     testLinkDropKeepsNav();

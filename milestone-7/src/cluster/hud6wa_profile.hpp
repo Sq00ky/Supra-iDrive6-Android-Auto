@@ -6,8 +6,7 @@
 // Everything specific to one cluster's HUDTerminal layout: which instance does what, which colours, where to draw.
 // Fixed, not learned: the 6WA's values were read from the factory navigation's own traffic on an F20 (S19), and the
 // same instances drew our arrow, distance, unit and street there. A cluster with the same protocol and another layout is
-// a new profile, not a new driver. HudTerminal's profile check (cluster/hud_terminal.hpp) stops the driver if the
-// factory navigation is seen using the instances differently.
+// a new profile, not a new driver.
 //
 // What the factory navigation does with the 6WA's instances (car): 1 shows or hides the whole guidance panel; 2 street,
 // 3 distance, 4 unit (texts); 5 and 6 the double-buffered main picture, swapped with SwitchVisibility; 7..10 other
@@ -62,21 +61,6 @@ inline HandleSet handlesOf(const HudProfile& p) {
     h.allow(p.street);
     h.allow(p.distance);
     h.allow(p.unit);
-    h.allow(p.bufA);
-    h.allow(p.bufB);
-    return h;
-}
-
-inline HandleSet textsOf(const HudProfile& p) {
-    HandleSet h;
-    h.allow(p.street);
-    h.allow(p.distance);
-    h.allow(p.unit);
-    return h;
-}
-
-inline HandleSet buffersOf(const HudProfile& p) {
-    HandleSet h;
     h.allow(p.bufA);
     h.allow(p.bufB);
     return h;

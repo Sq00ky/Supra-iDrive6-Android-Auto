@@ -37,10 +37,11 @@ struct FakePort : public Port {
     uint32_t ep;
     SubmitResult result;
     bool idle;
+    bool wait;               // a batch waits behind the one in progress
     int resets;
     Status afterReset;
     std::vector<Batch> batches;
-    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), resets(0), afterReset(kReady) {}
+    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
         for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(k6wa)));
@@ -50,6 +51,7 @@ struct FakePort : public Port {
     }
     Status status() const { return st; }
     uint32_t epoch() const { return ep; }
+    bool waiting() const { return wait; }
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
 };
@@ -312,7 +314,7 @@ static void testClearBatch() {
     assert(d.visibleBuffer() == 5);
     std::string detail;
     assert(d.clear(&detail));
-    const Batch& c = port.batches.back();
+    const Batch c = port.batches.back();          // a copy: more batches follow
     assert(c.full && c.label == "clear" && c.calls.size() == 8);
     expectCall(c.calls[0], kSetVisibility, 1);
     assert(c.calls[0].payload[2] == 0);
@@ -326,15 +328,120 @@ static void testClearBatch() {
     d.forget();
     assert(d.visibleBuffer() == 6 && !d.sentAny());
 
-    // Buffer 6 on show already: no swap.
+    // Buffer 6 on show by our count: the same clear, swap included, since a restart or lost work can leave 5 on show.
     assert(d.showManeuver(view(36, "Testroad", "100", 1, 100), 0, true, true) == ClusterDisplay::kOk);
     assert(d.showManeuver(view(7, "Testroad", "90", 1, 90), 1, true, false) == ClusterDisplay::kOk);
     assert(d.visibleBuffer() == 6 && d.clear(&detail));
-    assert(port.batches.back().calls.size() == 7);
-    for (size_t k = 0; k < 7; ++k) assert(port.batches.back().calls[k].fkt != kSwitchVisibility);
+    const Batch& c2 = port.batches.back();
+    assert(c2.calls.size() == 8);
+    for (size_t k = 0; k < 8; ++k) assert(c2.calls[k].fkt == c.calls[k].fkt && c2.calls[k].payload == c.calls[k].payload);
+    Hud6waDisplay fresh(port, k6wa, false);                     // just started, nothing drawn yet: the same clear
+    assert(fresh.clear(&detail));
+    assert(port.batches.back().calls.size() == 8 && port.batches.back().calls[3].payload == c.calls[3].payload);
 
     port.idle = false;                                           // the cluster does not answer everything
     assert(!d.clear(&detail) && strstr(detail.c_str(), "no answer"));
+}
+
+// A maneuver while a batch is still waiting is held, not put in its place: the waiting batch was built first and its
+// calls (the texts switched on, the buffer swap) are what the next picture builds on.
+static void testHold() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    assert(d.showManeuver(view(8, "Testroad Alpha", "300", 1, 300), 0, true, true) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 1 && d.visibleBuffer() == 5);
+    port.wait = true;
+    NavView b = view(7, "Sample Lane Beta", "150", 1, 150);
+    assert(d.showManeuver(b, 0.1, true, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 1 && logged("HOLD type 7"));
+    assert(d.sameManeuver(b, 0.35));                             // still waiting: held again, nothing sent
+    assert(d.showManeuver(b, 0.35, false, false) == ClusterDisplay::kOk && port.batches.size() == 1);
+    port.wait = false;
+    assert(d.sameManeuver(b, 0.6));
+    assert(d.showManeuver(b, 0.6, false, false) == ClusterDisplay::kOk && port.batches.size() == 2);
+    const Batch& r = port.batches[1];
+    expectCall(r.calls[0], kRemoveAllItems, 6);                  // into the buffer the first batch hid
+    for (size_t i = 0; i < r.calls.size(); ++i) {
+        if (r.calls[i].fkt == kSwitchVisibility) assert(r.calls[i].handle() == 5 && rdBe16(&r.calls[i].payload[2]) == 6);
+        if (r.calls[i].fkt == kSetVisibility) assert(r.calls[i].handle() == 1);   // the texts are on already
+        if (r.calls[i].fkt == kTextareaSetText && r.calls[i].handle() == 2) assert(text(r.calls[i]) == "Sample Lane Beta");
+    }
+    assert(d.visibleBuffer() == 6 && !d.sameManeuver(b, 0.7));
+
+    // The state machine: the held maneuver goes out on the next step once nothing waits.
+    FakePort p2;
+    Hud6waDisplay d2(p2, k6wa, false);
+    Settings s;
+    kombinav::Core core(d2, s, &logFn, NULL);
+    NavView a = view(8, "Testroad Alpha", "300", 1, 300);
+    core.step(&a, 0);
+    assert(p2.batches.size() == 1);
+    p2.wait = true;
+    core.step(&b, 0.25);
+    core.step(&b, 0.5);
+    assert(p2.batches.size() == 1 && core.shown());
+    p2.wait = false;
+    core.step(&b, 0.75);
+    assert(p2.batches.size() == 2 && p2.batches[1].full);
+    bool texts = false;
+    for (size_t i = 0; i < p2.batches[1].calls.size(); ++i)
+        texts = texts || (p2.batches[1].calls[i].fkt == kTextareaSetText && text(p2.batches[1].calls[i]) == "150");
+    assert(texts);
+    core.step(&b, 1.0);
+    assert(p2.batches.size() == 2);
+}
+
+// The main-prompt reminder: one partial SetVisibility(frame, on), nothing before a picture, in shadow mode or while
+// the factory navigation has the panel; through the state machine, once per maneuver at main_s.
+static void testRemind() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    NavView v = view(8, "Testroad Alpha", "300", 1, 300);
+    assert(d.remind(v, 0) == ClusterDisplay::kOk && port.batches.empty());   // nothing of ours is up
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && port.batches.size() == 1);
+    port.wait = true;                                            // a batch waits: partial, so merged, never a replacement
+    assert(d.remind(v, 1) == ClusterDisplay::kOk && port.batches.size() == 2);
+    const Batch& r = port.batches[1];
+    assert(r.label == "remind" && !r.full && r.calls.size() == 1);
+    expectCall(r.calls[0], kSetVisibility, 1);
+    assert(r.calls[0].payload.size() == 3 && r.calls[0].payload[2] == 1);
+    assert(logged("REMIND type 8: panel on again"));
+    port.st = kNavActive;
+    assert(d.remind(v, 2) == ClusterDisplay::kOk && port.batches.size() == 2);
+    port.st = kFailed;
+    assert(d.remind(v, 3) == ClusterDisplay::kRejected && port.batches.size() == 2);
+
+    FakePort ps;
+    Hud6waDisplay ds(ps, k6wa, true);
+    ds.setLog(&logFn, NULL);
+    assert(ds.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(ds.remind(v, 1) == ClusterDisplay::kOk && ps.batches.empty() && logged("[shadow] 204 SetVisibility h1 on"));
+
+    FakePort p2;
+    Hud6waDisplay d2(p2, k6wa, false);
+    kombinav::Core core(d2, Settings(), &logFn, NULL);
+    NavView a = view(8, "Testroad Alpha", "0.4", 5, 640);
+    a.has_step_s = true;
+    a.step_s = 60;
+    core.step(&a, 0);
+    assert(!core.shown() && p2.batches.empty());
+    a.step_s = 45;
+    core.step(&a, 1);
+    assert(core.shown() && p2.batches.size() == 1 && p2.batches[0].full);
+    a.step_s = 25;
+    a.dist_text = "0.2"; a.step_m = 350;
+    core.step(&a, 2);
+    assert(p2.batches.size() == 2 && p2.batches[1].label == "distance");
+    a.step_s = 18;
+    core.step(&a, 3);
+    assert(p2.batches.size() == 3 && p2.batches[2].label == "remind" && logged("MAIN type 8: 18 s, 350 m"));
+    a.step_s = 9;
+    core.step(&a, 4);
+    assert(p2.batches.size() == 3);
 }
 
 // ---- the transport's states ----------------------------------------------------------------------------------------
@@ -466,6 +573,11 @@ static void runKombiNav(bool shadow) {
     setenv("NBT_CLUSTER", "6wa", 1);
     if (shadow) setenv("NBT_HUDTERM", "log", 1);
     else unsetenv("NBT_HUDTERM");
+    if (shadow) {                                                // a picture an earlier live run left up
+        FILE* f = fopen(shown.c_str(), "w");
+        assert(f);
+        fclose(f);
+    }
     fake_dsi::reset();
     {
         most::Client client;
@@ -495,7 +607,7 @@ static void runKombiNav(bool shadow) {
     }                                                            // the terminal's thread is joined here
     size_t n = hudRequests();
     printf("KombiNav 6wa %s: %u calls to 82/00\n", shadow ? "shadow" : "live", (unsigned)n);
-    if (shadow) assert(n == 0);
+    if (shadow) assert(n == 0 && access(shown.c_str(), F_OK) == 0);   // left for the next live run to clear
     else assert(n >= 8);                                         // a maneuver's calls, up to 8 in flight unanswered
     unsetenv("NBT_CLUSTER");
     unsetenv("NBT_HUDTERM");
@@ -530,6 +642,8 @@ int main() {
     testTexts();
     testShowBatches();
     testClearBatch();
+    testHold();
+    testRemind();
     testStates();
     testShadow();
     testCore();

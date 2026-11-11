@@ -30,6 +30,7 @@ const double kLinkBackoffS = 30.0;
 const int kLinkGiveUp = 5;    // failed sends in a row without ever drawing: no KOMBI there (not a J29?)
 const double kExitCancelRetryS = 0.0;
 const double kCancelRetryS = 60.0;
+const double kStalePosS = 3.0;   // a new maneuver waits at most this long for a position of its own
 
 double monoS() {
     struct timespec ts;
@@ -45,7 +46,8 @@ volatile int g_mayShow = 0;   // an arrow may be up: the fatal-signal handler se
 
 Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
     : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
-      no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning) {
+      no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning), have_next_(false), next_since_(0),
+      stage_(kHidden), timed_(false), remind_(false), fallback_(false) {
     d_.setSettings(s);
     d_.setLog(log, log_user);
 }
@@ -65,7 +67,70 @@ void Core::fail(ClusterDisplay::Result r) {
           r == ClusterDisplay::kRejected ? "KOMBI rejected a frame" : "template layout");
 }
 
-bool Core::approachHold(const NavView& v, double /*now*/) {
+const char* approachName(Approach a) {
+    return a == kApproachTime ? "time" : a == kApproachDistance ? "distance" : "off";
+}
+
+namespace {
+// Motorway-type turns, due by distance too: AA off-ramps (21-24) and forks (25, 26). Keep-left/right is left out (it
+// is common in towns too), and so are on-ramps (the turn is still on the road before the motorway).
+bool motorwayTurn(int aa_type) { return aa_type >= 21 && aa_type <= 26; }
+}
+
+// True: v is held back (not shown, and a different maneuver shown is cleared).
+bool Core::approachHold(const NavView& v, double now) {
+    if (s_.approach == kApproachOff) return false;
+    if (s_.approach == kApproachDistance) return distanceHold(v);
+    return timeHold(v, now);
+}
+
+bool Core::timeHold(const NavView& v, double now) {
+    bool same = has_shown_ && v.sameManeuver(shown_);
+    if (!have_next_ || !v.sameManeuver(next_)) {      // a new next maneuver
+        have_next_ = true;
+        next_ = v;
+        next_since_ = now;
+        stage_ = same ? kWarned : kHidden;
+        timed_ = same;
+    }
+    // Right after a turn the next step can come with the last step's position (a few metres, a few seconds): judge a
+    // new maneuver only on a position stored after its step, or after kStalePosS. Meanwhile nothing changes on the
+    // cluster.
+    if (!same && v.pos_seq != 0 && v.pos_seq == v.step_pos_seq && now - next_since_ < kStalePosS) return true;
+    double m = 0;
+    bool has_m = distanceMetres(v, m), mway = motorwayTurn(v.aa_type) && has_m;
+    if (!v.has_step_s && !mway) {                     // nothing to time it by
+        if (v.pos_seq != 0) fallback_ = true;         // a position without seconds (not a step still waiting for one)
+        if (same && timed_) return false;             // shown by time: one position without seconds doesn't hide it
+        return distanceHold(v);                       // the distance rule
+    }
+    bool by_s = v.has_step_s && v.step_s <= s_.warn_s;
+    bool warn = by_s || (mway && m <= s_.mway_warn_m);
+    bool main = s_.main_s > 0 && ((v.has_step_s && v.step_s <= s_.main_s) || (mway && m <= s_.mway_main_m));
+    if (same) {                                       // shown: it stays, whatever the traffic does to the seconds
+        if (stage_ < kMain && main) {
+            stage_ = kMain;
+            remind_ = true;
+        }
+        return false;
+    }
+    if (!warn) {
+        if (has_shown_) {
+            log("APPROACH: next maneuver %s%lld s, %.0f m away: hidden", v.has_step_s ? "" : "?",
+                (long long)v.step_s, has_m ? m : -1.0);
+            clear("approach");
+        }
+        no_dist_ = false;
+        return true;
+    }
+    stage_ = main ? kMain : kWarned;
+    timed_ = true;
+    log("WARN type %d: %lld s, %.0f m (%s)%s", v.aa_type, (long long)(v.has_step_s ? v.step_s : -1), has_m ? m : -1.0,
+        by_s ? "time" : "motorway distance", main ? ", main prompt already due" : "");
+    return false;
+}
+
+bool Core::distanceHold(const NavView& v) {
     if (s_.approach_mi <= 0) return false;
     double m;
     if (!distanceMetres(v, m)) return false;           // unknown distance: show as before (fail open)
@@ -92,6 +157,8 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     }
     off_ = false;
     NavView v = *in;
+    // The road as it is stored in shown_, before anything compares the two (an unnamed road is " ").
+    v.road = utf8Prefix(v.road.empty() ? std::string(" ") : v.road, kMaxRoad);
     if (approachHold(v, now)) return;
     // A snapshot without a distance (0x8006 before its 0x8007): keep the last one rather than flicker "-".
     if (v.dist_text.empty() && has_shown_ && !shown_.dist_text.empty() && shown_.dist_text != "-") {
@@ -114,12 +181,11 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         v.dist_text = text;
         v.aa_unit = unit;
     }
-    if (s_.approach_mi > 0 && v.dist_text != "-") {
+    if (shortDist() && v.dist_text != "-") {
         shortDistance(v, s_.dist_chars, text, unit);
         v.dist_text = text;
         v.aa_unit = unit;
     }
-    v.road = utf8Prefix(v.road.empty() ? std::string(" ") : v.road, kMaxRoad);
     v.dist_text = utf8Prefix(v.dist_text, kMaxDist);
     bool new_man = !has_shown_ || !v.sameManeuver(shown_);
     bool redraw = !new_man && d_.sameManeuver(v, now);
@@ -133,7 +199,19 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         shown_ = v;
         last_dist_ = v;
         last_dist_t_ = now;
+        remind_ = false;                               // drawn whole: the panel is on anyway
         return;
+    }
+    if (remind_) {
+        remind_ = false;
+        double m;
+        log("MAIN type %d: %lld s, %.0f m", v.aa_type, (long long)(v.has_step_s ? v.step_s : -1),
+            distanceMetres(v, m) ? m : -1.0);
+        ClusterDisplay::Result r = d_.remind(v, now);
+        if (r != ClusterDisplay::kOk) {
+            fail(r);
+            return;
+        }
     }
     if (!v.sameDistance(last_dist_) && now - last_dist_t_ >= s_.min_update_s) {
         ClusterDisplay::Result r = d_.updateDistance(v, now);
@@ -154,6 +232,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
 
 void Core::forget() {
     has_shown_ = false;
+    remind_ = false;
     shown_ = NavView();
     last_dist_ = NavView();
     off_ = false;
@@ -216,7 +295,8 @@ unsigned KombiNav::kWatchSkip = 0;
 KombiNav::KombiNav()
     : last_msg_t_(0), session_ended_(false), quit_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
       port_(30502), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
-      disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), watch_pid_(-1), watch_fd_(-1),
+      disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), fallback_noted_(false),
+      watch_pid_(-1), watch_fd_(-1),
       watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), watch_fp_(NULL),
       watch_method_(-1), watch_method_logged_(-1), graph_(NULL), client_(NULL), terminal_(NULL), shadow_(false),
       stopHint_(""), stale_shown_(false), display_(NULL), core_(NULL) {
@@ -297,9 +377,6 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         hudterm::Config c;
         c.handles = hudterm::handlesOf(p);
         c.navFrame = p.frame;
-        c.checkNav = true;
-        c.navTexts = hudterm::textsOf(p);
-        c.navBuffers = hudterm::buffersOf(p);
         c.logBatches = !shadow_;
         terminal_ = new hudterm::HudTerminal(c);   // never deleted before exit once attached: the client calls it
         if (!terminal_->attach(*most, !shadow_) || !terminal_->start()) {
@@ -319,6 +396,71 @@ void KombiNav::logHealth() {
     if (terminal_) terminal_->logHealth();
 }
 
+namespace {
+// A number from the environment in lo..hi; anything else is logged and the default kept.
+void envNumber(const char* name, double lo, double hi, double& v) {
+    const char* e = getenv(name);
+    if (!e || !*e) return;
+    char* end = NULL;
+    double x = strtod(e, &end);
+    if (end != e && !*end && x >= lo && x <= hi) v = x;
+    else printf("[KombiNav] %s=%s out of range (%g..%g): keeping %g\n", name, e, lo, hi, v);
+}
+}
+
+// NBT_KOMBI_NAV_APPROACH=time|distance|off (time by default), NBT_KOMBI_NAV_WARN_S, _MAIN_S (0 = no reminder),
+// _MWAY_WARN_M, _MWAY_MAIN_M, and NBT_KOMBI_NAV_APPROACH_MI for the distance rule (and time's fallback; 0 = off, as
+// before).
+void KombiNav::readApproach() {
+    const char* e = getenv("NBT_KOMBI_NAV_APPROACH");
+    if (e && *e) {
+        if (!strcmp(e, "time")) settings_.approach = kApproachTime;
+        else if (!strcmp(e, "distance")) settings_.approach = kApproachDistance;
+        else if (!strcmp(e, "off")) settings_.approach = kApproachOff;
+        else printf("[KombiNav] NBT_KOMBI_NAV_APPROACH=%s is not time, distance or off: keeping %s\n", e,
+                    approachName(settings_.approach));
+    }
+    e = getenv("NBT_KOMBI_NAV_APPROACH_MI");
+    if (e && *e) {
+        char* end = NULL;
+        double a = strtod(e, &end);
+        if (end != e && !*end && (a == 0 || (a >= 0.1 && a <= 9.9))) {
+            settings_.approach_mi = a;
+            if (a == 0 && !getenv("NBT_KOMBI_NAV_APPROACH")) settings_.approach = kApproachOff;
+        } else {
+            printf("[KombiNav] NBT_KOMBI_NAV_APPROACH_MI=%s is not 0 or 0.1..9.9: keeping %g\n", e,
+                   settings_.approach_mi);
+        }
+    }
+    envNumber("NBT_KOMBI_NAV_WARN_S", 10, 120, settings_.warn_s);
+    envNumber("NBT_KOMBI_NAV_MAIN_S", 0, 60, settings_.main_s);
+    if (settings_.main_s >= settings_.warn_s) {
+        printf("[KombiNav] the main prompt (%g s) must come after the warning (%g s): no reminder\n",
+               settings_.main_s, settings_.warn_s);
+        settings_.main_s = 0;
+    }
+    envNumber("NBT_KOMBI_NAV_MWAY_WARN_M", 200, 5000, settings_.mway_warn_m);
+    envNumber("NBT_KOMBI_NAV_MWAY_MAIN_M", 200, 5000, settings_.mway_main_m);
+    if (settings_.mway_main_m >= settings_.mway_warn_m) {
+        printf("[KombiNav] the motorway main prompt (%g m) must come after the warning (%g m): using %g m\n",
+               settings_.mway_main_m, settings_.mway_warn_m, settings_.mway_warn_m / 2);
+        settings_.mway_main_m = settings_.mway_warn_m / 2;
+    }
+}
+
+std::string KombiNav::approachText() const {
+    char b[200];
+    const Settings& s = settings_;
+    if (s.approach == kApproachTime)
+        snprintf(b, sizeof(b), "time (warning %g s, main %g s, off-ramps/forks %g/%g m; no seconds: %g mi)", s.warn_s,
+                 s.main_s, s.mway_warn_m, s.mway_main_m, s.approach_mi);
+    else if (s.approach == kApproachDistance && s.approach_mi > 0)
+        snprintf(b, sizeof(b), "distance %g mi", s.approach_mi);
+    else
+        snprintf(b, sizeof(b), "off");
+    return b;
+}
+
 void KombiNav::start(most::Client* most) {
     if (started_) return;
     forced_ = envFlag("NBT_KOMBI_NAV");
@@ -328,13 +470,7 @@ void KombiNav::start(most::Client* most) {
     if (e && *e) host_ = e;
     e = getenv("NBT_KOMBI_NAV_PORT");
     if (e && *e) port_ = (uint16_t)atoi(e);
-    e = getenv("NBT_KOMBI_NAV_APPROACH_MI");
-    if (e && *e) {
-        double a = atof(e);
-        if (a == 0 || (a >= 0.1 && a <= 9.9)) settings_.approach_mi = a;
-        else printf("[KombiNav] NBT_KOMBI_NAV_APPROACH_MI=%s out of range (0 or 0.1..9.9): keeping %g\n", e,
-                    settings_.approach_mi);
-    }
+    readApproach();
     if (envFlag("NBT_KOMBI_NAV_SHOW_BAR") == 1) settings_.hide_bar = false;
     if (envFlag("NBT_KOMBI_NAV_YIELD") == 0) yield_enabled_ = false;
     if (envFlag("NBT_KOMBI_NAV_LANES") == 0) settings_.lanes = false;
@@ -344,16 +480,16 @@ void KombiNav::start(most::Client* most) {
     if (!createDisplay(e && *e ? e : "j29", most)) return;
     core_ = new Core(*display_, settings_, &KombiNav::logLine, this);
     if (client_)
-        printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %g mi, bar %s, iDrive-route "
+        printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %s, bar %s, iDrive-route "
                "yield %s, lanes %s, in-place %d\n", enabledNow() ? "ON" : "off",
                forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", host_.c_str(), (unsigned)port_, handle_,
-               settings_.approach_mi, settings_.hide_bar ? "hidden" : "factory", yield_enabled_ ? "on" : "off",
+               approachText().c_str(), settings_.hide_bar ? "hidden" : "factory", yield_enabled_ ? "on" : "off",
                settings_.lanes ? "on" : "off", settings_.inplace);
     else
-        printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %g mi, iDrive-route yield %s (and the "
+        printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %s, iDrive-route yield %s (and the "
                "factory navigation on the terminal, always)\n", enabledNow() ? "ON" : "off",
                forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", display_->name(), target_.c_str(),
-               shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "", settings_.approach_mi,
+               shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "", approachText().c_str(),
                yield_enabled_ ? "on" : "off");
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
@@ -392,8 +528,9 @@ void KombiNav::onFatalSignal() {
 
 // Marker file + flag for the fatal-signal handler while an arrow may be up. It is removed only after an acknowledged
 // cancel (or a yield: the factory graph owns the models then), so the next start retries a cancel that failed.
+// The shadow mode draws nothing and never touches it: a file a live run left stays for the next live run to clear.
 void KombiNav::markShown(bool on, bool force) {
-    if (on == marked_) return;
+    if (shadow_ || on == marked_) return;
     if (on) {
         int fd = open(kShownFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) close(fd);
@@ -414,7 +551,11 @@ void* KombiNav::workerStub(void* self) {
 void KombiNav::worker() {
     // An arrow left up by a killed daemon (SIGKILL after Force Stop, power loss of the HU only): clear it once. The
     // J29's cancel goes now; another cluster's waits until its transport is ready (tick).
-    if (access(kShownFile, F_OK) == 0 && !client_) stale_shown_ = true;
+    if (access(kShownFile, F_OK) == 0 && !client_ && shadow_)
+        printf("[KombiNav] a picture may be left by an earlier live run: the shadow mode leaves it for the next live "
+               "run to clear\n");
+    else if (access(kShownFile, F_OK) == 0 && !client_)
+        stale_shown_ = true;
     if (access(kShownFile, F_OK) == 0 && client_) {
         std::string detail;
         bool ok = client_->cancel(*graph_, 0.0, 5.0, &KombiNav::quitting, this, &detail);
@@ -482,6 +623,7 @@ void KombiNav::tick(double now) {
         backoff_until_ = 0;
         link_failures_ = 0;
         prev_guidance_ = false;
+        fallback_noted_ = false;
         markShown(core_->shown() || core_->sentAny());
         return;
     }
@@ -516,6 +658,11 @@ void KombiNav::tick(double now) {
         else pv = &v;
     }
     core_->step(pv, now, why);
+    if (core_->takeFallback() && !fallback_noted_) {
+        fallback_noted_ = true;
+        printf("[KombiNav] the phone sends no seconds to the next turn: using the %g mi distance rule\n",
+               settings_.approach_mi);
+    }
     if (core_->shown()) link_failures_ = 0;
     if (core_->stopped() == Core::kStoppedRejected) {
         printf("[KombiNav] %s: arrows off until the next Android Auto session (%s)\n",
