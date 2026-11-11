@@ -215,6 +215,13 @@ struct Nav {
     NavMessages m;
     Nav() { Bytes s = status(1); m.store(0x8003, &s[0], s.size()); }
     void step(int type, const char* road) { Bytes ns = navState(type, road); m.store(0x8006, &ns[0], ns.size()); }
+    // A step body that differs from step()'s only in the steps after it (the phone's next step looks the same).
+    void stepThen(int type, const char* road, int then_type, const char* then_road) {
+        std::vector<std::pair<int, std::string> > nx(1, std::make_pair(then_type, std::string(then_road)));
+        Bytes ns = navState(type, road, -1, nx);
+        m.store(0x8006, &ns[0], ns.size());
+    }
+    void guidance(int st) { Bytes s = status(st); m.store(0x8003, &s[0], s.size()); }
     void pos(int64_t metres, int secs) {
         std::string d;
         int u;
@@ -399,6 +406,83 @@ static void testTimeApproach() {
         n.pos(1500, 0);
         r.feed(n.m, 2.0);
         assert(r.core.shown() && countLog("WARN") == 0);
+    }
+}
+
+// The turn is made and the next step looks the same (same type and road): drawn again as a new maneuver, judged by
+// the time rule from scratch, whichever of its body and its position comes first; a same step's body change (lanes)
+// with a little GPS noise is not a new step.
+static void testRenewedStep() {
+    for (int order = 0; order < 2; ++order) {
+        Rig r(timeApproach());
+        Nav n;
+        n.stepThen(8, "SAME RD", 8, "SAME RD");
+        n.pos(600, 30);
+        r.feed(n.m, 0.0);
+        assert(r.core.shown() && countLog("WARN") == 1);
+        n.pos(10, 1);
+        r.feed(n.m, 1.0);
+        if (order == 0) {                                            // body, its old position, then its own
+            n.stepThen(8, "SAME RD", 7, "OTHER ST");
+            r.feed(n.m, 2.0);
+            n.pos(0, 0);
+            r.feed(n.m, 2.5);
+            assert(r.core.shown() && countLog("NEW STEP") == 0);
+            n.pos(1300, 110);
+            r.feed(n.m, 3.0);
+        } else {                                                     // its position, then its body
+            n.pos(1300, 110);
+            r.feed(n.m, 2.0);
+            assert(r.core.shown() && countLog("NEW STEP") == 0);
+            n.stepThen(8, "SAME RD", 7, "OTHER ST");
+            r.feed(n.m, 3.0);
+        }
+        assert(hasLog(order == 0 ? "NEW STEP type 8: looks like the one shown, but 0 m -> 1300 m"
+                                 : "NEW STEP type 8: looks like the one shown, but 10 m -> 1300 m"));
+        if (order == 1) {                                            // its position came first: judged on the next one
+            assert(r.core.shown() && countLog("CLEAR") == 0);
+            n.pos(1250, 75);
+            r.feed(n.m, 3.5);
+        }
+        assert(!r.core.shown() && hasLog("CLEAR (approach)"));
+        n.pos(1200, 70);
+        r.feed(n.m, 4.0);
+        assert(!r.core.shown());
+        n.pos(1000, 50);
+        r.feed(n.m, 5.0);
+        assert(r.core.shown() && countLog("WARN") == 2 && countLog("SHOW ") == 2);
+        n.pos(400, 20);
+        r.feed(n.m, 6.0);
+        assert(countLog("MAIN") == 2 && countLog("NEW STEP") == 1);            // one main prompt each
+    }
+    // the same step: its body changes near the junction and the distance wobbles up a little
+    {
+        Rig r(timeApproach());
+        Nav n;
+        n.step(8, "SAME RD");
+        n.pos(500, 25);
+        r.feed(n.m, 0.0);
+        n.pos(300, 15);
+        r.feed(n.m, 1.0);
+        n.stepThen(8, "SAME RD", 7, "OTHER ST");
+        r.feed(n.m, 1.5);
+        n.pos(360, 16);
+        r.feed(n.m, 2.0);
+        assert(r.core.shown() && countLog("NEW STEP") == 0 && countLog("SHOW ") == 1 && countLog("CLEAR") == 0);
+    }
+    // no approach rule: still drawn again, as a new maneuver
+    {
+        Rig r;
+        Nav n;
+        n.step(8, "SAME RD");
+        n.pos(300, 15);
+        r.feed(n.m, 0.0);
+        n.pos(0, 0);
+        r.feed(n.m, 1.0);
+        n.stepThen(8, "SAME RD", 7, "OTHER ST");
+        n.pos(900, 60);
+        r.feed(n.m, 2.0);
+        assert(r.core.shown() && countLog("NEW STEP") == 1 && countLog("SHOW ") == 2);
     }
 }
 
@@ -928,6 +1012,7 @@ int main() {
     yieldThroughChild((1u << KombiNav::kWatchPosixSpawn) | (1u << KombiNav::kWatchQnxSpawn), KombiNav::kWatchPopen);
     yieldThroughChild(7u, -1);                                               // nothing starts: no yield, AA carries on
     testTimeApproach();
+    testRenewedStep();
     printf("test_kombi_nav OK\n");
     return 0;
 }

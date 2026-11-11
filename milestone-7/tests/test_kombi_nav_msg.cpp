@@ -130,19 +130,19 @@ int main() {
     {
         NavMessages m = msgs(navState(7, "TEST ST"), curPos(800, "0.5", 5, 53));   // step first, then its position
         NavView v;
-        assert(m.pos_seq == 1 && viewFromMessages(m, v) && v.pos_seq == 1 && v.step_pos_seq == 0);
+        assert(m.pos_seq == 1 && viewFromMessages(m, v) && v.pos_seq == 1 && v.step_pos_seq == 0 && v.step_seq == 1);
         Bytes st = navState(8, "MAIN ST"), cp = curPos(20, "60", 6, 1);
         m.store(0x8007, &cp[0], cp.size());
         m.store(0x8006, &st[0], st.size());           // the next step, still with the old step's position
-        assert(viewFromMessages(m, v) && v.aa_type == 8 && v.pos_seq == 2 && v.step_pos_seq == 2);
+        assert(viewFromMessages(m, v) && v.aa_type == 8 && v.pos_seq == 2 && v.step_pos_seq == 2 && v.step_seq == 2);
         m.store(0x8006, &st[0], st.size());           // the same step again: not a change
         cp = curPos(1500, "0.9", 5, 95);
         m.store(0x8007, &cp[0], cp.size());
         assert(viewFromMessages(m, v) && v.pos_seq == 3 && v.step_pos_seq == 2 && v.step_s == 95);
         m.store(0x8006, &st[0], st.size());
-        assert(viewFromMessages(m, v) && v.step_pos_seq == 2);
+        assert(viewFromMessages(m, v) && v.step_pos_seq == 2 && v.step_seq == 2);
         m.clear();
-        assert(m.pos_seq == 0 && m.step_pos_seq == 0);
+        assert(m.pos_seq == 0 && m.step_pos_seq == 0 && m.step_seq == 0);
     }
     // a roundabout's exit number: legacy field 5 (and 6, its angle); the maneuver is a different one when it changes
     {

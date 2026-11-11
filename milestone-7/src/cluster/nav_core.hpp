@@ -69,6 +69,10 @@ public:
 
 private:
     enum Stage { kHidden = 0, kWarned, kMain };
+    // v is the maneuver shown (same type, road and exit), and not a new step that only looks like it.
+    bool isShown(const NavView& v) const { return has_shown_ && !renew_ && v.sameManeuver(shown_); }
+    bool renewedStep(const NavView& v);
+    void drawn(const NavView& v);
     bool approachHold(const NavView& v, double now);
     bool timeHold(const NavView& v, double now);
     bool distanceHold(const NavView& v);
@@ -101,6 +105,13 @@ private:
     bool timed_;            // it was shown by the time rule (not the distance fallback): it stays until the next one
     bool remind_;           // the main prompt is due on the maneuver shown
     bool fallback_;
+    // A next step that looks like the one shown (two right turns onto roads with the same name): the step body changed
+    // since the draw and the distance jumped up from the nearest it got. renew_ holds from then until it is drawn or
+    // cleared, so it is judged and drawn as a new maneuver.
+    uint32_t drawn_step_seq_;   // NavView::step_seq of the last draw
+    bool has_min_m_;
+    double min_m_;              // the nearest the maneuver shown got since it was drawn
+    bool renew_;
 };
 
 // iDrive route detection from the system log (NavNBTEvoController / MapViewer lines, car-seen 2026-10-31):

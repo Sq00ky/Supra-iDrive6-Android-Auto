@@ -31,6 +31,7 @@ const int kLinkGiveUp = 5;    // failed sends in a row without ever drawing: no 
 const double kExitCancelRetryS = 0.0;
 const double kCancelRetryS = 60.0;
 const double kStalePosS = 3.0;   // a new maneuver waits at most this long for a position of its own
+const double kRenewM = 100.0;    // a jump up by more than this on a changed step body = a new step that looks the same
 
 double monoS() {
     struct timespec ts;
@@ -47,7 +48,8 @@ volatile int g_mayShow = 0;   // an arrow may be up: the fatal-signal handler se
 Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
     : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
       no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning), have_next_(false), next_since_(0),
-      stage_(kHidden), timed_(false), remind_(false), fallback_(false) {
+      stage_(kHidden), timed_(false), remind_(false), fallback_(false), drawn_step_seq_(0), has_min_m_(false),
+      min_m_(0), renew_(false) {
     d_.setSettings(s);
     d_.setLog(log, log_user);
 }
@@ -78,8 +80,36 @@ bool Core::approachHold(const NavView& v, double now) {
     return timeHold(v, now);
 }
 
+// The maneuver shown, with a step body that changed since it was drawn, and a distance more than kRenewM above the
+// nearest it got: the turn was made and the next one looks the same. Without this the arrow stays up and counts up
+// to the far turn (0 yd, then most of a mile), with no time rule. A same step only counts down, give or take GPS
+// noise. The nearest, not the last, so the new position may come before or after the new step body.
+bool Core::renewedStep(const NavView& v) {
+    if (!has_shown_ || !v.sameManeuver(shown_)) return false;
+    double m;
+    if (!distanceMetres(v, m)) return false;
+    bool jump = has_min_m_ && v.step_seq != drawn_step_seq_ && m > min_m_ + kRenewM;
+    if (jump) {
+        log("NEW STEP type %d: looks like the one shown, but %.0f m -> %.0f m", v.aa_type, min_m_, m);
+        return true;
+    }
+    if (!has_min_m_ || m < min_m_) min_m_ = m;
+    has_min_m_ = true;
+    return false;
+}
+
+void Core::drawn(const NavView& v) {
+    has_shown_ = true;
+    shown_ = v;
+    drawn_step_seq_ = v.step_seq;
+    double m;
+    has_min_m_ = distanceMetres(v, m);
+    min_m_ = has_min_m_ ? m : 0;
+    renew_ = false;
+}
+
 bool Core::timeHold(const NavView& v, double now) {
-    bool same = has_shown_ && v.sameManeuver(shown_);
+    bool same = isShown(v);
     if (!have_next_ || !v.sameManeuver(next_)) {      // a new next maneuver
         have_next_ = true;
         next_ = v;
@@ -128,7 +158,7 @@ bool Core::distanceHold(const NavView& v) {
     if (s_.approach_mi <= 0) return false;
     double m;
     if (!distanceMetres(v, m)) return false;           // unknown distance: show as before (fail open)
-    bool same = has_shown_ && v.sameManeuver(shown_);  // hysteresis: same maneuver only
+    bool same = isShown(v);                            // hysteresis: same maneuver only
     double lim = s_.approach_mi * 1609.344 * (same ? s_.hysteresis : 1.0);
     if (m <= lim) return false;
     if (has_shown_) {
@@ -153,6 +183,10 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     NavView v = *in;
     // The road as it is stored in shown_, before anything compares the two (an unnamed road is " ").
     v.road = utf8Prefix(v.road.empty() ? std::string(" ") : v.road, kMaxRoad);
+    if (!renew_ && renewedStep(v)) {
+        renew_ = true;                                 // until it is drawn or cleared
+        have_next_ = false;                            // and the time rule judges it from now
+    }
     if (approachHold(v, now)) return;
     // A snapshot without a distance (0x8006 before its 0x8007): keep the last one rather than flicker "-".
     if (v.dist_text.empty() && has_shown_ && !shown_.dist_text.empty() && shown_.dist_text != "-") {
@@ -181,7 +215,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         v.aa_unit = unit;
     }
     v.dist_text = utf8Prefix(v.dist_text, kMaxDist);
-    bool new_man = !has_shown_ || !v.sameManeuver(shown_);
+    bool new_man = !isShown(v);
     bool redraw = !new_man && d_.sameManeuver(v, now);
     if (new_man || redraw) {
         ClusterDisplay::Result r = d_.showManeuver(v, now, new_man, !has_shown_);
@@ -189,8 +223,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
             fail(r);
             return;
         }
-        has_shown_ = true;
-        shown_ = v;
+        drawn(v);
         last_dist_ = v;
         last_dist_t_ = now;
         remind_ = false;                               // drawn whole: the panel is on anyway
@@ -227,6 +260,8 @@ void Core::step(const NavView* in, double now, const char* why_none) {
 void Core::forget() {
     has_shown_ = false;
     remind_ = false;
+    renew_ = false;
+    has_min_m_ = false;
     shown_ = NavView();
     last_dist_ = NavView();
     off_ = false;
