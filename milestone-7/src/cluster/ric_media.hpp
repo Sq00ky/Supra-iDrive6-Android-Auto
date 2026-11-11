@@ -4,19 +4,25 @@
 // list the thumb wheel brings up), J29. Off unless NBT_KOMBI_MEDIA=1.
 //
 // Why it works the way it does (car findings, 2026-11-10):
-//   - iDrive re-sends that list to the KOMBI on every thumb-wheel step (list, three values, commit), always naming
-//     its own text model for the middle row. With the phone's music on the car's browser source that text is the
-//     last Bluetooth track, and it never changes.
-//   - The KOMBI takes list-service frames from a second client (tools/ricprobe), so the title can be replaced. But
-//     anything sent on our own schedule is overwritten by iDrive's next list, exactly when the driver looks.
-//   - So the daemon listens to iDrive's requests to the KOMBI (cluster/ric_sniff.hpp) and answers each of iDrive's
-//     commits with the same list, the middle row pointing at a text model of our own, and a commit. iDrive's own text
-//     models are never written: it remembers which one holds which Bluetooth title.
-//   - The handle and the list are taken from what iDrive just sent, never from constants. A list that is not that
-//     three-row list (another source's list, another car's layout) is left alone.
+//   - iDrive re-sends that list to the KOMBI whenever the thumb wheel is turned or pressed and on every skip (list,
+//     three values, commit), always naming its own text model for the middle row. With the phone's music on the car's
+//     browser source that text is the last Bluetooth track, and it never changes.
+//   - The KOMBI takes text frames from a second client and iDrive's next list shows them (tools/ricprobe).
+//   - v1.9.59 answered each of iDrive's lists with the same list naming a text model of our own, plus a commit. The
+//     KOMBI answered E_OK to all of it and the display kept iDrive's title: a list from a second client is not what
+//     gets drawn (or not without more than list + commit).
+//   - So the default (mode "slot") does the one thing the car has shown working: the phone's title is written into
+//     the text model iDrive's list names for the middle row. iDrive draws it with its next list, and it is written
+//     when the title changes, not when the driver looks, so there is nothing to race. Cost: iDrive remembers that
+//     model as the text of its last Bluetooth track, so that one track shows the last Android Auto title if it comes
+//     back over Bluetooth before the head unit restarts.
+//   - Mode "list" (NBT_KOMBI_MEDIA_MODE=list) is the v1.9.59 way with iDrive's three value frames replayed as well,
+//     to find out whether they are what makes the KOMBI draw. It never writes iDrive's text models.
+//   - Handle, list and text model are taken from what iDrive just sent, never from constants. A list that is not
+//     that three-row list (another source's list, another car's layout) is left alone.
 //
 // MediaList is the decision logic (no I/O, host-tested in tests/test_ric_media.cpp); KombiMedia is the worker that
-// listens, and sends on its own connection to the KOMBI.
+// listens (cluster/ric_sniff.hpp), and sends on its own connection to the KOMBI.
 #ifndef CLUSTER_RIC_MEDIA_HPP
 #define CLUSTER_RIC_MEDIA_HPP
 
@@ -44,22 +50,31 @@ struct OutFrame {
 
 class MediaList {
 public:
-    explicit MediaList(uint32_t index = kDefaultTextIndex, uint16_t ownClient = kOwnClient)
-        : own_(ownClient), base_(index), index_(index), show_(false), handle_(0), titleAt_(0), idriveTitle_(0),
-          pending_(false), open_(false), sentValid_(false), sentIndex_(0), lists_(0), others_(0), answered_(0),
-          moved_(0) {}
+    enum Mode { kSlot = 0, kList = 1 };
+
+    explicit MediaList(Mode mode = kSlot, uint32_t index = kDefaultTextIndex, uint16_t ownClient = kOwnClient)
+        : mode_(mode), own_(ownClient), base_(index), index_(index), show_(false), handle_(0), titleAt_(0),
+          idriveTitle_(0), pending_(false), open_(false), sentValid_(false), sentId_(0), lists_(0), others_(0),
+          answered_(0), moved_(0) {}
 
     // A message seen on the wire to the KOMBI. Frames to send are appended to out.
     void onSniffed(const SomeipMsg& m, std::vector<OutFrame>* out) {
         if (m.service != kService || m.type != 0x00 || m.client == own_ || m.body.size() < 4) return;
         if (m.method == kMethodText) {
-            if (m.body.size() >= 8 && kombinav::getU32(m.body, 4) == textId()) {    // iDrive reached our index
-                index_ = base_ + ((index_ - base_ + 1) % (uint32_t)kIndexSpan);
-                ++moved_;
+            if (m.body.size() < 8) return;
+            const uint32_t id = kombinav::getU32(m.body, 4);
+            if (mode_ == kList) {
+                if (id == textId()) {                           // iDrive reached our index: ours moves
+                    index_ = base_ + ((index_ - base_ + 1) % (uint32_t)kIndexSpan);
+                    ++moved_;
+                }
+            } else if (sentValid_ && id == sentId_) {
+                sentValid_ = false;                             // iDrive put a text of its own into that model
             }
         } else if (m.method == kMethodList) {
             if (m.body.size() < 8 || kombinav::getU32(m.body, 4) != kListModel) return;
             size_t at = 0;
+            values_.clear();
             if (trackListShape(m.body, &at)) {
                 list_ = m.body;
                 titleAt_ = at;
@@ -76,6 +91,7 @@ public:
         } else if (m.method == kMethodValue) {
             uint32_t v = 0;
             if (shownValue(m.body, &v)) open_ = v == kListModel;
+            if (pending_ && values_.size() < 8) values_.push_back(m.body);     // the values of this group
         } else if (m.method == kMethodCommit) {
             if (!pending_ || kombinav::getU32(m.body, 0) != handle_) return;
             pending_ = false;
@@ -83,20 +99,24 @@ public:
         }
     }
 
-    // The title to show, and whether Android Auto is what is playing. A new title while the list is up is sent at
-    // once (the driver skipped a track and is looking at it); otherwise it waits for iDrive's next list.
+    // The title to show, and whether Android Auto is what is playing.
+    //   slot: a new title is written as soon as iDrive's text model is known, so the next look already shows it.
+    //   list: a new title while the list is up is sent at once; otherwise it waits for iDrive's next list.
     void setTitle(const std::string& title, bool show, std::vector<OutFrame>* out) {
         const bool on = show && !title.empty();
         const bool changed = title != title_ || on != show_;
         title_ = title;
         show_ = on;
-        if (changed && show_ && open_ && !pending_ && !list_.empty()) answer(out);
+        if (!changed || !show_ || pending_ || list_.empty()) return;
+        if (mode_ == kSlot || open_) answer(out);
     }
 
     // A frame did not get through: the text goes out again with the next answer.
     void sendFailed() { sentValid_ = false; }
 
-    uint32_t textId() const { return 0x03000000u | index_; }
+    Mode mode() const { return mode_; }
+    uint32_t textId() const { return 0x03000000u | index_; }                // our own text model (list mode)
+    uint32_t shownId() const { return mode_ == kSlot ? idriveTitle_ : textId(); }   // where the title goes
     uint32_t handle() const { return handle_; }
     uint32_t idriveTitleId() const { return idriveTitle_; }
     unsigned lists() const { return lists_; }
@@ -108,32 +128,40 @@ public:
 
 private:
     void answer(std::vector<OutFrame>* out) {
-        if (!sentValid_ || sentIndex_ != index_ || sentTitle_ != title_) {
+        const uint32_t id = shownId();
+        const bool textDue = !sentValid_ || sentId_ != id || sentTitle_ != title_;
+        if (mode_ == kSlot && !textDue) return;                 // our title is already in iDrive's text model
+        if (textDue) {
             Bytes text;
-            if (!textFrame(handle_, index_, title_, text)) return;
+            if (!textFrame(handle_, id & 0xFFFFFFu, title_, text)) return;
             out->push_back(OutFrame(kMethodText, text));
             sentValid_ = true;
-            sentIndex_ = index_;
+            sentId_ = id;
             sentTitle_ = title_;
         }
-        Bytes l = list_;
-        kombinav::putU32(l, titleAt_, textId());
-        out->push_back(OutFrame(kMethodList, l));
+        if (mode_ == kList) {
+            Bytes l = list_;
+            kombinav::putU32(l, titleAt_, id);
+            out->push_back(OutFrame(kMethodList, l));
+            for (size_t i = 0; i < values_.size(); ++i) out->push_back(OutFrame(kMethodValue, values_[i]));
+        }
         out->push_back(OutFrame(kMethodCommit, commitFrame(handle_)));
         ++answered_;
     }
 
+    Mode mode_;
     uint16_t own_;
     uint32_t base_, index_;
     std::string title_;
     bool show_;
     Bytes list_, other_;
+    std::vector<Bytes> values_;
     uint32_t handle_;
     size_t titleAt_;
     uint32_t idriveTitle_;
     bool pending_, open_;
     bool sentValid_;
-    uint32_t sentIndex_;
+    uint32_t sentId_;
     std::string sentTitle_;
     unsigned lists_, others_, answered_, moved_;
 };
@@ -155,7 +183,7 @@ public:
 
     static bool settingOn(const char* env);     // NBT_KOMBI_MEDIA: only "1" turns it on
 
-    // Reads NBT_KOMBI_MEDIA, NBT_KOMBI_MEDIA_IF, NBT_KOMBI_MEDIA_INDEX and NBT_KOMBI_NAV_HOST / _PORT, prints what is
+    // Reads NBT_KOMBI_MEDIA, NBT_KOMBI_MEDIA_MODE, _IF, _INDEX and NBT_KOMBI_NAV_HOST / _PORT, prints what is
     // in effect and starts the worker (idle until something plays). audioModeOk = the audio mode is not Bluetooth.
     // source: host tests only (not owned).
     void start(bool audioModeOk, FrameSource* source = NULL);
@@ -181,6 +209,7 @@ private:
     std::string host_, if_;
     uint16_t port_;
     uint32_t ip_, index_;
+    MediaList::Mode mode_;
     FrameSource* src_;
     bool ownSrc_;
     int fd_;

@@ -207,7 +207,7 @@ FrameSource* defaultSource(const std::string& ifname, uint32_t ip) {
 
 KombiMedia::KombiMedia()
     : running_(false), stop_(false), show_(false), answered_(0), port_(30502), ip_(0), index_(kDefaultTextIndex),
-      src_(NULL), ownSrc_(false), fd_(-1), session_(0x0100), fails_(0) {
+      mode_(MediaList::kSlot), src_(NULL), ownSrc_(false), fd_(-1), session_(0x0100), fails_(0) {
     pthread_mutex_init(&mu_, NULL);
     pthread_cond_init(&cv_, NULL);
 }
@@ -240,6 +240,8 @@ void KombiMedia::start(bool audioModeOk, FrameSource* source) {
     e = getenv("NBT_KOMBI_MEDIA_INDEX");
     const unsigned long idx = (e && *e) ? strtoul(e, NULL, 0) : 0;
     index_ = (idx >= 1 && idx <= 0xFFFFFFul - (unsigned long)kIndexSpan) ? (uint32_t)idx : kDefaultTextIndex;
+    e = getenv("NBT_KOMBI_MEDIA_MODE");
+    mode_ = (e && !strcmp(e, "list")) ? MediaList::kList : MediaList::kSlot;
     struct in_addr a;
     if (inet_aton(host_.c_str(), &a) == 0) {
         printf("[KombiMedia] track title in the cluster list: off, '%s' is not an address\n", host_.c_str());
@@ -260,9 +262,14 @@ void KombiMedia::start(bool audioModeOk, FrameSource* source) {
         return;
     }
     running_ = true;
-    printf("[KombiMedia] track title in the cluster list: on (NBT_KOMBI_MEDIA=1) - listens on %s while Android Auto "
-           "plays, KOMBI %s:%u, own text model 0x%08X\n", if_.c_str(), host_.c_str(), (unsigned)port_,
-           0x03000000u | index_);
+    if (mode_ == MediaList::kSlot)
+        printf("[KombiMedia] track title in the cluster list: on (NBT_KOMBI_MEDIA=1), mode slot: written into iDrive's "
+               "own title text - listens on %s while Android Auto plays, KOMBI %s:%u\n", if_.c_str(), host_.c_str(),
+               (unsigned)port_);
+    else
+        printf("[KombiMedia] track title in the cluster list: on (NBT_KOMBI_MEDIA=1), mode list "
+               "(NBT_KOMBI_MEDIA_MODE): iDrive's list answered with our own text model 0x%08X - listens on %s while "
+               "Android Auto plays, KOMBI %s:%u\n", 0x03000000u | index_, if_.c_str(), host_.c_str(), (unsigned)port_);
 }
 
 void KombiMedia::stop() {
@@ -345,7 +352,7 @@ bool KombiMedia::sendAll(const std::vector<OutFrame>& frames, std::string* why) 
 }
 
 void KombiMedia::worker() {
-    MediaList logic(index_);
+    MediaList logic(mode_, index_);
     StreamSniffer sniff;
     bool open = false, dead = false;
     uint32_t idleSince = 0;
@@ -379,7 +386,7 @@ void KombiMedia::worker() {
             }
             open = true;
             sniff = StreamSniffer();
-            logic = MediaList(index_);
+            logic = MediaList(mode_, index_);
             seenLists = seenOthers = seenMoved = 0;
             seenHandle = 0;
             base = 0;
@@ -441,8 +448,8 @@ void KombiMedia::worker() {
             for (size_t i = 0; i < out.size(); ++i) text = text || out[i].method == kMethodText;
             std::string why;
             if (sendAll(out, &why)) {
-                if (text) printf("[KombiMedia] cluster list: '%s' (text model 0x%08X, handle 0x%X)\n", title.c_str(),
-                                 logic.textId(), logic.handle());
+                if (text) printf("[KombiMedia] cluster list: '%s' (%s text model 0x%08X, handle 0x%X)\n", title.c_str(),
+                                 mode_ == MediaList::kSlot ? "iDrive's" : "own", logic.shownId(), logic.handle());
                 fails_ = 0;
             } else {
                 logic.sendFailed();

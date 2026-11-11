@@ -206,7 +206,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
 >
-> **v1.9.59-kombimedia (first car test pending; off unless `NBT_KOMBI_MEDIA=1` is in `nbt-aad.env`): the Android Auto
+> **v1.9.60-kombimedia (first working car test pending; off unless `NBT_KOMBI_MEDIA=1` is in `nbt-aad.env`): the Android Auto
 > track title in the instrument cluster's track list (GR Supra).** With the phone's music on the car's own audio source
 > (Use Native Audio), the list the thumb wheel brings up - Previous title / the track / Next title - kept showing the
 > last Bluetooth track. iDrive re-sends that list to the KOMBI on every thumb-wheel step (SOME/IP service `0xB00E`, the
@@ -224,7 +224,13 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > record's header against `sizeof(struct bpf_hdr)` (20) where the kernel writes 18 bytes, so every record was dropped.
 > v1.9.59 takes the length from the record (host-tested now) and says what the capture sees:
 > `[KombiMedia] the capture works: first packet to the KOMBI seen`, or after 30 s without one
-> `[KombiMedia] no packet to the KOMBI seen on vlan73 ...`.
+> `[KombiMedia] no packet to the KOMBI seen on vlan73 ...`. v1.9.59 on the car: the capture works, the KOMBI answers
+> E_OK to our text, list and commit, and the display keeps iDrive's title - a list from a second client is not what
+> the cluster draws. v1.9.60 therefore does the one thing `tools/ricprobe` showed on the display: the title is
+> written into the text model iDrive's own list names for the middle row (mode `slot`, the default), when the title
+> changes rather than when the driver looks. iDrive remembers that model as the text of its last Bluetooth track,
+> so that one track shows the last Android Auto title if it comes back over Bluetooth before the head unit restarts.
+> `NBT_KOMBI_MEDIA_MODE=list` is the v1.9.59 way, now with iDrive's three value frames replayed after the list.
 >
 > **v1.9.57-cpcompat + rhmiapp-54-cpcompat (CarPlay fixes from v1.9.48-v1.9.50, good feedback from the #156 testers;
 > the checkbox confirmed on the car on this build): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
@@ -882,6 +888,7 @@ Leave these unset unless you are testing.
 | `NBT_CTL_PORT` | Control port (default 52790) |
 | `NBT_KOMBI_NAV` | `1` / `0` forces the cluster/HUD arrows on / off, whatever the menu checkbox says (default: the checkbox) |
 | `NBT_KOMBI_MEDIA=1` | Show the Android Auto track title in the instrument cluster's track list (off by default; not in Bluetooth audio mode) |
+| `NBT_KOMBI_MEDIA_MODE` | `slot` (default): the title is written into iDrive's own title text model. `list`: iDrive's list is answered with a list naming a text model of our own (not shown by the cluster so far) |
 | `NBT_KOMBI_MEDIA_IF`, `NBT_KOMBI_MEDIA_INDEX` | The interface iDrive's requests to the KOMBI are read from (default `vlan73`) and the index of our own text model (default `0x7E01`) |
 | `NBT_KOMBI_NAV_APPROACH_MI` | Show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once) |
 | `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |

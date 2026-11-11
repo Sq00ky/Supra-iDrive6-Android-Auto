@@ -33,40 +33,42 @@ static void group(MediaList& l, std::vector<OutFrame>* out, const char* list = k
     l.onSniffed(req(0x0004, kCommit), out);
 }
 
-static void logicTests() {
+static void listModeTests() {
     Bytes text, want;
     std::vector<OutFrame> out;
 
     // nothing playing: iDrive's list is left alone
     {
-        MediaList l;
+        MediaList l(MediaList::kList);
         group(l, &out);
         assert(out.empty() && l.lists() == 1 && l.handle() == 0x64 && l.idriveTitleId() == 0x03000003 && l.open());
     }
-    // playing: iDrive's commit is answered with our text, the same list naming it, and a commit
-    MediaList l;
+    // playing: iDrive's commit is answered with our text, the same list naming it, iDrive's three values, a commit
+    MediaList l(MediaList::kList);
     l.setTitle("Brighter", true, &out);
     assert(out.empty());                        // no list from iDrive yet: nothing to answer
     group(l, &out);
-    assert(out.size() == 3);
+    assert(out.size() == 6);
     assert(textFrame(0x64, kDefaultTextIndex, "Brighter", text));
     assert(out[0].method == 0x0003 && out[0].body == text);
     want = hex(kListBody);
     assert(want[65] == 0x03 && want[68] == 0x03);
     want[65] = 0x03; want[66] = 0x00; want[67] = 0x7E; want[68] = 0x01;
     assert(out[1].method == 0x000B && out[1].body == want);
-    assert(out[2].method == 0x0004 && out[2].body == hex(kCommit));
-    assert(l.answered() == 1 && l.textId() == 0x03007E01);
-    // the next wheel step: the text is already there, only list + commit
+    assert(out[2].method == 0x0009 && out[2].body == hex(kValue70));
+    assert(out[3].method == 0x0009 && out[3].body == hex(kValue71));
+    assert(out[4].method == 0x0009 && out[4].body == hex(kShown));
+    assert(out[5].method == 0x0004 && out[5].body == hex(kCommit));
+    assert(l.answered() == 1 && l.textId() == 0x03007E01 && l.shownId() == 0x03007E01);
+    // the next wheel step: the text is already there
     out.clear();
     group(l, &out);
-    assert(out.size() == 2 && out[0].method == 0x000B && out[0].body == want && out[1].method == 0x0004);
+    assert(out.size() == 5 && out[0].method == 0x000B && out[0].body == want && out[4].method == 0x0004);
     // a new title while the list is up goes out at once
     out.clear();
     l.setTitle("Complicated", true, &out);
-    assert(out.size() == 3 && out[0].method == 0x0003 && out[1].body == want);
+    assert(out.size() == 6 && out[0].method == 0x0003 && out[1].body == want);
     assert(textFrame(0x64, kDefaultTextIndex, "Complicated", text) && out[0].body == text);
-    // the same title again: nothing
     out.clear();
     l.setTitle("Complicated", true, &out);
     assert(out.empty());
@@ -76,20 +78,19 @@ static void logicTests() {
     l.setTitle("Bukkowasu!!", true, &out);
     assert(out.empty());
     group(l, &out);
-    assert(out.size() == 3 && out[0].method == 0x0003);
+    assert(out.size() == 6 && out[0].method == 0x0003);
     // paused / stopped: iDrive's next list stands
     out.clear();
     l.setTitle("Bukkowasu!!", false, &out);
     group(l, &out);
     assert(out.empty());
-    // playing again with the list up: list + commit (the text is still ours)
     l.setTitle("Bukkowasu!!", true, &out);
-    assert(out.size() == 2 && out[0].method == 0x000B);
+    assert(out.size() == 5 && out[0].method == 0x000B);
     // a frame was lost: the text goes out again
     out.clear();
     l.sendFailed();
     group(l, &out);
-    assert(out.size() == 3 && out[0].method == 0x0003);
+    assert(out.size() == 6 && out[0].method == 0x0003);
     // our own frames, replies, other services and other handles never trigger anything
     out.clear();
     l.onSniffed(req(0x000B, kListBody, 0x7E01), &out);
@@ -103,7 +104,7 @@ static void logicTests() {
     l.onSniffed(req(0x0004, "000000c8"), &out); // another instance's commit
     assert(out.empty());
     l.onSniffed(req(0x0004, kCommit), &out);
-    assert(out.size() == 2);
+    assert(out.size() == 2);                    // list + commit: this group carried no values
     // iDrive reaches our text index: ours moves, and the text is sent again under the new id
     out.clear();
     assert(textFrame(0x64, kDefaultTextIndex, "Some Bluetooth title", text));
@@ -112,9 +113,9 @@ static void logicTests() {
     l.onSniffed(theirs, &out);
     assert(l.moved() == 1 && l.textId() == 0x03007E02);
     group(l, &out);
-    assert(out.size() == 3 && out[0].method == 0x0003 && nbt::kombinav::getU32(out[0].body, 4) == 0x03007E02);
+    assert(out.size() == 6 && out[0].method == 0x0003 && nbt::kombinav::getU32(out[0].body, 4) == 0x03007E02);
     assert(nbt::kombinav::getU32(out[1].body, 65) == 0x03007E02);
-    // another kind of list on the same model (not previous / current / next): left alone, also on a title change
+    // another kind of list on the same model: left alone, also on a title change
     out.clear();
     Bytes other = hex(kListBody);
     other[17 + 25 + 4 + 3] = 0x09;              // first row's icon is not the "previous" icon
@@ -125,16 +126,9 @@ static void logicTests() {
     l.onSniffed(req(0x0004, kCommit), &out);
     l.setTitle("New Song", true, &out);
     assert(out.empty() && l.others() == 1 && l.otherList() == other);
-    // an empty title is nothing to show
-    {
-        MediaList e;
-        e.setTitle("", true, &out);
-        group(e, &out);
-        assert(out.empty());
-    }
     // the index moves within its span and wraps
     {
-        MediaList w(100);
+        MediaList w(MediaList::kList, 100);
         for (int i = 0; i < kIndexSpan; ++i) {
             assert(textFrame(0x64, 100 + (uint32_t)i, "x", text));
             SomeipMsg t = req(0x0003, kCommit);
@@ -143,6 +137,103 @@ static void logicTests() {
         }
         assert(w.textId() == (0x03000000u | 100) && w.moved() == (unsigned)kIndexSpan);
     }
+}
+
+// The default: the title goes into the text model iDrive's own list names for the middle row.
+static void slotModeTests() {
+    Bytes text;
+    std::vector<OutFrame> out;
+    MediaList s;
+    assert(s.mode() == MediaList::kSlot);
+    // nothing playing, or no list seen yet: nothing is written
+    group(s, &out);
+    assert(out.empty() && s.lists() == 1 && s.shownId() == 0x03000003);
+    MediaList l;
+    l.setTitle("Brighter", true, &out);
+    assert(out.empty());
+    // iDrive's list names text model 0x03000003: our title goes there, with a commit, and nothing else
+    group(l, &out);
+    assert(out.size() == 2);
+    assert(textFrame(0x64, 3, "Brighter", text));
+    assert(out[0].method == 0x0003 && out[0].body == text);
+    assert(out[1].method == 0x0004 && out[1].body == hex(kCommit));
+    assert(l.answered() == 1 && l.shownId() == 0x03000003);
+    // further lists: the title is already there, nothing is sent
+    out.clear();
+    group(l, &out);
+    group(l, &out);
+    assert(out.empty() && l.answered() == 1);
+    // a new title is written at once, whether the list is up or not
+    l.setTitle("Complicated", true, &out);
+    assert(out.size() == 2 && textFrame(0x64, 3, "Complicated", text) && out[0].body == text);
+    out.clear();
+    l.onSniffed(req(0x0009, kClosed), &out);
+    l.setTitle("Bukkowasu!!", true, &out);
+    assert(out.size() == 2 && textFrame(0x64, 3, "Bukkowasu!!", text) && out[0].body == text && out[1].method == 0x0004);
+    // iDrive's list names another text model (its Bluetooth track changed): the title follows it
+    out.clear();
+    Bytes moved = hex(kListBody);
+    moved[68] = 0x05;
+    SomeipMsg lm = req(0x000B, kCommit);
+    lm.body = moved;
+    l.onSniffed(lm, &out);
+    assert(out.empty());
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(out.size() == 2 && textFrame(0x64, 5, "Bukkowasu!!", text) && out[0].body == text && l.shownId() == 0x03000005);
+    // iDrive writes a text of its own into that model: ours goes back in after its next list
+    out.clear();
+    assert(textFrame(0x64, 5, "A Bluetooth title", text));
+    SomeipMsg theirs = req(0x0003, kCommit);
+    theirs.body = text;
+    l.onSniffed(theirs, &out);
+    assert(out.empty());
+    l.onSniffed(lm, &out);
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(out.size() == 2 && out[0].method == 0x0003);
+    // iDrive's texts in other models are none of our business
+    out.clear();
+    assert(textFrame(0x64, 9, "Another title", text));
+    theirs.body = text;
+    l.onSniffed(theirs, &out);
+    l.onSniffed(lm, &out);
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(out.empty());
+    // paused: nothing is written; playing again with the title still in place: nothing either
+    l.setTitle("Bukkowasu!!", false, &out);
+    l.setTitle("Other", false, &out);
+    l.onSniffed(lm, &out);
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(out.empty());
+    l.setTitle("Bukkowasu!!", true, &out);
+    assert(out.empty());
+    // a frame was lost: written again after the next list
+    l.sendFailed();
+    l.onSniffed(lm, &out);
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(out.size() == 2);
+    // our own frames are not iDrive's
+    out.clear();
+    theirs.client = 0x7E01;
+    assert(textFrame(0x64, 5, "ours", text));
+    theirs.body = text;
+    l.onSniffed(theirs, &out);
+    l.onSniffed(lm, &out);
+    l.onSniffed(req(0x0004, kCommit), &out);
+    assert(out.empty());
+    // another kind of list: nothing is written, also on a title change
+    Bytes other = hex(kListBody);
+    other[17 + 25 + 4 + 3] = 0x09;
+    SomeipMsg om = req(0x000B, kCommit);
+    om.body = other;
+    l.onSniffed(om, &out);
+    l.onSniffed(req(0x0004, kCommit), &out);
+    l.setTitle("New Song", true, &out);
+    assert(out.empty() && l.others() == 1);
+    // an empty title is nothing to show
+    MediaList e;
+    e.setTitle("", true, &out);
+    group(e, &out);
+    assert(out.empty());
 }
 
 // ---- end to end ------------------------------------------------------------------------------------------------
@@ -285,28 +376,24 @@ static void endToEnd() {
     for (int i = 0; i < 200 && src.opens() == 0; ++i) usleep(10000);
     assert(src.opens() == 1);
     usleep(100000);
-    assert(kombiCount() == 0 || kombiCount() == 3);   // the early group may or may not have been picked up
+    assert(kombiCount() == 0 || kombiCount() == 2);   // the early group may or may not have been picked up
     wireGroup(port);
-    assert(waitFor(3));
-    Bytes text, want = hex(kListBody);
-    want[65] = 0x03; want[66] = 0x00; want[67] = 0x7E; want[68] = 0x01;
+    assert(waitFor(2));
+    usleep(300000);                             // an answer to the early group, if any, is the same two frames
+    Bytes text;
     pthread_mutex_lock(&g_mu);
-    assert(textFrame(0x64, kDefaultTextIndex, "Song A", text));
+    assert(g_kombi.size() == 2);                // written once: the second list finds the title in place
+    assert(textFrame(0x64, 3, "Song A", text)); // iDrive's own title text model, 0x03000003 in the captured list
     assert(g_kombi[0].method == 0x0003 && g_kombi[0].body == text);
-    assert(g_kombi[1].method == 0x000B && g_kombi[1].body == want);
-    assert(g_kombi[2].method == 0x0004 && g_kombi[2].body == hex(kCommit));
+    assert(g_kombi[1].method == 0x0004 && g_kombi[1].body == hex(kCommit));
     g_kombi.clear();
     pthread_mutex_unlock(&g_mu);
-    usleep(300000);                             // let a possible answer to the early group drain
-    pthread_mutex_lock(&g_mu);
-    g_kombi.clear();
-    pthread_mutex_unlock(&g_mu);
-    // the driver skips a track: the list is up, the phone reports the new song, it goes out without a new list
+    // the driver skips a track: the phone reports the new song and it is written at once
     km.update("Song B", true);
-    assert(waitFor(3));
+    assert(waitFor(2));
     pthread_mutex_lock(&g_mu);
-    assert(textFrame(0x64, kDefaultTextIndex, "Song B", text));
-    assert(g_kombi[0].method == 0x0003 && g_kombi[0].body == text && g_kombi[1].body == want && g_kombi[2].method == 0x0004);
+    assert(textFrame(0x64, 3, "Song B", text));
+    assert(g_kombi.size() == 2 && g_kombi[0].method == 0x0003 && g_kombi[0].body == text && g_kombi[1].method == 0x0004);
     g_kombi.clear();
     pthread_mutex_unlock(&g_mu);
     // frames to another host or port are not iDrive's list traffic
@@ -330,7 +417,8 @@ static void endToEnd() {
 }
 
 int main() {
-    logicTests();
+    listModeTests();
+    slotModeTests();
     endToEnd();
     printf("test_ric_media OK\n");
     return 0;
