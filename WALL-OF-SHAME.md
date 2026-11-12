@@ -4,5 +4,6 @@
 3. Aktiv Tuninghaus
 4. APEX Garaj Timişoara
 5. Codemybm Téch / CodeMyBM_UK
+6. bmw_coding_resolution
 
 If you find any other resellers, please submit an issue. They'll be listed here for all eternity.
