@@ -105,6 +105,7 @@ public:
     // Inputs. now: monotonic ms.
     void setLink(bool up, uint16_t self, uint32_t now);
     void setHost(uint16_t host, uint32_t now);
+    void setReplyTag(uint32_t tag) { replyTag_ = tag; } // set before link-up; client registration tag
     void onMessage(const most::View& m, uint32_t now);
     void tick(uint32_t now);                  // timeouts and the end of the navigation's route
     void reset(uint32_t now);                 // leave kFailed
@@ -128,12 +129,17 @@ public:
     TerminalStats stats() const { return stats_; }
 
 private:
-    struct Echo { uint16_t fkt; uint32_t ms; std::vector<uint8_t> payload; };
+    struct Echo { uint16_t fkt; uint32_t ms, tag; std::vector<uint8_t> payload; };
     std::vector<Echo> echoes_;
     bool ownEcho(const most::View& m, uint32_t now) const;
     struct Size { uint16_t handle, width, height; };
     std::vector<Size> sizes_;
-    struct InFlight { uint16_t fkt, handle; uint32_t sentMs; };
+    struct InFlight { uint16_t fkt, handle; uint32_t sentMs, tag; };
+    // Registered routing tags are not transaction IDs. Never repeat a size query
+    // for the same peer/registration: an old reply could match the new query.
+    struct SizeQuery { uint16_t host, self, handle; uint32_t tag; };
+    std::vector<SizeQuery> sizeQueries_;
+    uint32_t replyTag_;
 
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);

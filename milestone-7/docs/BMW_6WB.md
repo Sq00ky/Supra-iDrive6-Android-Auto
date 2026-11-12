@@ -3,7 +3,8 @@
 This backend adds `NBT_CLUSTER=6wb` to the existing Android Auto navigation
 pipeline. It targets F-series BMWs with NBT EVO and an original 6WB, initially
 an F31 LCI (2018), without changing the J29 or 6WA backend defaults.
-**It has not been compiled with the QNX ARM toolchain or tested on that car.**
+**The corrected source has not been compiled with the QNX ARM toolchain or
+validated for live rendering on that car. The capture below covers one query only.**
 
 ## Implementation and provenance
 
@@ -35,6 +36,47 @@ Notices apply; retain these attributions when distributing the adapted code.
 | `src/cluster/hud6wb_artwork.*` | Maneuver outlines, roundabouts, exits and lanes |
 | `src/cluster/hud6wb_codec.*` | Text, distance bar, ABGR RLE32 and optional road shields |
 | `tests/test_hud6wb.cpp` | Host tests with fake MOST/DSI and a synthetic cluster |
+
+## F31 ImageGetSize capture and parser correction
+
+A stationary F31 LCI 2018 / NBT EVO ID6 capture with NBTevo_V20153I
+observed the OEM navigation frame 0x17 switch off and the terminal become ready.
+One live ImageGetSize call for that handle received ResultAck with six bytes:
+`00 17 01 35 01 4A` (handle 0x0017, width 309, height 330, all BE16).
+The old seven-byte result (selector byte followed by dimensions) existed in
+synthetic tests, without a hardware capture justifying it; it is not accepted.
+The request still includes its existing selector byte.
+
+The result is accepted only for a pending function/handle and return-routing
+tag, with positive dimensions and before the original deadline. Invalid,
+uncorrelated, duplicate and late results do not populate the size cache or
+complete another query. A correlated ErrorAck still stops the terminal.
+The registered tag is obtained from the existing MOST client; no address/tag
+is hard-coded and the send format is unchanged. Other cluster drivers do not
+use this strict size-result path.
+
+The tag is routing identity, not a transaction sequence. A size query must not
+be repeated for the same host/local-address/tag/handle during this terminal's
+lifetime: it cannot distinguish a delayed old result from a new result. The
+bounded history refuses such a retry rather than guessing. After OEM navigation
+yields back, already validated dimensions from the unchanged link/host cache
+are reused without repeating queries. Revalidation after an interrupted query
+batch may stop safely; there is no automatic retry.
+Process restart is not proof that queued replies have disappeared.
+
+The observed result was logged after a 3000 ms timeout. The capture lacks an
+explicit dispatch timestamp, so it cannot establish the actual wire latency.
+The timeout remains 3000 ms. Query dispatch/deadline, send-return duration,
+valid-result elapsed time and timeout timestamps are now logged separately;
+dispatch timing is not a measurement of delivery onto the MOST bus.
+
+Software tests replay the six-byte result and exercise invalid lengths, the
+unsupported seven-byte shape, zero sizes, wrong peer/function/instance/tag/handle,
+duplicates, mirrored results and expiration with or without a prior timer tick.
+They do not establish hardware rendering. Seven remaining surfaces, actual
+rendering, OEM arbitration and this corrected ARM binary still need vehicle
+validation. Before the next diagnostic start, restore `NBT_HUDTERM=log` on the
+vehicle: its configuration is not changed by this source update.
 
 ## Selection and shadow mode
 
@@ -111,7 +153,7 @@ Live operation requires all of the following:
 4. Yield when foreign navigation traffic is observed; drop queued work without
    sending cleanup over the OEM navigation. Correlate replies by method,
    handle and method-specific payload, including narrowly matched mirrored
-   replies. Unexpected replies, timeouts and ErrorAck stop drawing.
+   replies. Invalid size results are ignored; timeouts and correlated ErrorAck stop drawing.
 
 No instance allocation, resolution switching, handle scan or guessed session
 initialization is attempted. Error `0x41` is not assigned an unproven meaning

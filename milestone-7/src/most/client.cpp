@@ -174,6 +174,13 @@ uint16_t Client::selfAddress() const {
     return a;
 }
 
+uint32_t Client::registeredHeaderTag() const {
+    pthread_mutex_lock(&lock_);
+    uint32_t tag = clientId_;
+    pthread_mutex_unlock(&lock_);
+    return tag;
+}
+
 bool Client::request(DsiClient* c, uint32_t id, const std::vector<uint8_t>& p) {
     pthread_mutex_lock(&sendLock_);
     bool ok = c->sendRequest(id, p);

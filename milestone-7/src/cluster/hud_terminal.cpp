@@ -50,7 +50,7 @@ const char* submitResultName(SubmitResult r) {
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
 Core::Core(const Config& cfg)
-    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(cfg.initialNavActive),
+    : replyTag_(0xffffu), cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(cfg.initialNavActive),
       routeOn_(cfg.initialNavActive), frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
@@ -233,16 +233,33 @@ bool Core::next(uint32_t now, most::Msg& out) {
     if (nextCall_ == 0) batchStartMs_ = now;
     out.txType = c.txType >= 0 ? (uint32_t)c.txType : cfg_.txType;
     if (cfg_.useFixedTag) out.hdrTag = cfg_.fixedTag;
+    const uint32_t replyTag = cfg_.useFixedTag && cfg_.fixedTag == 0xffffu ? replyTag_ : out.hdrTag;
+    if (cfg_.strictAnswers && c.fkt == kGetSize) {
+        if (replyTag == 0xffffu) { fail("no registered return tag for ImageGetSize", now); return false; }
+        for (size_t i=0; i<sizeQueries_.size(); ++i) {
+            const SizeQuery& q=sizeQueries_[i];
+            if(q.host==host_ && q.self==self_ && q.tag==replyTag && q.handle==c.handle()) {
+                fail("ImageGetSize already issued for this registration; refusing ambiguous retry", now);
+                return false;
+            }
+        }
+        if (sizeQueries_.size() >= 128) { fail("ImageGetSize registration history full", now); return false; }
+        SizeQuery q; q.host=host_; q.self=self_; q.tag=replyTag; q.handle=c.handle();
+        sizeQueries_.push_back(q);
+        printf("[HudTerm] +%u DISPATCH ImageGetSize host %04X self %04X tag %u handle %04X deadline +%u ms\n",
+               now, host_, self_, replyTag, c.handle(), cfg_.replyMs);
+    }
     ++tag_;
     ++nextCall_;
     InFlight f;
     f.fkt = c.fkt;
     f.handle = c.handle();
     f.sentMs = now;
+    f.tag = replyTag;
     inFlight_.push_back(f);
     recent_.add(c.fkt, f.handle, now);
     if(cfg_.strictAnswers) {
-        Echo e; e.fkt=c.fkt; e.ms=now; e.payload=c.payload;
+        Echo e; e.fkt=c.fkt; e.ms=now; e.tag=replyTag; e.payload=c.payload;
         if(echoes_.size()>=128)echoes_.erase(echoes_.begin());
         echoes_.push_back(e);
     }
@@ -272,6 +289,11 @@ void Core::finishIfDone(uint32_t now) {
 
 void Core::onMessage(const most::View& m, uint32_t now) {
     if (m.fblock != kFBlock || m.inst != kInst || !host_) return;
+    if (cfg_.strictAnswers && m.src == host_ && m.fkt == kGetSize &&
+        (m.dst == self_ || cfg_.acceptMirroredAnswers)) {
+        onAnswer(m, now);
+        return;
+    }
     if (self_ && m.src == self_) return;                      // our own, if the server shows them to us
     if (self_ && m.dst == self_) {
         if (m.src == host_) onAnswer(m, now);
@@ -291,16 +313,16 @@ void Core::onMessage(const most::View& m, uint32_t now) {
 }
 
 bool Core::ownEcho(const most::View& m,uint32_t now) const {
-    if(m.len<2)return false;
+    if(m.len<2 || !m.data)return false;
     for(size_t i=echoes_.size();i>0;--i) {
         const Echo& e=echoes_[i-1];
-        if(e.fkt!=m.fkt || now-e.ms>cfg_.replyMs || e.payload.size()<2 ||
+        if(e.fkt!=m.fkt || e.tag!=m.hdrTag || now-e.ms>=cfg_.replyMs || e.payload.size()<2 ||
            e.payload[0]!=m.data[0] || e.payload[1]!=m.data[1])continue;
         if(m.op==most::kOpErrorAck)return m.len>=3;
         if(m.op!=most::kOpResultAck && m.op!=most::kOpStatus &&
            m.op!=most::kOpProcessingAck && m.op!=most::kOpProcessing)return false;
         if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing)return true;
-        if(m.fkt==kGetSize)return m.len==7 && m.data[2]==1;
+        if(m.fkt==kGetSize)return m.len==6 && rdBe16(m.data+2)>0 && rdBe16(m.data+4)>0;
         if(m.fkt==0xC05)return m.len==4 && e.payload.size()>=10 && m.data[2]==e.payload[9] && m.data[3]==1;
         size_t n=e.payload.size();
         if(m.fkt==kTextareaSetText) {
@@ -316,16 +338,47 @@ bool Core::ownEcho(const most::View& m,uint32_t now) const {
 // function alone. An error fails the terminal even when it matches nothing in flight: one of our calls is wrong. Only
 // an answer to a call we dropped a moment ago is let go (see the header).
 void Core::onAnswer(const most::View& m, uint32_t now) {
+    if (cfg_.strictAnswers && m.fkt == kGetSize) {
+        // Expiry is evaluated on receipt too, even if the send thread has not
+        // ticked yet. Validation never consumes or extends a pending request.
+        tick(now);
+        size_t i=0;
+        while(i<inFlight_.size() && !(inFlight_[i].fkt==m.fkt &&
+              inFlight_[i].tag==m.hdrTag && m.data && m.len>=2 &&
+              inFlight_[i].handle==rdBe16(m.data))) ++i;
+        if(status_!=kReady || i==inFlight_.size()) { ++stats_.strays; return; }
+        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing) return;
+        if(m.op==most::kOpResultAck) {
+            // F31 capture: handle BE16, width BE16, height BE16. No selector
+            // byte in the result; the old seven-byte shape was synthetic only.
+            if(m.len!=6 || !rdBe16(m.data+2) || !rdBe16(m.data+4)) {
+                ++stats_.strays; return;
+            }
+            const InFlight f=inFlight_[i];
+            Size sz; sz.handle=f.handle; sz.width=rdBe16(m.data+2); sz.height=rdBe16(m.data+4);
+            size_t k=0; while(k<sizes_.size() && sizes_[k].handle!=sz.handle) ++k;
+            if(k==sizes_.size()) sizes_.push_back(sz); else sizes_[k]=sz;
+            inFlight_.erase(inFlight_.begin()+i);
+            ++stats_.answers;
+            printf("[HudTerm] +%u RX ImageGetSize tag %u handle %04X %ux%u elapsed %u ms\n",
+                   now, m.hdrTag, sz.handle, sz.width, sz.height, now-f.sentMs);
+            finishIfDone(now);
+            return;
+        }
+        // Unacknowledged Error has no proven handle correlation here.
+        if(m.op!=most::kOpErrorAck || m.len<3) { ++stats_.strays; return; }
+        // A correlated error still follows the existing fail-closed path.
+    }
     if (m.op == most::kOpProcessingAck || m.op == most::kOpProcessing) return;   // still working: the timeout stands
-    if (cfg_.strictAnswers && m.len < 2) { fail("short method answer", now); return; }
+    if (cfg_.strictAnswers && (m.len < 2 || !m.data)) { ++stats_.strays; return; }
     if (cfg_.strictAnswers && (m.op==most::kOpResultAck || m.op==most::kOpStatus) && !ownEcho(m,now)) {
-        fail("method answer does not match the sent payload",now);return;
+        ++stats_.strays; return;
     }
     bool error = m.op != most::kOpResultAck && m.op != most::kOpStatus;
     bool byHandle = m.op != most::kOpError && m.len >= 2;
     uint16_t h = byHandle ? rdBe16(m.data) : 0;
     size_t i = 0;
-    while (i < inFlight_.size() && !(inFlight_[i].fkt == m.fkt && (!byHandle || inFlight_[i].handle == h))) ++i;
+    while (i < inFlight_.size() && !(inFlight_[i].fkt == m.fkt && (!cfg_.strictAnswers || inFlight_[i].tag == m.hdrTag) && (!byHandle || inFlight_[i].handle == h))) ++i;
     bool matched = i < inFlight_.size();
     if (matched) inFlight_.erase(inFlight_.begin() + i);
     if (error && !matched && takeDropped(m.fkt, byHandle, h, now)) {
@@ -334,6 +387,7 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
                most::opName(m.op), m.op, m.fkt, fktName(m.fkt), h);
         return;
     }
+    if (cfg_.strictAnswers && !matched) { ++stats_.strays; return; }
     if (error) {
         ++stats_.errors;
         char why[160];
@@ -349,12 +403,6 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
         ++stats_.strays;
         return;
     }
-    if (cfg_.strictAnswers && m.fkt == kGetSize && m.len == 7 && m.data[2] == 1) {
-        Size sz; sz.handle=h; sz.width=rdBe16(m.data+3); sz.height=rdBe16(m.data+5);
-        if (!sz.width || !sz.height) { fail("zero image size", now); return; }
-        size_t k=0; while(k<sizes_.size() && sizes_[k].handle!=h) ++k;
-        if(k==sizes_.size()) sizes_.push_back(sz); else sizes_[k]=sz;
-    } else if (m.fkt == kGetSize && cfg_.strictAnswers) { fail("unexpected ImageGetSize format", now); return; }
     ++stats_.answers;
     finishIfDone(now);
 }
@@ -395,8 +443,8 @@ void Core::tick(uint32_t now) {
     if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
         ++stats_.timeouts;
         char why[96];
-        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
-                 inFlight_[0].handle, cfg_.replyMs);
+        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms (sent +%u, now +%u)", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
+                 inFlight_[0].handle, cfg_.replyMs, inFlight_[0].sentMs, now);
         fail(why, now);
     }
     if (navActive_ && !routeOn_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
@@ -584,6 +632,7 @@ void HudTerminal::onMessage(const most::View& m) {
 
 void HudTerminal::onLink(bool up, uint16_t self) {
     pthread_mutex_lock(&lock_);
+    if (up && client_) core_.setReplyTag(client_->registeredHeaderTag());
     core_.setLink(up, self, nowMs());
     wake();
     pthread_mutex_unlock(&lock_);
@@ -632,7 +681,11 @@ void HudTerminal::run() {
             SendFn fn = send_;
             void* user = sendUser_;
             pthread_mutex_unlock(&lock_);
+            const uint32_t dispatchMs = nowMs();
             bool ok = fn && fn(m, user);
+            if (registeredTag_ && m.fkt == kGetSize)
+                printf("[HudTerm] +%u ImageGetSize send returned %s after %u ms\n",
+                       nowMs(), ok ? "OK" : "FAILED", nowMs()-dispatchMs);
             pthread_mutex_lock(&lock_);
             now = nowMs();
             if (!ok) core_.sendFailed(now);

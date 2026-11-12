@@ -18,13 +18,14 @@ std::vector<std::string> logs;
 void record(const char* s,void*) {logs.push_back(s);}
 void route(const most::View&,void*) {}
 struct FakePort : Port {
-    Status st;uint32_t ep;bool idle,badSize;unsigned resets;Bmw6wbProfile p;std::vector<Batch> batches;
-    FakePort():st(kReady),ep(0),idle(true),badSize(false),resets(0){}
-    SubmitResult submit(const Batch& b){if(st!=kReady)return kNotReady;batches.push_back(b);return kQueued;}
+    Status st;uint32_t ep;bool idle,badSize,queried;unsigned resets;Bmw6wbProfile p;std::vector<Batch> batches;
+    FakePort():st(kReady),ep(0),idle(true),badSize(false),queried(false),resets(0){}
+    SubmitResult submit(const Batch& b){if(st!=kReady)return kNotReady;batches.push_back(b);if(b.label=="6wb-size-check")queried=true;return kQueued;}
     Status status() const{return st;}uint32_t epoch() const{return ep;}
     bool waiting() const{return false;}
     void reset(){++resets;}bool waitIdle(uint32_t){return idle && st==kReady;}
     bool imageSize(uint16_t h,uint16_t& w,uint16_t& height) const {
+        if(!queried)return false;
         if(h==p.base.frame){w=p.frameWidth;height=p.frameHeight;}
         else if(h==p.bar){w=p.barWidth;height=p.barHeight;}
         else {
@@ -107,29 +108,33 @@ void testResourcesAndSafety(){
     bd.showManeuver(v,0,true,true);assert(bd.showManeuver(v,1,true,true)==ClusterDisplay::kRejected);
     assert(bad.batches.size()==1&&!bd.sentAny());
     FakePort reconnect;Hud6wbDisplay rd(reconnect,p,false);rd.showManeuver(v,0,true,true);rd.showManeuver(v,1,true,true);
-    ++reconnect.ep;rd.showManeuver(v,2,true,true);assert(reconnect.batches.back().label=="6wb-size-check");
+    ++reconnect.ep;rd.showManeuver(v,2,true,true);
+    assert(reconnect.batches.back().label!="6wb-size-check"); // OEM yield: use existing validated sizes
+    reconnect.queried=false; // transport cache cleared on actual reconnect/host change
+    ++reconnect.ep;rd.showManeuver(v,3,true,true);assert(reconnect.batches.back().label=="6wb-size-check");
 }
 most::View message(uint16_t f,const std::vector<uint8_t>& b,uint16_t dst=0x201f,uint8_t op=0xd){
-    most::View m={};m.src=0x101;m.dst=dst;m.fblock=0x82;m.inst=0;m.fkt=f;m.op=op;m.len=b.size();m.data=b.empty()?NULL:&b[0];return m;
+    most::View m={};m.src=0x101;m.dst=dst;m.fblock=0x82;m.inst=0;m.fkt=f;m.op=op;m.hdrTag=89;m.len=b.size();m.data=b.empty()?NULL:&b[0];return m;
 }
 void testTransport(){
     Bmw6wbProfile p;Config cfg;cfg.handles=handlesOf(p);cfg.navFrame=p.base.frame;
     cfg.initialNavActive=true;cfg.strictAnswers=true;cfg.acceptMirroredAnswers=true;cfg.extendedCalls=true;cfg.maxInFlight=1;
     cfg.txType=4;cfg.useFixedTag=true;cfg.fixedTag=0xffff;
-    hudterm::Core core(cfg);core.setLink(true,0x2059,0);core.setHost(0x101,0);assert(core.status()==kNavActive);
+    hudterm::Core core(cfg);core.setReplyTag(89);core.setLink(true,0x2059,0);core.setHost(0x101,0);assert(core.status()==kNavActive);
     most::Msg out;assert(!core.next(0,out));core.tick(60000);assert(core.status()==kNavActive);
     std::vector<uint8_t> off=setVisibility(p.base.frame,false);core.onMessage(message(0x204,off),60001);
     core.tick(65001);assert(core.status()==kReady);
     Batch b("size");std::vector<uint8_t> q=getSize(p.main.a);q.push_back(1);b.add(kGetSize,q);
     assert(core.submit(b,65002)==kQueued&&core.next(65002,out));
     assert(out.dst==0x101&&out.fblock==0x82&&out.inst==0&&out.opType==6&&out.txType==4&&out.hdrTag==0xffff);
-    std::vector<uint8_t> ack=q;putBe16(ack,221);putBe16(ack,158);
+    std::vector<uint8_t> ack=getSize(p.main.a);putBe16(ack,221);putBe16(ack,158);
     core.onMessage(message(kGetSize,ack),65003);assert(!core.busy());uint16_t w,h;assert(core.imageSize(p.main.a,w,h)&&w==221&&h==158);
-    assert(core.submit(b,65004)==kQueued&&core.next(65004,out));core.tick(66504);assert(core.status()==kFailed&&core.stats().timeouts==1);
-    hudterm::Core fail(cfg);fail.setLink(true,0x2059,0);fail.setHost(0x101,0);fail.onMessage(message(0x204,off),0);fail.tick(5000);
+    Batch b2("size-next");q=getSize(p.main.b);q.push_back(1);b2.add(kGetSize,q);
+    assert(core.submit(b2,65004)==kQueued&&core.next(65004,out));core.tick(66504);assert(core.status()==kFailed&&core.stats().timeouts==1);
+    hudterm::Core fail(cfg);fail.setReplyTag(89);fail.setLink(true,0x2059,0);fail.setHost(0x101,0);fail.onMessage(message(0x204,off),0);fail.tick(5000);
     assert(fail.submit(b,5001)==kQueued&&fail.next(5001,out));std::vector<uint8_t> err=getSize(p.main.a);err.push_back(0x41);
     fail.onMessage(message(kGetSize,err,0x2059,9),5002);assert(fail.status()==kFailed&&!fail.next(5003,out));
-    hudterm::Core factory(cfg);factory.setLink(true,0x2059,0);factory.setHost(0x101,0);factory.onMessage(message(0x204,off),0);factory.tick(5000);
+    hudterm::Core factory(cfg);factory.setReplyTag(89);factory.setLink(true,0x2059,0);factory.setHost(0x101,0);factory.onMessage(message(0x204,off),0);factory.tick(5000);
     assert(factory.submit(b,5001)==kQueued&&factory.next(5001,out));
     std::vector<uint8_t> foreign=setVisibility(p.base.frame,true);factory.onMessage(message(0x204,foreign),5002);
     assert(factory.status()==kNavActive&&!factory.busy());
@@ -142,10 +147,81 @@ void testTransport(){
     assert(client.addRoute(0x82,0,most::kAny,most::kAny,&route,NULL)&&client.allowSend(0x82,0)&&client.start("HEADER"));
     fake_dsi::attach();std::vector<uint8_t> response;most::putLe32(response,77);most::putLe16(response,0x2059);
     fake_dsi::data(most::kInfoClientResponse,&response[0],response.size());
+    assert(client.registeredHeaderTag()==77);
     assert(client.send(out,true));const fake_dsi::Call& request=fake_dsi::calls.back();
     most::View wire;assert(most::parseView(&request.payload[4],request.payload.size()-4,wire));
     assert(wire.src==0x2059&&wire.dst==0x101&&wire.hdrTag==77&&wire.txType==4&&request.payload.size()%4==0);
     fake_dsi::detach();
+}
+// Deterministic replay of the F31 response, not a simulated vehicle success.
+void testSizeReplies(){
+    Bmw6wbProfile p;Config cfg;cfg.handles=handlesOf(p);cfg.extendedCalls=true;
+    cfg.strictAnswers=true;cfg.acceptMirroredAnswers=true;cfg.replyMs=3000;
+    cfg.useFixedTag=true;cfg.fixedTag=96;cfg.maxInFlight=1;
+    const uint8_t raw[]={0x00,0x17,0x01,0x35,0x01,0x4a};
+    std::vector<uint8_t> ack(raw,raw+sizeof(raw));
+    Batch b("frame-size");std::vector<uint8_t> q=getSize(0x17);q.push_back(1);b.add(kGetSize,q);
+    for(unsigned scenario=0;scenario<18;++scenario) {
+        hudterm::Core c(cfg);c.setLink(true,0x2060,0);c.setHost(0x101,0);
+        most::Msg out;uint16_t w=0,h=0;
+        assert(c.submit(b,100)==kQueued && c.next(100,out));
+        most::View m=message(kGetSize,ack,0x2060);m.hdrTag=96;
+        std::vector<uint8_t> bad=ack;
+        if(scenario==1)bad.insert(bad.begin()+2,1); // old synthetic seven-byte result: unsupported
+        if(scenario==2)bad.resize(5);
+        if(scenario==3)bad[1]=0x18;
+        if(scenario==4)m.fkt=kTextareaSetText;
+        if(scenario==5)m.hdrTag=95;
+        if(scenario==6)m.op=most::kOpStatus;
+        if(scenario==7){bad[2]=bad[3]=0;} // zero width
+        if(scenario==8){bad.clear();}
+        if(scenario==9){m.src=0x102;}
+        if(scenario==10){m.fblock=0x83;}
+        if(scenario==11){m.inst=1;}
+        if(scenario==14){bad[4]=bad[5]=0;} // zero height
+        if(scenario==15){bad.push_back(0);bad.push_back(0);} // trailing bytes
+        if(scenario==16){m.op=most::kOpErrorAck;m.hdrTag=95;}
+        if(scenario==17){m.op=most::kOpErrorAck;bad[1]=0x18;}
+        m.data=bad.empty()?NULL:&bad[0];m.len=bad.size();
+        if(scenario==12 || scenario==13) {
+            // Both an explicit tick and a delayed send-thread tick must expire.
+            if(scenario==12)c.tick(3100);
+            c.onMessage(m,3100);
+            assert(c.status()==kFailed && c.stats().timeouts==1 && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+            c.reset(3101);assert(c.status()==kReady);
+            assert(c.submit(b,3102)==kQueued && !c.next(3102,out));
+            assert(c.status()==kFailed && c.stats().calls==1); // no ambiguous same-tag retry
+            c.onMessage(m,3103);assert(c.stats().answers==0);
+            c.reset(3104);
+            Batch next("different-handle");std::vector<uint8_t> nq=getSize(0x1f);nq.push_back(1);next.add(kGetSize,nq);
+            assert(c.submit(next,3105)==kQueued && c.next(3105,out));
+            c.onMessage(m,3106);assert(c.status()==kReady && c.busy() && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+            continue;
+        }
+        c.onMessage(m,200);
+        if(scenario) {
+            assert(c.status()==kReady && c.busy() && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+            // Invalid packets neither consume the request nor prevent a valid result.
+            m=message(kGetSize,ack,0x2060);m.hdrTag=96;c.onMessage(m,201);
+        }
+        assert(c.status()==kReady && !c.busy() && c.stats().answers==1 && c.stats().batchesDone==1);
+        assert(c.imageSize(0x17,w,h) && w==309 && h==330);
+        c.onMessage(m,202);assert(c.stats().answers==1 && !c.busy()); // duplicate
+        // An old frame reply must not complete the next handle's request.
+        Batch next("next-size");q=getSize(0x1f);q.push_back(1);next.add(kGetSize,q);
+        assert(c.submit(next,203)==kQueued && c.next(203,out));
+        c.onMessage(m,204);assert(c.busy() && c.stats().answers==1);
+        std::vector<uint8_t> second=getSize(0x1f);putBe16(second,221);putBe16(second,158);
+        m=message(kGetSize,second,0x2019);m.hdrTag=96; // mirrored but correlated
+        c.onMessage(m,205);assert(!c.busy() && c.stats().answers==2 && c.status()==kReady);
+    }
+    hudterm::Core idle(cfg);idle.setLink(true,0x2060,0);idle.setHost(0x101,0);
+    most::View unsolicited=message(kGetSize,ack,0x2019);unsolicited.hdrTag=96;
+    idle.onMessage(unsolicited,1);uint16_t w,h;
+    assert(idle.status()==kReady && idle.stats().answers==0 && !idle.imageSize(0x17,w,h));
 }
 void testSecondStep(){
     kntest::Bytes first=kntest::navState(8,"First"),second=kntest::navState(7,"Second");
@@ -178,4 +254,4 @@ void testRuntime(const char* mode){
     unlink(marker.c_str());rmdir(dir);unsetenv("NBT_CLUSTER");unsetenv("NBT_HUDTERM");unsetenv("NBT_KOMBI_NAV");unsetenv("NBT_KOMBI_NAV_YIELD");
 }
 }
-int main(){testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");puts("test_hud6wb OK");}
+int main(){testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");puts("test_hud6wb OK");}
