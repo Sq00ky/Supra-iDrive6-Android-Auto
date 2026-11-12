@@ -6,5 +6,6 @@
 5. Codemybm Téch / CodeMyBM_UK
 6. bmw_coding_resolution
 7. Bimmer Fits
+8. Woj-Car Carplay Tuning
 
 If you find any other resellers, please submit an issue. They'll be listed here for all eternity.
