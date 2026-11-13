@@ -116,6 +116,7 @@
 #include "audio/media_state.hpp"
 #include "audio/voice_scenario.hpp"
 #include "usb_log.hpp"
+#include "log_pump.hpp"
 #include "spp_rereg.hpp"
 #include "spp_link_policy.hpp"
 #include "../tools/pf_aa.hpp"
@@ -1720,16 +1721,17 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.57-cpcompat"
+#define NBT_AAD_BUILD "v1.9.58-logpump"
+
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
-// (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
-// /var/opt/aa/usblog, usb_log.hpp) makes us append to <stick>/nbt-aad.log on the first writable /mnt/umass* stick;
-// checked at start and every 5 s, so a stick plugged in later is picked up and a removed one is let go.
-static bool g_logForced = false;
-static char g_usbLogPath[192] = "";
-
-static bool logPersistent() { return g_logForced || g_usbLogPath[0] != 0; }
+// (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect.
+// File logging goes through the log pump (log_pump.hpp, v1.9.58): NBT_LOG_FILE=<path> forces a file; the iDrive
+// app's "Save logs to USB" checkbox (flag /var/opt/aa/usblog, usb_log.hpp) appends to <stick>/nbt-aad.log on the first
+// writable /mnt/umass* stick. stdout then becomes a pipe and only the pump's writer thread touches the file, so a slow
+// or dead stick costs log lines, never a stalled session, mixer or main loop. The pump's writer looks for the stick
+// (at once and every 5 s: a stick plugged in later is picked up, a removed one is let go); the main loop only checks
+// the checkbox flag, which is on internal flash. Started from a shell, the terminal keeps getting every line.
 
 // RAM log (v1.8.67, usb_log.hpp ramlog): with no USB / NBT_LOG_FILE log, stdout goes to /dev/shmem/nbt-aad.log
 // (fresh per run, 5 MB cap; NBT_RAM_LOG=0 = off). Only replaces /dev/null: a shell run on a terminal or redirected to
@@ -1782,39 +1784,38 @@ static void printHuVersion() {
     printf("  HU software / nav version: %s\n", v);
 }
 
-static void serviceUsbLog(bool atStart) {
-    if (g_logForced) return;
-    const bool on = nbt::usblog::enabled();
-    if (g_usbLogPath[0]) {
-        char dir[192];
-        snprintf(dir, sizeof(dir), "%s", g_usbLogPath);
-        char* slash = strrchr(dir, '/');
-        if (slash) *slash = 0;
-        if (on && nbt::usblog::isWritableDir(dir)) return;
-        printf("[Log] %s: USB log closed\n", on ? "USB stick gone" : "Save logs to USB turned off");
-        g_usbLogPath[0] = 0;
-        stdoutToRamOrNull();
-        return;
-    }
-    char stick[128];
-    if (!on || !nbt::usblog::findStick(stick, sizeof(stick))) return;
-    char path[192];
-    nbt::usblog::logPath(path, sizeof(path), stick, nbt::usblog::kDaemonName);
-    if (isatty(1)) printf("[Log] Save logs to USB is on: logging to %s\n", path);
+static const char* const kBuildLine = NBT_AAD_BUILD " (" __DATE__ " " __TIME__ ")";
+
+// Hands stdout to the log pump. The RAM log is its fallback while no file is open, if stdout was the RAM log or
+// /dev/null (the iDrive app's start) and NBT_RAM_LOG is not off.
+static bool startLogPump(nbt::logpump::Mode mode, const char* path) {
+    const bool ramWanted = g_ramLog || (stdoutIsNull() && ramLogWanted());
+    const nbt::logpump::Config c = nbt::logpump::daemonConfig(mode, path, g_ramLog, ramWanted, kBuildLine);
     fflush(stdout);
-    if (g_ramLog) printf("[Log] USB stick found: logging to %s (the RAM log %s stops here)\n", path, nbt::ramlog::kDaemonPath);
+    if (!nbt::logpump::start(c)) return false;
+    g_ramLog = false;   // fd 1 is the pipe now; the pump keeps the RAM log's cap
+    return true;
+}
+
+// NBT_LOG_FILE without the pump (it could not start): the file straight on stdout, as before v1.9.58. Every log line
+// then waits for that file, and the main loop fsyncs it every 2 s.
+static bool g_logDirect = false;
+
+// At start and every 5 s: "Save logs to USB" ticked -> the log pump (once started, it handles the stick, the box
+// being unticked again and a removed stick itself). A failed start leaves nothing behind and is tried again every
+// 5 s, said once. A pump that stopped (its reader stopped) is not started again: start() refuses.
+static void serviceUsbLog() {
+    static bool said = false;
+    if (g_logDirect || nbt::logpump::running() || !nbt::usblog::enabled()) return;   // NBT_LOG_FILE wins
+    if (startLogPump(nbt::logpump::kUsb, NULL)) return;
+    if (!said) printf("[Log] Save logs to USB is on, but the log pump did not start: no USB log (trying every 5 s)\n");
+    said = true;
+}
+
+// Before leaving main: the pump writes what it holds (bounded, a dead stick cannot hang the exit).
+static void finishLog() {
     fflush(stdout);
-    if (!freopen(path, "a", stdout)) { stdoutToRamOrNull(); return; }
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    dup2(fileno(stdout), 2);
-    g_ramLog = false;
-    snprintf(g_usbLogPath, sizeof(g_usbLogPath), "%s", path);
-    printf("---- nbt-aad log appended to %s (Save logs to USB, fsync every 2 s) ----\n", path);
-    if (!atStart) {
-        printf("  Build: " NBT_AAD_BUILD " (%s %s): USB stick found while running, earlier lines were not saved%s\n",
-               __DATE__, __TIME__, g_ramUsed ? " here (see the RAM log)" : "");
-        printHuVersion();
-    }
+    nbt::logpump::shutdown(2000);
 }
 
 int main(int argc, char* argv[]) {
@@ -1834,14 +1835,22 @@ int main(int argc, char* argv[]) {
         nbt::printNbtAadLicense();
         return 0;
     }
-    // NBT_LOG_FILE=/mnt/umass01200t7/nbt-aad-live.log: log straight to that file (fsync'd every 2 s by the main
-    // loop). Otherwise the "Save logs to USB" checkbox decides (serviceUsbLog).
-    const char* log_file = getenv("NBT_LOG_FILE");
-    if (log_file && *log_file) g_logForced = (freopen(log_file, "a", stdout) != NULL);
-    else serviceUsbLog(true);
-    if (!logPersistent() && stdoutIsNull()) stdoutToRamOrNull();   // started by the iDrive app with no USB log
     nbt::installProcessGuards();   // first: line-buffered log, SIGPIPE ignored, fatal-signal report (setvbuf must precede any output)
-    if (g_logForced) printf("---- nbt-aad log appended to %s (fsync every 2 s) ----\n", log_file);
+    // NBT_LOG_FILE=/mnt/umass01200t7/nbt-aad-live.log: log to that file (through the log pump). Otherwise the "Save
+    // logs to USB" checkbox decides (serviceUsbLog).
+    const char* log_file = getenv("NBT_LOG_FILE");
+    bool log_forced = false;
+    if (log_file && *log_file) {
+        log_forced = startLogPump(nbt::logpump::kForced, log_file);
+        if (!log_forced && freopen(log_file, "a", stdout)) {
+            setvbuf(stdout, NULL, _IOLBF, 0);
+            dup2(fileno(stdout), 2);
+            g_logDirect = true;
+        }
+    } else {
+        serviceUsbLog();
+    }
+    if (!nbt::logpump::running() && !g_logDirect && stdoutIsNull()) stdoutToRamOrNull();   // started by the iDrive app with no USB log
     printf("====================================================\n");
     printf("  NBT-AAD: Native Wireless Android Auto Daemon      \n");
     printf("  Platform: BMW NBT Evo ID6 / Toyota GR Supra (J29) \n");
@@ -1849,11 +1858,18 @@ int main(int argc, char* argv[]) {
     printf("  Build: " NBT_AAD_BUILD " (%s %s)\n", __DATE__, __TIME__);
     printHuVersion();
     if (g_ramLog) printf("  Log: RAM %s (fresh per run, 5 MB cap; NBT_RAM_LOG=0 = off)\n", nbt::ramlog::kDaemonPath);
+    if (nbt::logpump::running())
+        printf("  Log: %s through the log pump (NBT_LOG_RING_KB, NBT_LOG_SLOW_MS)\n",
+               log_forced ? log_file : "Save logs to USB");
+    else if (g_logDirect)
+        printf("  Log: NBT_LOG_FILE=%s directly: the log pump did not start, so logging waits for that file\n", log_file);
+    else if (log_file && *log_file)
+        printf("  Log: NBT_LOG_FILE=%s: the log pump did not start and the file could not be opened\n", log_file);
     nbt::printNbtAadBannerNotice();
     printf("====================================================\n");
     printf("----------------------------------------------------\n");
 
-    if (!ctlClaimOrForward()) return 0;   // a daemon is already running (second start from the iDrive menu)
+    if (!ctlClaimOrForward()) { finishLog(); return 0; }   // a daemon is already running (second start from the iDrive menu)
 
     // Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
     // the HMI. The bootloop log showed `ldd:FATAL: Could not preload library libEGL_X.gpp.so` from audioconn and
@@ -2006,6 +2022,7 @@ int main(int argc, char* argv[]) {
 
     if (!tcp_server.start()) {
         printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
+        finishLog();
         return 1;
     }
     g_tcp = &tcp_server;
@@ -2228,9 +2245,9 @@ int main(int argc, char* argv[]) {
         ++log_sync_ticks;
         if (log_sync_ticks == 2400 && unlink(kBootGuardFile) == 0)   // 10 min up: not part of a bootloop
             printf("[Main] running for 10 min: autostart bootloop guard cleared\n");
-        if ((log_sync_ticks % 20) == 0) serviceUsbLog(false);   // every 5 s: stick plugged in / removed, checkbox
-        checkRamLogCap();                                         // every tick: RAM log 5 MB cap
-        if (logPersistent() && (log_sync_ticks % 8) == 0) { fflush(stdout); fsync(fileno(stdout)); }
+        if ((log_sync_ticks % 20) == 0) serviceUsbLog();   // every 5 s: checkbox ticked while running
+        checkRamLogCap();                                    // every tick: RAM log 5 MB cap (without the log pump)
+        if (g_logDirect && (log_sync_ticks % 8) == 0) { fflush(stdout); fsync(fileno(stdout)); }
         if (act && !was_active) { g_userExit = 0; g_carExit = 0; }   // a new phone session comes up in Android Auto
         if (g_backState == 1 && (uint32_t)(monoMs() - g_backDownMs) >= backHoldMs()) {
             // Car-side minimize, like reverse: only the overlay goes down. Telling the phone (unrequested UNFOCUSED,
@@ -2492,7 +2509,7 @@ int main(int argc, char* argv[]) {
     unlink(kBootGuardFile); // clean exit: the iDrive app's autostart bootloop guard starts from zero
     printf("[Main] [%9.3f] nbt-aad shutdown complete (%.2f s)%s.\n", upSec(), upSec() - t0,
            g_cpYielded ? ": yielded to CarPlay (decoder context, windows and window group released)" : "");
-    fflush(stdout);
+    finishLog();
     // Leave without running static destructors: detached threads (DSI sender loops, wireless bring-up) may still
     // be running, and tearing globals down under them crashed at exit (nbt-aad-21: SIGSEGV after "shutdown complete").
     _exit(0);

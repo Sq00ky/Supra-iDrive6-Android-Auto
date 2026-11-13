@@ -89,6 +89,7 @@ SRC_test_touch             := src/touch_probe.cpp
 SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
 SRC_test_usb_log           :=
+SRC_test_log_pump          := src/log_pump.cpp src/crash_handler.cpp
 SRC_test_voice_scenario    := src/audio/voice_scenario.cpp
 SRC_test_volume_input      := src/car/volume_input.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_volume_level      :=
