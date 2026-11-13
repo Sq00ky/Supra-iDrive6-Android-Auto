@@ -1224,6 +1224,8 @@ static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t 
     if (g_audioBackend) g_audioBackend->onStreamState(channel, started, rate, channels);
 }
 
+static void writeTransportState(nbt::Transport t);   // defined below, next to the USB watch
+
 static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
 static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
 static const double kShortSessionS = 15.0;
@@ -1269,8 +1271,6 @@ static void writeTransportState(nbt::Transport t) {
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
 // whose session is over (owner no longer USB) is ended.
-static void writeTransportState(nbt::Transport t);   // defined below, next to the USB watch
-
 static nbt::Transport sessionOwner(void*) {
     return g_owner.get();
 }
