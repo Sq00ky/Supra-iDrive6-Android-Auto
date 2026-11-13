@@ -1269,6 +1269,8 @@ static void writeTransportState(nbt::Transport t) {
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
 // whose session is over (owner no longer USB) is ended.
+static void writeTransportState(nbt::Transport t);   // defined below, next to the USB watch
+
 static nbt::Transport sessionOwner(void*) {
     return g_owner.get();
 }
