@@ -98,6 +98,19 @@ and subscribes to DSI/MOST: this is not a claim of zero local IPC traffic.
 bypass resource validation or OEM priority. No configuration files are written
 by selecting this backend, and no installer is provided.
 
+## Experimental OEM-navigation bypass
+
+For controlled 6WB debugging only, set `NBT_6WB_OEM_BYPASS=1` alongside
+`NBT_CLUSTER=6wb`. The operator must keep BMW navigation off during the test.
+This skips the initial OEM frame-off/quiet requirement, the iDrive route-log
+watch, and terminal yielding on observed OEM drawing, including after reconnect.
+It applies to SHADOW and LIVE; SHADOW still submits no HUDTerminal calls.
+Absent/disabled, all existing OEM checks remain enabled. Other cluster drivers
+ignore this setting. Discovery, registered addressing, surface validation,
+reply correlation, query-reuse protection and finite timeouts remain enforced.
+This does not change manual startup or any vehicle configuration automatically.
+It does not fix the separately observed ImageGetSize response latency.
+
 ## Data and layout
 
 | Role | Handle(s) | Dimensions reported by the reference |

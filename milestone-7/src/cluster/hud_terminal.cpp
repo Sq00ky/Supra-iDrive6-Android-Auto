@@ -424,6 +424,7 @@ static bool draws(const most::View& m) {
 
 void Core::onNav(const most::View& m, uint32_t now) {
     ++stats_.navMsgs;
+    if (cfg_.ignoreFactoryNav) return;
     lastNavMs_ = now;
     if (m.fkt == kSetVisibility && m.len >= 3 && cfg_.navFrame > 0 && rdBe16(m.data) == cfg_.navFrame) {
         routeOn_ = m.data[2] != 0;

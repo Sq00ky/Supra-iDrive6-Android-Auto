@@ -218,6 +218,16 @@ void testSizeReplies(){
         m=message(kGetSize,second,0x2019);m.hdrTag=96; // mirrored but correlated
         c.onMessage(m,205);assert(!c.busy() && c.stats().answers==2 && c.status()==kReady);
     }
+    Config bypassCfg=cfg;bypassCfg.ignoreFactoryNav=true;
+    hudterm::Core bypass(bypassCfg);bypass.setLink(true,0x2060,0);bypass.setHost(0x101,0);
+    assert(bypass.status()==kReady);most::Msg pending;
+    assert(bypass.submit(b,1)==kQueued && bypass.next(1,pending));
+    std::vector<uint8_t> on=setVisibility(0x17,true);
+    bypass.onMessage(message(kSetVisibility,on),2);
+    assert(bypass.status()==kReady && bypass.busy());
+    bypass.tick(3001);assert(bypass.status()==kFailed && bypass.stats().timeouts==1);
+    bypass.setLink(false,0,3002);bypass.setLink(true,0x2061,3003);bypass.setHost(0x102,3003);
+    assert(bypass.status()==kReady);
     hudterm::Core idle(cfg);idle.setLink(true,0x2060,0);idle.setHost(0x101,0);
     most::View unsolicited=message(kGetSize,ack,0x2019);unsolicited.hdrTag=96;
     idle.onMessage(unsolicited,1);uint16_t w,h;
@@ -234,7 +244,8 @@ void testSecondStep(){
     assert(!bmwExitNumber(2,box).empty()&&bmwExitNumber(0,box).empty()&&bmwExitNumber(100,box).empty());
 }
 unsigned graphicRequests(){unsigned n=0;for(size_t i=0;i<fake_dsi::calls.size();++i)if(fake_dsi::calls[i].kind==fake_dsi::Call::kRequest&&fake_dsi::calls[i].id==most::kReqProcessMessage)++n;return n;}
-void testRuntime(const char* mode){
+void testRuntime(const char* mode,bool bypass=false){
+    if(bypass)setenv("NBT_6WB_OEM_BYPASS","1",1);else unsetenv("NBT_6WB_OEM_BYPASS");
     char dir[]="/tmp/6wb-host-XXXXXX";assert(mkdtemp(dir));std::string marker=std::string(dir)+"/shown";
     KombiNav::kShownFile=marker.c_str();KombiNav::kFlagFile="/nonexistent/6wb-flag";KombiNav::kManualFile="/nonexistent/6wb-manual";
     setenv("NBT_CLUSTER","6wb",1);setenv("NBT_KOMBI_NAV","1",1);setenv("NBT_KOMBI_NAV_YIELD","0",1);
@@ -246,7 +257,7 @@ void testRuntime(const char* mode){
         fake_dsi::data(most::kAttrRegistry,&reg[0],reg.size());
         kntest::Bytes status=kntest::status(1),step=kntest::navState(8,"Synthetic Road"),pos=kntest::curPos(250,"250",1);
         KombiNav::navStatusCallback(0x8003,&status[0],status.size(),&nav);KombiNav::navStatusCallback(0x8006,&step[0],step.size(),&nav);KombiNav::navStatusCallback(0x8007,&pos[0],pos.size(),&nav);
-        usleep(400000);nav.stop();assert(graphicRequests()==0);
+        usleep(400000);nav.stop();assert((graphicRequests()>0)==(bypass && mode && !strcmp(mode,"on")));
         // Default/log never acquire send rights. Even live cannot draw before an observed factory route end.
         if(!mode || strcmp(mode,"on"))assert(access(marker.c_str(),F_OK)!=0);
         fake_dsi::detach();
@@ -254,4 +265,4 @@ void testRuntime(const char* mode){
     unlink(marker.c_str());rmdir(dir);unsetenv("NBT_CLUSTER");unsetenv("NBT_HUDTERM");unsetenv("NBT_KOMBI_NAV");unsetenv("NBT_KOMBI_NAV_YIELD");
 }
 }
-int main(){testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");puts("test_hud6wb OK");}
+int main(){testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");testRuntime(NULL,true);testRuntime("log",true);testRuntime("on",true);unsetenv("NBT_6WB_OEM_BYPASS");puts("test_hud6wb OK");}

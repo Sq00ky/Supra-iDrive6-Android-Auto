@@ -63,6 +63,7 @@ const char* statusName(Status s);
 struct Config {
     uint32_t txType, fixedTag;
     bool useFixedTag, initialNavActive, strictAnswers, acceptMirroredAnswers, extendedCalls;
+    bool ignoreFactoryNav; // explicit experimental 6WB opt-in only
     HandleSet handles;       // the only handles calls may use
     int navFrame;            // the factory navigation's frame instance: SetVisibility(navFrame, 0) ends a route
     uint32_t replyMs;        // per call, and the copy window
@@ -71,7 +72,7 @@ struct Config {
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
     Config() : txType(0), fixedTag(0), useFixedTag(false), initialNavActive(false), strictAnswers(false),
-               acceptMirroredAnswers(false), extendedCalls(false), navFrame(-1), replyMs(1500), navQuietMs(5000),
+               acceptMirroredAnswers(false), extendedCalls(false), ignoreFactoryNav(false), navFrame(-1), replyMs(1500), navQuietMs(5000),
                maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
