@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#include "most/latency_diag.hpp"
 #include "cluster/hud_terminal.hpp"
 
 #include <errno.h>
@@ -249,6 +250,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
         printf("[HudTerm] +%u DISPATCH ImageGetSize host %04X self %04X tag %u handle %04X deadline +%u ms\n",
                now, host_, self_, replyTag, c.handle(), cfg_.sizeReplyMs ? cfg_.sizeReplyMs : cfg_.replyMs);
     }
+    if(latencydiag::enabled())latencydiag::record(latencydiag::Dispatch,latencydiag::metadata(out),0,tag_,this);
     ++tag_;
     ++nextCall_;
     InFlight f;
@@ -257,6 +259,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
     f.sentMs = now;
     f.tag = replyTag;
     f.warned = false;
+    f.diagnosticId = tag_-1;
     inFlight_.push_back(f);
     recent_.add(c.fkt, f.handle, now);
     if(cfg_.strictAnswers) {
@@ -339,6 +342,8 @@ bool Core::ownEcho(const most::View& m,uint32_t now) const {
 // function alone. An error fails the terminal even when it matches nothing in flight: one of our calls is wrong. Only
 // an answer to a call we dropped a moment ago is let go (see the header).
 void Core::onAnswer(const most::View& m, uint32_t now) {
+    if(latencydiag::enabled())latencydiag::record(latencydiag::CoreAnswer,
+        latencydiag::metadata(m),0,inFlight_.empty()?0:inFlight_[0].diagnosticId,this);
     if (cfg_.strictAnswers && m.fkt == kGetSize) {
         // Expiry is evaluated on receipt too, even if the send thread has not
         // ticked yet. Validation never consumes or extends a pending request.
@@ -451,6 +456,11 @@ void Core::tick(uint32_t now) {
                now,inFlight_[0].handle,cfg_.replyMs,inFlight_[0].sentMs+deadline(inFlight_[0]));
     }
     if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, deadline(inFlight_[0]), now) == 0) {
+        if(latencydiag::enabled()) {
+            latencydiag::Meta m;m.src=self_;m.dst=host_;m.fb=kFBlock;m.inst=kInst;
+            m.fkt=inFlight_[0].fkt;m.handle=inFlight_[0].handle;m.tag=inFlight_[0].tag;
+            latencydiag::record(latencydiag::Timeout,m,0,inFlight_[0].diagnosticId,this);
+        }
         ++stats_.timeouts;
         char why[96];
         snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms (sent +%u, now +%u)", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
@@ -638,6 +648,7 @@ void HudTerminal::logHealth() {
 }
 
 void HudTerminal::onMessage(const most::View& m) {
+    if(latencydiag::enabled())latencydiag::record(latencydiag::TerminalEntry,latencydiag::metadata(m),0,0,this);
     const uint32_t entryMs=nowMs();
     pthread_mutex_lock(&lock_);
     const uint32_t coreMs=nowMs();

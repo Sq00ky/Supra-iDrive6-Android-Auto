@@ -80,6 +80,7 @@
 //
 // **Use** means anything you do with the software requiring one of your licenses.
 
+#include "most/latency_diag.hpp"
 #include "nbt_env.hpp"
 #include "audio/config.hpp"
 #include "car_config.hpp"
@@ -1853,7 +1854,11 @@ int main(int argc, char* argv[]) {
     printf("====================================================\n");
     printf("----------------------------------------------------\n");
 
-    if (!ctlClaimOrForward()) return 0;   // a daemon is already running (second start from the iDrive menu)
+    if (!ctlClaimOrForward()) return 0; // second invocation only forwards to the running daemon
+    const char* diagnosticCluster=getenv("NBT_CLUSTER");
+    if(!nbt::latencydiag::start(diagnosticCluster && !strcmp(diagnosticCluster,"6wb") &&
+                              nbt::envFlag("NBT_6WB_DIAG")==1))
+        printf("[6wb diagnostic] exporter thread unavailable; application behavior unchanged\n");
 
     // Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
     // the HMI. The bootloop log showed `ldd:FATAL: Could not preload library libEGL_X.gpp.so` from audioconn and

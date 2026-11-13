@@ -235,3 +235,70 @@ Outstanding vehicle work: verify F31 handles/dimensions, route-end visibility,
 return routing, method reply formats, access permissions, palette/font,
 perspective placement and bitmap behavior. Until then, this contribution is
 implemented and host-tested software, **not vehicle-confirmed 6WB support**.
+
+## Optional low-overhead MOST/DSI timing recorder
+
+`NBT_6WB_DIAG=1`, read once at manual startup with `NBT_CLUSTER=6wb`, enables
+only instrumentation. No timing, matching, renderer or protocol setting is
+changed. With it absent/off there is no exporter thread, file or diagnostic
+clock read. The statically allocated ring remains reserved in the executable.
+The existing `NBT_MOST_LOG`/stdout logs are unchanged; for a low-overhead capture,
+use `NBT_MOST_LOG=0` rather than a mass USB trace. Respect the launcher's 15-setting
+limit. No vehicle configuration is edited by this feature.
+
+The recorder has 2048 fixed events. Producers read CLOCK_MONOTONIC in nanoseconds
+(actual resolution is platform-dependent), fill fixed metadata, and use only
+pthread_mutex_trylock to append. No allocation, printf, file I/O, sleeps or
+blocking lock acquisition is added to the producer. If busy, the event is lost;
+contention losses are NOT counted. Ring eviction is counted as `overwritten`.
+A short exporter copy of at most 128 events can cause trace drops, never an
+application wait. OS scheduling and clock/mutex implementation costs still exist;
+this is not a real-time latency guarantee.
+
+A dedicated thread exports CSV to `/dev/shmem/nbt-aad-6wb-diag.csv`, independently
+of stdout and USB logging. The file is fresh per daemon start, limited to 8 MiB,
+and the worker stops exporting at the cap. Collect it before another Start or
+NBT shutdown. Normal daemon exit retains its existing `_exit` behavior: it does
+not wait for the diagnostic thread; the last buffered events/footer may be lost.
+A crash/reset also loses the RAM file. Missing file can indicate exporter/open
+failure; absence of events is not evidence of absence of delay. The recorder
+is lossy and must not be used as a protocol truth source.
+
+CSV `ns` is phase entry, `end_ns` is completion (equal/nearly equal for point
+events); divide differences by 1000000 for milliseconds. `serial` orders storage,
+not wire transmission: completed spans are stored after their nested events.
+A handler that never returns has no completed span; absence of a span cannot
+exclude a hung callback.
+Group spans by `thread` and `context`, and sort by `ns` to reconstruct overlap.
+Context is a process-local object address, not a stable vehicle identifier.
+
+| Phase | Meaning |
+|---|---|
+| 1 | Core dispatch, before registered source/tag substitution |
+| 2 / 3 | Before / after send-lock acquisition, actual encoded MOST metadata |
+| 4 / 5 | Before / immediately after vendor stream send |
+| 6 | Entire DSI trampoline span, entry captured before lookup/decoding/logging |
+| 7 | MOST parser span, only ImageGetSize/SetVisibility |
+| 8 | MOST message processing span, includes tap/logging and route dispatch |
+| 9 | Entry into HudTerminal before its mutex |
+| 10 | Entry into Core::onAnswer |
+| 11 | Existing timeout decision, no additional recovery |
+| 12 | Individual router handler span, context is consumer user pointer |
+
+`request` is an internal Core dispatch counter where available. At answer entry
+it is the current candidate's counter, NOT proof of successful matching; zero
+means unavailable/no pending request. Other stages are correlated offline by
+peer/function/handle/tag/time, not by inventing a transaction ID. The registered
+MOST tag is routing identity, not a unique transaction sequence. `dsi_event`
+and `dsi_seq` are vendor event/sequence fields only when available. Handle is
+meaningful for HUDTerminal; for other traffic it is only the first two bytes.
+No payload beyond that prefix is recorded. Both C04 and 204 replies, including
+late ones, reach the recorder before existing validation decides their outcome.
+
+2→3 isolates send-lock waiting; 4→5 isolates the vendor send call. Overlapping
+6/8/12 spans on the response's callback thread show earlier handlers occupying
+that thread. 6→7→9→10 separates trampoline work, tap/dispatch and terminal-lock
+waiting. Long time before phase 6 remains ambiguous: the vendor's internal
+receiver/queue, IPC/server, MOST transport and device cannot be separated by
+this recorder. That requires QNX thread/IPC tracing or server/vendor-side
+instrumentation. Never interpret dispatch→6 as measured device execution time.

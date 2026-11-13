@@ -299,4 +299,13 @@ void testRuntime(const char* mode){
     unlink(marker.c_str());rmdir(dir);unsetenv("NBT_CLUSTER");unsetenv("NBT_HUDTERM");unsetenv("NBT_KOMBI_NAV");unsetenv("NBT_KOMBI_NAV_YIELD");
 }
 }
-int main(){testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");puts("test_hud6wb OK");}
+int main(){
+const bool trace=getenv("NBT_6WB_DIAG_TEST")!=NULL;
+char tracePath[]="/tmp/6wb-diag-integration-XXXXXX";
+if(trace){int fd=mkstemp(tracePath);assert(fd>=0);close(fd);assert(latencydiag::start(true,tracePath));}
+testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
+    latencydiag::stop();FILE* f=fopen(tracePath,"r");assert(f);
+    char row[512];unsigned rows=0;while(fgets(row,sizeof(row),f))if(row[0]>='0'&&row[0]<='9')++rows;
+    fclose(f);unlink(tracePath);assert(rows>0);
+}
+puts("test_hud6wb OK");}

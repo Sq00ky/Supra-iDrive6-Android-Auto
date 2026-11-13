@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#include "most/latency_diag.hpp"
 #include "most/client.hpp"
 
 #include <stdio.h>
@@ -182,7 +183,11 @@ uint32_t Client::registeredHeaderTag() const {
 }
 
 bool Client::request(DsiClient* c, uint32_t id, const std::vector<uint8_t>& p) {
+    if(latencydiag::enabled())latencydiag::record(latencydiag::BeforeSendLock,
+        latencydiag::dsiMetadata(id,p.empty()?NULL:&p[0],p.size(),true),0,0,c);
     pthread_mutex_lock(&sendLock_);
+    if(latencydiag::enabled())latencydiag::record(latencydiag::AfterSendLock,
+        latencydiag::dsiMetadata(id,p.empty()?NULL:&p[0],p.size(),true),0,0,c);
     bool ok = c->sendRequest(id, p);
     pthread_mutex_unlock(&sendLock_);
     return ok;
@@ -318,6 +323,7 @@ void Client::noteFirst(const View& m, MsgClass c, bool wanted) {
 }
 
 void Client::onMessage(const uint8_t* p, uint32_t len, uint32_t deliveryMs) {
+    const uint64_t diagnosticParse=latencydiag::stamp();
     View m;
     if (!parseView(p, len, m)) {
         pthread_mutex_lock(&lock_);
@@ -327,6 +333,11 @@ void Client::onMessage(const uint8_t* p, uint32_t len, uint32_t deliveryMs) {
     }
     m.rxMs = nowMs();
     m.deliveryMs = deliveryMs;
+    if(latencydiag::enabled()) {
+        latencydiag::Meta dm=latencydiag::metadata(m);
+        if(latencydiag::hud(dm))latencydiag::record(latencydiag::MostParsed,dm,diagnosticParse,0,&dsi_);
+    }
+    const uint64_t diagnosticHandler=latencydiag::stamp();
     MsgClass c = classify(m);
     bool wanted = router_.wants(m);
     noteFirst(m, c, wanted);
@@ -345,6 +356,8 @@ void Client::onMessage(const uint8_t* p, uint32_t len, uint32_t deliveryMs) {
     } else if (c != kTxStatus) {
         ran = router_.dispatch(m);
     }
+    if(latencydiag::enabled())latencydiag::record(latencydiag::MostHandlerSpan,
+        latencydiag::metadata(m),diagnosticHandler,0,&dsi_);
     uint32_t took = nowMs() - m.rxMs;
 
     pthread_mutex_lock(&lock_);

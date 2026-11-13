@@ -136,7 +136,7 @@ private:
     bool ownEcho(const most::View& m, uint32_t now) const;
     struct Size { uint16_t handle, width, height; };
     std::vector<Size> sizes_;
-    struct InFlight { uint16_t fkt, handle; uint32_t sentMs, tag; bool warned; };
+    struct InFlight { uint16_t fkt, handle; uint32_t sentMs, tag, diagnosticId; bool warned; };
     // Registered routing tags are not transaction IDs. Never repeat a size query
     // for the same peer/registration: an old reply could match the new query.
     struct SizeQuery { uint16_t host, self, handle; uint32_t tag; };

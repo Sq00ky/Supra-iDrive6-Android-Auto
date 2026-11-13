@@ -59,6 +59,7 @@ SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp s
 SRC_test_kombi_graph       :=
 SRC_test_kombi_nav         := $(SRC_KOMBI_NAV)
 SRC_test_kombi_nav_msg     :=
+SRC_test_latency_diag      :=
 SRC_test_lm_geometry       :=
 SRC_test_media_ack         :=
 SRC_test_media_msgs        :=
