@@ -24,6 +24,15 @@ inline int envFlag(const char* name) {
     return -1;
 }
 
+// Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
+// the HMI. Each of them was loading a graphics stack it never uses (`ldd:FATAL: Could not preload library
+// libEGL_X.gpp.so` from audioconn, `unknown symbol: kdMain` on every LayerManagerControl run). Stripping LD_PRELOAD
+// for children is the default since v1.9.69: unset means strip. NBT_CHILD_NO_PRELOAD=0 / off / no keeps it, which is
+// only useful when a child is being debugged and needs the HMI's preloads.
+inline bool childNoPreload() {
+    return envFlag("NBT_CHILD_NO_PRELOAD") != 0;   // unset stays on
+}
+
 // HU-hosted wireless (Bluetooth RFCOMM -> Wi-Fi credentials -> TCP accept) is the default since
 // v1.4.2 (car-verified). NBT_WIRELESS=0 / off / no restores the legacy outbound phone scanner.
 inline bool wirelessEnabled() {

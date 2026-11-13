@@ -415,6 +415,22 @@ int main() {
     assert(nbt::navAnyDistanceWanted("distance", NULL, true) == false);   // env wins
     assert(nbt::navAnyDistanceWanted(NULL, "2.5", true)      == false);   // ditto
     assert(nbt::navAnyDistanceWanted("", "", true)           == true);    // empty = unset
+
+    // LD_PRELOAD is stripped for children unless the setting is explicitly turned off.
+    {
+        const char* old = getenv("NBT_CHILD_NO_PRELOAD");
+        unsetenv("NBT_CHILD_NO_PRELOAD");
+        assert(nbt::childNoPreload() == true);            // unset = on
+        setenv("NBT_CHILD_NO_PRELOAD", "", 1);
+        assert(nbt::childNoPreload() == true);            // empty = on
+        setenv("NBT_CHILD_NO_PRELOAD", "0", 1);
+        assert(nbt::childNoPreload() == false);           // explicit off
+        setenv("NBT_CHILD_NO_PRELOAD", "off", 1);
+        assert(nbt::childNoPreload() == false);
+        setenv("NBT_CHILD_NO_PRELOAD", "1", 1);
+        assert(nbt::childNoPreload() == true);
+        if (old) setenv("NBT_CHILD_NO_PRELOAD", old, 1); else unsetenv("NBT_CHILD_NO_PRELOAD");
+    }
     // in-place (default on the car): the first maneuver is the full graph; each next maneuver is the template's own
     // maneuver-0 update block (no route-start state 1), patched; a guidance gap (reroute) gets the full graph again;
     // a gap that comes back on the same maneuver doesn't; mode 2 leaves out the 0x07 guiding model

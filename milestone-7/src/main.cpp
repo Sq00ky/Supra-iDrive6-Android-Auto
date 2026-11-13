@@ -1720,7 +1720,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.68-navsettings"
+#define NBT_AAD_BUILD "v1.9.69-navsettings"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -1871,14 +1871,15 @@ int main(int argc, char* argv[]) {
     // Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
     // the HMI. The bootloop log showed `ldd:FATAL: Could not preload library libEGL_X.gpp.so` from audioconn and
     // every LayerManagerControl run prints `unknown symbol: kdMain referenced from libKD.so.1`, i.e. each child loads
-    // the graphics stack it does not use. NBT_CHILD_NO_PRELOAD=1 (experiment, not car-verified) removes LD_PRELOAD
-    // for all children; the daemon itself is already loaded and keeps its libraries.
+    // the graphics stack it does not use. LD_PRELOAD is removed for all children by default since v1.9.69
+    // (nbt_env.hpp childNoPreload); NBT_CHILD_NO_PRELOAD=0 keeps it. The daemon itself is already loaded and keeps
+    // its libraries either way.
     {
         const char* pre = getenv("LD_PRELOAD");
-        const char* np = getenv("NBT_CHILD_NO_PRELOAD");
-        bool strip = np && np[0] == '1';
+        const bool strip = nbt::childNoPreload();
         printf("[Main] LD_PRELOAD=%s%s\n", pre ? pre : "(unset)",
-               pre && strip ? " -> removed for child processes (NBT_CHILD_NO_PRELOAD=1)" : "");
+               !pre ? "" : strip ? " -> removed for child processes (default; NBT_CHILD_NO_PRELOAD=0 keeps it)"
+                                 : " -> kept for child processes (NBT_CHILD_NO_PRELOAD=0)");
         if (pre && strip) unsetenv("LD_PRELOAD");
     }
 
