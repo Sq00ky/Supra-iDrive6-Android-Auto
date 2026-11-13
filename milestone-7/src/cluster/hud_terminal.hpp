@@ -15,12 +15,13 @@
 //   kOffline    no MOST link, no registered address, or no host of 82/00 in the registry
 //   kReady      batches are sent
 //   kNavActive  the factory navigation is using the terminal: nothing is sent, and queued work is dropped
-//   kFailed     a call got no answer within the reply timeout, or an error answer: nothing is sent until reset(), the
+//   kFailed     a mandatory call timed out, or a correlated structural error: nothing is sent until reset(), the
 //               link comes back, or the host changes
 // Leaving kReady drops the batch in progress and the one queued, so on the way back to kReady the driver redraws its
 // whole state. It is told through the status listener, and epoch() changes whenever work was dropped.
 //
-// Batches: one is sent at a time, back to back; one more waits. A "full" batch redraws everything the driver shows
+// Experimental 6WB paced setters do not fail on missing acknowledgement; see Config::pacedGraphics.
+// Batches: one is sent at a time, back to back (or at the configured 6WB cadence); one more waits. A "full" batch redraws everything the driver shows
 // (a new maneuver, a clear), so a full batch submitted while another waits takes its place. A partial batch (a new
 // distance) is merged into the waiting one instead: a text call for a handle the waiting batch already sets replaces
 // that call's payload in place, anything else is appended. So a distance update never wipes out a new maneuver that
@@ -64,6 +65,8 @@ struct Config {
     uint32_t txType, fixedTag;
     bool useFixedTag, initialNavActive, strictAnswers, acceptMirroredAnswers, extendedCalls;
     bool ignoreFactoryNav; // experimental 6WB only
+    bool pacedGraphics;     // opt-in experimental 6WB; information/bitmap results still gate progress
+    uint32_t graphicIntervalMs, graphicReplyMs; // cadence and telemetry window, not a transport timeout
     HandleSet handles;       // the only handles calls may use
     int navFrame;            // the factory navigation's frame instance: SetVisibility(navFrame, 0) ends a route
     uint32_t replyMs;        // per call, and the copy window
@@ -73,7 +76,7 @@ struct Config {
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
     Config() : txType(0), fixedTag(0), useFixedTag(false), initialNavActive(false), strictAnswers(false),
-               acceptMirroredAnswers(false), extendedCalls(false), ignoreFactoryNav(false), navFrame(-1), replyMs(1500), sizeReplyMs(0), navQuietMs(5000),
+               acceptMirroredAnswers(false), extendedCalls(false), ignoreFactoryNav(false), pacedGraphics(false), graphicIntervalMs(15), graphicReplyMs(8000), navFrame(-1), replyMs(1500), sizeReplyMs(0), navQuietMs(5000),
                maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
@@ -96,8 +99,10 @@ enum SubmitResult {
 const char* submitResultName(SubmitResult r);
 
 struct TerminalStats {
+    // batchesDone: blocking mode = answered; paced mode = dispatched + mandatory results received.
     uint32_t batches, batchesDone, batchesDropped, replaced, merged, refused;
     uint32_t calls, answers, copies, strays, navMsgs, timeouts, errors, lateErrors;
+    uint32_t graphicsSent, graphicsAnswered, graphicsUnconfirmed, graphicsAmbiguous, graphicsLate, graphicsAbandoned;
 };
 
 class Core {
@@ -114,9 +119,10 @@ public:
 
     SubmitResult submit(const Batch& b, uint32_t now);
 
-    // The next message to send, if any, already counted as in flight. After a failed send, sendFailed().
+    // The next message to send, registered before delivery. Call sent() on local success, sendFailed() otherwise.
     bool next(uint32_t now, most::Msg& out);
     void sendFailed(uint32_t now);
+    void sent(uint32_t now); // successful local send; paced batch completion is not a wire acknowledgement
 
     Status status() const { return status_; }
     bool busy() const { return haveCurrent_ || havePending_; }
@@ -134,6 +140,26 @@ private:
     struct Echo { uint16_t fkt; uint32_t ms, tag; std::vector<uint8_t> payload; };
     std::vector<Echo> echoes_;
     bool ownEcho(const most::View& m, uint32_t now) const;
+    // Routing tags are not transaction IDs. Once a graphics key is reused in this
+    // registration, NEVER attribute its answers to a particular command again.
+    // This sticky history also prevents duplicates older than the 8 s RAM ledger
+    // from completing/failing a later batch. Ambiguous errors remain diagnostics.
+    struct GraphicKey { uint16_t host, self, fkt, handle; uint32_t tag; bool reused; };
+    struct Graphic {
+        Call call; size_t key; uint32_t sentMs, id, batch;
+        enum Outcome { kPending, kAnswered, kError, kAbandoned } outcome;
+    };
+    enum { kMaxGraphicKeys=512, kMaxGraphics=1024 };
+    std::vector<GraphicKey> graphicKeys_;
+    std::vector<Graphic> graphics_;
+    uint32_t currentBatchId_, nextBatchId_, lastGraphicMs_;
+    bool haveGraphicTime_;
+    bool asynchronous(const Call& c) const;
+    bool graphicFunction(uint16_t fkt) const;
+    bool rememberGraphic(const Call& c, uint32_t tag, uint32_t now, uint32_t id);
+    bool onGraphicAnswer(const most::View& m, uint32_t now);
+    void expireGraphics(uint32_t now);
+    void abandonGraphics();
     struct Size { uint16_t handle, width, height; };
     std::vector<Size> sizes_;
     struct InFlight { uint16_t fkt, handle; uint32_t sentMs, tag, diagnosticId; bool warned; };
@@ -185,7 +211,7 @@ public:
     // A batch waits behind the one in progress: a full batch submitted now would take its place.
     virtual bool waiting() const = 0;
     virtual void reset() = 0;                     // leave kFailed
-    // Until everything submitted is answered: true then; false on the timeout or once the status leaves kReady.
+    // Until submitted work completes (paced graphics: locally sent, NOT acknowledged): true then; false on the timeout or once the status leaves kReady.
     virtual bool waitIdle(uint32_t ms) = 0;
 };
 

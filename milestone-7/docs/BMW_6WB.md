@@ -4,7 +4,8 @@ This backend adds `NBT_CLUSTER=6wb` to the existing Android Auto navigation
 pipeline. It targets F-series BMWs with NBT EVO and an original 6WB, initially
 an F31 LCI (2018), without changing the J29 or 6WA backend defaults.
 **The corrected source has not been compiled with the QNX ARM toolchain or
-validated for live rendering on that car. The capture below covers one query only.**
+validated for live rendering on that car. Prior F31 captures completed the eight
+size queries; this new paced-graphics revision still needs ARM build and hardware validation.**
 
 ## Implementation and provenance
 
@@ -67,7 +68,8 @@ The observed result was logged after a 3000 ms timeout. The capture lacks an
 explicit dispatch timestamp, so it cannot establish the actual wire latency.
 ImageGetSize now logs a diagnostic threshold at 3000 ms and keeps the same
 request pending until a final experimental deadline of 5000 ms, without retry.
-At or beyond 5000 ms it fails; other method deadlines remain 3000 ms.
+At or beyond 5000 ms it fails. Blocking methods (including C05 upload) retain
+3000 ms; whitelisted graphics now use the asynchronous policy below.
 Query dispatch/deadline, send-return duration,
 valid-result elapsed time and timeout timestamps are now logged separately;
 dispatch timing is not a measurement of delivery onto the MOST bus.
@@ -75,9 +77,8 @@ dispatch timing is not a measurement of delivery onto the MOST bus.
 Software tests replay the six-byte result and exercise invalid lengths, the
 unsupported seven-byte shape, zero sizes, wrong peer/function/instance/tag/handle,
 duplicates, mirrored results and expiration with or without a prior timer tick.
-They do not establish hardware rendering. Seven remaining surfaces, actual
-rendering, coexistence behavior and this corrected ARM binary still need vehicle
-validation. Before the next diagnostic start, restore `NBT_HUDTERM=log` on the
+They do not establish hardware rendering. Actual rendering and this new ARM
+revision still need vehicle validation. Before the next diagnostic start, restore `NBT_HUDTERM=log` on the
 vehicle: its configuration is not changed by this source update.
 
 ## Selection and shadow mode
@@ -116,8 +117,8 @@ parser timestamp, terminal callback entry and Core handling time. The first
 stamp is after the vendor DSI trampoline decoded the event; it is not a bus
 arrival timestamp and cannot locate latency inside the firmware/server.
 The tap/logger runs between MOST parsing and terminal dispatch, so these stamps
-can expose local logging/dispatch delay. This experimental wait does not prove
-that seven remaining surfaces or live rendering work on the car.
+can expose local logging/dispatch delay. Completing the size checks does not prove
+that live rendering works on the car.
 
 ## Data and layout
 
@@ -165,16 +166,19 @@ Live operation requires all of the following:
 1. A registered MOST link and a valid registry host for 82/00.
 2. Acknowledged positive ImageGetSize dimensions exactly matching all eight
    selected profile surfaces before drawing. Text instances are not queried.
-3. Only whitelisted functions/handles, with one call in flight. Pending batches
-   are not replaced or retried.
+3. Only whitelisted functions/handles. One blocking result at a time; graphical
+   setters advance at the configured cadence without waiting for their answers.
+   An active batch finishes in order; only a not-yet-started waiting batch may
+   be replaced/merged by the existing queue policy. No automatic retries.
 4. Correlated method, handle, routing tag and payload. Invalid or late results
    cannot authorize drawing. The 3000 ms size-query diagnostic threshold does
    not cancel or replace the request; its final deadline is 5000 ms.
 
 No instance allocation, resolution switching, handle scan or guessed session
 initialization is attempted. Error `0x41` is not assigned an unproven meaning
-and does not trigger a reset to force access. Cleanup waits for acknowledgements
-and is withheld when ownership/readiness is uncertain. Crash/SIGKILL cleanup
+and does not trigger a reset to force access. For paced graphics, cleanup waits
+for local dispatch completion, NOT wire acknowledgements, and is withheld if
+the terminal is not ready. Crash/SIGKILL cleanup
 cannot be guaranteed; the existing marker mechanism remains in use.
 
 The protocol does not let the observer distinguish identical requests from
@@ -284,6 +288,13 @@ Context is a process-local object address, not a stable vehicle identifier.
 | 10 | Entry into Core::onAnswer |
 | 11 | Existing timeout decision, no additional recovery |
 | 12 | Individual router handler span, context is consumer user pointer |
+| 13 | Unambiguously correlated graphics acknowledgement |
+| 14 | Graphics command unconfirmed after its telemetry window; nonfatal |
+| 15 | Valid graphics reply with reused/ambiguous key; request=0 |
+| 16 | Explicit graphics error; request=0 when no safe attribution exists |
+| 17 | Graphics acknowledgement tracking abandoned on link/failure/drop |
+| 18 | Batch dispatch complete; request is the internal batch generation |
+| 19 | Unambiguous graphics reply after the old 3000 ms threshold |
 
 `request` is an internal Core dispatch counter where available. At answer entry
 it is the current candidate's counter, NOT proof of successful matching; zero
@@ -293,7 +304,9 @@ MOST tag is routing identity, not a unique transaction sequence. `dsi_event`
 and `dsi_seq` are vendor event/sequence fields only when available. Handle is
 meaningful for HUDTerminal; for other traffic it is only the first two bytes.
 No payload beyond that prefix is recorded. Both C04 and 204 replies, including
-late ones, reach the recorder before existing validation decides their outcome.
+late ones, reach the recorder before validation decides their outcome.
+Asynchronous graphics go through the ledger (phases 13–17/19), not CoreAnswer
+phase 10. A phase 18 event confirms local dispatch, never successful display.
 
 2→3 isolates send-lock waiting; 4→5 isolates the vendor send call. Overlapping
 6/8/12 spans on the response's callback thread show earlier handlers occupying
@@ -302,3 +315,81 @@ waiting. Long time before phase 6 remains ambiguous: the vendor's internal
 receiver/queue, IPC/server, MOST transport and device cannot be separated by
 this recorder. That requires QNX thread/IPC tracing or server/vendor-side
 instrumentation. Never interpret dispatch→6 as measured device execution time.
+
+
+## Paced graphics revision (baseline d2c3d8511918001e8cc321bd24bda58bb5b5219d)
+
+Only `NBT_CLUSTER=6wb` enables `Config::pacedGraphics`. The SHADOW and LIVE
+selection is unchanged; SHADOW still acquires no send rights. Other cluster
+profiles keep their existing per-answer scheduler, timeouts and OEM policy.
+
+Classification is explicit, not a blanket fire-and-forget switch:
+
+| Methods | Scheduling | Reason |
+|---|---|---|
+| C04 ImageGetSize | Blocking; diagnostic 3000 / final 5000 ms | Dimensions are needed and all eight surfaces must match before drawing |
+| 204, 20E, 210, 219, 21B, 21D, 220, 227 | Ordered, paced, asynchronous acknowledgements | Existing setters/drawing methods used this way by JayJay; no returned value is needed to build the next command |
+| C05 bitmap upload | Blocking, existing 3000 ms | TX0 upload completion remains a barrier before TX4 visibility changes; cross-channel ordering is not hardware-verified |
+| Other permitted methods | Existing blocking behavior | No evidence justifying asynchronous scheduling |
+
+The reference is JayJay `12c8411618acd3eea5fb0a5ff1a57ef1c87761e0`,
+`nbt_cluster.cpp` send/onMsg. The cadence is initially 15 ms, set by
+`Config::graphicIntervalMs` in the 6WB setup in `nav_core.cpp`; change that field
+for experiments, not a new vehicle env option. It is a minimum between local
+send starts, not a physical bus-spacing guarantee. The existing sender's
+monotonic condition variable schedules the next call; no sleep was added to
+main or DSI callbacks. No transport timeout, wire format, TX4 vector or TX0
+bitmap selection changed. JayJay's newer TX1 bitmap choice is a separate
+hardware question and is not imported here.
+
+A graphics command is entered in a bounded ledger before send. Local send
+success permits the next ordered command; an immediate failure remains fatal.
+A batch becomes idle when all its commands have been dispatched successfully
+and blocking results have arrived. **Idle/batchesDone no longer means all
+asynchronous graphics were acknowledged.** Buffer swap and cleanup retain their
+place in the batch. The renderer waits for dispatch completion before advancing
+to the next batch. New Maps views remain dirty while a batch runs and are
+rendered afterwards; the Core also retains its existing one-waiting-batch policy.
+Previously validated sizes are cached until link/host invalidation, as before.
+No instances are created/released and no OEM navigation prerequisite is added.
+
+The graphics ledger retains commands/outcomes for 8000 ms, independently of the
+old 3000 ms graphic deadline. Missing confirmation then increments
+`graphicsUnconfirmed` and removes telemetry only; it does not fail, retry or
+extend a transport deadline. Health summaries distinguish dispatched,
+acknowledged, unconfirmed, ambiguous, late and abandoned. CSV phases above
+provide per-command timestamps without new per-answer text logging.
+
+**Conservative identity policy:** host/local address/client tag/function/handle
+is a routing key, not a transaction ID. ResultAck must also match the exact
+method payload (with the existing text terminator exception). ErrorAck must
+contain handle + at least one opaque error byte. Only a key issued once during
+this Core lifetime has a unique command candidate. A second use makes that key
+permanently ambiguous, even if the first call was answered or its 8 s ledger
+entry expired. This deliberately prevents an arbitrarily late duplicate from
+being assigned to a later identical command. It also means many repeated setters
+and polygons cannot have individual confirmations counted; their valid replies
+are telemetry, not proof of completion. `graphicsUnconfirmed` includes such
+unattributable commands and must not be read as measured packet loss.
+
+A unique ErrorAck for the latest batch is fatal and drops unsent work. An error
+from an older/abandoned generation, a reused key or an Error(F) without a proven
+handle remains visible in error counters/CSV but never fails an unrelated newer
+batch. Duplicate results do not double-count accepted answers. Invalid
+peer/tag/handle/function/type/payload does not complete anything. An 8 s window
+cannot create a transaction nonce; process restart or registration/address reuse
+also cannot prove all old wire traffic disappeared.
+
+Storage is bounded: 1024 live ledger entries (at 15 ms, fewer than 535 normally
+fit in 8 s) and 512 distinct registration keys retained for this Core lifetime.
+Exhaustion is an explicit structural failure, never silent eviction/retry or an
+unbounded queue. Tracking is abandoned on disconnect/failure; discovery and
+mandatory resource validation still gate resumed drawing.
+
+Host tests: `make -C tests run-test_hud6wb_async`. Payloads are synthetic;
+eight size-query timing pairs and the 3365 ms graphics latency come from the
+provided CSV. Tests cover pacing/order, full resource initialization/cache,
+missing/late/duplicate/out-of-order replies, explicit and ambiguous errors,
+old batches, Maps updates while sending, mandatory timeouts, local-send failure,
+clock wrap, bounded storage and the real sender thread. Existing 6WA/J29 suites
+remain required. None of these tests proves rendering on the BMW.

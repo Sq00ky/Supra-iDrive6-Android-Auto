@@ -14,7 +14,8 @@
 namespace nbt { namespace latencydiag {
 enum Phase { Dispatch=1, BeforeSendLock, AfterSendLock, VendorSendEnter,
     VendorSendReturn, DsiCallbackSpan, MostParsed, MostHandlerSpan,
-    TerminalEntry, CoreAnswer, Timeout, MostRouteSpan };
+    TerminalEntry, CoreAnswer, Timeout, MostRouteSpan, GraphicAck, GraphicUnconfirmed,
+    GraphicAmbiguous, GraphicError, GraphicAbandoned, BatchDispatched, GraphicLate };
 struct Meta {
     uint16_t src,dst,fkt,handle;
     uint8_t fb,inst,op;

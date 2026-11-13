@@ -51,15 +51,21 @@ const char* submitResultName(SubmitResult r) {
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
 Core::Core(const Config& cfg)
-    : replyTag_(0xffffu), cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(cfg.initialNavActive),
+    : currentBatchId_(0), nextBatchId_(0), lastGraphicMs_(0), haveGraphicTime_(false), replyTag_(0xffffu), cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(cfg.initialNavActive),
       routeOn_(cfg.initialNavActive), frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
+    if (cfg_.pacedGraphics) {
+        if (!cfg_.graphicIntervalMs) cfg_.graphicIntervalMs=15;
+        if (!cfg_.graphicReplyMs) cfg_.graphicReplyMs=8000;
+        graphicKeys_.reserve(kMaxGraphicKeys); graphics_.reserve(kMaxGraphics);
+    }
     memset(&stats_, 0, sizeof(stats_));
 }
 
 void Core::dropWork(uint32_t now) {
+    if (cfg_.pacedGraphics) abandonGraphics();
     stats_.batchesDropped += (haveCurrent_ ? 1 : 0) + (havePending_ ? 1 : 0);
     if (haveCurrent_ || havePending_) ++epoch_;
     haveCurrent_ = havePending_ = false;
@@ -176,6 +182,7 @@ SubmitResult Core::submit(const Batch& b, uint32_t) {
     if (!haveCurrent_) {
         ++stats_.batches;
         current_ = b;
+        currentBatchId_=++nextBatchId_;
         haveCurrent_ = true;
         nextCall_ = 0;
         batchStartMs_ = 0;
@@ -223,10 +230,151 @@ bool Core::merge(const Batch& b) {
     return true;
 }
 
+// Explicit setter/drawing whitelist. C04 needs dimensions; C05 waits for upload
+// completion before visibility changes across TX0/TX4. Unknown methods stay gated.
+bool Core::graphicFunction(uint16_t fkt) const {
+    switch(fkt) {
+        case kSetVisibility: case kSwitchVisibility: case kTextareaSetText:
+        case kSetLineWidth: case kSetFillColor: case kAddPolygon:
+        case kRemoveAllItems: case 0x227: return true;
+        default: return false;
+    }
+}
+bool Core::asynchronous(const Call& c) const { return cfg_.pacedGraphics && graphicFunction(c.fkt); }
+
+void Core::abandonGraphics() {
+    for(size_t i=0;i<graphics_.size();++i) {
+        Graphic& g=graphics_[i];
+        if(g.outcome!=Graphic::kPending)continue;
+        g.outcome=Graphic::kAbandoned;++stats_.graphicsAbandoned;
+        if(latencydiag::enabled()) {
+            const GraphicKey& k=graphicKeys_[g.key];latencydiag::Meta m;
+            m.src=k.self;m.dst=k.host;m.fb=kFBlock;m.fkt=k.fkt;m.handle=k.handle;m.tag=k.tag;
+            latencydiag::record(latencydiag::GraphicAbandoned,m,0,g.id,this);
+        }
+    }
+}
+void Core::expireGraphics(uint32_t now) {
+    size_t keep=0;
+    for(size_t i=0;i<graphics_.size();++i) {
+        const Graphic& g=graphics_[i];
+        if(left(g.sentMs,cfg_.graphicReplyMs,now)>0) {
+            if(keep!=i)graphics_[keep]=g;
+            ++keep;continue;
+        }
+        if(g.outcome==Graphic::kPending) {
+            ++stats_.graphicsUnconfirmed;
+            if(latencydiag::enabled()) {
+                const GraphicKey& k=graphicKeys_[g.key];latencydiag::Meta m;
+                m.src=k.self;m.dst=k.host;m.fb=kFBlock;m.fkt=k.fkt;m.handle=k.handle;m.tag=k.tag;
+                latencydiag::record(latencydiag::GraphicUnconfirmed,m,0,g.id,this);
+            }
+        }
+    }
+    graphics_.resize(keep);
+}
+bool Core::rememberGraphic(const Call& c,uint32_t tag,uint32_t now,uint32_t id) {
+    expireGraphics(now);
+    if(graphics_.size()>=kMaxGraphics) {fail("graphics correlation ledger full",now);return false;}
+    size_t key=0;
+    while(key<graphicKeys_.size()) {
+        const GraphicKey& k=graphicKeys_[key];
+        if(k.host==host_ && k.self==self_ && k.tag==tag && k.fkt==c.fkt && k.handle==c.handle())break;
+        ++key;
+    }
+    if(key==graphicKeys_.size()) {
+        if(key>=kMaxGraphicKeys) {fail("graphics registration history full",now);return false;}
+        GraphicKey k;k.host=host_;k.self=self_;k.tag=tag;k.fkt=c.fkt;k.handle=c.handle();k.reused=false;
+        graphicKeys_.push_back(k);
+    } else graphicKeys_[key].reused=true;
+    Graphic g;g.call=c;g.key=key;g.sentMs=now;g.id=id;g.batch=currentBatchId_;g.outcome=Graphic::kPending;
+    graphics_.push_back(g);++stats_.graphicsSent;return true;
+}
+// Results echo method-specific payloads. This is a validation check, not a
+// transaction identifier. Reused keys remain ambiguous even when bytes match.
+static bool graphicPayload(const Call& c,const most::View& m) {
+    size_t n=c.payload.size();
+    if(c.fkt==kTextareaSetText) {
+        if(n>=4 && c.payload[2]==1 && m.len==n-1)--n;
+        else if(n>=5 && c.payload[2]==0 && m.len==n-2)n-=2;
+    }
+    return m.len==n && n && !memcmp(m.data,&c.payload[0],n);
+}
+bool Core::onGraphicAnswer(const most::View& m,uint32_t now) {
+    expireGraphics(now);
+    if(m.op==most::kOpError && m.hdrTag==(cfg_.useFixedTag && cfg_.fixedTag!=0xffffu ? cfg_.fixedTag : replyTag_) && m.dst==self_) {
+        // Error(F) has no proven handle: report, never attach it to a newer batch.
+        ++stats_.errors;++stats_.graphicsAmbiguous;
+        if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,0,this);
+        return true;
+    }
+    if(!m.data || m.len<2 || (m.op!=most::kOpResultAck && m.op!=most::kOpErrorAck &&
+       m.op!=most::kOpProcessingAck && m.op!=most::kOpProcessing)) {++stats_.strays;return false;}
+    if(m.op==most::kOpErrorAck && m.len<3) {++stats_.strays;return false;}
+    const uint16_t handle=rdBe16(m.data);
+    for(size_t i=0;i<graphics_.size();++i) {
+        Graphic& g=graphics_[i];const GraphicKey& k=graphicKeys_[g.key];
+        if(m.src!=k.host || m.hdrTag!=k.tag || m.fkt!=k.fkt || handle!=k.handle ||
+           (m.dst!=k.self && !(cfg_.acceptMirroredAnswers && isAppAddress(m.dst))))continue;
+        if(m.op==most::kOpResultAck && !graphicPayload(g.call,m))continue;
+        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing)return true;
+        if(k.reused) {
+            ++stats_.graphicsAmbiguous;
+            if(m.op==most::kOpErrorAck)++stats_.errors;
+            if(latencydiag::enabled())latencydiag::record(m.op==most::kOpErrorAck ? latencydiag::GraphicError :
+                latencydiag::GraphicAmbiguous,latencydiag::metadata(m),0,0,this);
+            return true;
+        }
+        if(g.outcome!=Graphic::kPending) {
+            if(m.op==most::kOpErrorAck && g.outcome!=Graphic::kError) {
+                // Contradictory/already abandoned results are observable errors,
+                // but must never invalidate work submitted since that command.
+                g.outcome=Graphic::kError;++stats_.errors;++stats_.lateErrors;
+                if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,g.id,this);
+            } else ++stats_.copies;
+            return true;
+        }
+        if(now-g.sentMs>=cfg_.replyMs) {
+            ++stats_.graphicsLate;
+            if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicLate,latencydiag::metadata(m),0,g.id,this);
+        }
+        if(m.op==most::kOpErrorAck) {
+            g.outcome=Graphic::kError;++stats_.errors;
+            if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,g.id,this);
+            // A positively correlated error in the latest generation is structural.
+            // An older generation must not invalidate newly queued/sent work.
+            if(g.batch==currentBatchId_ && status_==kReady)fail("explicit ErrorAck to current graphics batch",now);
+            else ++stats_.lateErrors;
+        } else {
+            g.outcome=Graphic::kAnswered;++stats_.answers;++stats_.graphicsAnswered;
+            if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicAck,latencydiag::metadata(m),0,g.id,this);
+        }
+        return true;
+    }
+    if(m.op==most::kOpErrorAck) {
+        // The payload ledger has a finite lifetime; registration history does
+        // not. An expired known key is reportable, never assigned to new work.
+        for(size_t i=0;i<graphicKeys_.size();++i) {
+            const GraphicKey& k=graphicKeys_[i];
+            if(m.src==k.host && m.hdrTag==k.tag && m.fkt==k.fkt && handle==k.handle &&
+               (m.dst==k.self || (cfg_.acceptMirroredAnswers && isAppAddress(m.dst)))) {
+                ++stats_.errors;++stats_.graphicsAmbiguous;
+                if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,0,this);
+                return true;
+            }
+        }
+    }
+    ++stats_.strays;return false;
+}
+
 bool Core::next(uint32_t now, most::Msg& out) {
     if (status_ != kReady || !haveCurrent_ || nextCall_ >= current_.calls.size()) return false;
     if (inFlight_.size() >= cfg_.maxInFlight) return false;
     const Call& c = current_.calls[nextCall_];
+    // Do not cross an information/bitmap barrier, even when maxInFlight > 1.
+    if (cfg_.pacedGraphics && !inFlight_.empty()) return false;
+    if (cfg_.pacedGraphics && haveGraphicTime_ &&
+        left(lastGraphicMs_,cfg_.graphicIntervalMs,now)>0) return false;
     if (!buildCall(host_, c, tag_, cfg_.handles, out, cfg_.extendedCalls)) {   // checked at submit: only a host change could do this
         fail("a queued call no longer builds", now);
         return false;
@@ -251,6 +399,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
                now, host_, self_, replyTag, c.handle(), cfg_.sizeReplyMs ? cfg_.sizeReplyMs : cfg_.replyMs);
     }
     if(latencydiag::enabled())latencydiag::record(latencydiag::Dispatch,latencydiag::metadata(out),0,tag_,this);
+    if (asynchronous(c) && !rememberGraphic(c,replyTag,now,tag_)) return false;
     ++tag_;
     ++nextCall_;
     InFlight f;
@@ -260,9 +409,10 @@ bool Core::next(uint32_t now, most::Msg& out) {
     f.tag = replyTag;
     f.warned = false;
     f.diagnosticId = tag_-1;
-    inFlight_.push_back(f);
+    if (!asynchronous(c)) inFlight_.push_back(f);
+    if (cfg_.pacedGraphics) { lastGraphicMs_=now; haveGraphicTime_=true; }
     recent_.add(c.fkt, f.handle, now);
-    if(cfg_.strictAnswers) {
+    if(cfg_.strictAnswers && !asynchronous(c)) {
         Echo e; e.fkt=c.fkt; e.ms=now; e.tag=replyTag; e.payload=c.payload;
         if(echoes_.size()>=128)echoes_.erase(echoes_.begin());
         echoes_.push_back(e);
@@ -272,19 +422,31 @@ bool Core::next(uint32_t now, most::Msg& out) {
 }
 
 void Core::sendFailed(uint32_t now) { fail("the MOST client did not send a call", now); }
+void Core::sent(uint32_t now) {
+    if(cfg_.pacedGraphics) {
+        // Space successful local sends even if the vendor send itself took time.
+        lastGraphicMs_=now;
+        finishIfDone(now);
+    }
+}
 
 void Core::finishIfDone(uint32_t now) {
     if (!haveCurrent_ || nextCall_ < current_.calls.size() || !inFlight_.empty()) return;
     ++stats_.batchesDone;
     if (cfg_.logBatches)
-        printf("[HudTerm] batch '%s': %u calls answered in %u ms\n", current_.label.c_str(),
-               (unsigned)current_.calls.size(), now - batchStartMs_);
+        printf("[HudTerm] batch '%s': %u calls %s in %u ms\n", current_.label.c_str(),
+               (unsigned)current_.calls.size(), cfg_.pacedGraphics ? "dispatched (graphics acknowledgements asynchronous)" : "answered", now - batchStartMs_);
+    if(cfg_.pacedGraphics && latencydiag::enabled()) {
+        latencydiag::Meta m;m.src=self_;m.dst=host_;m.fb=kFBlock;
+        latencydiag::record(latencydiag::BatchDispatched,m,0,currentBatchId_,this);
+    }
     haveCurrent_ = false;
     if (!havePending_) {
         current_ = Batch();
         return;
     }
     current_ = pending_;
+    currentBatchId_=++nextBatchId_;
     pending_ = Batch();
     havePending_ = false;
     haveCurrent_ = true;
@@ -293,6 +455,10 @@ void Core::finishIfDone(uint32_t now) {
 
 void Core::onMessage(const most::View& m, uint32_t now) {
     if (m.fblock != kFBlock || m.inst != kInst || !host_) return;
+    if (cfg_.pacedGraphics && graphicFunction(m.fkt) && m.src==host_) {
+        onGraphicAnswer(m,now);
+        return;
+    }
     if (cfg_.strictAnswers && m.src == host_ && m.fkt == kGetSize &&
         (m.dst == self_ || cfg_.acceptMirroredAnswers)) {
         onAnswer(m, now);
@@ -447,6 +613,7 @@ void Core::onNav(const most::View& m, uint32_t now) {
 }
 
 void Core::tick(uint32_t now) {
+    if(cfg_.pacedGraphics) expireGraphics(now);
     if (status_ == kReady && !inFlight_.empty() && inFlight_[0].fkt==kGetSize &&
         cfg_.sizeReplyMs>cfg_.replyMs && !inFlight_[0].warned &&
         left(inFlight_[0].sentMs,cfg_.replyMs,now)==0 &&
@@ -483,6 +650,16 @@ uint32_t Core::msUntilDeadline(uint32_t now) const {
             if(diagnostic<t)t=diagnostic;
         }
         if (t < d) d = t;
+    }
+    if(cfg_.pacedGraphics) {
+        if(status_==kReady && haveCurrent_ && nextCall_<current_.calls.size() && inFlight_.empty()) {
+            uint32_t t=haveGraphicTime_ ? left(lastGraphicMs_,cfg_.graphicIntervalMs,now) : 0;
+            if(t<d)d=t;
+        }
+        for(size_t i=0;i<graphics_.size();++i) {
+            uint32_t t=left(graphics_[i].sentMs,cfg_.graphicReplyMs,now);
+            if(t<d)d=t;
+        }
     }
     if (navActive_ && !routeOn_) {
         uint32_t t = left(lastNavMs_, cfg_.navQuietMs, now);
@@ -645,6 +822,10 @@ void HudTerminal::logHealth() {
            t.replaced - l.replaced, t.merged - l.merged, t.refused - l.refused, t.calls - l.calls, t.answers - l.answers, t.copies - l.copies,
            t.strays - l.strays, t.navMsgs - l.navMsgs, t.timeouts - l.timeouts, t.errors - l.errors,
            t.lateErrors - l.lateErrors);
+    if(t.graphicsSent || l.graphicsSent)
+        printf("[HudTerm] graphics: dispatched %u, acknowledged %u, unconfirmed %u, ambiguous replies %u, late %u, abandoned %u (non-blocking)\n",
+               t.graphicsSent-l.graphicsSent,t.graphicsAnswered-l.graphicsAnswered,t.graphicsUnconfirmed-l.graphicsUnconfirmed,
+               t.graphicsAmbiguous-l.graphicsAmbiguous,t.graphicsLate-l.graphicsLate,t.graphicsAbandoned-l.graphicsAbandoned);
 }
 
 void HudTerminal::onMessage(const most::View& m) {
@@ -720,6 +901,7 @@ void HudTerminal::run() {
             pthread_mutex_lock(&lock_);
             now = nowMs();
             if (!ok) core_.sendFailed(now);
+            else core_.sent(now);
         }
         Status s;
         if (core_.takeStatusChange(s)) {

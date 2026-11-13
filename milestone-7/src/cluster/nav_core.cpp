@@ -404,6 +404,7 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         yield_enabled_=false;
         printf("[KombiNav] 6wb experimental: OEM navigation checks disabled\n");
         c.replyMs=3000; c.sizeReplyMs=5000;
+        c.pacedGraphics=true; c.graphicIntervalMs=15; c.graphicReplyMs=8000;
         c.maxInFlight=1; c.maxBatch=128; c.logBatches=!shadow_;
         terminal_=new hudterm::HudTerminal(c);
         if(!terminal_->attach(*most,!shadow_) || !terminal_->start()) return false;
