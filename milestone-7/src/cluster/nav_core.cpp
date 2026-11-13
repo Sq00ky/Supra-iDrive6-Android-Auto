@@ -399,23 +399,21 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         c.handles=hudterm::handlesOf(p); c.navFrame=p.base.frame;
         c.txType=p.vectorTx; c.fixedTag=p.headerTag; c.useFixedTag=true;
         c.strictAnswers=true; c.acceptMirroredAnswers=true; c.extendedCalls=true;
-        const bool bypassOem=envFlag("NBT_6WB_OEM_BYPASS")==1;
-        c.ignoreFactoryNav=bypassOem;
-        c.initialNavActive=!bypassOem;
-        if(bypassOem) {
-            yield_enabled_=false;
-            printf("[KombiNav] 6wb experimental OEM bypass: no factory-route watch, frame-off or quiet wait\n");
-        }
-        c.replyMs=3000; c.maxInFlight=1; c.maxBatch=128; c.logBatches=!shadow_;
+        c.ignoreFactoryNav=true;
+        c.initialNavActive=false;
+        yield_enabled_=false;
+        printf("[KombiNav] 6wb experimental: OEM navigation checks disabled\n");
+        c.replyMs=3000; c.sizeReplyMs=5000;
+        c.maxInFlight=1; c.maxBatch=128; c.logBatches=!shadow_;
         terminal_=new hudterm::HudTerminal(c);
         if(!terminal_->attach(*most,!shadow_) || !terminal_->start()) return false;
         display_=new Hud6wbDisplay(*terminal_,p,shadow_);
         settings_.approach=kApproachOff; // 6WB bar carries distance; keep the full AA distance text.
         settings_.approach_mi=0;
         target_="experimental BMW 6WB HUDTerminal (registry host)";
-        stopHint_="6WB: factory idle and matching ImageGetSize results required; never reset after errors";
+        stopHint_="6WB: matching ImageGetSize results required; never reset after errors";
         printf("[KombiNav] 6wb %s: F31 profile unverified; %s\n",shadow_?"SHADOW":"LIVE OPT-IN",
-            shadow_?"no HUDTerminal commands sent":bypassOem?"OEM bypass; checking surfaces when AA guidance arrives":"waiting for observed factory route end, then checking surfaces");
+            shadow_?"no HUDTerminal commands sent":"checking surfaces when AA guidance arrives; no OEM prerequisite");
         return true;
     }
     printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa, 6wb): cluster arrows disabled\n", id);
@@ -521,7 +519,7 @@ void KombiNav::start(most::Client* most) {
                forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", display_->name(), target_.c_str(),
                shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "", approachText().c_str(),
                yield_enabled_ ? "on" : "off",
-               !strcmp(display_->name(),"6wb") && envFlag("NBT_6WB_OEM_BYPASS")==1 ?
+               !strcmp(display_->name(),"6wb") ?
                "experimental OEM checks bypassed" : "factory navigation on the terminal, always");
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");

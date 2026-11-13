@@ -108,7 +108,7 @@ private:
     void onAttached(DsiClient* c);
     void onDetached();
     void onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len);
-    void onMessage(const uint8_t* p, uint32_t len);
+    void onMessage(const uint8_t* p, uint32_t len, uint32_t deliveryMs);
     void noteFirst(const View& m, MsgClass c, bool wanted);
     LinkState deriveStateLocked() const;
     void updateStateLocked();         // call with lock_ held: unlocks it, then tells the listeners about a change

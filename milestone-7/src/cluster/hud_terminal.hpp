@@ -63,16 +63,17 @@ const char* statusName(Status s);
 struct Config {
     uint32_t txType, fixedTag;
     bool useFixedTag, initialNavActive, strictAnswers, acceptMirroredAnswers, extendedCalls;
-    bool ignoreFactoryNav; // explicit experimental 6WB opt-in only
+    bool ignoreFactoryNav; // experimental 6WB only
     HandleSet handles;       // the only handles calls may use
     int navFrame;            // the factory navigation's frame instance: SetVisibility(navFrame, 0) ends a route
     uint32_t replyMs;        // per call, and the copy window
+    uint32_t sizeReplyMs;    // optional final size-query deadline; replyMs is the diagnostic threshold
     uint32_t navQuietMs;     // quiet after the frame went off before the navigation counts as finished
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
     Config() : txType(0), fixedTag(0), useFixedTag(false), initialNavActive(false), strictAnswers(false),
-               acceptMirroredAnswers(false), extendedCalls(false), ignoreFactoryNav(false), navFrame(-1), replyMs(1500), navQuietMs(5000),
+               acceptMirroredAnswers(false), extendedCalls(false), ignoreFactoryNav(false), navFrame(-1), replyMs(1500), sizeReplyMs(0), navQuietMs(5000),
                maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
@@ -135,13 +136,14 @@ private:
     bool ownEcho(const most::View& m, uint32_t now) const;
     struct Size { uint16_t handle, width, height; };
     std::vector<Size> sizes_;
-    struct InFlight { uint16_t fkt, handle; uint32_t sentMs, tag; };
+    struct InFlight { uint16_t fkt, handle; uint32_t sentMs, tag; bool warned; };
     // Registered routing tags are not transaction IDs. Never repeat a size query
     // for the same peer/registration: an old reply could match the new query.
     struct SizeQuery { uint16_t host, self, handle; uint32_t tag; };
     std::vector<SizeQuery> sizeQueries_;
     uint32_t replyTag_;
 
+    uint32_t deadline(const InFlight& f) const { return f.fkt==kGetSize && cfg_.sizeReplyMs ? cfg_.sizeReplyMs : cfg_.replyMs; }
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
     bool merge(const Batch& b);

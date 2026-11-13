@@ -58,15 +58,17 @@ use this strict size-result path.
 The tag is routing identity, not a transaction sequence. A size query must not
 be repeated for the same host/local-address/tag/handle during this terminal's
 lifetime: it cannot distinguish a delayed old result from a new result. The
-bounded history refuses such a retry rather than guessing. After OEM navigation
-yields back, already validated dimensions from the unchanged link/host cache
+bounded history refuses such a retry rather than guessing. Already validated dimensions from an unchanged link/host cache
 are reused without repeating queries. Revalidation after an interrupted query
 batch may stop safely; there is no automatic retry.
 Process restart is not proof that queued replies have disappeared.
 
 The observed result was logged after a 3000 ms timeout. The capture lacks an
 explicit dispatch timestamp, so it cannot establish the actual wire latency.
-The timeout remains 3000 ms. Query dispatch/deadline, send-return duration,
+ImageGetSize now logs a diagnostic threshold at 3000 ms and keeps the same
+request pending until a final experimental deadline of 5000 ms, without retry.
+At or beyond 5000 ms it fails; other method deadlines remain 3000 ms.
+Query dispatch/deadline, send-return duration,
 valid-result elapsed time and timeout timestamps are now logged separately;
 dispatch timing is not a measurement of delivery onto the MOST bus.
 
@@ -74,7 +76,7 @@ Software tests replay the six-byte result and exercise invalid lengths, the
 unsupported seven-byte shape, zero sizes, wrong peer/function/instance/tag/handle,
 duplicates, mirrored results and expiration with or without a prior timer tick.
 They do not establish hardware rendering. Seven remaining surfaces, actual
-rendering, OEM arbitration and this corrected ARM binary still need vehicle
+rendering, coexistence behavior and this corrected ARM binary still need vehicle
 validation. Before the next diagnostic start, restore `NBT_HUDTERM=log` on the
 vehicle: its configuration is not changed by this source update.
 
@@ -95,21 +97,27 @@ It leaves the shown-picture marker untouched. The observer still registers
 and subscribes to DSI/MOST: this is not a claim of zero local IPC traffic.
 
 `NBT_HUDTERM=on` explicitly opts into the experimental live path. It does not
-bypass resource validation or OEM priority. No configuration files are written
+bypass resource validation. No configuration files are written
 by selecting this backend, and no installer is provided.
 
-## Experimental OEM-navigation bypass
+## Experimental 6WB testing without OEM prerequisites
 
-For controlled 6WB debugging only, set `NBT_6WB_OEM_BYPASS=1` alongside
-`NBT_CLUSTER=6wb`. The operator must keep BMW navigation off during the test.
-This skips the initial OEM frame-off/quiet requirement, the iDrive route-log
-watch, and terminal yielding on observed OEM drawing, including after reconnect.
-It applies to SHADOW and LIVE; SHADOW still submits no HUDTerminal calls.
-Absent/disabled, all existing OEM checks remain enabled. Other cluster drivers
-ignore this setting. Discovery, registered addressing, surface validation,
-reply correlation, query-reuse protection and finite timeouts remain enforced.
-This does not change manual startup or any vehicle configuration automatically.
-It does not fix the separately observed ImageGetSize response latency.
+The 6WB driver intrinsically disables OEM navigation arbitration: no preliminary
+BMW route, frame-off observation, quiet wait, route-log watch or yielding on OEM
+activity is required, including after reconnect. `NBT_6WB_OEM_BYPASS` is no
+longer read or needed. The operator uses Android Auto exclusively during tests.
+Other cluster drivers retain their existing defaults and OEM arbitration.
+SHADOW still sends nothing; LIVE keeps discovery, registered addressing,
+surface validation, reply correlation, query-reuse protection and finite deadlines.
+No surface allocation or instance registration is added. Startup remains manual.
+
+ImageGetSize reception logs entry into the MOST client's DSI callback, the MOST
+parser timestamp, terminal callback entry and Core handling time. The first
+stamp is after the vendor DSI trampoline decoded the event; it is not a bus
+arrival timestamp and cannot locate latency inside the firmware/server.
+The tap/logger runs between MOST parsing and terminal dispatch, so these stamps
+can expose local logging/dispatch delay. This experimental wait does not prove
+that seven remaining surfaces or live rendering work on the car.
 
 ## Data and layout
 
@@ -154,19 +162,14 @@ padding are opt-ins; the existing 6WA tag/transport defaults are unchanged.
 
 Live operation requires all of the following:
 
-1. OEM activity starts as unknown/active. Observe the factory switching frame
-   `0x17` off, then five seconds of quiet, before submitting even size queries.
-   A timeout alone never declares the OEM navigation idle. A reconnect/host
-   change requires a fresh observed route end.
-2. Query the eight documented image handles with `ImageGetSize` (`0xC04`,
-   `[handle BE16][01]`). Require acknowledged positive dimensions exactly
-   matching the selected profile before drawing. Text instances are not queried.
-3. Send only whitelisted functions/handles, with one call in flight. Do not
-   replace pending drawing batches or reuse their buffer state prematurely.
-4. Yield when foreign navigation traffic is observed; drop queued work without
-   sending cleanup over the OEM navigation. Correlate replies by method,
-   handle and method-specific payload, including narrowly matched mirrored
-   replies. Invalid size results are ignored; timeouts and correlated ErrorAck stop drawing.
+1. A registered MOST link and a valid registry host for 82/00.
+2. Acknowledged positive ImageGetSize dimensions exactly matching all eight
+   selected profile surfaces before drawing. Text instances are not queried.
+3. Only whitelisted functions/handles, with one call in flight. Pending batches
+   are not replaced or retried.
+4. Correlated method, handle, routing tag and payload. Invalid or late results
+   cannot authorize drawing. The 3000 ms size-query diagnostic threshold does
+   not cancel or replace the request; its final deadline is 5000 ms.
 
 No instance allocation, resolution switching, handle scan or guessed session
 initialization is attempted. Error `0x41` is not assigned an unproven meaning
@@ -175,9 +178,8 @@ and is withheld when ownership/readiness is uncertain. Crash/SIGKILL cleanup
 cannot be guaranteed; the existing marker mechanism remains in use.
 
 The protocol does not let the observer distinguish identical requests from
-two clients with absolute certainty. A command already in flight cannot be
-withdrawn atomically when OEM activity begins. This is conservative arbitration,
-not a guarantee of exclusive ownership.
+two clients with absolute certainty. Experimental 6WB testing assumes BMW
+navigation remains off; OEM arbitration is disabled for this profile.
 
 Bitmap calls (`0xC05`) contain a complete surface, format 1, one application
 segment, ABGR RLE32 and padding. Payloads over 4096 bytes are omitted, never
@@ -214,7 +216,7 @@ make -C milestone-7/tests check
 
 The new tests cover text/RLE round trips, geometry, payloads, buffer/visibility
 sequences, mismatched resources, registered DSI headers, replies, timeouts,
-OEM priority, reconnection and zero HUDTerminal submissions in default/log
+terminal arbitration in isolated transport tests, reconnection and zero HUDTerminal submissions in default/log
 mode. Existing 6WA, J29 golden and MOST tests are retained. C++98 syntax checks
 and an ARM Makefile dry-run are additional checks, not a QNX compilation.
 

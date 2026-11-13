@@ -233,6 +233,41 @@ void testSizeReplies(){
     idle.onMessage(unsolicited,1);uint16_t w,h;
     assert(idle.status()==kReady && idle.stats().answers==0 && !idle.imageSize(0x17,w,h));
 }
+void testExtendedSizeDeadline(){
+    Bmw6wbProfile p;Config cfg;cfg.handles=handlesOf(p);cfg.strictAnswers=true;
+    cfg.extendedCalls=true;cfg.replyMs=3000;cfg.sizeReplyMs=5000;cfg.maxInFlight=1;
+    cfg.useFixedTag=true;cfg.fixedTag=96;
+    const uint8_t raw[]={0,0x17,1,0x35,1,0x4a};std::vector<uint8_t> ack(raw,raw+6);
+    Batch b("size");std::vector<uint8_t> q=getSize(0x17);q.push_back(1);b.add(kGetSize,q);
+    for(unsigned scenario=0;scenario<4;++scenario) {
+        hudterm::Core c(cfg);c.setLink(true,0x2060,0);c.setHost(0x101,0);most::Msg out;
+        assert(c.submit(b,100)==kQueued && c.next(100,out));
+        assert(c.msUntilDeadline(100)==3000);
+        c.tick(3100);assert(c.status()==kReady && c.busy() && c.stats().timeouts==0);
+        assert(c.msUntilDeadline(3100)==2000 && !c.next(3100,out));
+        c.tick(3200);assert(c.stats().calls==1 && c.stats().answers==0);
+        most::View wrong=message(kGetSize,ack,0x2060);wrong.hdrTag=95;
+        c.onMessage(wrong,3300);assert(c.busy() && c.stats().answers==0);
+        most::View m=message(kGetSize,ack,0x2060);m.hdrTag=96;
+        uint32_t receipt=scenario==0?3501:scenario==1?5099:scenario==2?5100:5200;
+        if(scenario==3)c.tick(5100);
+        c.onMessage(m,receipt);uint16_t w,h;
+        if(scenario<2) {
+            assert(c.status()==kReady && !c.busy() && c.stats().answers==1);
+            assert(c.imageSize(0x17,w,h) && w==309 && h==330);
+            c.onMessage(m,receipt+1);assert(c.stats().answers==1);
+        } else {
+            assert(c.status()==kFailed && c.stats().timeouts==1 && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+        }
+        assert(c.stats().calls==1); // never a retry
+    }
+    // The extra wait belongs to ImageGetSize only, not arbitrary drawing calls.
+    hudterm::Core other(cfg);other.setLink(true,0x2060,0);other.setHost(0x101,0);
+    Batch draw("visibility");draw.add(kSetVisibility,setVisibility(0x17,true));most::Msg out;
+    assert(other.submit(draw,100)==kQueued && other.next(100,out));other.tick(3100);
+    assert(other.status()==kFailed && other.stats().timeouts==1);
+}
 void testSecondStep(){
     kntest::Bytes first=kntest::navState(8,"First"),second=kntest::navState(7,"Second");
     first.insert(first.end(),second.begin(),second.end());NavMessages m;assert(m.store(0x8006,&first[0],first.size()));
@@ -244,8 +279,7 @@ void testSecondStep(){
     assert(!bmwExitNumber(2,box).empty()&&bmwExitNumber(0,box).empty()&&bmwExitNumber(100,box).empty());
 }
 unsigned graphicRequests(){unsigned n=0;for(size_t i=0;i<fake_dsi::calls.size();++i)if(fake_dsi::calls[i].kind==fake_dsi::Call::kRequest&&fake_dsi::calls[i].id==most::kReqProcessMessage)++n;return n;}
-void testRuntime(const char* mode,bool bypass=false){
-    if(bypass)setenv("NBT_6WB_OEM_BYPASS","1",1);else unsetenv("NBT_6WB_OEM_BYPASS");
+void testRuntime(const char* mode){
     char dir[]="/tmp/6wb-host-XXXXXX";assert(mkdtemp(dir));std::string marker=std::string(dir)+"/shown";
     KombiNav::kShownFile=marker.c_str();KombiNav::kFlagFile="/nonexistent/6wb-flag";KombiNav::kManualFile="/nonexistent/6wb-manual";
     setenv("NBT_CLUSTER","6wb",1);setenv("NBT_KOMBI_NAV","1",1);setenv("NBT_KOMBI_NAV_YIELD","0",1);
@@ -257,12 +291,12 @@ void testRuntime(const char* mode,bool bypass=false){
         fake_dsi::data(most::kAttrRegistry,&reg[0],reg.size());
         kntest::Bytes status=kntest::status(1),step=kntest::navState(8,"Synthetic Road"),pos=kntest::curPos(250,"250",1);
         KombiNav::navStatusCallback(0x8003,&status[0],status.size(),&nav);KombiNav::navStatusCallback(0x8006,&step[0],step.size(),&nav);KombiNav::navStatusCallback(0x8007,&pos[0],pos.size(),&nav);
-        usleep(400000);nav.stop();assert((graphicRequests()>0)==(bypass && mode && !strcmp(mode,"on")));
-        // Default/log never acquire send rights. Even live cannot draw before an observed factory route end.
+        usleep(400000);nav.stop();assert((graphicRequests()>0)==(mode && !strcmp(mode,"on")));
+        // SHADOW never acquires send rights; LIVE starts size queries without any OEM route.
         if(!mode || strcmp(mode,"on"))assert(access(marker.c_str(),F_OK)!=0);
         fake_dsi::detach();
     }
     unlink(marker.c_str());rmdir(dir);unsetenv("NBT_CLUSTER");unsetenv("NBT_HUDTERM");unsetenv("NBT_KOMBI_NAV");unsetenv("NBT_KOMBI_NAV_YIELD");
 }
 }
-int main(){testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");testRuntime(NULL,true);testRuntime("log",true);testRuntime("on",true);unsetenv("NBT_6WB_OEM_BYPASS");puts("test_hud6wb OK");}
+int main(){testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");puts("test_hud6wb OK");}

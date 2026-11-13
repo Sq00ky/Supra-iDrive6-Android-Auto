@@ -247,7 +247,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
         SizeQuery q; q.host=host_; q.self=self_; q.tag=replyTag; q.handle=c.handle();
         sizeQueries_.push_back(q);
         printf("[HudTerm] +%u DISPATCH ImageGetSize host %04X self %04X tag %u handle %04X deadline +%u ms\n",
-               now, host_, self_, replyTag, c.handle(), cfg_.replyMs);
+               now, host_, self_, replyTag, c.handle(), cfg_.sizeReplyMs ? cfg_.sizeReplyMs : cfg_.replyMs);
     }
     ++tag_;
     ++nextCall_;
@@ -256,6 +256,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
     f.handle = c.handle();
     f.sentMs = now;
     f.tag = replyTag;
+    f.warned = false;
     inFlight_.push_back(f);
     recent_.add(c.fkt, f.handle, now);
     if(cfg_.strictAnswers) {
@@ -441,11 +442,19 @@ void Core::onNav(const most::View& m, uint32_t now) {
 }
 
 void Core::tick(uint32_t now) {
-    if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
+    if (status_ == kReady && !inFlight_.empty() && inFlight_[0].fkt==kGetSize &&
+        cfg_.sizeReplyMs>cfg_.replyMs && !inFlight_[0].warned &&
+        left(inFlight_[0].sentMs,cfg_.replyMs,now)==0 &&
+        left(inFlight_[0].sentMs,deadline(inFlight_[0]),now)>0) {
+        inFlight_[0].warned=true;
+        printf("[HudTerm] +%u ImageGetSize handle %04X diagnostic threshold %u ms; same request pending until +%u\n",
+               now,inFlight_[0].handle,cfg_.replyMs,inFlight_[0].sentMs+deadline(inFlight_[0]));
+    }
+    if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, deadline(inFlight_[0]), now) == 0) {
         ++stats_.timeouts;
         char why[96];
         snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms (sent +%u, now +%u)", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
-                 inFlight_[0].handle, cfg_.replyMs, inFlight_[0].sentMs, now);
+                 inFlight_[0].handle, deadline(inFlight_[0]), inFlight_[0].sentMs, now);
         fail(why, now);
     }
     if (navActive_ && !routeOn_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
@@ -458,7 +467,11 @@ void Core::tick(uint32_t now) {
 uint32_t Core::msUntilDeadline(uint32_t now) const {
     uint32_t d = 0xFFFFFFFFu;
     if (status_ == kReady && !inFlight_.empty()) {
-        uint32_t t = left(inFlight_[0].sentMs, cfg_.replyMs, now);
+        uint32_t t = left(inFlight_[0].sentMs, deadline(inFlight_[0]), now);
+        if (inFlight_[0].fkt==kGetSize && cfg_.sizeReplyMs>cfg_.replyMs && !inFlight_[0].warned) {
+            uint32_t diagnostic=left(inFlight_[0].sentMs,cfg_.replyMs,now);
+            if(diagnostic<t)t=diagnostic;
+        }
         if (t < d) d = t;
     }
     if (navActive_ && !routeOn_) {
@@ -625,10 +638,16 @@ void HudTerminal::logHealth() {
 }
 
 void HudTerminal::onMessage(const most::View& m) {
+    const uint32_t entryMs=nowMs();
     pthread_mutex_lock(&lock_);
-    core_.onMessage(m, nowMs());
+    const uint32_t coreMs=nowMs();
+    const bool diagnostic=registeredTag_ && m.fblock==kFBlock && m.inst==kInst && m.fkt==kGetSize;
+    core_.onMessage(m, coreMs);
     wake();
     pthread_mutex_unlock(&lock_);
+    if(diagnostic)
+        printf("[HudTerm] ImageGetSize receive DSI callback +%u MOST +%u terminal +%u core +%u tag %u len %u\n",
+               m.deliveryMs,m.rxMs,entryMs,coreMs,m.hdrTag,(unsigned)m.len);
 }
 
 void HudTerminal::onLink(bool up, uint16_t self) {

@@ -259,7 +259,7 @@ void Client::onDetached() {
 
 void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
     if (id == kInfoMessage) {
-        onMessage(p, len);
+        onMessage(p, len, nowMs());
         return;
     }
     if (infoTap_) infoTap_(id, p, len, infoTapUser_);
@@ -317,7 +317,7 @@ void Client::noteFirst(const View& m, MsgClass c, bool wanted) {
     }
 }
 
-void Client::onMessage(const uint8_t* p, uint32_t len) {
+void Client::onMessage(const uint8_t* p, uint32_t len, uint32_t deliveryMs) {
     View m;
     if (!parseView(p, len, m)) {
         pthread_mutex_lock(&lock_);
@@ -326,6 +326,7 @@ void Client::onMessage(const uint8_t* p, uint32_t len) {
         return;
     }
     m.rxMs = nowMs();
+    m.deliveryMs = deliveryMs;
     MsgClass c = classify(m);
     bool wanted = router_.wants(m);
     noteFirst(m, c, wanted);
