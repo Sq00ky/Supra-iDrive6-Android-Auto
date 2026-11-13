@@ -67,7 +67,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-60-navsettings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-61-navsettings (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -393,7 +393,6 @@ const unsigned    kActUsb1080       = 174;   // "1080p over USB" checkbox
 const unsigned    kUsb1080Model     = 178;   // raBoolModel
 const char* const kUsb1080Flag      = "/var/opt/aa/usb-1080p";
 const char* const kUsb1080Manual    = "/opt/aa/usb-1080p";
-const char* const kTransportState   = "/var/opt/aa/transport";   // "usb" while a USB session runs
 const char* const kNoLogFlag        = "/var/opt/aa/no-log";
 const char* const kNoLogManual      = "/opt/aa/no-log";
 const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
@@ -2285,27 +2284,13 @@ bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-// The daemon writes /var/opt/aa/transport while a session runs, so the app can tell the cable from Wi-Fi.
-bool phoneOnCable() {
-    FILE* f = fopen(kTransportState, "r");
-    if (!f) return false;
-    char b[16] = {0};
-    size_t n = fread(b, 1, sizeof(b) - 1, f);
-    fclose(f);
-    b[n] = 0;
-    return strcmp(b, "usb\n") == 0 || strcmp(b, "usb") == 0;
-}
 bool usb1080On() { return fileExists(kUsb1080Flag) || fileExists(kUsb1080Manual); }
-// Not selectable over Wi-Fi: the row reads unchecked whenever the phone is not on the cable, and a press is refused.
-void showUsb1080(bmw::PluginApp* app) { app->updateModel(kUsb1080Model, usb1080On() && phoneOnCable()); }
+// Always selectable. The daemon applies the 1080p profile to a USB session only, so the box can be set before the phone
+// is plugged in; over Wi-Fi it is stored but does nothing.
+void showUsb1080(bmw::PluginApp* app) { app->updateModel(kUsb1080Model, usb1080On()); }
 bool onUsb1080Toggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    if (!phoneOnCable()) {
-        alog("1080p over USB: refused - the phone is not on the cable (transport is not USB)");
-        if (g_runApp) showUsb1080(g_runApp);
-        return true;
-    }
     toggleFlagFile(kUsb1080Flag, kUsb1080Manual,
-                   "1080p over USB (only on the cable; needs Android Auto over USB; NBT_USB_1080P wins)");
+                   "1080p over USB (applies to a USB session; NBT_USB_1080P in nbt-aad.env wins)");
     if (g_runApp) showUsb1080(g_runApp);
     return true;
 }
