@@ -1697,7 +1697,7 @@ bool VideoManager::postCodecConfig(const uint8_t* data, size_t length) {
     item.has_inline_config = false;
     item.raw_size = length;
     item.inline_config_size = 0;
-    frame_queue_.push_back(item);
+    frame_queue_.push(item);   // config packets are not subject to the cap
     pthread_cond_signal(&queue_cond_);
     pthread_mutex_unlock(&queue_mutex_);
     return true;
@@ -1726,35 +1726,6 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
         wait_idr_ = false;
         printf("[VideoManager] keyframe after the decoder rebuild (%u frames without one dropped)\n", idr_dropped_);
     }
-    if (frame_queue_.size() >= 15) {
-        bool dropped = false;
-        size_t dropped_size = 0;
-        for (std::vector<VideoQueueItem>::iterator it = frame_queue_.begin(); it != frame_queue_.end(); ++it) {
-            if (!it->is_config && !it->is_idr) {   // never sacrifice a keyframe
-                dropped_size = it->data.size();
-                it = frame_queue_.erase(it);
-                dropped = true;
-                // Every frame up to the next keyframe decodes against the missing one. A keyframe already queued behind
-                // it repairs the picture by itself; otherwise the phone has to be asked (keyframeWanted()).
-                bool idr_behind = false;
-                for (; it != frame_queue_.end(); ++it) {
-                    if (it->is_idr) { idr_behind = true; break; }
-                }
-                if (!idr_behind) idr_wanted_ = true;
-                break;
-            }
-        }
-        if (!dropped) {
-            printf("[VideoManager] Warning: video queue full of codec config packets; rejecting %u byte frame.\n",
-                   static_cast<unsigned int>(length));
-            pthread_mutex_unlock(&queue_mutex_);
-            return false;
-        }
-        printf("[VideoManager] Warning: video queue full; dropped oldest non-config frame (%u bytes), queued=%u.\n",
-               static_cast<unsigned int>(dropped_size),
-               static_cast<unsigned int>(frame_queue_.size()));
-    }
-    dumpVideo(data, length, false);
     VideoQueueItem item;
     item.raw_size = length;
     item.inline_config_size = cached_codec_config_.size();
@@ -1769,10 +1740,30 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
     item.pts = pts;
     item.is_config = false;
     item.is_idr = looksLikeIdr(data, length);
-    if (item.is_idr) idr_wanted_ = false;   // the phone's keyframe repairs whatever was lost before it
-    frame_queue_.push_back(item);
-    pthread_cond_signal(&queue_cond_);
+    // The queue takes the bytes (no copy), and drops the oldest plain frame when it is full (frame_queue.hpp).
+    const FrameQueue::PushResult pushed = frame_queue_.push(item);
+    const size_t queued_before_push = frame_queue_.size() - (pushed == FrameQueue::kRejectedFullOfConfig ? 0 : 1);
+    const size_t dropped_size = frame_queue_.lastDroppedSize();
+    if (pushed != FrameQueue::kRejectedFullOfConfig) {
+        // Every frame up to the next keyframe decodes against a dropped one. A keyframe already queued behind it
+        // repairs the picture by itself; otherwise the phone has to be asked (keyframeWanted()).
+        if (pushed == FrameQueue::kQueuedDroppedOldest && !frame_queue_.lastDropKeyframeBehind()) idr_wanted_ = true;
+        if (item.is_idr) idr_wanted_ = false;   // the phone's keyframe repairs whatever was lost before it
+        pthread_cond_signal(&queue_cond_);
+    }
     pthread_mutex_unlock(&queue_mutex_);
+    // Log after the unlock: with a slow log destination (USB stick) a printf under queue_mutex_ stalled the worker
+    // and, through it, the session thread.
+    if (pushed == FrameQueue::kRejectedFullOfConfig) {
+        printf("[VideoManager] Warning: video queue full of codec config packets; rejecting %u byte frame.\n",
+               static_cast<unsigned int>(length));
+        return false;
+    }
+    if (pushed == FrameQueue::kQueuedDroppedOldest) {
+        printf("[VideoManager] Warning: video queue full; dropped oldest non-config frame (%u bytes), queued=%u.\n",
+               static_cast<unsigned int>(dropped_size), static_cast<unsigned int>(queued_before_push));
+    }
+    dumpVideo(data, length, false);
     return true;
 }
 
@@ -1789,8 +1780,7 @@ void VideoManager::workerLoop() {
             pthread_mutex_unlock(&queue_mutex_);
             break;
         }
-        item = frame_queue_.front();
-        frame_queue_.erase(frame_queue_.begin());
+        frame_queue_.pop(item);   // not empty here; takes the bytes without a copy
         size_t queued_after_pop = frame_queue_.size();
         bool do_reset = reset_pending_;
         reset_pending_ = false;
@@ -1883,11 +1873,7 @@ void VideoManager::workerLoop() {
                 if (ret != 0) {
                     // mdev did not take the frame: it is lost like a queue-full drop (see postVideoFrame).
                     pthread_mutex_lock(&queue_mutex_);
-                    bool idr_behind = false;
-                    for (size_t i = 0; i < frame_queue_.size(); ++i) {
-                        if (frame_queue_[i].is_idr) { idr_behind = true; break; }
-                    }
-                    if (!idr_behind) idr_wanted_ = true;
+                    if (!frame_queue_.hasKeyframe()) idr_wanted_ = true;
                     pthread_mutex_unlock(&queue_mutex_);
                 }
                 if (ret != 0 || frame_count <= 35 || (frame_count % 30) == 0) {
