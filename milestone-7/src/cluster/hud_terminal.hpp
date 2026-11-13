@@ -65,7 +65,7 @@ struct Config {
     uint32_t txType, fixedTag;
     bool useFixedTag, initialNavActive, strictAnswers, acceptMirroredAnswers, extendedCalls;
     bool ignoreFactoryNav; // experimental 6WB only
-    bool pacedGraphics;     // opt-in experimental 6WB; information/bitmap results still gate progress
+    bool pacedGraphics;     // opt-in experimental 6WB; information results still gate progress
     uint32_t graphicIntervalMs, graphicReplyMs; // cadence and telemetry window, not a transport timeout
     HandleSet handles;       // the only handles calls may use
     int navFrame;            // the factory navigation's frame instance: SetVisibility(navFrame, 0) ends a route

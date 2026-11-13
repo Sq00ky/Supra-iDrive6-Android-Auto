@@ -37,11 +37,12 @@ void arrow(const std::vector<V>& path, Shape& out) {
     p.pts.push_back(p.pts[0]);out.push_back(p);
 }
 }
-Shape bmwManeuver(const ShapeSpec& s,const Rect& rect,bool knownExit) {
+Shape bmwManeuver(const ShapeSpec& s,const Rect& rect,bool knownExit,unsigned segments) {
     Shape design,out;std::vector<V> path;
     if(s.kind==kShapeRoundabout) {
         Poly ring;ring.type=kPolyline;
-        for(unsigned i=0;i<=24;++i)ring.pts.push_back(point(heading(V(500,430),i*15,210)));
+        if(segments<24 || segments>72)segments=24;
+        for(unsigned i=0;i<=segments;++i)ring.pts.push_back(point(heading(V(500,430),i*360.0/segments,210)));
         design.push_back(ring);
         Poly entry;entry.type=kPolyline;entry.pts.push_back(point(V(500,950)));entry.pts.push_back(point(V(500,640)));design.push_back(entry);
         // Entry is south; sweep follows the AA direction of circulation.

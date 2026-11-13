@@ -29,7 +29,10 @@ private:
     bool submit(const hudterm::Batch& b);
     void log(const std::string& s) const;
     hudterm::Port& port_;hudterm::Bmw6wbProfile p_;hudterm::BmwResources resources_;
-    bool shadow_,sent_,fresh_,dirty_;uint32_t epoch_;
+    void remember(const NavView& v,const hudterm::Batch& b);
+    bool mainChanged(const NavView& v) const;
+    bool iconChanged(const NavView& v) const;
+    bool shadow_,sent_,fresh_,dirty_,shownLanes_;uint32_t epoch_;
     uint16_t mainVisible_,laneVisible_,iconVisible_;
     NavView shown_;Settings settings_;LogFn log_;void* user_;
 };

@@ -6,7 +6,7 @@
 namespace nbt { namespace hudterm {
 // Outlined arrows adapted from JayJay3071's offset-path renderer; coordinates
 // fitted to an explicit profile rectangle. No OEM assets or binary dependencies.
-Shape bmwManeuver(const ShapeSpec& spec, const Rect& rect, bool knownExit = true);
+Shape bmwManeuver(const ShapeSpec& spec, const Rect& rect, bool knownExit = true, unsigned roundaboutSegments = 24);
 Shape bmwExitNumber(unsigned number, const Rect& rect);
 Shape bmwLane(int shape, bool highlighted, const Rect& rect);
 } }

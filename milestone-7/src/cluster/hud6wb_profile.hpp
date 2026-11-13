@@ -17,11 +17,14 @@ struct Bmw6wbProfile {
     uint8_t lineWidth, laneLineWidth, textEncoding;
     uint32_t vectorTx, headerTag, barRangeMetres;
     size_t maxBitmapBytes;
-    bool roadShields;
+    bool roadShields,iconAntialias;
+    unsigned roundaboutSegments; // default preserves the hardware-tested geometry
+    Rect nextGlyph;
     Bmw6wbProfile() : main(0x1f,0x20,221,158), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40),
         bar(0x35), frameWidth(309), frameHeight(330), barWidth(28), barHeight(113),
         lineWidth(6), laneLineWidth(3), textEncoding(1), vectorTx(4), headerTag(0xffff),
-        barRangeMetres(1000), maxBitmapBytes(4096), roadShields(false) {
+        barRangeMetres(1000), maxBitmapBytes(4096), roadShields(false), iconAntialias(false), roundaboutSegments(24) {
+        Rect next={90,3,126,39};nextGlyph=next;
         base.name="6wb"; base.frame=0x17; base.street=0x1a; base.distance=0x1b; base.unit=0x1c;
         base.bufA=main.a; base.bufB=main.b; base.fill=2;
         Rect c={0,0,220,157}; base.canvas=c;
@@ -43,6 +46,9 @@ inline bool validProfile(const Bmw6wbProfile& p) {
         p.base.glyph.x0>=0 && p.base.glyph.y0>=0 && p.base.glyph.x1>p.base.glyph.x0 && p.base.glyph.y1>p.base.glyph.y0 &&
         p.base.glyph.x1<p.main.width && p.base.glyph.y1<p.main.height && p.lanes.width>=80 && p.lanes.height>=16 &&
         p.icons.width>=130 && p.icons.height>=44 && p.frameWidth && p.frameHeight && p.barWidth && p.barHeight &&
+        p.roundaboutSegments>=24 && p.roundaboutSegments<=72 &&
+        p.nextGlyph.x0>=0 && p.nextGlyph.y0>=0 && p.nextGlyph.x1>p.nextGlyph.x0 && p.nextGlyph.y1>p.nextGlyph.y0 &&
+        p.nextGlyph.x1<p.icons.width && p.nextGlyph.y1<p.icons.height &&
         p.lineWidth>0 && p.laneLineWidth>0 && p.barRangeMetres>0 && p.maxBitmapBytes>=18 && p.maxBitmapBytes<=4096 &&
         p.base.streetChars>0 && p.base.streetChars<=255 && p.base.distanceChars>0 && p.base.distanceChars<=255;
 }

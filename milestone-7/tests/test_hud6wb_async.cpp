@@ -117,17 +117,22 @@ void updatesAndBarriers() {
     gate.tick(5000);assert(gate.status()==kFailed&&gate.stats().timeouts==1&&gate.stats().calls==1);
     Core fail(config());up(fail);fail.submit(first,0);assert(fail.next(0,out));fail.sendFailed(0);
     assert(fail.status()==kFailed&&fail.stats().batchesDone==0&&!fail.next(15,out));
-    // C05 is not on the asynchronous whitelist: cross-channel bitmap upload remains a barrier.
-    Bmw6wbProfile profile;std::vector<uint32_t> pixels(305*44,0);
+    // C05 now shares ordered asynchronous dispatch; upload precedes visibility.
+    std::vector<uint32_t> pixels(305*44,0);
     std::vector<uint8_t> bmp=bitmap(0x18,1,pixels,305,44,4096);
     Batch upload("bitmap");Call call(0xc05,bmp);call.txType=0;upload.calls.push_back(call);
+    upload.add(kSwitchVisibility,switchVisibility(0x19,0x18));
     upload.add(kSetVisibility,setVisibility(0x18,true));Core bitmapCore(config());up(bitmapCore);
-    bitmapCore.submit(upload,0);send(bitmapCore,0);assert(!bitmapCore.next(15,out));
-    bitmapCore.tick(3000);assert(bitmapCore.status()==kFailed);
-    Core uploaded(config());up(uploaded);uploaded.submit(upload,0);send(uploaded,0);
+    bitmapCore.submit(upload,0);most::Msg uploaded=send(bitmapCore,0);assert(uploaded.txType==0);
+    assert(send(bitmapCore,15).fkt==kSwitchVisibility);send(bitmapCore,30);
+    bitmapCore.tick(3000);assert(bitmapCore.status()==kReady&&!bitmapCore.busy());
     std::vector<uint8_t> result=getSize(0x18);result.push_back(1);result.push_back(1);
-    uploaded.onMessage(answer(0xc05,result),250);
-    assert(send(uploaded,251).fkt==kSetVisibility&&uploaded.stats().answers==1);
+    bitmapCore.onMessage(answer(0xc05,result),3365);
+    assert(bitmapCore.stats().graphicsAnswered==1&&bitmapCore.stats().graphicsLate==1);
+    bitmapCore.onMessage(answer(0xc05,result),3366);assert(bitmapCore.stats().graphicsAnswered==1);
+    Core rejected(config());up(rejected);rejected.submit(upload,0);most::Msg bad=send(rejected,0);
+    answerMsg(rejected,bad,1,most::kOpErrorAck);assert(rejected.status()==kFailed);
+
 }
 // Exercise the actual driver + resource cache with the CSV's eight receive times.
 struct CorePort : Port {
@@ -162,6 +167,12 @@ void sizesThenRender() {
     port.c.tick(t+3000);assert(port.c.status()==kReady); // no fatal graphic deadline
     v.aa_type=7;display.showManeuver(v,10,true,true);
     assert(send(port.c,t+3015).fkt!=kGetSize); // cached dimensions, next Maps update
+    port.c.setHost(0x102,t+3016);display.showManeuver(v,11,true,true);
+    assert(send(port.c,t+3030).fkt==kGetSize); // actual peer change invalidates the cache
+    Core identity(config());up(identity);uint32_t epoch=identity.epoch();
+    identity.setHost(0x102,1);assert(identity.epoch()!=epoch);epoch=identity.epoch();
+    identity.setHost(0x102,2);assert(identity.epoch()==epoch);
+    identity.setLink(true,0x2064,3);assert(identity.epoch()!=epoch);
 }
 // Real sender thread: condition-variable scheduling, no acknowledgements.
 struct Sender {

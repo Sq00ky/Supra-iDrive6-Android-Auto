@@ -3,9 +3,9 @@
 This backend adds `NBT_CLUSTER=6wb` to the existing Android Auto navigation
 pipeline. It targets F-series BMWs with NBT EVO and an original 6WB, initially
 an F31 LCI (2018), without changing the J29 or 6WA backend defaults.
-**The corrected source has not been compiled with the QNX ARM toolchain or
-validated for live rendering on that car. Prior F31 captures completed the eight
-size queries; this new paced-graphics revision still needs ARM build and hardware validation.**
+**Baseline e34d96f is reported hardware-working by the F31 owner. The newer
+incremental/C05-asynchronous revision below is software-tested only until
+compiled and checked on the car.**
 
 ## Implementation and provenance
 
@@ -68,7 +68,7 @@ The observed result was logged after a 3000 ms timeout. The capture lacks an
 explicit dispatch timestamp, so it cannot establish the actual wire latency.
 ImageGetSize now logs a diagnostic threshold at 3000 ms and keeps the same
 request pending until a final experimental deadline of 5000 ms, without retry.
-At or beyond 5000 ms it fails. Blocking methods (including C05 upload) retain
+At or beyond 5000 ms it fails. Other blocking methods retain
 3000 ms; whitelisted graphics now use the asynchronous policy below.
 Query dispatch/deadline, send-return duration,
 valid-result elapsed time and timeout timestamps are now logged separately;
@@ -329,7 +329,7 @@ Classification is explicit, not a blanket fire-and-forget switch:
 |---|---|---|
 | C04 ImageGetSize | Blocking; diagnostic 3000 / final 5000 ms | Dimensions are needed and all eight surfaces must match before drawing |
 | 204, 20E, 210, 219, 21B, 21D, 220, 227 | Ordered, paced, asynchronous acknowledgements | Existing setters/drawing methods used this way by JayJay; no returned value is needed to build the next command |
-| C05 bitmap upload | Blocking, existing 3000 ms | TX0 upload completion remains a barrier before TX4 visibility changes; cross-channel ordering is not hardware-verified |
+| C05 bitmap upload | Asynchronous, paced (incremental revision) | TX0 upload precedes swap/visibility in the local queue; physical cross-channel completion remains hardware-unverified |
 | Other permitted methods | Existing blocking behavior | No evidence justifying asynchronous scheduling |
 
 The reference is JayJay `12c8411618acd3eea5fb0a5ff1a57ef1c87761e0`,
@@ -393,3 +393,88 @@ missing/late/duplicate/out-of-order replies, explicit and ambiguous errors,
 old batches, Maps updates while sending, mandatory timeouts, local-send failure,
 clock wrap, bounded storage and the real sender thread. Existing 6WA/J29 suites
 remain required. None of these tests proves rendering on the BMW.
+
+## Incremental renderer revision after e34d96f
+
+The owner reports e34d96f working on the F31 NBT EVO ID6/6WB: arrows, distance,
+street names and persistent graphics through driving-mode changes. That is the
+hardware baseline; the optimizations below are a new revision requiring a
+subsequent hardware check. Earlier sections describe historical limitations.
+
+C05 now uses the same ordered, 15 ms paced asynchronous ledger as the vector
+setters. TX0, format, size cap and routing are unchanged. The bitmap upload is
+submitted before its buffer swap and visibility setters; there is no wait for a
+ResultAck. Its special four-byte ResultAck validates handle, bitmap ID and the
+observed success marker, rather than comparing the entire bitmap payload.
+Explicit errors, duplicate/late results and permanently ambiguous reused keys
+follow the same conservative graphics policy described above. **This preserves
+local dispatch order; it does not prove physical completion ordering between
+TX0 and TX4 inside vendor firmware.** No retry, new transport timeout or blocking
+grace period is added. C04 remains the mandatory result-dependent operation.
+
+The renderer remembers the last accepted view and the actual buffer swaps in
+its accepted batch. It independently updates:
+- main vector surface when maneuver geometry/exit changes;
+- lane surface when lane data or its enable setting changes;
+- bitmap surface when the next maneuver or actual road shield changes;
+- each text area only when its encoded/truncated value changes;
+- the distance bar only when its quantized 0–255 value/visibility changes.
+
+Identical updates emit no commands. Text changes no longer clear polygons or
+upload bitmaps. The old hidden vector buffer is retained until it becomes the
+next drawing target, when it is cleared before reuse. An active batch finishes
+before a newer view is accepted; deferred changes remain dirty and render from
+the latest view. Buffer state does not advance on a refused/deferred submission.
+No signal, timer or handler was added for driving-mode changes; no forced
+redraw accompanies Comfort/Sport/Eco changes.
+
+All eight C04 results stay cached across ordinary updates and AA guidance
+sessions. A real host/local-registration change now explicitly invalidates the
+6WB renderer generation even when the send queue was empty, preventing stale
+verified dimensions from authorizing a new peer. Link/host changes still require
+resource validation. Neither empty deltas nor driving modes invalidate it.
+
+### Optional startup configuration (defaults preserve the current appearance)
+
+These variables are read only for 6WB at daemon startup, through the existing
+HMI environment. Nothing edits the vehicle's env automatically.
+
+| Variable | Default | Accepted range / meaning |
+|---|---|---|
+| NBT_6WB_STREET_CHARS | 15 | 1–40 encoded characters |
+| NBT_6WB_DISTANCE_CHARS | 5 | 1–8 encoded characters |
+| NBT_6WB_LINE_WIDTH | 6 | 1–22, main vector outline |
+| NBT_6WB_LANE_LINE_WIDTH | 3 | 1–10 |
+| NBT_6WB_ARROW_X / Y | 20 / 74 | Main arrow rectangle origin, within its surface |
+| NBT_6WB_ARROW_WIDTH / HEIGHT | 181 / 78 | Minimum 32; rectangle must fit 221×158 |
+| NBT_6WB_ROUNDABOUT_SEGMENTS | 24 | 24–72, optional smoother circle approximation |
+| NBT_6WB_ICON_AA | 0 | 0/1, optional software antialiasing for next-maneuver bitmap |
+
+An invalid numeric value keeps its default. An out-of-bounds rectangle is
+rejected as a unit. These settings never resize a MOST surface or change handles.
+The HMI launcher reads at most 15 env-file settings; add only needed overrides,
+not this entire table. No launcher/Settings behavior is changed by this revision.
+
+**Character limits are not physical font size.** No proven TextareaSetFormat
+parameter layout/font-size mapping is available for this firmware, so no guessed
+0x211 command or pretend font-size option is sent. Native font scaling and text
+placement remain a separate protocol-validation task. Existing default text is
+unchanged; longer overrides may be clipped by the OEM text area.
+
+Quality options are separate and off by default. Roundabouts can use up to 73
+vertices including closure, below the 99-point protocol limit. Outline widths
+and geometry proportions are configurable rather than globally changed.
+Optional bitmap antialiasing uses 2× coverage sampling and opaque grayscale
+blending in the existing ABGR RLE format, without relying on unconfirmed partial
+alpha. It applies only to the small next-maneuver bitmap, not to terminal vector
+edges or the main navigation text. Larger RLE payloads are still omitted if they
+exceed the existing 4096-byte cap. No new drawing method, native vector-AA switch
+or OEM asset is assumed. Defaults retain the tested 24-segment geometry and
+unsmoothed bitmap rasterization.
+
+Tests extend test_hud6wb and test_hud6wb_async with unchanged/road-only/distance/
+lane/icon updates, independent buffer state, deferred latest-view rendering,
+C04 cache reuse and identity invalidation, C05 progress without acknowledgements,
+late/duplicate/error C05 results, configuration validation and optional quality
+paths. Synthetic payloads remain software checks, not hardware validation of
+this new revision.

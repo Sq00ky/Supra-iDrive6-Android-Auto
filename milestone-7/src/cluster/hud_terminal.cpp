@@ -130,6 +130,7 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
     if (linkUp_ && self == self_) return;
     linkUp_ = true;
     self_ = self;
+    if (cfg_.pacedGraphics) ++epoch_; // invalidate the 6WB renderer even if no batch was active
     if (cfg_.initialNavActive) { navActive_=true; routeOn_=true; frameOff_=false; }
     sizes_.clear();
     failed_ = false;
@@ -146,6 +147,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
     if (host) snprintf(why, sizeof(why), "82/00 host %04X%s", host, host_ ? " (changed)" : "");
     else snprintf(why, sizeof(why), "no 82/00 host on a ring node in the registry");
     host_ = host;
+    if (cfg_.pacedGraphics) ++epoch_; // cached dimensions belong to this actual peer
     failed_ = false;
     navActive_ = cfg_.initialNavActive;
     routeOn_ = cfg_.initialNavActive;
@@ -230,13 +232,13 @@ bool Core::merge(const Batch& b) {
     return true;
 }
 
-// Explicit setter/drawing whitelist. C04 needs dimensions; C05 waits for upload
-// completion before visibility changes across TX0/TX4. Unknown methods stay gated.
+// Explicit setter/drawing whitelist. C04 needs dimensions; unknown methods stay gated.
+// C05 uploads are queued before visibility changes, without an acknowledgement barrier.
 bool Core::graphicFunction(uint16_t fkt) const {
     switch(fkt) {
         case kSetVisibility: case kSwitchVisibility: case kTextareaSetText:
         case kSetLineWidth: case kSetFillColor: case kAddPolygon:
-        case kRemoveAllItems: case 0x227: return true;
+        case kRemoveAllItems: case 0x227: case 0xC05: return true;
         default: return false;
     }
 }
@@ -294,6 +296,7 @@ bool Core::rememberGraphic(const Call& c,uint32_t tag,uint32_t now,uint32_t id) 
 // transaction identifier. Reused keys remain ambiguous even when bytes match.
 static bool graphicPayload(const Call& c,const most::View& m) {
     size_t n=c.payload.size();
+    if(c.fkt==0xC05)return n>=10 && m.len==4 && m.data[2]==c.payload[9] && m.data[3]==1;
     if(c.fkt==kTextareaSetText) {
         if(n>=4 && c.payload[2]==1 && m.len==n-1)--n;
         else if(n>=5 && c.payload[2]==0 && m.len==n-2)n-=2;

@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/nav_core.hpp"
 #include "cluster/hud6wb_display.hpp"
+#include "cluster/hud6wb_config.hpp"
 #include "nbt_env.hpp"
 
 #include <errno.h>
@@ -394,6 +395,7 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         const char* mode=getenv("NBT_HUDTERM");
         shadow_=!mode || strcmp(mode,"on")!=0;
         hudterm::Bmw6wbProfile p;
+        hudterm::configure6wb(p);
         p.roadShields=envFlag("NBT_6WB_ROAD_SHIELDS")==1;
         hudterm::Config c;
         c.handles=hudterm::handlesOf(p); c.navFrame=p.base.frame;

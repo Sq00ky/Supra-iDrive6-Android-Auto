@@ -5,6 +5,7 @@
 #include "cluster/hud6wb_display.hpp"
 #include "cluster/hud6wb_codec.hpp"
 #include "cluster/hud6wb_artwork.hpp"
+#include "cluster/hud6wb_config.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <assert.h>
@@ -91,8 +92,51 @@ void testRendering(){
     const Call* sw=find(first,0x20e);assert(sw&&rdBe16(&sw->payload[0])==0x20&&rdBe16(&sw->payload[2])==0x1f);
     assert(d.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
     assert(logs.size()>=first.calls.size()+8 && logs[0].find("payload:")!=std::string::npos);
-    Batch second=d.render(v);sw=find(second,0x20e);assert(rdBe16(&sw->payload[0])==0x1f&&rdBe16(&sw->payload[2])==0x20);
+    Batch second=d.render(v);assert(second.calls.empty());
+    v.aa_type=7;second=d.render(v);sw=find(second,0x20e);assert(sw && rdBe16(&sw->payload[0])==0x1f&&rdBe16(&sw->payload[2])==0x20);
     assert(d.updateDistance(v,1)==ClusterDisplay::kOk);assert(d.clear(NULL));assert(port.batches.empty());
+}
+void testIncremental(){
+    FakePort port;Bmw6wbProfile p;Hud6wbDisplay d(port,p,false);NavView v=view();
+    d.showManeuver(v,0,true,true);d.showManeuver(v,1,true,true);size_t n=port.batches.size();
+    d.showManeuver(v,2,true,true);assert(port.batches.size()==n && d.render(v).calls.empty());
+    // Text-only changes must not clear, query, upload or flip any graphics buffer.
+    v.road="Other Road";d.showManeuver(v,3,true,false);
+    assert(port.batches.back().calls.size()==1&&find(port.batches.back(),kTextareaSetText,0x1a));
+    v.aa_type=7;d.showManeuver(v,4,true,false);const Batch& arrow=port.batches.back();
+    assert(find(arrow,kAddPolygon,0x20)&&find(arrow,kSwitchVisibility));
+    assert(!find(arrow,kTextareaSetText)&&!find(arrow,0xc05)&&!find(arrow,kGetSize));
+    assert(!find(arrow,kRemoveAllItems,0x1f)); // old visible buffer retained until reused
+    n=port.batches.size();v.step_m=250.1;d.keepUp(v,5);assert(port.batches.size()==n);
+    v.dist_text="251";v.step_m=251;d.updateDistance(v,6);const Batch& dist=port.batches.back();
+    assert(find(dist,kTextareaSetText,0x1b)&&!find(dist,kTextareaSetText,0x1c)&&!find(dist,kRemoveAllItems));
+    v.has_next=true;v.next_type=8;d.showManeuver(v,7,false,false);const Batch& icon=port.batches.back();
+    assert(find(icon,0xc05,0x18)&&!find(icon,kAddPolygon)&&!find(icon,kTextareaSetText));
+    v.next_type=7;d.showManeuver(v,8,false,false);assert(find(port.batches.back(),0xc05,0x19));
+    AaLane lane;lane.push_back(LaneDirection(1,true));v.lanes.push_back(lane);d.showManeuver(v,9,false,false);
+    assert(find(port.batches.back(),kAddPolygon,0x24)&&!find(port.batches.back(),0xc05)&&!find(port.batches.back(),kTextareaSetText));
+    // Deferred changes do not commit any predicted buffer state.
+    port.idle=false;v.aa_type=8;d.showManeuver(v,10,true,false);n=port.batches.size();
+    v.road="Latest Road";d.showManeuver(v,11,true,false);assert(port.batches.size()==n);
+    port.idle=true;d.showManeuver(v,12,true,false);assert(find(port.batches.back(),kAddPolygon,0x1f));
+    // C04 stays cached through repeated updates and a new AA guidance session.
+    d.forget();d.showManeuver(v,13,true,true);unsigned queries=0;
+    for(size_t i=0;i<port.batches.size();++i)if(port.batches[i].label=="6wb-size-check")++queries;
+    assert(queries==1);
+}
+void testLayoutConfig(){
+    Bmw6wbProfile p;configure6wb(p);assert(p.base.streetChars==15&&p.lineWidth==6&&p.roundaboutSegments==24&&!p.iconAntialias);
+    setenv("NBT_6WB_STREET_CHARS","22",1);setenv("NBT_6WB_LINE_WIDTH","4",1);
+    setenv("NBT_6WB_ARROW_WIDTH","120",1);setenv("NBT_6WB_ROUNDABOUT_SEGMENTS","48",1);
+    configure6wb(p);assert(validProfile(p)&&p.base.streetChars==22&&p.lineWidth==4&&p.base.glyph.x1==139);
+    ShapeSpec spec=shapeFor(34,true,90);Shape a=bmwManeuver(spec,p.base.glyph,true,24),b=bmwManeuver(spec,p.base.glyph,true,48);
+    assert(a[0].pts.size()==25&&b[0].pts.size()==49);
+    setenv("NBT_6WB_STREET_CHARS","22garbage",1);setenv("NBT_6WB_LINE_WIDTH","999999999999999999999999",1);
+    Bmw6wbProfile invalid;configure6wb(invalid);assert(invalid.base.streetChars==15&&invalid.lineWidth==6);
+    unsetenv("NBT_6WB_STREET_CHARS");unsetenv("NBT_6WB_LINE_WIDTH");unsetenv("NBT_6WB_ARROW_WIDTH");unsetenv("NBT_6WB_ROUNDABOUT_SEGMENTS");
+    // Optional raster AA uses only existing bitmap encoding; defaults are untouched.
+    FakePort port;p=Bmw6wbProfile();p.iconAntialias=true;Hud6wbDisplay d(port,p,true);NavView v=view();v.has_next=true;v.next_type=8;
+    Batch aa=d.render(v);assert(find(aa,0xc05));valid(aa,p);
 }
 void testResourcesAndSafety(){
     FakePort port;Bmw6wbProfile p;Hud6wbDisplay d(port,p,false);NavView v=view();
@@ -303,7 +347,7 @@ int main(){
 const bool trace=getenv("NBT_6WB_DIAG_TEST")!=NULL;
 char tracePath[]="/tmp/6wb-diag-integration-XXXXXX";
 if(trace){int fd=mkstemp(tracePath);assert(fd>=0);close(fd);assert(latencydiag::start(true,tracePath));}
-testCodec();testGeometry();testRendering();testResourcesAndSafety();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
+testCodec();testGeometry();testRendering();testResourcesAndSafety();testIncremental();testLayoutConfig();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
     latencydiag::stop();FILE* f=fopen(tracePath,"r");assert(f);
     char row[512];unsigned rows=0;while(fgets(row,sizeof(row),f))if(row[0]>='0'&&row[0]<='9')++rows;
     fclose(f);unlink(tracePath);assert(rows>0);
