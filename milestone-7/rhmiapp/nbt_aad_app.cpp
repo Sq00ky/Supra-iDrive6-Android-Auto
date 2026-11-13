@@ -67,7 +67,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-59-navsettings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-60-navsettings (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
