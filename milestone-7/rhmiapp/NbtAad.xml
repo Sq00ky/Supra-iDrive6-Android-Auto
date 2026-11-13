@@ -17,7 +17,10 @@
       <raAction id="28"/>
       <raAction id="29"/>
       <raAction id="30"/>
+      <raAction id="167"/>
+      <raAction id="173"/>
       <hmiAction id="25" target="12"/>
+      <hmiAction id="81" target="15"/>
       <hmiAction id="80" target="14"/>
       <raAction id="83"/>
       <raAction id="87"/>
@@ -67,6 +70,19 @@
       </textIdModel>
       <raBoolModel id="46"/>
       <textIdModel id="47" textId="21">
+        <synonyms/>
+      </textIdModel>
+      <raDataModel id="163" modelType="Richtext"/>
+      <raDataModel id="164" modelType="Richtext"/>
+      <textIdModel id="165" textId="45">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="170"/>
+      <textIdModel id="168" textId="46">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="175"/>
+      <textIdModel id="176" textId="47">
         <synonyms/>
       </textIdModel>
       <raBoolModel id="48"/>
@@ -165,6 +181,7 @@
           <separator id="66"/>
           <button action="80" id="81" model="82" text="Settings"/>
           <button action="25" id="65" model="36" text="About"/>
+          <button action="81" id="166" model="165" text="Version"/>
         </components>
       </hmiState>
       <hmiState id="12" parentId="10" text="About" textModel="36">
@@ -223,7 +240,9 @@
           <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
           <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
           <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
-          <checkbox action="29" id="72" model="46" text="Turn arrows in cluster/HUD" textModel="47"/>
+          <checkbox action="29" id="72" model="46" text="Show navigation in HUD/gauge cluster" textModel="47"/>
+          <checkbox action="167" id="169" model="170" text="Show directions at any distance" textModel="168"/>
+          <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
           <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
           <checkbox action="87" id="90" model="88" text="Use Phone GPS" textModel="89"/>
@@ -235,6 +254,23 @@
           <button action="132" id="135" model="134" text="Install PF Rules"/>
           <button action="136" id="140" model="138" text="Check PF Rules"/>
           <button action="137" id="141" model="139" text="Uninstall PF Rules"/>
+        </components>
+      </hmiState>
+      <!-- Build versions, filled when the page is shown (BasicString into two Richtext labels): the daemon build
+           tag scanned out of /opt/aa/nbt-aad, and this app's compile-time version. Appended after state 14 so the
+           50000+n numbering of the existing states does not move. -->
+      <hmiState id="15" parentId="10" text="Version" textModel="165">
+        <components>
+          <label id="171" model="163" text="Android Auto:">
+            <properties>
+              <property id="2" value="false"/>
+            </properties>
+          </label>
+          <label id="172" model="164" text="RHMI app:">
+            <properties>
+              <property id="2" value="false"/>
+            </properties>
+          </label>
         </components>
       </hmiState>
     </hmiStates>

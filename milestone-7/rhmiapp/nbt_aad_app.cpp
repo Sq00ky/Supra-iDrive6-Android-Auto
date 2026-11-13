@@ -64,9 +64,10 @@
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
+#include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-54-cpcompat (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-58-navsettings (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -188,6 +189,8 @@ public:
     void updateModel(unsigned modelId, const ImageID& image); // _ZN3bmw9PluginApp11updateModelEjRKNS_7ImageIDE
     void updateModel(unsigned modelId, bool value);           // _ZN3bmw9PluginApp11updateModelEjb (raBoolModel: checkbox)
     void updateModel(unsigned modelId, const DataTableBase& table); // _ZN3bmw9PluginApp11updateModelEjRKNS_13DataTableBaseE
+    // Dynamic plain text (the Version labels): SecurityMenu fills its own VersionInfo label this way.
+    void updateModel(unsigned modelId, const BasicString<char>& text); // _ZN3bmw9PluginApp11updateModelEjRKNS_11BasicStringIcEE
     // Component property: 1 enabled, 2 selectable, 3 visible, 8 LABEL_WAITINGANIMATION (iDrive's busy ring while any
     // component of the state has it set; HmiMain3D component -> state -> activity waitingAnimation).
     void setProperty(unsigned componentId, unsigned propertyId, const Parcel& value);   // _ZN3bmw9PluginApp11setPropertyEjjRKNS_6ParcelE
@@ -372,6 +375,22 @@ const unsigned    kActPfInstall    = 132;
 const unsigned    kActPfCheck      = 136;
 const unsigned    kActPfUninstall  = 137;
 const unsigned    kPfRowModel[3]   = { 134, 138, 139 };   // textIdModels: install, check, uninstall
+
+// Version page (hmiState 15) and the "Show directions at any distance" checkbox (rhmiapp-55-navset)
+const unsigned    kVersionState     = 15;
+const unsigned    kVersionRowAction = 81;    // hmiAction 81 -> state 15
+const unsigned    kVersionRowModel  = 165;   // textIdModel "Version"
+const unsigned    kDaemonVerModel   = 163;   // raDataModel Richtext: daemon build tag
+const unsigned    kAppVerModel      = 164;   // raDataModel Richtext: this app
+const unsigned    kActAnyDist       = 167;   // checkbox raAction
+const unsigned    kAnyDistModel     = 170;   // raBoolModel (checkbox state)
+const unsigned    kAnyDistTextModel = 168;   // textIdModel (checkbox label)
+const char* const kAnyDistFlag      = "/var/opt/aa/kombi-nav-anydist";
+const char* const kAnyDistManual    = "/opt/aa/kombi-nav-anydist";
+const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
+const unsigned    kNoLogModel       = 175;   // raBoolModel
+const char* const kNoLogFlag        = "/var/opt/aa/no-log";
+const char* const kNoLogManual      = "/opt/aa/no-log";
 const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
 const unsigned    kPfRowLabel[3]   = { 29, 30, 31 };      // Install / Check / Uninstall PF Rules
 enum { kTxtPfWriting = 32, kTxtPfWritten = 33, kTxtPfActive = 34, kTxtPfChecking = 35, kTxtPfInPlace = 36,
@@ -430,7 +449,29 @@ bool envFlagOn(const char* name, bool def);
 nbt::ramlog::Capped g_ramLog;
 int g_ramLogOn = -1;   // NBT_RAM_LOG, read once
 
+// "Disable logging (performance test)": one flag silences the app log, the RAM log and slog. Cached, because
+// this runs per line and the check must not become the cost we are trying to measure.
+bool loggingOff() {
+    static int s = -1;
+    if (s >= 0) return s == 1;
+    s = 0;
+    const char* e = getenv("NBT_NO_LOG");
+    if (e && *e) s = (e[0] != '0');
+    else if (access("/var/opt/aa/no-log", F_OK) == 0 || access("/opt/aa/no-log", F_OK) == 0) s = 1;
+    else {
+        FILE* f = fopen("/opt/aa/nbt-aad.env", "r");
+        if (f) {
+            char line[160];
+            while (fgets(line, sizeof(line), f))
+                if (!strncmp(line, "NBT_NO_LOG=", 11)) { s = line[11] != '0'; break; }
+            fclose(f);
+        }
+    }
+    return s == 1;
+}
+
 void ramLog(const char* line, size_t n) {
+    if (loggingOff()) return;
     pthread_mutex_lock(&g_logMutex);
     if (g_ramLogOn < 0) g_ramLogOn = envFlagOn("NBT_RAM_LOG", true) ? 1 : 0;
     if (g_ramLogOn == 1) {
@@ -447,6 +488,7 @@ void ramLog(const char* line, size_t n) {
 }
 
 void alog(const char* fmt, ...) {
+    if (loggingOff()) return;                        // "Disable logging (performance test)"
     char msg[384];
     va_list ap;
     va_start(ap, fmt);
@@ -2224,9 +2266,80 @@ bool serviceAutostartHandoff(bmw::PluginApp* app, const DaemonState& d, bool con
     return false;
 }
 
+// ---- Version page + "Show directions at any distance" (rhmiapp-55-navset) -------------------------------------
+bool g_anyDistShown = false;
+bool anyDistOn() { return fileExists(kAnyDistFlag) || fileExists(kAnyDistManual); }
+void showAnyDist(bmw::PluginApp* app) { app->updateModel(kAnyDistModel, anyDistOn()); g_anyDistShown = true; }
+bool g_noLogShown = false;
+bool noLogOn() { return fileExists(kNoLogFlag) || fileExists(kNoLogManual) || loggingOff(); }
+void showNoLog(bmw::PluginApp* app) { app->updateModel(kNoLogModel, noLogOn()); g_noLogShown = true; }
+bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kNoLogFlag, kNoLogManual,
+                   "Disable logging (performance test; NBT_NO_LOG in nbt-aad.env wins)");
+    if (g_runApp) showNoLog(g_runApp);
+    return true;
+}
+
+bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kAnyDistFlag, kAnyDistManual,
+                   "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
+    if (g_runApp) showAnyDist(g_runApp);
+    return true;
+}
+
+// Copy the printable run that follows `mark` in a file (the daemon exports "NBT-AAD-VERSION=<build>").
+bool scanFileFor(const char* path, const char* mark, char* out, size_t n) {
+    if (!n) return false;
+    out[0] = 0;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return false;
+    const size_t ml = strlen(mark);
+    char buf[8192];
+    std::string keep;
+    ssize_t r;
+    bool found = false;
+    while (!found && (r = read(fd, buf, sizeof(buf))) > 0) {
+        keep.append(buf, (size_t)r);
+        const size_t p = keep.find(mark);
+        if (p != std::string::npos) {
+            size_t i = p + ml, j = 0;
+            while (i < keep.size() && j + 1 < n && keep[i] > 32 && keep[i] < 127) out[j++] = keep[i++];
+            out[j] = 0;
+            found = j > 0;
+        }
+        if (keep.size() > ml) keep.erase(0, keep.size() - ml);   // keep a marker-length tail for the next chunk
+    }
+    close(fd);
+    return found;
+}
+
+void showVersions(bmw::PluginApp* app) {
+    if (!app) return;
+    char ver[48];
+    char l[64];
+    if (scanFileFor("/opt/aa/nbt-aad", "NBT-AAD-VERSION=", ver, sizeof(ver)) && ver[0]) {
+        snprintf(l, sizeof(l), "Android Auto: %s", ver);
+    } else {
+        snprintf(l, sizeof(l), "Android Auto: not installed");
+        alog("Version page: the daemon binary carries no NBT-AAD-VERSION tag");
+    }
+    app->updateModel(kDaemonVerModel, bmw::BasicString<char>(l));
+    alog("Version page: %s", l);
+    char av[64];
+    snprintf(av, sizeof(av), "%s", NBT_AAD_APP_VERSION);
+    for (size_t i = 0; av[i]; ++i)
+        if (av[i] == ' ') { av[i] = 0; break; }          // one row, ~34 chars: drop " (date time)"
+    snprintf(l, sizeof(l), "RHMI app: %s", av);
+    app->updateModel(kAppVerModel, bmw::BasicString<char>(l));
+    alog("Version page: %s", l);
+}
+bool onVersionFocus(void* /*app*/, const bmw::Parcel& /*p*/) { showVersions(g_runApp); return false; }
+
 void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
+    if (!g_anyDistShown) showAnyDist(app);
+    if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
     if (!g_menuIdriveShown) showMenuIdrive(app);
@@ -2467,6 +2580,8 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActNativeAudio, &onNativeAudioToggle);
     addAction(self, kActLciMedia, &onLciMediaToggle);
     addAction(self, kActCpCompat, &onCpCompatToggle);
+    addAction(self, kActAnyDist, &onAnyDistToggle);
+    addAction(self, kActNoLog, &onNoLogToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
@@ -2480,6 +2595,10 @@ bool appOnInit(bmw::PluginApp* self) {
         s.object = self;
         s.stub = &onSettingsFocus;
         self->addHandler(kSettingsState, kHandlerFocus, s);
+        bmw::ActionDelegate vp;                          // Version page: fill the two labels when shown
+        vp.object = self;
+        vp.stub = &onVersionFocus;
+        self->addHandler(kVersionState, kHandlerFocus, vp);
         bmw::ActionDelegate f;
         f.object = self;
         f.stub = &onAaFocus;

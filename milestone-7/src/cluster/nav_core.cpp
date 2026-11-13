@@ -432,6 +432,15 @@ void KombiNav::readApproach() {
                    settings_.approach_mi);
         }
     }
+    // The Settings checkbox "Show directions at any distance": at once, no distance/time gate - but only while
+    // neither env var above is set (they are the documented overrides).
+    if (nbt::navAnyDistanceWanted(getenv("NBT_KOMBI_NAV_APPROACH"), getenv("NBT_KOMBI_NAV_APPROACH_MI"),
+                                  access(nbt::kNavAnyDistFlagFile, F_OK) == 0 ||
+                                  access(nbt::kNavAnyDistManualFile, F_OK) == 0)) {
+        settings_.approach = kApproachOff;
+        settings_.approach_mi = 0;
+        printf("[KombiNav] \"Show directions at any distance\" on: approach off, shown at once\n");
+    }
     envNumber("NBT_KOMBI_NAV_WARN_S", 10, 120, settings_.warn_s);
     envNumber("NBT_KOMBI_NAV_MAIN_S", 0, 60, settings_.main_s);
     if (settings_.main_s >= settings_.warn_s) {

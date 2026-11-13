@@ -1720,7 +1720,11 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.57-cpcompat"
+#define NBT_AAD_BUILD "v1.9.68-navsettings"
+
+// Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
+// keep the prefix exact.
+extern "C" __attribute__((used)) const char kNbtAadVersionTag[] = "NBT-AAD-VERSION=" NBT_AAD_BUILD;
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -1738,7 +1742,8 @@ static bool g_ramLog = false;      // stdout is the RAM log now
 static bool g_ramUsed = false;     // the RAM log was opened this run (later opens append)
 static bool g_ramFull = false;     // cap reached: no more RAM logging this run
 
-static bool ramLogWanted() { return nbt::envFlag("NBT_RAM_LOG") != 0 && !g_ramFull; }
+static bool g_noLog = false;   // "Disable logging (performance test)": every sink off, stdout to /dev/null
+static bool ramLogWanted() { return !g_noLog && nbt::envFlag("NBT_RAM_LOG") != 0 && !g_ramFull; }
 
 static bool stdoutIsNull() {
     struct stat a, b;
@@ -1784,7 +1789,7 @@ static void printHuVersion() {
 
 static void serviceUsbLog(bool atStart) {
     if (g_logForced) return;
-    const bool on = nbt::usblog::enabled();
+    const bool on = !g_noLog && nbt::usblog::enabled();
     if (g_usbLogPath[0]) {
         char dir[192];
         snprintf(dir, sizeof(dir), "%s", g_usbLogPath);
@@ -1818,6 +1823,14 @@ static void serviceUsbLog(bool atStart) {
 }
 
 int main(int argc, char* argv[]) {
+    // "Disable logging (performance test)": set before the log redirection below, so the printf traces too cost
+    // only a write to /dev/null. Not on the one-shot --pf-* / --license paths: the app reads their output.
+    if (argc <= 1) {
+        g_noLog = nbt::noLogWanted(getenv("NBT_NO_LOG"),
+                                   access(nbt::kNoLogFlagFile, F_OK) == 0 ||
+                                   access(nbt::kNoLogManualFile, F_OK) == 0);
+        if (g_noLog) stdoutToNull();
+    }
     // pf_aa built in (src/pf_aa_embed.cpp): nbt-aad --pf-install | --pf-check | --pf-uninstall [--pf/--env/--backup f].
     // Before any of the daemon's start-up (log redirection, control port), so it never starts a second daemon.
     if (argc > 1 && !strncmp(argv[1], "--pf-", 5)) {

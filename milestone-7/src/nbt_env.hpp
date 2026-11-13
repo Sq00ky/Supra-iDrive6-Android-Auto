@@ -185,6 +185,26 @@ inline long envRange(const char* name, long def, long lo, long hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+// "Show directions at any distance" (Settings checkbox -> flag file): show the next maneuver at once instead of
+// inside the last mile or the last few seconds. Either env var decides on its own and beats the checkbox. Pure so
+// tests/test_kombi_nav.cpp covers the precedence.
+static const char* const kNavAnyDistFlagFile   = "/var/opt/aa/kombi-nav-anydist";
+static const char* const kNavAnyDistManualFile = "/opt/aa/kombi-nav-anydist";
+inline bool navAnyDistanceWanted(const char* envApproach, const char* envMi, bool flag) {
+    if (envApproach && *envApproach) return false;    // NBT_KOMBI_NAV_APPROACH=... decides
+    if (envMi && *envMi) return false;                // NBT_KOMBI_NAV_APPROACH_MI=... decides
+    return flag;
+}
+
+// "Disable logging (performance test)": silence both sides. NBT_NO_LOG wins over the checkbox, as with every
+// other setting. Pure so the host tests cover the precedence.
+static const char* const kNoLogFlagFile   = "/var/opt/aa/no-log";
+static const char* const kNoLogManualFile = "/opt/aa/no-log";
+inline bool noLogWanted(const char* envValue, bool flag) {
+    if (envValue && *envValue) return envValue[0] != '0';
+    return flag;
+}
+
 } // namespace nbt
 
 #endif // NBT_ENV_HPP

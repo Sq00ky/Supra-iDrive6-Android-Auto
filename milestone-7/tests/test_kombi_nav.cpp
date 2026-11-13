@@ -27,6 +27,7 @@ static double monoS() {
 }
 
 #include "fake_kombi.hpp"
+#include "nbt_env.hpp"   // navAnyDistanceWanted (the "Show directions at any distance" precedence)
 
 // ---- harness -------------------------------------------------------------------------------------------------------
 struct TestLink {
@@ -403,6 +404,17 @@ static void testTimeApproach() {
 }
 
 int main() {
+    // "Disable logging": env wins, then the checkbox
+    assert(nbt::noLogWanted(NULL, false) == false);
+    assert(nbt::noLogWanted(NULL, true)  == true);
+    assert(nbt::noLogWanted("0", true)   == false);
+    assert(nbt::noLogWanted("1", false)  == true);
+    // nav settings: NBT_KOMBI_NAV_APPROACH / _APPROACH_MI each decide alone; the checkbox only when both are unset
+    assert(nbt::navAnyDistanceWanted(NULL, NULL, false) == false);
+    assert(nbt::navAnyDistanceWanted(NULL, NULL, true)  == true);
+    assert(nbt::navAnyDistanceWanted("distance", NULL, true) == false);   // env wins
+    assert(nbt::navAnyDistanceWanted(NULL, "2.5", true)      == false);   // ditto
+    assert(nbt::navAnyDistanceWanted("", "", true)           == true);    // empty = unset
     // in-place (default on the car): the first maneuver is the full graph; each next maneuver is the template's own
     // maneuver-0 update block (no route-start state 1), patched; a guidance gap (reroute) gets the full graph again;
     // a gap that comes back on the same maneuver doesn't; mode 2 leaves out the 0x07 guiding model
