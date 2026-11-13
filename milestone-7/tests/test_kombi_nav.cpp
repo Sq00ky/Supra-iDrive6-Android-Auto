@@ -431,6 +431,27 @@ int main() {
         assert(nbt::childNoPreload() == true);
         if (old) setenv("NBT_CHILD_NO_PRELOAD", old, 1); else unsetenv("NBT_CHILD_NO_PRELOAD");
     }
+
+    // "Android Auto over USB" closes the wireless path: with NBT_USB set there is no Bluetooth advert and no TCP accept.
+    {
+        const char* oldUsb = getenv("NBT_USB");
+        const char* oldWl = getenv("NBT_WIRELESS");
+        unsetenv("NBT_USB");
+        unsetenv("NBT_WIRELESS");
+        assert(nbt::wirelessEnabledForTransport() == true);      // no USB: wireless as before
+        setenv("NBT_USB", "1", 1);
+        assert(nbt::wirelessEnabledForTransport() == false);     // USB selected: Wi-Fi is not offered
+        setenv("NBT_USB", "0", 1);
+        assert(nbt::wirelessEnabledForTransport() == true);
+        setenv("NBT_WIRELESS", "0", 1);
+        assert(nbt::wirelessEnabledForTransport() == false);     // NBT_WIRELESS=0 still wins
+        // the 1080p box parses like every other switch, and needs USB to be on at all
+        assert(nbt::usbSettingOn("1", false) == true);
+        assert(nbt::usbSettingOn("0", true) == false);           // env forces it off
+        assert(nbt::usbSettingOn(NULL, true) == true);           // flag file, no env
+        if (oldUsb) setenv("NBT_USB", oldUsb, 1); else unsetenv("NBT_USB");
+        if (oldWl) setenv("NBT_WIRELESS", oldWl, 1); else unsetenv("NBT_WIRELESS");
+    }
     // in-place (default on the car): the first maneuver is the full graph; each next maneuver is the template's own
     // maneuver-0 update block (no route-start state 1), patched; a guidance gap (reroute) gets the full graph again;
     // a gap that comes back on the same maneuver doesn't; mode 2 leaves out the 0x07 guiding model

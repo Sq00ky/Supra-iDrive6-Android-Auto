@@ -68,10 +68,17 @@ inline bool carParkingBrakeEnabled() {
 
 // Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
 // the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
+// Defined below, with the USB settings: the video profile asks about both.
+inline bool sessionIsUsb();
+inline bool usb1080pEnabled();
+
 inline int videoResolution() {
     const char* e = getenv("NBT_VID_RES");
     if (e && strcmp(e, "1") == 0) return 1;
     if (e && strcmp(e, "3") == 0) return 3;
+    // "1080p over USB" (rhmiapp-59): only a session that runs on the cable gets it. Over Wi-Fi this stays 720p whatever
+    // the checkbox says, because the phone would spend the wireless link on pixels it cannot deliver in time.
+    if (sessionIsUsb() && usb1080pEnabled()) return 3;
     return 2;
 }
 inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
@@ -110,6 +117,33 @@ inline bool usbSettingOn(const char* env, bool flagFile) {
 }
 inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
 inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
+
+// With "Android Auto over USB" selected the wireless path is not offered at all: no Bluetooth SDP advert, no Wi-Fi
+// credentials and the session starter refuses a TCP connection. Without this the phone is offered wireless Android Auto
+// first and connects over Wi-Fi instead of the cable, which is the one thing USB mode is meant to avoid.
+inline bool wirelessEnabledForTransport() { return wirelessEnabled() && !usbEnabled(); }
+
+// The transport of the session being set up: 0 none, 1 wireless, 2 USB (same values as nbt::Transport in
+// session_owner.hpp). sdr_builder builds the manifest inside startSession(), so the USB-only video profile has to be
+// readable there; main.cpp sets this before the session starts and clears it when the session ends.
+inline int& sessionTransportSlot() {
+    static int t = 0;
+    return t;
+}
+inline void setSessionTransport(int t) { sessionTransportSlot() = t; }
+inline bool sessionIsUsb() { return sessionTransportSlot() == 2; }
+
+// "1080p over USB" checkbox (flag file kUsb1080PFlagFile; a hand-made kUsb1080PManualFile also counts; NBT_USB_1080P=1
+// / 0 wins either way, same words as NBT_USB). Requires "Android Auto over USB" itself: on the Wi-Fi path it does
+// nothing, and the app refuses to select it while the phone is not on the cable.
+static const char* const kUsb1080PFlagFile = "/var/opt/aa/usb-1080p";
+static const char* const kUsb1080PManualFile = "/opt/aa/usb-1080p";
+inline bool usb1080pFlagFileSet() {
+    return access(kUsb1080PFlagFile, F_OK) == 0 || access(kUsb1080PManualFile, F_OK) == 0;
+}
+inline bool usb1080pEnabled() {
+    return usbSettingOn(getenv("NBT_USB_1080P"), usb1080pFlagFileSet()) && usbEnabled();
+}
 
 // "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag file kPhoneGpsFlagFile, a hand-made kPhoneGpsManualFile
 // also counts; NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna,

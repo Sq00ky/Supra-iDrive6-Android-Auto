@@ -1234,6 +1234,8 @@ static void onSessionEnded(void* user_data) {
         usb->noteSessionFailed(outcome == nbt::AASession::kStale);
     g_sessionActive = false;
     g_owner.set(nbt::kTransportNone);
+    nbt::setSessionTransport(0);
+    writeTransportState(nbt::kTransportNone);
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
     double now = upSec(), dur = g_sessionStartS > 0 ? now - g_sessionStartS : -1;
     printf("[Main] [%9.3f] Android Auto session ended after %.1f s. Resuming auto-connector probing...\n", now, dur);
@@ -1254,6 +1256,17 @@ static void onSessionEnded(void* user_data) {
     resetMedia("session ended");   // the iDrive app must not show the last track of a session that is over
 }
 
+// Which transport the running session uses, for the iDrive app: it may only offer "1080p over USB" while the phone is on
+// the cable, and it has no other way to know. Written when a session starts, removed when it ends.
+static void writeTransportState(nbt::Transport t) {
+    const char* path = "/var/opt/aa/transport";
+    if (t == nbt::kTransportNone) { unlink(path); return; }
+    FILE* f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", t == nbt::kTransportUsb ? "usb" : "wifi");
+    fclose(f);
+}
+
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
 // whose session is over (owner no longer USB) is ended.
 static nbt::Transport sessionOwner(void*) {
@@ -1265,6 +1278,15 @@ static nbt::Transport sessionOwner(void*) {
 static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t) {
     pthread_mutex_lock(&g_connectMutex);
     nbt::Transport cur = g_owner.get();
+    // "Android Auto over USB" closes the wireless path: the Bluetooth advert is off and this refuses the TCP
+    // connection, so a phone that was paired for Wi-Fi cannot take the session instead of the cable.
+    if (t == nbt::kTransportTcp && nbt::usbEnabled()) {
+        printf("[Main] [%9.3f] refusing the wireless connection on fd %d: Android Auto over USB is selected "
+               "(untick it to use Wi-Fi)\n", upSec(), client_fd);
+        close(client_fd);
+        pthread_mutex_unlock(&g_connectMutex);
+        return;
+    }
     if (!nbt::mayStart(cur, t)) {
         printf("[Main] [%9.3f] %s Android Auto session running: refusing the %s connection on fd %d\n", upSec(),
                nbt::transportName(cur), nbt::transportName(t), client_fd);
@@ -1276,6 +1298,8 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     // starting: its onSessionEnded() runs now, so it cannot clear the new session's flags afterwards.
     g_session.stop();
     g_owner.set(t);
+    nbt::setSessionTransport((int)t);
+    writeTransportState(t);
     g_sessionStartS = upSec();
     printf("[Main] [%9.3f] Android Auto client connected over %s on fd %d. Initializing aasdk session...\n",
            g_sessionStartS, nbt::transportName(t), client_fd);
@@ -1286,6 +1310,8 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     if (!g_session.start(client_fd)) {
         // start() closed the fd; make sure the server does not wait for a session that never began
         g_owner.set(nbt::kTransportNone);
+    nbt::setSessionTransport(0);
+    writeTransportState(nbt::kTransportNone);
         g_sessionActive = false;
         if (server) server->notifySessionEnded();
         pthread_mutex_unlock(&g_connectMutex);
@@ -1720,7 +1746,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.69-navsettings"
+#define NBT_AAD_BUILD "v1.9.70-navsettings"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -2044,8 +2070,8 @@ int main(int argc, char* argv[]) {
 
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
-    if (nbt::wirelessEnabled()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
-    if (nbt::wirelessEnabled() && bluetooth.init()) {
+    if (nbt::wirelessEnabledForTransport()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
+    if (nbt::wirelessEnabledForTransport() && bluetooth.init()) {
         if (bluetooth.registerAndroidAutoSdp()) g_btMgr = &bluetooth;
     }
 
@@ -2102,14 +2128,15 @@ int main(int argc, char* argv[]) {
     if (!g_most.start("NBTAAD_MOST"))
         printf("[Main] MOST client failed to start: knob/keys, car GPS, car speed and parking brake disabled.\n");
 
-    if (nbt::wirelessEnabled()) {
+    if (nbt::wirelessEnabledForTransport()) {
         pthread_t wt;
         if (pthread_create(&wt, NULL, &wirelessThread, NULL) == 0) {
             pthread_detach(wt);
             printf("[Main] Wireless bring-up thread started (port %u)\n", (unsigned)g_aaPort);
         }
     } else {
-        printf("[Main] Wireless off (NBT_WIRELESS=0): outbound phone scanner mode.\n");
+        printf("[Main] Wireless off (%s): outbound phone scanner mode.\n",
+               nbt::usbEnabled() ? "Android Auto over USB is selected, so Wi-Fi is not offered" : "NBT_WIRELESS=0");
     }
 
     printf("[Main] Daemon running. Press Ctrl+C to terminate.\n");

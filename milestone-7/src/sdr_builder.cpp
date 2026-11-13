@@ -670,7 +670,10 @@ bool configureMainVideo(ServiceDiscovery& m) {
     // NBT_VID_RES (PR #66): the canvas the phone renders (VIDEO_800X480 / VIDEO_1280X720 default / VIDEO_1920X1080);
     // invalid values = 720p. Decoder size, insets, DPI and touch follow it (nbt_env.hpp videoCanvas*).
     const char* resEnv = getenv("NBT_VID_RES");
-    const bool res = resEnv && *resEnv;
+    const bool usb1080 = nbt::sessionIsUsb() && nbt::usb1080pEnabled();
+    // The USB 1080p profile counts as an explicit resolution: the legacy 1280x480 margins are dropped for it, the same
+    // way NBT_VID_RES=3 drops them.
+    const bool res = (resEnv && *resEnv) || usb1080;
     const int vres = videoResolution();
     // NBT_VID_FPS (PR #66): 30 -> VIDEO_FPS_30, 60 -> VIDEO_FPS_60; unset keeps the manifest's VIDEO_FPS_30.
     const unsigned fpsSet = videoFpsSetting();
