@@ -46,8 +46,9 @@
 //   NBT_DUCK_DB          media level while ducked, dB (default -12)
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
-//   NBT_SPEECH=1         with NBT_SPEECH_SRC: guidance plays on the nav prompt channel (speech_out.hpp) with AA media
-//                        ducked under it; a guidance stream goes into the mix when SpeechOut cannot take it at its start
+//   NBT_SPEECH=1         with NBT_SPEECH_SRC: guidance plays on the nav prompt channel (speech_out.hpp) over the radio;
+//                        a guidance stream goes into the mix (AA media ducked) when the browser source carries AA
+//                        media (the car mutes it under that focus) or SpeechOut cannot take it at its start
 
 #include "audio/asound_device.hpp"
 #include "audio/audio_route.hpp"
@@ -130,6 +131,7 @@ private:
     void requestRoute(const char* why);
     void releaseRoute(const char* why);
     bool routedForPlayback();
+    bool mediaOnSource(uint64_t now);   // the browser source carries AA media (RoutePolicy::carriesMedia)
     void logStats(bool force);
     void consumed(int s, size_t bytes);   // reports to consumed_fn_
     void discard(int s);                  // clears stream s's ring, reporting the bytes
@@ -199,7 +201,7 @@ private:
     pthread_mutex_t lock_;
     RoutePolicy route_policy_;
     uint64_t last_sound_ms_;
-    uint64_t last_media_ms_;            // last AA media sound or open media stream (0 = none this session)
+    uint64_t last_media_ms_;            // last AA media sound or open media stream (0 = none this session; lock_)
 
     // NBT_SPEECH: guidance on the nav prompt channel. Own route: releaseRoute() cancels route_'s pending jobs.
     AudioRoute speech_route_;

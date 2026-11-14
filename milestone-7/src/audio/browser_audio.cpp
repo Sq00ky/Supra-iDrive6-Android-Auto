@@ -283,7 +283,12 @@ void BrowserAudio::onStreamState(uint8_t channel, bool started, uint32_t rate, u
     if (s == GUIDANCE) {   // each start with a declared rate goes to the nav prompt channel if SpeechOut takes it
         if (started) {
             if (guidance_to_speech_) speech_.state(false, 0, 0);   // START without STOP
-            guidance_to_speech_ = rate && speech_.takesPrompt(nowMs());   // no rate: the mix measures it
+            const uint64_t now = nowMs();
+            guidance_to_speech_ = rate && speech_.takesPrompt(now);   // no rate: the mix measures it
+            if (guidance_to_speech_ && mediaOnSource(now)) {
+                guidance_to_speech_ = false;
+                printf("[Browser] AA media is on the browser source: nav prompt stays in the mix (media ducked)\n");
+            }
             if (guidance_to_speech_) stream_[s].in.started = false;
         }
         if (guidance_to_speech_) {
@@ -461,6 +466,14 @@ bool BrowserAudio::routedForPlayback() {
     bool r = route_policy_.routed();
     pthread_mutex_unlock(&lock_);
     return r;
+}
+
+bool BrowserAudio::mediaOnSource(uint64_t now) {   // session thread (it writes the media stream's started flag)
+    const bool open = stream_[MEDIA].in.started;
+    pthread_mutex_lock(&lock_);
+    const bool on = route_policy_.carriesMedia(now, open, last_media_ms_);
+    pthread_mutex_unlock(&lock_);
+    return on;
 }
 
 void BrowserAudio::setMediaGain(float g) {
@@ -795,7 +808,11 @@ void BrowserAudio::mixerLoop() {
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
                    have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck || speech_.active(), &out[0]);
         if (loud[MEDIA] || duck) last_sound_ms_ = now;
-        if (loud[MEDIA] || stream_[MEDIA].in.started) last_media_ms_ = now;
+        if (loud[MEDIA] || stream_[MEDIA].in.started) {   // under lock_: the session thread reads it (mediaOnSource)
+            pthread_mutex_lock(&lock_);
+            last_media_ms_ = now;
+            pthread_mutex_unlock(&lock_);
+        }
         const bool ducking = mixer_.ducking();
         if (ducking != was_ducking_) {
             printf("[Browser] media %s\n", ducking ? "ducked under a prompt / system sound" : "back to full level");
@@ -883,8 +900,8 @@ void BrowserAudio::onSessionEnded() {
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);
     route_policy_.clearBackoff();
-    pthread_mutex_unlock(&lock_);
     last_media_ms_ = 0;
+    pthread_mutex_unlock(&lock_);
     waited_ms_ = waited_blocks_ = 0;
     waited_blocks_total_ = 0;
     dev_.resetWaitRoom();
