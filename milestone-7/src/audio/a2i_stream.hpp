@@ -45,7 +45,7 @@ public:
 
     bool open(const A2IStreamConfig& cfg);
     // Spawns the worker (prime -> Start -> feed loop). If feed is false the
-    // worker only writes silence (bounded bring-up stage).
+    // worker only writes silence; write() still queues.
     bool start(bool feed);
     void setFeedEnabled(bool feed) { feed_ = feed; }
     void flush() { ring_.clear(); }   // drop queued PCM (pause / stream stop)
@@ -53,6 +53,7 @@ public:
 
     // Queue PCM already converted to the endpoint format. Never blocks.
     void write(const uint8_t* pcm, size_t len);
+    size_t queuedBytes() const { return ring_.size(); }
 
     bool isOpen() const { return handle_ != NULL; }
     bool isRunning() const { return running_; }

@@ -25,6 +25,10 @@ bool BtAudio::requestSource() {
 
 void BtAudio::releaseSource() {
     play_.stop("session ended");
+    removeSource();
+}
+
+void BtAudio::removeSource() {
     if (conn_) route_.remove(conn_);
     else route_.removeFocus(src_, sink_);
 }
@@ -69,9 +73,7 @@ void BtAudio::onFrame(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t 
 }
 
 void BtAudio::onStreamState(uint8_t channel, bool started, uint32_t rate, uint32_t channels) {
-    (void)rate;
-    (void)channels;
-    if (channel == AA_CH_GUIDANCE_AUDIO) speech_.state(started);
+    if (channel == AA_CH_GUIDANCE_AUDIO) speech_.state(started, rate, channels);
 }
 
 void BtAudio::onSessionEnded() {
@@ -118,7 +120,8 @@ void BtAudio::cancelPending() {
 }
 
 void BtAudio::stop() {
-    speech_.stop();
+    // SpeechOut may have cancelled the NBT_BT_RELEASE remove queued at the session end: queue it again.
+    if (speech_.stop() && release_) removeSource();
 }
 
 } // namespace nbt

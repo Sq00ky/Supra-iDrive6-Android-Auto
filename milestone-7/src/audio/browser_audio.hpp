@@ -46,6 +46,8 @@
 //   NBT_DUCK_DB          media level while ducked, dB (default -12)
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
+//   NBT_SPEECH=1         with NBT_SPEECH_SRC: guidance plays on the nav prompt channel (speech_out.hpp) with AA media
+//                        ducked under it; a guidance stream goes into the mix when SpeechOut cannot take it at its start
 
 #include "audio/asound_device.hpp"
 #include "audio/audio_route.hpp"
@@ -56,6 +58,7 @@
 #include "audio/mixer.hpp"
 #include "audio/resampler.hpp"
 #include "audio/route_policy.hpp"
+#include "audio/speech_out.hpp"
 #include "audio/stream_input.hpp"
 #include <pthread.h>
 #include <stdint.h>
@@ -81,7 +84,8 @@ public:
     // rate / channels: the format the phone declared for this stream in START_INDICATION (0 = it gave none: the rate
     // is then measured from the timestamps, among the rates offered for the stream).
     virtual void onStreamState(uint8_t channel, bool started, uint32_t rate, uint32_t channels);
-    // Session ended (session thread): stop the mixer, close the device, remove the connection.
+    // Session ended (session thread): stop the mixer, close the device, remove the connection, give the nav prompt
+    // focus back.
     virtual void onSessionEnded();
     // Phone closed the mic (Assistant): refocus("mic closed").
     virtual void onMicClosed();
@@ -89,6 +93,8 @@ public:
     void refocus(const char* why);
     // Live media gain 0..1 (the volume slider). Ramped inside the mixer, safe from any thread; 0 = silent.
     void setMediaGain(float g);
+    // Shutdown starts: drops the queued nav prompt focus requests.
+    virtual void cancelPending();
     // Daemon shutdown.
     virtual void stop();
 
@@ -194,6 +200,11 @@ private:
     RoutePolicy route_policy_;
     uint64_t last_sound_ms_;
     uint64_t last_media_ms_;            // last AA media sound or open media stream (0 = none this session)
+
+    // NBT_SPEECH: guidance on the nav prompt channel. Own route: releaseRoute() cancels route_'s pending jobs.
+    AudioRoute speech_route_;
+    SpeechOut speech_;
+    bool guidance_to_speech_;           // the open GUIDANCE stream plays on speech_ (session thread)
 
     // stats
     uint64_t blocks_;
