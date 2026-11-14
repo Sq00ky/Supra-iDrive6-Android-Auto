@@ -239,17 +239,18 @@ void PcmResampler::processBytes(const uint8_t* in, size_t len, std::vector<uint8
     size_t frames = len / frame_bytes;
     if (frames == 0) return;
 
-    std::vector<int16_t> src(frames * src_ch_);
-    memcpy(&src[0], in, frames * frame_bytes);   // PCM is little-endian on host and target
+    bytes_src_.resize(frames * src_ch_);
+    memcpy(&bytes_src_[0], in, frames * frame_bytes);   // PCM is little-endian on host and target
 
-    std::vector<int16_t> dst;
-    dst.reserve(frames * dst_ch_ * (static_cast<size_t>(dst_rate_) / src_rate_ + 1));
-    process(&src[0], frames, dst);
+    bytes_dst_.clear();
+    const size_t ratio = src_rate_ ? static_cast<size_t>(dst_rate_) / src_rate_ + 1 : 1;
+    bytes_dst_.reserve(frames * dst_ch_ * ratio);
+    process(&bytes_src_[0], frames, bytes_dst_);
 
-    if (!dst.empty()) {
+    if (!bytes_dst_.empty()) {
         size_t old = out.size();
-        out.resize(old + dst.size() * 2);
-        memcpy(&out[old], &dst[0], dst.size() * 2);
+        out.resize(old + bytes_dst_.size() * 2);
+        memcpy(&out[old], &bytes_dst_[0], bytes_dst_.size() * 2);
     }
 }
 

@@ -41,6 +41,8 @@ struct StreamInput {
         PcmResampler rs;
         uint32_t rs_rate;                       // the rate rs is configured for
         std::vector<int16_t> pending;           // converted (device rate, stereo), not played yet
+        size_t pending_offset;                  // consumed prefix; compact only when the queue is drained
+        std::vector<uint8_t> converted;          // reusable byte output for PcmResampler::processBytes
         StreamWatch watch;                      // per-block gap counters for the stats line
         UnderrunGuard guard;                    // wait for late input instead of padding
         PrerollGate gate;                       // pre-roll: hold a started stream until it has a cushion
@@ -51,7 +53,7 @@ struct StreamInput {
         uint64_t report_ms;                     // last report (0 = no follow-up pending)
         uint64_t report_written;                // ring bytes written at that report
         uint32_t reports;                       // this session
-        Mix() : rs_rate(0), seen_seq(0), gap(false), dry(false), report_ms(0), report_written(0), reports(0) {}
+        Mix() : rs_rate(0), pending_offset(0), seen_seq(0), gap(false), dry(false), report_ms(0), report_written(0), reports(0) {}
     } mix;
 
 private:

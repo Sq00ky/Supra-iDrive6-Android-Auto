@@ -765,6 +765,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_LOG_FILE` | (none) | Append the daemon log to this file; it survives a head-unit reset. Same name = appended |
 | `NBT_MENU_RETURN` | home | Where iDrive goes once connected: `media` = Media/Radio list, `off` = stay in our menu |
 | `NBT_RX_TIMEOUT_S` | 5 | Seconds without data from the phone before iDrive gets the screen back; `0` = off (2 before v1.9.32) |
+| `NBT_VIDEO_QUEUE` | 15 | Maximum queued video frames (`1`-`60`). Lower it to reduce memory use and backlog on slower head units |
 | `NBT_VID_FPS` | (unset) | `30` or `60`: the frame rate asked of the phone and the decoder's rate. Unset: the phone is asked for 30 fps (what it delivers over Wi-Fi anyway) and the decoder is declared at 60, as before. `30` declares the decoder at 30 too (smoother on a slower head unit, car-verified on an F22); `60` asks the phone for 60 |
 | `NBT_BACK_HOLD_MS` | 2500 | BACK hold time to minimize; `0` = off (BACK forwarded at once) |
 | `NBT_KNOB_INVERT` | off | `1` reverses the rotary direction |

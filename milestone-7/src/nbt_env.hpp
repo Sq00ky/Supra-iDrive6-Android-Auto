@@ -92,6 +92,15 @@ inline unsigned videoRequestedFps() { return videoFpsSetting() ? videoFpsSetting
 // What the decoder (mdev format packet, MM-Renderer input) is declared with: NBT_VID_FPS, else 60 (unchanged).
 inline unsigned videoDecoderFps() { return videoFpsSetting() ? videoFpsSetting() : 60u; }
 
+// Maximum queued video frames. Default is a 15-frame cap
+inline size_t videoQueueCapacity() {
+    const char* e = getenv("NBT_VIDEO_QUEUE");
+    if (!e || !*e) return 15;
+    char* end = NULL;
+    const unsigned long value = strtoul(e, &end, 10);
+    return end != e && *end == 0 && value >= 1 && value <= 60 ? static_cast<size_t>(value) : 15;
+}
+
 // The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
 // Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified, so
