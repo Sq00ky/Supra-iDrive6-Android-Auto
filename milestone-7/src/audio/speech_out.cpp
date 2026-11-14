@@ -57,9 +57,10 @@ void SpeechOut::removeDoneThunk(void* self, bool ran) { static_cast<SpeechOut*>(
 void SpeechOut::openThread() {
     const char* ep = endpoint_;
     if (!ep || !*ep) ep = A2I_ENDPOINT_NAV_ALT;
-    // Ring holds ~12 s at 44.1 kHz stereo: the phone sends a prompt faster than real time (only max_unacked
-    // limits it) and the ring drops the OLDEST bytes when full, which would cut the start of a long prompt.
+    // Ring holds ~12 s at 44.1 kHz stereo (~24 s mono): the phone sends a prompt faster than real time (only
+    // max_unacked limits it) and the ring drops the OLDEST bytes when full, which would cut the start of a long prompt.
     A2IPlaybackStream* s = new A2IPlaybackStream("Speech", 44100u * 4u * 12u);
+    const uint32_t ch = speechEndpointChannels(ep);
     uint32_t rates[2] = { A2I_SAMPLE_RATE_44K, A2I_SAMPLE_RATE_48K };
     bool ok = false;
     for (int i = 0; i < 2 && !ok; ++i) {
@@ -68,8 +69,8 @@ void SpeechOut::openThread() {
         cfg.endpoint          = ep;
         cfg.fallback_endpoint = NULL;
         cfg.sample_rate       = rates[i];
-        cfg.channels          = A2I_CHANNELS_STEREO;
-        cfg.buffer_size       = A2I_BUFFER_SIZE_STEREO;
+        cfg.channels          = ch;
+        cfg.buffer_size       = ch == A2I_CHANNELS_MONO ? A2I_BUFFER_SIZE_MONO : A2I_BUFFER_SIZE_STEREO;
         cfg.cookie_primary    = A2I_COOKIE_LEGACY_PLAYBACK;
         cfg.cookie_alternate  = A2I_COOKIE_FACTORY;
         cfg.timeout_ms        = 2000;

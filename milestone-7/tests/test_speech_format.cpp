@@ -19,6 +19,14 @@ int main() {
     f = speechInputFormat(48000, 2);
     CHECK(f.rate == 48000 && f.channels == 2);
 
+    // Endpoint layout from the name: a mono device fed stereo plays at half speed.
+    CHECK(speechEndpointChannels("/input_mono_0") == 1);
+    CHECK(speechEndpointChannels("input_mono_1") == 1);
+    CHECK(speechEndpointChannels("/input_mono_AirPlayDL") == 1);
+    CHECK(speechEndpointChannels("/input_stereo_AirPlayAlt") == 2);
+    CHECK(speechEndpointChannels(NULL) == 2);
+    CHECK(speechEndpointChannels("") == 2);
+
     if (fails) { printf("test_speech_format: %d failure(s)\n", fails); return 1; }
     printf("test_speech_format OK\n");
     return 0;
