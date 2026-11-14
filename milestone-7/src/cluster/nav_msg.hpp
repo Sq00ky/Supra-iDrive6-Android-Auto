@@ -47,8 +47,9 @@ struct NavMessages {
     bool has_status, has_state, has_position, has_turn, has_turn_dist;
     uint32_t pos_seq;                // counts 0x8007 / 0x8005 bodies stored
     uint32_t step_pos_seq;           // pos_seq when the step (0x8006 / 0x8004) last changed: equal = no position since
+    uint32_t step_seq;               // counts step bodies (0x8006 / 0x8004) that differ from the one before
     NavMessages() : has_status(false), has_state(false), has_position(false), has_turn(false), has_turn_dist(false),
-                    pos_seq(0), step_pos_seq(0) {}
+                    pos_seq(0), step_pos_seq(0), step_seq(0) {}
 
     // Returns false for messages kombi_nav doesn't use.
     bool store(uint16_t msg_id, const uint8_t* body, size_t len) {
@@ -66,7 +67,10 @@ struct NavMessages {
         slot->assign(body, body + len);
         *has = true;
         if (msg_id == 0x8007 || msg_id == 0x8005) ++pos_seq;
-        if ((msg_id == 0x8006 || msg_id == 0x8004) && changed) step_pos_seq = pos_seq;
+        if ((msg_id == 0x8006 || msg_id == 0x8004) && changed) {
+            step_pos_seq = pos_seq;
+            ++step_seq;
+        }
         return true;
     }
     void clear() { *this = NavMessages(); }
@@ -107,17 +111,24 @@ struct NavView {
     // NavMessages::step_pos_seq: when it equals pos_seq, the position was stored before the step changed, so it may
     // still be the previous step's (the newest 0x8006 and 0x8007 are kept apart)
     uint32_t step_pos_seq;
+    // NavMessages::step_seq: changes with every new step body. A body can change on the same step (its lanes come near
+    // the junction), so this alone doesn't make a new maneuver; see Core::renewedStep.
+    uint32_t step_seq;
     bool has_dest_m;
     int64_t dest_m;
     bool has_exit_angle;
     int64_t exit_angle;
+    bool has_exit_number;
+    int64_t exit_number;     // a roundabout's exit, counted from the entry (1 = the first exit)
     std::vector<AaLane> lanes;   // the step's lanes, left to right (the phone sends them only near the junction)
     NavView() : aa_type(0), aa_unit(0), has_step_m(false), step_m(0), has_step_s(false), step_s(0), pos_seq(0), step_pos_seq(0),
-                has_dest_m(false), dest_m(0), has_exit_angle(false), exit_angle(0) {}
+                step_seq(0), has_dest_m(false), dest_m(0), has_exit_angle(false), exit_angle(0), has_exit_number(false),
+                exit_number(0) {}
 
     bool sameManeuver(const NavView& o) const {
         return aa_type == o.aa_type && road == o.road && has_exit_angle == o.has_exit_angle &&
-               (!has_exit_angle || exit_angle == o.exit_angle);
+               (!has_exit_angle || exit_angle == o.exit_angle) && has_exit_number == o.has_exit_number &&
+               (!has_exit_number || exit_number == o.exit_number);
     }
     bool sameDistance(const NavView& o) const { return dist_text == o.dist_text && aa_unit == o.aa_unit; }
 };
@@ -155,6 +166,7 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         PbSpan man = pbMsg(step, 1);
         int64_t x;
         if (pbInt(man, 1, x)) v.aa_type = (int)x;
+        if (pbInt(man, 2, x)) { v.has_exit_number = true; v.exit_number = x; }
         if (pbInt(man, 3, x)) { v.has_exit_angle = true; v.exit_angle = x; }
         v.road = pbText(pbMsg(step, 2), 1);
         // step field 3: repeated NavigationLane {1 repeated LaneDirection {1 shape, 2 is_highlighted}}
@@ -188,6 +200,7 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
                 if (kLegacy[i][0] == event) { pl = kLegacy[i][1]; pr = kLegacy[i][2]; }
         v.aa_type = has_side && side == 1 ? pl : has_side && side == 2 ? pr : (pl == pr ? pl : 0);
         v.road = pbText(ev, 1);
+        if (pbInt(ev, 5, x)) { v.has_exit_number = true; v.exit_number = x; }
         if (pbInt(ev, 6, x)) { v.has_exit_angle = true; v.exit_angle = x; }
     } else {
         return false;
@@ -216,6 +229,7 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
     if (secs > 0 || (secs == 0 && v.has_step_m && v.step_m < kNoSecondsM)) { v.has_step_s = true; v.step_s = secs; }
     if ((m.has_position && cp.len) || (m.has_turn_dist && de.len)) v.pos_seq = m.pos_seq;
     v.step_pos_seq = m.step_pos_seq;
+    v.step_seq = m.step_seq;
     return true;
 }
 
@@ -399,6 +413,10 @@ inline void unitDisplay(double m, int phone_unit, std::string& text, int& aa_uni
     }
 }
 
+// Motorway-type turns, due by distance too: AA off-ramps (21-24) and forks (25, 26). Keep-left/right is left out (it
+// is common in towns too), and so are on-ramps (the turn is still on the road before the motorway).
+inline bool motorwayTurn(int aa_type) { return aa_type >= 21 && aa_type <= 26; }
+
 // Metres to the next maneuver: the phone's value, else parsed from the display text + unit.
 inline bool distanceMetres(const NavView& v, double& m) {
     if (v.has_step_m) { m = (double)v.step_m; return true; }
@@ -420,6 +438,14 @@ inline bool distanceMetres(const NavView& v, double& m) {
     }
     m = x * f;
     return true;
+}
+
+// Maneuver TYPE_DEPART at 0 m: what Maps sends for about a second when guidance starts or after each reroute, before
+// the first real turn. Nothing to show (a straight arrow at 0 yd). One with no distance yet is left to the usual
+// wait for a distance.
+inline bool departHere(const NavView& v) {
+    double m;
+    return v.aa_type == 1 && distanceMetres(v, m) && m < 1.0;
 }
 
 // UTF-8 prefix of at most n code points (never splits a character).

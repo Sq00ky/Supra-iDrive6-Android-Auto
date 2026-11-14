@@ -20,11 +20,14 @@
 // Leaving kReady drops the batch in progress and the one queued, so on the way back to kReady the driver redraws its
 // whole state. It is told through the status listener, and epoch() changes whenever work was dropped.
 //
-// Batches: one is sent at a time, back to back; one more waits. A "full" batch redraws everything the driver shows
-// (a new maneuver, a clear), so a full batch submitted while another waits takes its place. A partial batch (a new
-// distance) is merged into the waiting one instead: a text call for a handle the waiting batch already sets replaces
-// that call's payload in place, anything else is appended. So a distance update never wipes out a new maneuver that
-// has not gone out yet.
+// Batches: one is sent at a time, back to back. Each belongs to a slot, one per thing the driver draws on its own (the
+// main picture with its texts, a route overlay, lanes), and one batch per slot waits behind the one in progress, in
+// the order they came. A "full" batch redraws everything of its slot (a new maneuver, a new route), so a full batch
+// submitted while one of its slot waits takes its place, at the back of the queue: what it draws on comes first. A
+// partial batch (a new distance) is merged into its slot's waiting batch instead: a text call for a handle the waiting
+// batch already sets replaces that call's payload in place, anything else is appended. So a distance update never
+// wipes out a new maneuver that has not gone out yet, and a new route never wipes out the roads it is drawn on. A
+// batch for every slot (a clear) takes the place of everything waiting.
 //
 // The factory navigation, as the 6WA showed it (car, S19):
 //   - what we see of it is the cluster's answers to it (host -> the navigation's address, each with its call's
@@ -71,19 +74,23 @@ struct Config {
     Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
+// What a batch draws: its own slot's waiting batch is the only one it may take the place of or merge into.
+enum Slot { kSlotMain = 0, kSlotRoute, kSlotLanes, kSlotCount, kSlotAll = 255 };
+
 struct Batch {
     std::string label;       // for the log
     std::vector<Call> calls;
-    bool full;               // redraws everything the driver shows: may replace a waiting batch
-    Batch() : full(false) {}
-    explicit Batch(const char* l, bool f = false) : label(l), full(f) {}
+    bool full;               // redraws everything of its slot: may replace that slot's waiting batch
+    uint8_t slot;            // Slot; kSlotAll (a clear) replaces every waiting batch
+    Batch() : full(false), slot(kSlotMain) {}
+    explicit Batch(const char* l, bool f = false, uint8_t s = kSlotMain) : label(l), full(f), slot(s) {}
     void add(uint16_t fkt, const std::vector<uint8_t>& p) { calls.push_back(Call(fkt, p)); }
 };
 
 enum SubmitResult {
     kQueued,      // will be sent after the batch in progress, if any
-    kReplaced,    // a full batch took the place of a queued one that had not started: the newest state wins
-    kMerged,      // a partial batch was merged into the queued one
+    kReplaced,    // a full batch took the place of a queued one of its slot that had not started: the newest wins
+    kMerged,      // a partial batch was merged into its slot's queued one
     kNotReady,    // status is not kReady: dropped, the driver redraws when kReady comes back
     kRefused      // empty, too long, or a call breaks a limit (cluster/hudterm.hpp): nothing of it is sent
 };
@@ -112,8 +119,9 @@ public:
     void sendFailed(uint32_t now);
 
     Status status() const { return status_; }
-    bool busy() const { return haveCurrent_ || havePending_; }
-    bool waiting() const { return havePending_; }  // a batch waits behind the one in progress
+    bool busy() const { return haveCurrent_ || !pending_.empty(); }
+    // A batch of this slot (or a clear) waits behind the one in progress.
+    bool waiting(int slot) const;
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
     uint16_t host() const { return host_; }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
@@ -127,7 +135,7 @@ private:
 
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
-    bool merge(const Batch& b);
+    bool merge(Batch& into, const Batch& b);
     void fail(const char* why, uint32_t now);
     void refresh(const char* why, uint32_t now);
     void dropWork(uint32_t now);
@@ -143,8 +151,9 @@ private:
     Status status_;
     bool changed_;
 
-    Batch current_, pending_;
-    bool haveCurrent_, havePending_;
+    Batch current_;
+    std::vector<Batch> pending_;      // at most one per slot, in the order they came
+    bool haveCurrent_;
     size_t nextCall_;
     uint32_t batchStartMs_;
     std::vector<InFlight> inFlight_;
@@ -162,8 +171,9 @@ public:
     virtual SubmitResult submit(const Batch& b) = 0;
     virtual Status status() const = 0;
     virtual uint32_t epoch() const = 0;
-    // A batch waits behind the one in progress: a full batch submitted now would take its place.
-    virtual bool waiting() const = 0;
+    // A batch of this slot (or a clear) waits behind the one in progress: a full batch of the slot submitted now would
+    // take its place.
+    virtual bool waiting(int slot) const = 0;
     virtual void reset() = 0;                     // leave kFailed
     // Until everything submitted is answered: true then; false on the timeout or once the status leaves kReady.
     virtual bool waitIdle(uint32_t ms) = 0;
@@ -191,7 +201,7 @@ public:
     void reset();
     Status status() const;
     uint32_t epoch() const;
-    bool waiting() const;
+    bool waiting(int slot) const;
     bool waitIdle(uint32_t ms);
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop
