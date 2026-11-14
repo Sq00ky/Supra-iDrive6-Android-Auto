@@ -123,6 +123,11 @@
 #include "spp_direction.hpp"
 #include "neutral_resume.hpp"
 #include "cluster/nav_core.hpp"
+// TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+#include "test6wb_temp/engine.hpp"
+#endif
+// TEST6WB_TEMP_END
 #include <termios.h>
 
 #include <stdio.h>
@@ -2090,6 +2095,11 @@ int main(int argc, char* argv[]) {
     if ((nbt::envFlag("NBT_MOST_LOG") == 1 || ccsLogCompat) && !g_mostTrace.attach(g_most))
         printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
     g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
+    // TEST6WB_TEMP_BEGIN: borrow the already-created terminal and MOST client.
+#ifdef TEST6WB_TEMP
+    nbt::test6wbtemp::start(g_kombiNav.test6wbTerminal(),g_most);
+#endif
+    // TEST6WB_TEMP_END
     if (!g_most.start("NBTAAD_MOST"))
         printf("[Main] MOST client failed to start: knob/keys, car GPS, car speed and parking brake disabled.\n");
 
@@ -2468,6 +2478,11 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
     if (mic_live) g_audioBackend->stopMic(mic);
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
+    // TEST6WB_TEMP_BEGIN: stop diagnostics before its borrowed owner is stopped.
+#ifdef TEST6WB_TEMP
+    nbt::test6wbtemp::stop();
+#endif
+    // TEST6WB_TEMP_END
     g_kombiNav.stop();              // clears a cluster/HUD arrow (one quick attempt)
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back

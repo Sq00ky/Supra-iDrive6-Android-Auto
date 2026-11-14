@@ -230,6 +230,13 @@ public:
     bool attach(most::Client& c, bool sending = true);
     void setSender(SendFn fn, void* user);        // in place of the client's send (host tests)
     void setStatusListener(StatusCb cb, void* user);
+    // TEST6WB_TEMP_BEGIN: removable diagnostic observer, no send-policy changes.
+#ifdef TEST6WB_TEMP
+    enum Test6wbPhase { kTest6wbAttempt, kTest6wbLocalOk, kTest6wbLocalFail, kTest6wbRx };
+    typedef void (*Test6wbTraceFn)(const most::Msg*,const most::View*,Test6wbPhase,void*);
+    void setTest6wbTrace(Test6wbTraceFn fn,void* user);
+#endif
+    // TEST6WB_TEMP_END
     bool start();
     void stop();
 
@@ -268,6 +275,11 @@ private:
     pthread_t thread_;
     bool running_, stop_, registeredTag_;
     TerminalStats lastHealth_;
+    // TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+    Test6wbTraceFn test6wbTrace_;void* test6wbTraceUser_;
+#endif
+    // TEST6WB_TEMP_END
 };
 
 } // namespace hudterm

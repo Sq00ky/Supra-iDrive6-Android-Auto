@@ -426,6 +426,13 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
 void KombiNav::logHealth() {
     if (terminal_) terminal_->logHealth();
 }
+// TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+hudterm::HudTerminal* KombiNav::test6wbTerminal() const {
+    return terminal_ && !shadow_ && display_ && !strcmp(display_->name(),"6wb")?terminal_:NULL;
+}
+#endif
+// TEST6WB_TEMP_END
 
 namespace {
 // A number from the environment in lo..hi; anything else is logged and the default kept.

@@ -145,6 +145,11 @@ public:
     // The 6WA transport's health line, from main's 60 s loop (nothing for the J29).
     void logHealth();
     const char* clusterName() const { return display_ ? display_->name() : "none"; }
+    // TEST6WB_TEMP_BEGIN: borrowed transport only; never inspects AA navigation state.
+#ifdef TEST6WB_TEMP
+    hudterm::HudTerminal* test6wbTerminal() const;
+#endif
+    // TEST6WB_TEMP_END
 
     // AASession nav-status callback (session thread): copies the message and returns.
     static void navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t len, void* user);

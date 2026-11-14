@@ -1,0 +1,4 @@
+# Tre passaggi per coppia, senza pulizia interna al singolo comando ab.
+ab 0x18
+ab 0x1F
+ab 0x23

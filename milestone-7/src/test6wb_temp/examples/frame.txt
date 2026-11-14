@@ -1,0 +1,5 @@
+# Il pattern T001 (R001) resta caricato durante frame off (R002) e on (R003).
+isolated 0x18
+frame off
+frame on
+clear

@@ -688,6 +688,11 @@ bool Core::takeStatusChange(Status& s) {
 HudTerminal::HudTerminal(const Config& cfg)
     : core_(cfg), client_(NULL), send_(NULL), sendUser_(NULL), statusCb_(NULL), statusUser_(NULL), running_(false),
       stop_(false), registeredTag_(cfg.useFixedTag && cfg.fixedTag == 0xffffu) {
+    // TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+    test6wbTrace_=NULL;test6wbTraceUser_=NULL;
+#endif
+    // TEST6WB_TEMP_END
     memset(&lastHealth_, 0, sizeof(lastHealth_));
     pthread_mutex_init(&lock_, NULL);
     pthread_condattr_t a;
@@ -723,6 +728,13 @@ void HudTerminal::setStatusListener(StatusCb cb, void* user) {
     statusCb_ = cb;
     statusUser_ = user;
 }
+// TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+void HudTerminal::setTest6wbTrace(Test6wbTraceFn fn,void* user) {
+    pthread_mutex_lock(&lock_);test6wbTrace_=fn;test6wbTraceUser_=user;pthread_mutex_unlock(&lock_);
+}
+#endif
+// TEST6WB_TEMP_END
 
 bool HudTerminal::start() {
     if (running_) return false;
@@ -836,10 +848,20 @@ void HudTerminal::onMessage(const most::View& m) {
     const uint32_t entryMs=nowMs();
     pthread_mutex_lock(&lock_);
     const uint32_t coreMs=nowMs();
+    // TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+    Test6wbTraceFn diagnosticTrace=test6wbTrace_;void* diagnosticUser=test6wbTraceUser_;
+#endif
+    // TEST6WB_TEMP_END
     const bool diagnostic=registeredTag_ && m.fblock==kFBlock && m.inst==kInst && m.fkt==kGetSize;
     core_.onMessage(m, coreMs);
     wake();
     pthread_mutex_unlock(&lock_);
+    // TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+    if(diagnosticTrace)diagnosticTrace(NULL,&m,kTest6wbRx,diagnosticUser);
+#endif
+    // TEST6WB_TEMP_END
     if(diagnostic)
         printf("[HudTerm] ImageGetSize receive DSI callback +%u MOST +%u terminal +%u core +%u tag %u len %u\n",
                m.deliveryMs,m.rxMs,entryMs,coreMs,m.hdrTag,(unsigned)m.len);
@@ -895,9 +917,24 @@ void HudTerminal::run() {
         while (!stop_ && core_.next(now, m)) {
             SendFn fn = send_;
             void* user = sendUser_;
+            // TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+            Test6wbTraceFn diagnosticTrace=test6wbTrace_;void* diagnosticUser=test6wbTraceUser_;
+#endif
+            // TEST6WB_TEMP_END
             pthread_mutex_unlock(&lock_);
             const uint32_t dispatchMs = nowMs();
+            // TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+            if(diagnosticTrace)diagnosticTrace(&m,NULL,kTest6wbAttempt,diagnosticUser);
+#endif
+            // TEST6WB_TEMP_END
             bool ok = fn && fn(m, user);
+            // TEST6WB_TEMP_BEGIN
+#ifdef TEST6WB_TEMP
+            if(diagnosticTrace)diagnosticTrace(&m,NULL,ok?kTest6wbLocalOk:kTest6wbLocalFail,diagnosticUser);
+#endif
+            // TEST6WB_TEMP_END
             if (registeredTag_ && m.fkt == kGetSize)
                 printf("[HudTerm] +%u ImageGetSize send returned %s after %u ms\n",
                        nowMs(), ok ? "OK" : "FAILED", nowMs()-dispatchMs);

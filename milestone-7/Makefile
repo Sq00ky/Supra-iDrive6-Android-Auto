@@ -66,12 +66,32 @@ SRCS = src/main.cpp \
        src/cluster/hud6wb_artwork.cpp \
        src/volume_osd.cpp
 
+# TEST6WB_TEMP_BEGIN: optional, fully removable diagnostic build.
+TEST6WB_TEMP ?= 0
+TEST6WB_TEMP_SRCS = src/test6wb_temp/engine.cpp \
+       src/test6wb_temp/commands/plan.cpp \
+       src/test6wb_temp/patterns/patterns.cpp \
+       src/test6wb_temp/patterns/identity.cpp \
+       src/test6wb_temp/logging/log.cpp
+ifeq ($(TEST6WB_TEMP),1)
+SRCS += $(TEST6WB_TEMP_SRCS)
+CXXFLAGS += -DTEST6WB_TEMP -I./src/test6wb_temp
+TEST6WB_TEMP_TARGETS = test6wbctl
+endif
+# TEST6WB_TEMP_END
+
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
 CSRCS = src/audio/speex.c
 CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 
 OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
 TARGET = nbt-aad
+# TEST6WB_TEMP_BEGIN: separate objects AND executable avoid mixed enabled/disabled ABI.
+ifeq ($(TEST6WB_TEMP),1)
+OBJS = $(SRCS:.cpp=.test6wb-temp.o) $(CSRCS:.c=.test6wb-temp.o)
+TARGET = nbt-aad-test6wb-temp
+endif
+# TEST6WB_TEMP_END
 
 .PHONY: all clean check
 
@@ -80,6 +100,21 @@ check:
 	$(MAKE) -C tests check
 
 all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
+
+# TEST6WB_TEMP_BEGIN
+all: $(TEST6WB_TEMP_TARGETS)
+ifeq ($(TEST6WB_TEMP),1)
+%.test6wb-temp.o: %.cpp
+	$(CXX) $(CXXFLAGS) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+%.test6wb-temp.o: %.c
+	$(CC) $(CFLAGS) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+test6wbctl: src/test6wb_temp/client.cpp src/test6wb_temp/ipc.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $< -lsocket -lang-c++ -Wl,-rpath,/lib:/usr/lib:/net/hu-omap/fs/sda32/lib
+endif
+.PHONY: test6wb-temp-clean
+test6wb-temp-clean:
+	$(RM) $(SRCS:.cpp=.test6wb-temp.o) $(SRCS:.cpp=.test6wb-temp.d) $(CSRCS:.c=.test6wb-temp.o) $(CSRCS:.c=.test6wb-temp.d) $(TEST6WB_TEMP_SRCS:.cpp=.test6wb-temp.o) $(TEST6WB_TEMP_SRCS:.cpp=.test6wb-temp.d) nbt-aad-test6wb-temp test6wbctl
+# TEST6WB_TEMP_END
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@

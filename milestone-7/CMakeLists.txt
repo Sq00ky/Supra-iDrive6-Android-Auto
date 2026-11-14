@@ -67,7 +67,32 @@ set(SOURCES
     src/audio/speex.c
 )
 
+# TEST6WB_TEMP_BEGIN
+option(TEST6WB_TEMP "Temporary, removable 6WB photographic diagnostics" OFF)
+if(TEST6WB_TEMP)
+    list(APPEND SOURCES
+        src/test6wb_temp/engine.cpp
+        src/test6wb_temp/commands/plan.cpp
+        src/test6wb_temp/patterns/patterns.cpp
+        src/test6wb_temp/patterns/identity.cpp
+        src/test6wb_temp/logging/log.cpp
+    )
+endif()
+# TEST6WB_TEMP_END
+
 add_executable(nbt-aad ${SOURCES})
+# TEST6WB_TEMP_BEGIN
+if(TEST6WB_TEMP)
+    target_compile_definitions(nbt-aad PRIVATE TEST6WB_TEMP)
+    target_include_directories(nbt-aad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/test6wb_temp)
+    set_target_properties(nbt-aad PROPERTIES OUTPUT_NAME nbt-aad-test6wb-temp)
+    add_executable(test6wbctl src/test6wb_temp/client.cpp)
+    target_compile_options(test6wbctl PRIVATE -Wall -O2 -D_QNX_SOURCE)
+    target_link_libraries(test6wbctl PRIVATE socket ang-c++)
+    set_target_properties(test6wbctl PROPERTIES LINK_FLAGS "-Wl,-rpath,/lib:/usr/lib:/net/hu-omap/fs/sda32/lib")
+endif()
+# TEST6WB_TEMP_END
+
 
 # Target QNX compilation flags
 target_compile_options(nbt-aad PRIVATE
