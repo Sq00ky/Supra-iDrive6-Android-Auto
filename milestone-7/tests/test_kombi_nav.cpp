@@ -445,7 +445,7 @@ int main() {
         assert(nbt::wirelessEnabledForTransport() == true);
         setenv("NBT_WIRELESS", "0", 1);
         assert(nbt::wirelessEnabledForTransport() == false);     // NBT_WIRELESS=0 still wins
-        // the 1080p box parses like every other switch, and needs USB to be on at all
+        // every switch in nbt-aad.env parses the same way
         assert(nbt::usbSettingOn("1", false) == true);
         assert(nbt::usbSettingOn("0", true) == false);           // env forces it off
         assert(nbt::usbSettingOn(NULL, true) == true);           // flag file, no env

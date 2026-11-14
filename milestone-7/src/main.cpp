@@ -1224,8 +1224,6 @@ static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t 
     if (g_audioBackend) g_audioBackend->onStreamState(channel, started, rate, channels);
 }
 
-static void writeTransportState(nbt::Transport t);   // defined below, next to the USB watch
-
 static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
 static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
 static const double kShortSessionS = 15.0;
@@ -1236,8 +1234,6 @@ static void onSessionEnded(void* user_data) {
         usb->noteSessionFailed(outcome == nbt::AASession::kStale);
     g_sessionActive = false;
     g_owner.set(nbt::kTransportNone);
-    nbt::setSessionTransport(0);
-    writeTransportState(nbt::kTransportNone);
     nbt::TcpServer* server = reinterpret_cast<nbt::TcpServer*>(user_data);
     double now = upSec(), dur = g_sessionStartS > 0 ? now - g_sessionStartS : -1;
     printf("[Main] [%9.3f] Android Auto session ended after %.1f s. Resuming auto-connector probing...\n", now, dur);
@@ -1256,17 +1252,6 @@ static void onSessionEnded(void* user_data) {
     if (g_audioBackend) g_audioBackend->onSessionEnded();
     g_kombiNav.onSessionEnded();   // the worker clears a cluster/HUD arrow
     resetMedia("session ended");   // the iDrive app must not show the last track of a session that is over
-}
-
-// Which transport the running session uses, for the iDrive app: it may only offer "1080p over USB" while the phone is on
-// the cable, and it has no other way to know. Written when a session starts, removed when it ends.
-static void writeTransportState(nbt::Transport t) {
-    const char* path = "/var/opt/aa/transport";
-    if (t == nbt::kTransportNone) { unlink(path); return; }
-    FILE* f = fopen(path, "w");
-    if (!f) return;
-    fprintf(f, "%s\n", t == nbt::kTransportUsb ? "usb" : "wifi");
-    fclose(f);
 }
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
@@ -1300,8 +1285,6 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     // starting: its onSessionEnded() runs now, so it cannot clear the new session's flags afterwards.
     g_session.stop();
     g_owner.set(t);
-    nbt::setSessionTransport((int)t);
-    writeTransportState(t);
     g_sessionStartS = upSec();
     printf("[Main] [%9.3f] Android Auto client connected over %s on fd %d. Initializing aasdk session...\n",
            g_sessionStartS, nbt::transportName(t), client_fd);
@@ -1312,8 +1295,6 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     if (!g_session.start(client_fd)) {
         // start() closed the fd; make sure the server does not wait for a session that never began
         g_owner.set(nbt::kTransportNone);
-    nbt::setSessionTransport(0);
-    writeTransportState(nbt::kTransportNone);
         g_sessionActive = false;
         if (server) server->notifySessionEnded();
         pthread_mutex_unlock(&g_connectMutex);
@@ -1748,7 +1729,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.75-navsettings"
+#define NBT_AAD_BUILD "v1.9.76-navsettings"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -1851,18 +1832,6 @@ static void serviceUsbLog(bool atStart) {
 }
 
 int main(int argc, char* argv[]) {
-
-    // "1080p over USB" needs a panel that can show a 1920x1080 canvas 1:1. On a 1280x480 (or any 2.67:1) panel the video
-    // path shows a 1920x720 window of that canvas and scales it to the panel: the AA UI, laid out for 1080p, loses its
-    // bottom third and everything shrinks. Decided here, before the car config or the decoder reads videoResolution().
-    {
-        const nbt::CarConfig& early = nbt::carConfig();
-        if (nbt::usb1080pEnabled() && (early.screenW < 1920 || early.screenH < 1080)) {
-            nbt::setUsb1080PanelOk(false);
-            printf("[Car] 1080p over USB is selected but the panel is %dx%d: staying at 720p, a 1080p canvas would be "
-                   "cropped and shrunk\n", early.screenW, early.screenH);
-        }
-    }
     // "Disable logging (performance test)": set before the log redirection below, so the printf traces too cost
     // only a write to /dev/null. Not on the one-shot --pf-* / --license paths: the app reads their output.
     if (argc <= 1) {

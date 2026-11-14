@@ -68,32 +68,12 @@ inline bool carParkingBrakeEnabled() {
 
 // Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
 // the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
-// Defined below, with the USB settings.
-inline bool usb1080pEnabled();
-inline bool usb1080PanelOk();
-
 inline int videoResolution() {
     const char* e = getenv("NBT_VID_RES");
     if (e && strcmp(e, "1") == 0) return 1;
     if (e && strcmp(e, "3") == 0) return 3;
-    // "1080p over USB": decided once at start-up, like every other video setting. It cannot be a per-session answer -
-    // the decoder size, the panel insets, the DPI and the touch mapping are all computed before a session exists
-    // (car_config / video_manager / touchScale), so a session-only change would leave touch mapped for 720p while the
-    // phone rendered 1080p. A wireless session cannot happen while "Android Auto over USB" is selected (the wireless
-    // path is closed), so this can only ever apply to the cable.
-    if (usb1080pEnabled() && usb1080PanelOk()) return 3;
     return 2;
 }
-
-// Whether the panel can actually show a 1920x1080 canvas. main() clears this at start-up when the panel is smaller: the
-// video path would show a 1920x720 window of the 1080p canvas and scale it down, i.e. the AA UI laid out for 1080p with
-// its bottom third cropped and everything shrunk. An 1080p canvas is only right where it is shown 1:1.
-inline bool& usb1080PanelOkSlot() {
-    static bool ok = true;
-    return ok;
-}
-inline bool usb1080PanelOk() { return usb1080PanelOkSlot(); }
-inline void setUsb1080PanelOk(bool ok) { usb1080PanelOkSlot() = ok; }
 inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
 inline int videoCanvasHeight() { return videoResolution() == 1 ? 480 : videoResolution() == 3 ? 1080 : 720; }
 
@@ -135,28 +115,6 @@ inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet
 // credentials and the session starter refuses a TCP connection. Without this the phone is offered wireless Android Auto
 // first and connects over Wi-Fi instead of the cable, which is the one thing USB mode is meant to avoid.
 inline bool wirelessEnabledForTransport() { return wirelessEnabled() && !usbEnabled(); }
-
-// The transport of the session being set up: 0 none, 1 wireless, 2 USB (same values as nbt::Transport in
-// session_owner.hpp). sdr_builder builds the manifest inside startSession(), so the USB-only video profile has to be
-// readable there; main.cpp sets this before the session starts and clears it when the session ends.
-inline int& sessionTransportSlot() {
-    static int t = 0;
-    return t;
-}
-inline void setSessionTransport(int t) { sessionTransportSlot() = t; }
-inline bool sessionIsUsb() { return sessionTransportSlot() == 2; }
-
-// "1080p over USB" checkbox (flag file kUsb1080PFlagFile; a hand-made kUsb1080PManualFile also counts; NBT_USB_1080P=1
-// / 0 wins either way, same words as NBT_USB). Requires "Android Auto over USB" itself: on the Wi-Fi path it does
-// nothing, and the app refuses to select it while the phone is not on the cable.
-static const char* const kUsb1080PFlagFile = "/var/opt/aa/usb-1080p";
-static const char* const kUsb1080PManualFile = "/opt/aa/usb-1080p";
-inline bool usb1080pFlagFileSet() {
-    return access(kUsb1080PFlagFile, F_OK) == 0 || access(kUsb1080PManualFile, F_OK) == 0;
-}
-inline bool usb1080pEnabled() {
-    return usbSettingOn(getenv("NBT_USB_1080P"), usb1080pFlagFileSet()) && usbEnabled();
-}
 
 // "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag file kPhoneGpsFlagFile, a hand-made kPhoneGpsManualFile
 // also counts; NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna,

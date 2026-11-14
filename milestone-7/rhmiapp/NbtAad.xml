@@ -19,7 +19,6 @@
       <raAction id="30"/>
       <raAction id="167"/>
       <raAction id="173"/>
-      <raAction id="174"/>
       <hmiAction id="25" target="12"/>
       <hmiAction id="81" target="15"/>
       <hmiAction id="80" target="14"/>
@@ -84,10 +83,6 @@
       </textIdModel>
       <raBoolModel id="175"/>
       <textIdModel id="176" textId="47">
-        <synonyms/>
-      </textIdModel>
-      <raBoolModel id="178"/>
-      <textIdModel id="180" textId="48">
         <synonyms/>
       </textIdModel>
       <raBoolModel id="48"/>
@@ -250,7 +245,6 @@
           <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
           <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
-          <checkbox action="174" id="179" model="178" text="1080p over USB" textModel="180"/>
           <checkbox action="87" id="90" model="88" text="Use Phone GPS" textModel="89"/>
           <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network" textModel="93"/>
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>

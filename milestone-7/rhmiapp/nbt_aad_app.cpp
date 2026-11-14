@@ -67,7 +67,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-63-navsettings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-64-navsettings (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -389,10 +389,6 @@ const char* const kAnyDistFlag      = "/var/opt/aa/kombi-nav-anydist";
 const char* const kAnyDistManual    = "/opt/aa/kombi-nav-anydist";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
 const unsigned    kNoLogModel       = 175;   // raBoolModel
-const unsigned    kActUsb1080       = 174;   // "1080p over USB" checkbox
-const unsigned    kUsb1080Model     = 178;   // raBoolModel
-const char* const kUsb1080Flag      = "/var/opt/aa/usb-1080p";
-const char* const kUsb1080Manual    = "/opt/aa/usb-1080p";
 const char* const kNoLogFlag        = "/var/opt/aa/no-log";
 const char* const kNoLogManual      = "/opt/aa/no-log";
 const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
@@ -2287,17 +2283,6 @@ bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-bool usb1080On() { return fileExists(kUsb1080Flag) || fileExists(kUsb1080Manual); }
-// Always selectable. The daemon applies the 1080p profile to a USB session only, so the box can be set before the phone
-// is plugged in; over Wi-Fi it is stored but does nothing.
-void showUsb1080(bmw::PluginApp* app) { app->updateModel(kUsb1080Model, usb1080On()); }
-bool onUsb1080Toggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kUsb1080Flag, kUsb1080Manual,
-                   "1080p over USB (applies to a USB session; NBT_USB_1080P in nbt-aad.env wins)");
-    if (g_runApp) showUsb1080(g_runApp);
-    return true;
-}
-
 bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kAnyDistFlag, kAnyDistManual,
                    "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
@@ -2557,8 +2542,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showNativeAudio(g_app);
         showLciMedia(g_app);
         showCpCompat(g_app);
-        showUsb1080(g_app);
-        alog("settings: thirteen checkbox models refreshed");
+        alog("settings: twelve checkbox models refreshed");
     }
     return true;
 }
@@ -2601,7 +2585,6 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActCpCompat, &onCpCompatToggle);
     addAction(self, kActAnyDist, &onAnyDistToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
-    addAction(self, kActUsb1080, &onUsb1080Toggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
