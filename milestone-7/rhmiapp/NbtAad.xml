@@ -19,6 +19,7 @@
       <raAction id="30"/>
       <raAction id="167"/>
       <raAction id="173"/>
+      <raAction id="174"/>
       <hmiAction id="25" target="12"/>
       <hmiAction id="81" target="15"/>
       <hmiAction id="80" target="14"/>
