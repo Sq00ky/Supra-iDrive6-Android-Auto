@@ -115,6 +115,7 @@
 #include "a2i_client.h"
 #include "audio/media_state.hpp"
 #include "audio/voice_scenario.hpp"
+#include "audio/focus_volume_quiet.hpp"
 #include "usb_log.hpp"
 #include "spp_rereg.hpp"
 #include "spp_link_policy.hpp"
@@ -1419,8 +1420,16 @@ static void onCarInput(const char* what, void*) {
 // the overlay. This is the value the amplifier actually applied, so the pill always matches what the driver hears.
 // From g_carVolume on the DSI callback thread.
 static void onCarVolume(int level, int max, void*) {
+    const int pct = nbt::car::VolumeLevel::percent(level, max);
+    struct timespec ts;   // 64-bit ms, same base as SpeechOut (monoMs() wraps at 32 bit)
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const uint64_t now = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+    if (nbt::focusVolumeQuiet().quiet(now)) {   // level change caused by the nav prompt focus, not the driver
+        printf("[Volume] %d%% (nav prompt focus, pill not shown)\n", pct);
+        return;
+    }
     g_carInputMs = monoMs() | 1u;   // iDrive draws its own volume bar: that is the driver, not the car
-    volumeApply(nbt::car::VolumeLevel::percent(level, max), false);
+    volumeApply(pct, false);
 }
 
 static uint32_t g_idrWaitMs = 0;   // decoder rebuilt on the way back: waiting for the phone's keyframe since
