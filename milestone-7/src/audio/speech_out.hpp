@@ -11,7 +11,11 @@
 //   NBT_SPEECH_SINK     AM sink (default 0x1, speakers)
 //   NBT_SPEECH_HOLD_MS  the focus is released this long after the ring has played out (default 500)
 // Earlier A2I *write* experiments crashed the head unit; this uses only the factory prime/Start/GetBuffer/Out_Write
-// loop (car-verified for 20k+ writes), opens the endpoint once on its own thread and never closes it mid-run.
+// loop (car-verified for 20k+ writes). The endpoint is opened at start-up only to learn its format, then like the
+// car's own nav prompter for each prompt: opened at the prompt start, closed once the focus is given back (without a
+// focus: NBT_SPEECH_HOLD_MS after the last audio). Held open, it kept the car's own nav prompts silent, and a car
+// prompt that opened it anyway left ours dead. Open and close run on the endpoint thread; prompt audio waits in the
+// ring meanwhile. An endpoint that stops taking buffers mid-prompt drops that prompt (SpeechFocus, stall_ms).
 
 #include "audio/a2i_stream.hpp"
 #include "audio/audio_route.hpp"
@@ -31,10 +35,10 @@ public:
     explicit SpeechOut(AudioRoute& route);
     ~SpeechOut();
 
-    // Start-up: with NBT_SPEECH=1 (cfg.enabled), opens the endpoint on a background thread.
+    // Start-up: with NBT_SPEECH=1 (cfg.enabled), learns the endpoint's format on a background thread.
     void init(const SpeechConfig& cfg);
-    // Session thread: the endpoint is open, the focus is in use (NBT_SPEECH_SRC, audioconn found) and not backing off
-    // (now: monotonic ms).
+    // Session thread: the endpoint format is known, the focus is in use (NBT_SPEECH_SRC, audioconn found), not backing
+    // off, and the endpoint did not fail to open 3 times in a row this session (now: monotonic ms).
     bool takesPrompt(uint64_t now) const;
     // Session thread: one ch 8 PCM frame in the format given to state().
     void frame(const uint8_t* pcm, size_t len);
@@ -54,11 +58,12 @@ private:
     SpeechOut(const SpeechOut&);
     SpeechOut& operator=(const SpeechOut&);
 
-    static void* openThreadThunk(void* self);
+    static void* endpointThreadThunk(void* self);
     static void* tickThreadThunk(void* self);
     static void grantedThunk(void* self);
     static void removeDoneThunk(void* self, bool ran);
-    void openThread();
+    bool openFirst();        // learns the format; true = ready
+    void endpointThread();
     void tickThread();
     void granted();
     void removeDone(bool ran);
@@ -71,13 +76,19 @@ private:
     void flush();
     size_t queuedBytes() const;
     void setFocusBusy(bool busy, uint64_t now);
+    void openEndpoint();
+    void closeEndpoint();
+    uint32_t endpointWrites() const;
 
     AudioRoute& route_;
     const char* endpoint_;        // NBT_SPEECH_EP (NULL / empty = the factory alternate nav endpoint)
-    A2IPlaybackStream* speech_;   // set by the open thread, then never changes
-    volatile bool ready_;
+    A2IPlaybackStream* speech_;   // created by init(); opened and closed only by the endpoint thread
+    volatile bool ready_;         // the endpoint format is known (ep_cfg_, ep_rate_, ep_ch_, rs_ set)
     uint32_t src_;
     uint32_t sink_;
+    A2IStreamConfig ep_cfg_;      // what opened at start-up (endpoint, rate, cookie), used for every open
+    uint32_t ep_rate_;
+    uint32_t ep_ch_;
 
     // Session thread only.
     PcmResampler rs_;
@@ -86,13 +97,21 @@ private:
     uint32_t bytes_;
     int peak_;
 
-    // Guarded by lock_ (session thread, tick thread, audioconn worker).
+    // Guarded by lock_ (session thread, tick thread, audioconn worker, endpoint thread).
     mutable pthread_mutex_t lock_;
     SpeechFocus focus_;
     uint32_t prompts_;
     uint32_t prompt_rate_;
     uint32_t prompt_ch_;
+    pthread_cond_t ep_cond_;   // the endpoint thread waits on it for ep_want_ / ep_stop_
+    bool ep_want_;             // the focus wants the endpoint open
+    bool ep_open_;             // open with its worker running
+    bool ep_failed_;           // the open for the current want failed: no retry before the next openEndpoint
+    uint32_t ep_fails_;        // failed opens in a row (reset by a good one and at the session end)
+    bool ep_stop_;
 
+    pthread_t ep_thread_;
+    bool ep_valid_;
     pthread_t tick_;
     bool tick_valid_;
     volatile bool tick_stop_;

@@ -134,11 +134,11 @@ bool A2IPlaybackStream::open(const A2IStreamConfig& cfg) {
     return true;
 }
 
-bool A2IPlaybackStream::start(bool feed) {
+bool A2IPlaybackStream::start(bool feed, bool keep_queued) {
     if (!handle_ || thread_valid_) return false;
     feed_ = feed;
     stop_ = false;
-    ring_.clear();
+    if (!keep_queued) ring_.clear();
     writes_ = 0;
     primed_ = 0;
     underruns_ = 0;

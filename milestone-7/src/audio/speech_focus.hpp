@@ -3,8 +3,15 @@
 #ifndef AUDIO_SPEECH_FOCUS_HPP
 #define AUDIO_SPEECH_FOCUS_HPP
 
-// The nav prompt focus of SpeechOut: when to build, hold and release it, and when ch 8 audio may play. Clock-free and
-// not thread-safe (the caller holds its lock); timestamps are monotonic ms. Side effects go through SpeechFocusPort.
+// The nav prompt focus of SpeechOut: when to build, hold and release it, when ch 8 audio may play, and when the A2I
+// endpoint is open. Clock-free and not thread-safe (the caller holds its lock); timestamps are monotonic ms. Side
+// effects go through SpeechFocusPort.
+//
+// The endpoint is open only around a prompt: opened at its start (together with the focus build), closed once the
+// focus is released again (without a focus: hold_ms after the last audio). The car's own nav prompter (natp) uses the
+// same endpoint and cannot speak while we hold it; when it opens it anyway, ours stops taking buffers. A prompt whose
+// endpoint has taken no buffer for stall_ms while it may play (stall_ms + open_ms while a fresh open has not taken its
+// first one) is dropped: ring flushed, focus released, endpoint closed, and the rest of the prompt is not queued.
 
 #include "audio/nav_prompt_policy.hpp"
 #include <stddef.h>
@@ -27,6 +34,12 @@ public:
     virtual size_t queuedBytes() const = 0;
     // A focus build or remove is in flight (the volume pill's quiet window starts when that ends).
     virtual void setFocusBusy(bool busy, uint64_t now) = 0;
+    // Asynchronous and idempotent: the endpoint plays the ring once open, or silence while the feed is off. Queued
+    // audio stays in the ring while it opens. openEndpoint also retries an open that failed.
+    virtual void openEndpoint() = 0;
+    virtual void closeEndpoint() = 0;
+    // Buffers the endpoint has taken; it only has to change while the endpoint plays.
+    virtual uint32_t endpointWrites() const = 0;
 };
 
 class SpeechFocus {
@@ -36,6 +49,10 @@ public:
         uint64_t waited_ms;    // since the last build was queued
         uint64_t idle_ms;      // since the last audio
         const char* rebuild;   // log text of the build for a prompt that waited for the release; NULL = none
+        bool stalled;          // the endpoint stopped taking buffers: prompt dropped
+        uint64_t stall_ms;     // stalled: since the endpoint last took a buffer
+        size_t dropped;        // stalled: bytes flushed from the ring
+        bool closed;           // the endpoint was closed after the prompt
     };
     struct Stop {
         bool sent;   // a release was started or a remove queued during the shutdown
@@ -48,13 +65,14 @@ public:
 
     NavPromptPolicy::State state() const { return policy_.state(); }
     uint64_t grantAfterMs() const { return grant_after_ms_; }
+    bool endpointWanted() const { return endpoint_; }
 
     // The focus is in use and not backing off.
     bool takesPrompt(uint64_t now) const;
     // ch 8 START; returns the log text, NULL = no focus in use.
     const char* promptStarted(uint64_t now);
     void promptStopped();
-    // ch 8 audio may enter the ring: no focus in use, or one building / held / waited for.
+    // ch 8 audio may enter the ring: no focus in use, or one building / held / waited for; not after a stall.
     bool playsFrames() const;
     // A prompt started or has audio queued while it may play.
     bool active() const;
@@ -84,6 +102,10 @@ private:
     // Starts the focus release if one is built or building; true = started.
     bool release(uint64_t now);
     void syncBusy(uint64_t now);
+    void openEndpoint(uint64_t now);
+    bool closeEndpoint();
+    // The endpoint's progress clock restarts (it has stall_ms from now to take a buffer, plus open_ms if not live).
+    void resetProgress(uint64_t now);
 
     SpeechFocusPort& port_;
     NavPromptPolicy policy_;
@@ -97,6 +119,11 @@ private:
     uint64_t build_ms_;
     uint64_t grant_after_ms_;
     bool stop_sent_;
+    bool endpoint_;          // openEndpoint was asked for and closeEndpoint not since
+    bool live_;              // the endpoint made progress since it was asked open (its open is done)
+    bool stalled_;           // the endpoint stalled during this prompt: its audio is dropped until the next start
+    uint32_t writes_seen_;   // endpointWrites() at the last progress
+    uint64_t progress_ms_;   // when the endpoint last took a buffer (or the clock was restarted)
 };
 
 } // namespace nbt

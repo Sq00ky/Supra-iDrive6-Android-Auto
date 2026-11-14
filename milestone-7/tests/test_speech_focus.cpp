@@ -25,7 +25,7 @@ namespace {
 
 class FakePort : public SpeechFocusPort {
 public:
-    FakePort() : build_ok(true), remove_ok(true), queued(0) {}
+    FakePort() : build_ok(true), remove_ok(true), queued(0), healthy(true), log_ep(false), ep(false), writes(0) {}
 
     bool queueBuild() { add("build"); return build_ok; }
     bool queueRemove() { add("remove"); return remove_ok; }
@@ -38,12 +38,20 @@ public:
         snprintf(b, sizeof(b), "%s@%llu", busy ? "busy" : "free", (unsigned long long)now);
         add(b);
     }
+    void openEndpoint() { ep = true; if (log_ep) add("open"); }
+    void closeEndpoint() { ep = false; if (log_ep) add("close"); }
+    // A healthy endpoint takes a buffer between any two looks.
+    uint32_t endpointWrites() const { return healthy ? ++writes : writes; }
 
     std::string take() { const std::string s = calls_; calls_.clear(); return s; }
 
     bool build_ok;
     bool remove_ok;
     size_t queued;   // the ring: frames write to it, the endpoint plays it out
+    bool healthy;    // false = the endpoint takes no buffers (natp took it over)
+    bool log_ep;     // record open / close in the calls
+    bool ep;         // opened and not closed since
+    mutable uint32_t writes;
 
 private:
     void add(const char* c) { if (!calls_.empty()) calls_ += ' '; calls_ += c; }
@@ -656,6 +664,215 @@ int main() {
         f.promptStopped();
         CHECK_TEXT(f.promptStarted(4000), "focus backing off: dropped");
         CHECK_CALLS(p, "free@4000");
+    }
+
+    // 15. The endpoint is open only around a prompt: opened with the build, closed once the focus is given back.
+    {
+        FakePort p;
+        p.log_ep = true;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        CHECK(!f.endpointWanted());
+        CHECK_TEXT(f.promptStarted(1000), kRequesting);
+        CHECK_CALLS(p, "feed- build open busy@1000");
+        CHECK(f.endpointWanted());
+        f.granted(1300);
+        f.promptStopped();
+        p.take();
+        CHECK(f.tick(1801).action == NavPromptPolicy::RELEASE);
+        CHECK_CALLS(p, "feed- remove busy@1801");   // the focus goes first
+        f.removeDone(1900, true);
+        p.take();
+        SpeechFocus::Tick t = f.tick(2000);
+        CHECK(t.closed);
+        CHECK_CALLS(p, "close free@2000");
+        CHECK(!p.ep);
+        CHECK(!f.tick(2100).closed);
+        CHECK_CALLS(p, "free@2100");
+    }
+
+    // 15a. A prompt on the held focus asks again (idempotent); the session end closes the endpoint.
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        routed(f, p);
+        p.log_ep = true;
+        CHECK_TEXT(f.promptStarted(1400), "focus still held");
+        CHECK_CALLS(p, "open free@1400");
+        CHECK(f.sessionEnded(1500));
+        CHECK_CALLS(p, "feed- remove flush close busy@1500");
+        CHECK(!p.ep);
+    }
+
+    // 15b. After a grant timeout the endpoint closes like after a release; a prompt dropped in the backoff opens
+    // nothing.
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        timedOut(f, p);
+        p.log_ep = true;
+        CHECK(f.tick(3600).closed);
+        CHECK_CALLS(p, "close free@3600");
+        CHECK_TEXT(f.promptStarted(4000), "focus backing off: dropped");
+        CHECK_CALLS(p, "free@4000");
+        CHECK(!p.ep);
+    }
+
+    // 15c. A prompt that waits for the release keeps the endpoint open into its own build.
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        released(f, p);
+        p.log_ep = true;
+        CHECK_TEXT(f.promptStarted(1850), "waiting for the focus release");
+        CHECK_CALLS(p, "open busy@1850");
+        p.queued = 3000;
+        f.removeDone(1950, true);
+        p.take();
+        SpeechFocus::Tick t = f.tick(2000);
+        CHECK_TEXT(t.rebuild, kRequesting);
+        CHECK(!t.closed);
+        CHECK_CALLS(p, "feed- build busy@2000");
+        CHECK(p.ep);
+    }
+
+    // 15d. The build could not be queued: nothing opened.
+    {
+        FakePort p;
+        p.log_ep = true;
+        p.build_ok = false;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        CHECK_TEXT(f.promptStarted(1000), "could not queue the focus request: dropped");
+        CHECK_CALLS(p, "feed- build flush free@1000");
+        CHECK(!f.endpointWanted());
+    }
+
+    // 16. The endpoint stops taking buffers on the held focus (natp opened it): after stall_ms the prompt is dropped,
+    // the focus released and the endpoint closed. The clock runs from the grant, not from the prompt start.
+    {
+        FakePort p;
+        p.log_ep = true;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        p.healthy = false;   // still opening
+        CHECK_TEXT(f.promptStarted(1000), kRequesting);
+        p.queued = 8000;
+        CHECK(!f.tick(1800).stalled);   // BUILDING: the grant timeout covers it
+        CHECK(f.granted(1900) == NavPromptPolicy::BUILDING);
+        p.healthy = true;
+        CHECK(!f.tick(2000).stalled);   // opened and playing
+        p.healthy = false;              // natp took it over
+        p.take();
+        CHECK(!f.tick(3000).stalled);
+        CHECK_CALLS(p, "free@3000");
+        SpeechFocus::Tick t = f.tick(3001);
+        CHECK(t.stalled);
+        CHECK(t.stall_ms == 1001);
+        CHECK(t.dropped == 8000);
+        CHECK(t.action == NavPromptPolicy::NONE);
+        CHECK_CALLS(p, "flush feed- remove close busy@3001");
+        CHECK(f.state() == NavPromptPolicy::RELEASING);
+        CHECK(!f.playsFrames());   // the rest of this prompt is not queued
+        CHECK(!f.active());
+        CHECK(!f.tick(3100).stalled);
+        f.removeDone(3200, true);
+        f.promptStopped();
+        p.take();
+
+        // The next prompt starts afresh.
+        p.healthy = true;
+        CHECK_TEXT(f.promptStarted(4000), kRequesting);
+        CHECK_CALLS(p, "feed- build open busy@4000");
+        CHECK(f.playsFrames());
+    }
+
+    // 16b. Progress resets the clock; a stalled endpoint with nothing to play is no stall (the hold releases it).
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        routed(f, p);
+        p.queued = 4000;
+        CHECK(!f.tick(2000).stalled);   // took buffers
+        p.healthy = false;
+        CHECK(!f.tick(3000).stalled);
+        CHECK(f.tick(3001).stalled);
+
+        FakePort q;
+        SpeechFocus g(q);
+        g.configure(defaults, true);
+        routed(g, q);
+        g.promptStopped();
+        q.healthy = false;
+        CHECK(!g.tick(1801).stalled);
+        CHECK(g.state() == NavPromptPolicy::RELEASING);
+    }
+
+    // 16c. A fresh open gets open_ms more for its first buffer: a slow one still plays, one that never opens is
+    // dropped stall_ms + open_ms after the grant.
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        p.healthy = false;
+        f.promptStarted(1000);
+        p.queued = 8000;
+        f.granted(1200);
+        CHECK(!f.tick(2500).stalled);   // still opening
+        p.healthy = true;
+        CHECK(!f.tick(2600).stalled);   // opened late
+        p.healthy = false;
+        CHECK(!f.tick(3600).stalled);
+        CHECK(f.tick(3601).stalled);    // live: stall_ms from here on
+
+        FakePort q;
+        SpeechFocus g(q);
+        g.configure(defaults, true);
+        q.healthy = false;
+        g.promptStarted(1000);
+        q.queued = 8000;
+        g.granted(1200);
+        CHECK(!g.tick(4200).stalled);
+        SpeechFocus::Tick t = g.tick(4201);
+        CHECK(t.stalled);
+        CHECK(t.stall_ms == 3001);
+    }
+
+    // 17. No focus in use (BT mode, NBT_SPEECH_SRC=0): the endpoint opens at the prompt start, closes hold_ms after
+    // the last audio, and a stall counts from the prompt start (an open that never completes: stall_ms + open_ms).
+    {
+        FakePort p;
+        p.log_ep = true;
+        SpeechFocus f(p);
+        f.configure(defaults, false);
+        CHECK_TEXT(f.promptStarted(1000), NULL);
+        CHECK_CALLS(p, "feed+ open");
+        p.queued = 100;
+        CHECK(!f.tick(1100).closed);
+        f.promptStopped();
+        p.queued = 0;
+        p.take();
+        CHECK(!f.tick(1600).closed);
+        CHECK_CALLS(p, "free@1600");
+        CHECK(f.tick(1601).closed);
+        CHECK_CALLS(p, "close free@1601");
+
+        p.healthy = false;
+        CHECK_TEXT(f.promptStarted(2000), NULL);
+        p.queued = 500;
+        p.take();
+        CHECK(!f.tick(5000).stalled);
+        SpeechFocus::Tick t = f.tick(5001);
+        CHECK(t.stalled);
+        CHECK_CALLS(p, "free@5000 flush close free@5001");
+        CHECK(!f.playsFrames());
+        f.promptStopped();
+        CHECK_TEXT(f.promptStarted(6000), NULL);
+        CHECK(f.playsFrames());
     }
 
     if (fails) { printf("test_speech_focus: %d failure(s)\n", fails); return 1; }

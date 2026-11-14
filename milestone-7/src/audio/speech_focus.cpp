@@ -6,7 +6,8 @@ namespace nbt {
 
 SpeechFocus::SpeechFocus(SpeechFocusPort& port)
     : port_(port), uses_focus_(false), prompt_started_(false), waiting_(false), held_(false), build_pending_(false),
-      removes_(0), last_busy_ms_(0), build_ms_(0), grant_after_ms_(0), stop_sent_(false) {}
+      removes_(0), last_busy_ms_(0), build_ms_(0), grant_after_ms_(0), stop_sent_(false), endpoint_(false),
+      live_(false), stalled_(false), writes_seen_(0), progress_ms_(0) {}
 
 void SpeechFocus::configure(const NavPromptPolicy::Config& cfg, bool uses_focus) {
     policy_.configure(cfg);
@@ -19,9 +20,11 @@ bool SpeechFocus::takesPrompt(uint64_t now) const {
 
 const char* SpeechFocus::promptStarted(uint64_t now) {
     prompt_started_ = true;
+    stalled_ = false;
     last_busy_ms_ = now;
     if (!uses_focus_) {
         port_.setFeed(true);
+        openEndpoint(now);
         return NULL;
     }
     const NavPromptPolicy::State st = policy_.state();
@@ -38,6 +41,7 @@ const char* SpeechFocus::promptStarted(uint64_t now) {
     } else {
         how = "focus backing off: dropped";
     }
+    if (playsFrames()) openEndpoint(now);   // in parallel with the focus build: both run on their own threads
     syncBusy(now);
     return how;
 }
@@ -60,6 +64,7 @@ const char* SpeechFocus::queueBuild(uint64_t now) {
 }
 
 bool SpeechFocus::playsFrames() const {
+    if (stalled_) return false;
     const NavPromptPolicy::State st = policy_.state();
     return !uses_focus_ || st == NavPromptPolicy::BUILDING || st == NavPromptPolicy::ROUTED || waiting_;
 }
@@ -75,6 +80,7 @@ NavPromptPolicy::State SpeechFocus::granted(uint64_t now) {
     if (st == NavPromptPolicy::BUILDING) {
         grant_after_ms_ = now - build_ms_;
         last_busy_ms_ = now;
+        resetProgress(now);   // the feed starts now
         port_.setFeed(true);
     } else if (st != NavPromptPolicy::ROUTED) {
         queueRemove();   // granted after we gave up: take it down again
@@ -102,6 +108,25 @@ void SpeechFocus::syncBusy(uint64_t now) {
     port_.setFocusBusy(st == NavPromptPolicy::BUILDING || st == NavPromptPolicy::RELEASING || removes_ > 0, now);
 }
 
+void SpeechFocus::openEndpoint(uint64_t now) {
+    if (!endpoint_) live_ = false;   // already asked open: it stays live
+    endpoint_ = true;
+    port_.openEndpoint();
+    resetProgress(now);
+}
+
+bool SpeechFocus::closeEndpoint() {
+    if (!endpoint_) return false;
+    endpoint_ = false;
+    port_.closeEndpoint();
+    return true;
+}
+
+void SpeechFocus::resetProgress(uint64_t now) {
+    writes_seen_ = port_.endpointWrites();
+    progress_ms_ = now;
+}
+
 void SpeechFocus::removeDone(uint64_t now, bool ran) {
     // Not run (cancelled, no slot): held_ stays, so the session end or the shutdown sends another remove.
     if (ran) held_ = false;
@@ -113,11 +138,21 @@ void SpeechFocus::removeDone(uint64_t now, bool ran) {
 SpeechFocus::Tick SpeechFocus::tick(uint64_t now) {
     const bool busy = prompt_started_ || port_.queuedBytes() > 0;
     if (busy) last_busy_ms_ = now;
+    const uint32_t writes = port_.endpointWrites();
+    if (writes != writes_seen_) {   // also the counter reset by a successful open
+        writes_seen_ = writes;
+        progress_ms_ = now;
+        if (endpoint_) live_ = true;
+    }
     Tick t;
     t.action = policy_.decide(now, busy, last_busy_ms_);
     t.waited_ms = now - build_ms_;
     t.idle_ms = now - last_busy_ms_;
     t.rebuild = NULL;
+    t.stalled = false;
+    t.stall_ms = 0;
+    t.dropped = 0;
+    t.closed = false;
     if (t.action == NavPromptPolicy::GRANT_TIMEOUT) {
         port_.flush();
         release(now);
@@ -127,11 +162,27 @@ SpeechFocus::Tick SpeechFocus::tick(uint64_t now) {
     } else if (t.action == NavPromptPolicy::RELEASE_TIMEOUT) {
         policy_.released();
     }
+    // The endpoint should be taking buffers: with a focus once it is granted, without one from the prompt start.
+    const bool feeding = !uses_focus_ || policy_.state() == NavPromptPolicy::ROUTED;
+    const NavPromptPolicy::Config& cfg = policy_.config();
+    const uint64_t limit = (uint64_t)cfg.stall_ms + (live_ ? 0u : cfg.open_ms);   // an open may block up to open_ms
+    if (endpoint_ && busy && feeding && now - progress_ms_ > limit) {
+        t.stalled = true;
+        t.stall_ms = now - progress_ms_;
+        t.dropped = port_.queuedBytes();
+        stalled_ = true;
+        port_.flush();
+        release(now);
+        closeEndpoint();
+    }
     if (waiting_ && policy_.state() == NavPromptPolicy::IDLE) {
         waiting_ = false;
         if (busy && policy_.tryBuild(now)) t.rebuild = queueBuild(now);
         else port_.flush();
     }
+    // Prompt over and the focus given back (or none in use): free the endpoint for the car's own prompts.
+    if (!busy && !waiting_ && policy_.state() == NavPromptPolicy::IDLE && now - last_busy_ms_ > cfg.hold_ms)
+        t.closed = closeEndpoint();
     syncBusy(now);
     return t;
 }
@@ -139,9 +190,11 @@ SpeechFocus::Tick SpeechFocus::tick(uint64_t now) {
 bool SpeechFocus::sessionEnded(uint64_t now) {
     prompt_started_ = false;
     waiting_ = false;
+    stalled_ = false;
     bool releasing = release(now);
     if (!releasing && held_) releasing = queueRemove();   // an earlier remove may have been cancelled
     port_.flush();
+    closeEndpoint();
     policy_.clearBackoff();
     syncBusy(now);
     return releasing;

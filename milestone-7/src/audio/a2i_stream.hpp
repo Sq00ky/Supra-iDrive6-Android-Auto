@@ -45,9 +45,11 @@ public:
 
     bool open(const A2IStreamConfig& cfg);
     // Spawns the worker (prime -> Start -> feed loop). If feed is false the
-    // worker only writes silence; write() still queues.
-    bool start(bool feed);
+    // worker only writes silence; write() still queues. keep_queued: PCM queued
+    // while the stream was closed plays first (default: dropped).
+    bool start(bool feed, bool keep_queued = false);
     void setFeedEnabled(bool feed) { feed_ = feed; }
+    bool feedEnabled() const { return feed_; }
     void flush() { ring_.clear(); }   // drop queued PCM (pause / stream stop)
     void stop();                      // join + Close (safe to call repeatedly)
 
@@ -58,6 +60,7 @@ public:
     bool isOpen() const { return handle_ != NULL; }
     bool isRunning() const { return running_; }
     const char* endpoint() const { return used_endpoint_; }
+    uint32_t cookie() const { return used_cookie_; }
     uint32_t sampleRate() const { return cfg_.sample_rate; }
     uint32_t channels() const { return cfg_.channels; }
     uint32_t bufferSize() const { return cfg_.buffer_size; }
