@@ -61,7 +61,13 @@ int main() {
         for (size_t i = 1; i + 1 < drive.size(); ++i) {
             assert(viewFromMessages(drive[i].m, v));
             if (v.aa_unit == 6) { feet = true; assert(kombiUnit(6) == 0x05); }
-            if (v.aa_type == 35) { ra = true; assert(v.has_exit_angle && v.exit_angle == 90 && kombiDirection(35) == 15); }
+            if (v.aa_type == 35) {
+                ra = true;
+                assert(v.has_exit_angle && v.exit_angle == 90 && kombiDirection(35) == 15);
+                assert(v.has_exit_number && v.exit_number == 2);   // the helper's maneuver field 2
+            } else {
+                assert(!v.has_exit_number);
+            }
         }
         assert(feet && ra);
     }
@@ -124,19 +130,36 @@ int main() {
     {
         NavMessages m = msgs(navState(7, "TEST ST"), curPos(800, "0.5", 5, 53));   // step first, then its position
         NavView v;
-        assert(m.pos_seq == 1 && viewFromMessages(m, v) && v.pos_seq == 1 && v.step_pos_seq == 0);
+        assert(m.pos_seq == 1 && viewFromMessages(m, v) && v.pos_seq == 1 && v.step_pos_seq == 0 && v.step_seq == 1);
         Bytes st = navState(8, "MAIN ST"), cp = curPos(20, "60", 6, 1);
         m.store(0x8007, &cp[0], cp.size());
         m.store(0x8006, &st[0], st.size());           // the next step, still with the old step's position
-        assert(viewFromMessages(m, v) && v.aa_type == 8 && v.pos_seq == 2 && v.step_pos_seq == 2);
+        assert(viewFromMessages(m, v) && v.aa_type == 8 && v.pos_seq == 2 && v.step_pos_seq == 2 && v.step_seq == 2);
         m.store(0x8006, &st[0], st.size());           // the same step again: not a change
         cp = curPos(1500, "0.9", 5, 95);
         m.store(0x8007, &cp[0], cp.size());
         assert(viewFromMessages(m, v) && v.pos_seq == 3 && v.step_pos_seq == 2 && v.step_s == 95);
         m.store(0x8006, &st[0], st.size());
-        assert(viewFromMessages(m, v) && v.step_pos_seq == 2);
+        assert(viewFromMessages(m, v) && v.step_pos_seq == 2 && v.step_seq == 2);
         m.clear();
-        assert(m.pos_seq == 0 && m.step_pos_seq == 0);
+        assert(m.pos_seq == 0 && m.step_pos_seq == 0 && m.step_seq == 0);
+    }
+    // a roundabout's exit number: legacy field 5 (and 6, its angle); the maneuver is a different one when it changes
+    {
+        NavMessages m;
+        Bytes s = status(1), ev;
+        m.store(0x8003, &s[0], s.size());
+        fStr(ev, 1, "RING RD"); fInt(ev, 2, 2); fInt(ev, 3, 13); fInt(ev, 5, 3); fInt(ev, 6, 270);
+        m.store(0x8004, &ev[0], ev.size());
+        NavView v, w;
+        assert(viewFromMessages(m, v) && v.has_exit_number && v.exit_number == 3);
+        assert(v.has_exit_angle && v.exit_angle == 270);
+        w = v;
+        assert(w.sameManeuver(v));
+        w.exit_number = 4;
+        assert(!w.sameManeuver(v));
+        w.has_exit_number = false;
+        assert(!w.sameManeuver(v));
     }
     // 0x8006 wins over 0x8004; a step without its 0x8007 has no distance yet
     {

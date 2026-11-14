@@ -52,9 +52,14 @@ struct Settings {
     double lane_feed_s;    // the position update the KOMBI checks lanes against: at most this often
     int inplace;           // next maneuver / lane change on a shown route: 1 = in-place maneuver-0 update (default),
                            // 2 = the same without the 0x07 guiding model, 0 = full graph (NBT_KOMBI_NAV_INPLACE)
+    bool junction;         // 6WA: a junction view (roads and route) in place of the arrow near a maneuver
+                           // (NBT_HUD_JUNCTION=0 turns it off)
+    double near_m;         // 6WA: the junction view comes in at the main prompt (kApproachTime), or this close
+    bool hud_lanes;        // 6WA: the phone's lanes in their own layer (NBT_HUD_LANES=1; off until their place is known)
     Settings() : approach(kApproachTime), warn_s(50), main_s(20), mway_warn_m(2000), mway_main_m(1000),
                  approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
-                 min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1) {}
+                 min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1),
+                 junction(true), near_m(300), hud_lanes(false) {}
 };
 
 typedef void (*LogFn)(const char* line, void* user);

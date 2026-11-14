@@ -52,18 +52,18 @@ const char* submitResultName(SubmitResult r) {
 Core::Core(const Config& cfg)
     : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), routeOn_(false),
       frameOff_(false),
-      lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
+      lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
 }
 
 void Core::dropWork(uint32_t now) {
-    stats_.batchesDropped += (haveCurrent_ ? 1 : 0) + (havePending_ ? 1 : 0);
-    if (haveCurrent_ || havePending_) ++epoch_;
-    haveCurrent_ = havePending_ = false;
+    stats_.batchesDropped += (haveCurrent_ ? 1 : 0) + (uint32_t)pending_.size();
+    if (haveCurrent_ || !pending_.empty()) ++epoch_;
+    haveCurrent_ = false;
     current_ = Batch();
-    pending_ = Batch();
+    pending_.clear();
     nextCall_ = 0;
     for (size_t i = 0; i < inFlight_.size(); ++i) {
         InFlight f = inFlight_[i];
@@ -175,33 +175,49 @@ SubmitResult Core::submit(const Batch& b, uint32_t) {
         batchStartMs_ = 0;
         return kQueued;
     }
-    if (!havePending_) {
+    if (b.slot == kSlotAll) {                         // a clear: nothing waiting is wanted any more
+        bool any = !pending_.empty();
         ++stats_.batches;
-        pending_ = b;
-        havePending_ = true;
+        if (any) ++stats_.replaced;
+        pending_.clear();
+        pending_.push_back(b);
+        return any ? kReplaced : kQueued;
+    }
+    size_t k = 0;
+    while (k < pending_.size() && pending_[k].slot != b.slot) ++k;
+    if (k == pending_.size()) {
+        ++stats_.batches;
+        pending_.push_back(b);
         return kQueued;
     }
-    if (b.full) {
+    if (b.full) {                                     // to the back: what it is drawn on goes out first
         ++stats_.batches;
         ++stats_.replaced;
-        pending_ = b;
+        pending_.erase(pending_.begin() + k);
+        pending_.push_back(b);
         return kReplaced;
     }
-    if (!merge(b)) {
+    if (!merge(pending_[k], b)) {
         ++stats_.refused;
         printf("[HudTerm] batch '%s' refused: merged into '%s' it would be over %u calls\n", b.label.c_str(),
-               pending_.label.c_str(), cfg_.maxBatch);
+               pending_[k].label.c_str(), cfg_.maxBatch);
         return kRefused;
     }
     ++stats_.merged;
     return kMerged;
 }
 
-// A partial batch into the waiting one: a text for a handle it already sets replaces that payload where it stands
-// (the newest text wins, in the waiting batch's order), anything else is appended. Nothing changes if the result would
-// be too long.
-bool Core::merge(const Batch& b) {
-    Batch m = pending_;
+bool Core::waiting(int slot) const {
+    for (size_t i = 0; i < pending_.size(); ++i)
+        if (pending_[i].slot == slot || pending_[i].slot == kSlotAll) return true;
+    return false;
+}
+
+// A partial batch into its slot's waiting one: a text for a handle it already sets replaces that payload where it
+// stands (the newest text wins, in the waiting batch's order), anything else is appended. Nothing changes if the result
+// would be too long.
+bool Core::merge(Batch& into, const Batch& b) {
+    Batch m = into;
     for (size_t i = 0; i < b.calls.size(); ++i) {
         const Call& c = b.calls[i];
         size_t k = 0;
@@ -213,7 +229,7 @@ bool Core::merge(const Batch& b) {
         else m.calls.push_back(c);
     }
     if (m.calls.size() > cfg_.maxBatch) return false;
-    pending_ = m;
+    into = m;
     return true;
 }
 
@@ -247,13 +263,12 @@ void Core::finishIfDone(uint32_t now) {
         printf("[HudTerm] batch '%s': %u calls answered in %u ms\n", current_.label.c_str(),
                (unsigned)current_.calls.size(), now - batchStartMs_);
     haveCurrent_ = false;
-    if (!havePending_) {
+    if (pending_.empty()) {
         current_ = Batch();
         return;
     }
-    current_ = pending_;
-    pending_ = Batch();
-    havePending_ = false;
+    current_ = pending_.front();
+    pending_.erase(pending_.begin());
     haveCurrent_ = true;
     nextCall_ = 0;
 }
@@ -470,9 +485,9 @@ uint32_t HudTerminal::epoch() const {
     return e;
 }
 
-bool HudTerminal::waiting() const {
+bool HudTerminal::waiting(int slot) const {
     pthread_mutex_lock(&lock_);
-    bool w = core_.waiting();
+    bool w = core_.waiting(slot);
     pthread_mutex_unlock(&lock_);
     return w;
 }
