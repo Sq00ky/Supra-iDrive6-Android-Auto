@@ -50,6 +50,7 @@ private:
     static void grantedThunk(void* self);   // audioconn worker thread
     bool requestSource();
     void releaseSource();
+    void removeSource();   // the audioconn remove of releaseSource()
     void describe(char* out, size_t n);
     void snapshot(bool listening);
 

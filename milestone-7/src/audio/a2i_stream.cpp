@@ -167,7 +167,7 @@ void A2IPlaybackStream::stop() {
 }
 
 void A2IPlaybackStream::write(const uint8_t* pcm, size_t len) {
-    if (!pcm || len == 0 || !feed_) return;
+    if (!pcm || len == 0) return;
     ring_.write(pcm, len);
 }
 

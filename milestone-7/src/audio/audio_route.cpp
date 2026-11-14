@@ -20,12 +20,13 @@ struct RouteJob {
     AudioRoute::GrantedFn onGranted;   // build requests: called once audioconn exits 0
     void* user;
     AudioRoute::GrantedFn onDone;      // remove requests: called when the worker is finished (any outcome)
+    AudioRoute::RemovedFn onRemoved;   // the same, with whether audioconn ran
     void* doneUser;
     AudioRoute* owner;  // for cancellation (generation check)
     unsigned gen;       // owner's generation when the job was queued
     bool isBuild;       // holds the owner's single-flight build slot
-    RouteJob() : retries(0), delayMs(0), maxLines(20), onGranted(0), user(0), onDone(0), doneUser(0), owner(0), gen(0),
-                 isBuild(false) {}
+    RouteJob() : retries(0), delayMs(0), maxLines(20), onGranted(0), user(0), onDone(0), onRemoved(0), doneUser(0),
+                 owner(0), gen(0), isBuild(false) {}
 };
 
 // At most one audioconn process daemon-wide. A tester's head unit rebooted 5 times (v1.8.35 log 2026-10-29): the
@@ -168,6 +169,7 @@ void* routeWorker(void* arg) {
     }
     if (job->isBuild && job->owner) job->owner->buildFinished(job->gen);
     if (job->onDone) job->onDone(job->doneUser);
+    if (job->onRemoved) job->onRemoved(job->doneUser, status >= 0);   // -2 not run, -1 could not start
     delete job;
     return NULL;
 }
@@ -223,7 +225,8 @@ bool AudioRoute::configure() {
     return true;
 }
 
-bool AudioRoute::run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn onGranted, void* user, int delayMs) {
+bool AudioRoute::run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn onGranted, void* user, int delayMs,
+                     RemovedFn onRemoved, bool retry) {
     if (path_.empty() || a == 0) return false;
 
     char arg[96];
@@ -235,7 +238,7 @@ bool AudioRoute::run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn o
 
     RouteJob* job = new RouteJob();
     job->command = path_ + arg + suffix_ + " 2>&1";
-    job->retries = (op == 'b') ? buildRetries() : 0;
+    job->retries = (op == 'b' && retry) ? buildRetries() : 0;
     job->delayMs = delayMs > 0 ? delayMs : 0;
     job->owner = this;
     if (op == 'b') {
@@ -261,7 +264,8 @@ bool AudioRoute::run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn o
         if (!spawn(job)) { if (owns) buildFinished(g); return false; }
         return true;
     }
-    job->onDone = onGranted;   // remove: completion callback (see remove())
+    job->onDone = onGranted;   // remove: completion callbacks (see remove(), removeFocus())
+    job->onRemoved = onRemoved;
     job->doneUser = user;
     pthread_mutex_lock(&lock_);
     job->gen = gen_;
@@ -306,9 +310,11 @@ bool AudioRoute::build(uint32_t conn_id, GrantedFn cb, void* user, int delayMs) 
 bool AudioRoute::remove(uint32_t conn_id, GrantedFn onDone, void* user) {
     return run('r', conn_id, 0, false, onDone, user, 0);
 }
-bool AudioRoute::buildFocus(uint32_t src, uint32_t sink, GrantedFn cb, void* user, int delayMs) {
-    return run('b', src, sink, true, cb, user, delayMs);
+bool AudioRoute::buildFocus(uint32_t src, uint32_t sink, GrantedFn cb, void* user, int delayMs, bool retry) {
+    return run('b', src, sink, true, cb, user, delayMs, 0, retry);
 }
-bool AudioRoute::removeFocus(uint32_t src, uint32_t sink) { return run('r', src, sink, true, 0, 0, 0); }
+bool AudioRoute::removeFocus(uint32_t src, uint32_t sink, RemovedFn onDone, void* user) {
+    return run('r', src, sink, true, 0, user, 0, onDone);
+}
 
 } // namespace nbt

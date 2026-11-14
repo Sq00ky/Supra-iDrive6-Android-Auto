@@ -79,10 +79,22 @@ BrowserConfig readBrowserConfig() {
     // ran dry (0x800b).
     c.defer_acks = envFlag("NBT_AA_DEFER_ACKS") != 0;
     c.underflow_reports = envFlag("NBT_AA_UNDERFLOW_REPORT") != 0;
+    c.speech = readSpeechConfig();
     return c;
 }
 
-SpeechConfig::SpeechConfig() : enabled(false), endpoint(NULL), src(0), sink(0x1) {}
+SpeechConfig::SpeechConfig() : enabled(false), endpoint(NULL), src(0), sink(0x1), hold_ms(500) {}
+
+SpeechConfig readSpeechConfig() {
+    SpeechConfig c;
+    const char* e = getenv("NBT_SPEECH");
+    c.enabled = e && strcmp(e, "1") == 0;
+    c.endpoint = getenv("NBT_SPEECH_EP");
+    c.src = (uint32_t)envHex("NBT_SPEECH_SRC", 0);
+    c.sink = (uint32_t)envHex("NBT_SPEECH_SINK", 0x1);
+    c.hold_ms = (int)envRange("NBT_SPEECH_HOLD_MS", 500, 0, 5000);
+    return c;
+}
 
 BtConfig::BtConfig()
     : src(0x3a), sink(0x1), conn(0xc7), route_delay_ms(1500), refocus(true), release(false), sdr_drop("9") {}
@@ -110,13 +122,7 @@ BtConfig readBtConfig() {
     c.refocus = envFlag("NBT_BT_REFOCUS") != 0;   // unset stays on
     c.release = getenv("NBT_BT_RELEASE") && strcmp(getenv("NBT_BT_RELEASE"), "1") == 0;
     c.sdr_drop = getenv("NBT_SDR_DROP") ? getenv("NBT_SDR_DROP") : "9";
-    {
-        const char* e = getenv("NBT_SPEECH");
-        c.speech.enabled = e && strcmp(e, "1") == 0;
-    }
-    c.speech.endpoint = getenv("NBT_SPEECH_EP");
-    c.speech.src = (uint32_t)envHex("NBT_SPEECH_SRC", 0);
-    c.speech.sink = (uint32_t)envHex("NBT_SPEECH_SINK", 0x1);
+    c.speech = readSpeechConfig();
     return c;
 }
 

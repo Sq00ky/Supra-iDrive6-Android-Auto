@@ -54,10 +54,14 @@ public:
     // audioconn at all).
     bool build(uint32_t conn_id, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0);
     // onDone(user) runs on the worker thread once the remove is over, whatever its outcome (also when it was
-    // cancelled or found no free audioconn slot). Not called when remove() returns false.
+    // cancelled or found no free audioconn slot). Not called when remove() / removeFocus() returns false.
     bool remove(uint32_t conn_id, GrantedFn onDone = 0, void* user = 0);
-    bool buildFocus(uint32_t src, uint32_t sink, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0);
-    bool removeFocus(uint32_t src, uint32_t sink);
+    // retry = false: one attempt only, no NBT_AUDIOCONN_RETRIES.
+    bool buildFocus(uint32_t src, uint32_t sink, GrantedFn onGranted = 0, void* user = 0, int delayMs = 0,
+                    bool retry = true);
+    // ran = audioconn ran (any exit status); false = cancelled, no free slot, or it could not be started.
+    typedef void (*RemovedFn)(void* user, bool ran);
+    bool removeFocus(uint32_t src, uint32_t sink, RemovedFn onDone = 0, void* user = 0);
     // Read-only `audioconn -l` after delayMs, logged as "[AudioRoute]   | ..." (40 lines max).
     bool listConnections(const char* tag, int delayMs);
 
@@ -70,7 +74,8 @@ public:
     void buildFinished(unsigned gen);
 
 private:
-    bool run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn onGranted, void* user, int delayMs);
+    bool run(char op, uint32_t a, uint32_t b, bool two_args, GrantedFn onGranted, void* user, int delayMs,
+             RemovedFn onRemoved = 0, bool retry = true);
     bool spawn(void* job);
 
     std::string path_;

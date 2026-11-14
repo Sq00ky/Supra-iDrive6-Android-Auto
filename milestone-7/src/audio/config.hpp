@@ -74,6 +74,16 @@ inline bool browserAudioEnabled() {
     return audioMode() == AUDIO_MODE_BROWSER;
 }
 
+// NBT_SPEECH (both audio modes, speech_out.hpp).
+struct SpeechConfig {
+    bool enabled;               // NBT_SPEECH=1
+    const char* endpoint;       // NBT_SPEECH_EP (NULL / empty = the factory alternate nav endpoint)
+    uint32_t src;               // NBT_SPEECH_SRC (0 = no audioconn request)
+    uint32_t sink;              // NBT_SPEECH_SINK (0x1)
+    int hold_ms;                // NBT_SPEECH_HOLD_MS (500, 0..5000)
+    SpeechConfig();
+};
+
 // Browser audio mode (browser_audio.hpp has what each setting does).
 struct BrowserConfig {
     uint32_t conn;              // NBT_BROWSER_CONN: connection id (0xb8; 0 = do not route, just play)
@@ -103,18 +113,11 @@ struct BrowserConfig {
     int system_gain_db;         // NBT_SYSTEM_GAIN_DB (0)
     bool defer_acks;            // NBT_AA_DEFER_ACKS: ack AA audio once played (on)
     bool underflow_reports;     // NBT_AA_UNDERFLOW_REPORT: AudioUnderflowNotification to the phone (on)
+    SpeechConfig speech;
     BrowserConfig();            // the defaults
 };
 BrowserConfig readBrowserConfig();
-
-// NBT_SPEECH (Bluetooth mode only, speech_out.hpp).
-struct SpeechConfig {
-    bool enabled;               // NBT_SPEECH=1
-    const char* endpoint;       // NBT_SPEECH_EP (NULL / empty = the factory alternate nav endpoint)
-    uint32_t src;               // NBT_SPEECH_SRC (0 = no audioconn request)
-    uint32_t sink;              // NBT_SPEECH_SINK (0x1)
-    SpeechConfig();
-};
+SpeechConfig readSpeechConfig();
 
 // Bluetooth audio mode (bt_audio.hpp).
 struct BtConfig {
