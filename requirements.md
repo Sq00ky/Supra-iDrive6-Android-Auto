@@ -48,6 +48,7 @@ The following versions have been tested and confirmed working:
 |NBTevo_N18092I|BMW 3 Series|F30|2018|
 |NBTevo_K170521|MINI Clubman|F54|2017|
 |NBTevo_M173451|BMW 4 Series|F36|2016 [ID5->ID6]|
+|NBTevo_X20511|BMW i3 LCI|i01|2021|
 
 ### Confirmed Non Compatible Versions
 **If you have tested a version and confirmed that it is NOT working, please submit a PR on this file!**
