@@ -27,6 +27,7 @@ static double monoS() {
 }
 
 #include "fake_kombi.hpp"
+#include "nbt_env.hpp"   // navAnyDistanceWanted (the "Show directions at any distance" precedence)
 
 // ---- harness -------------------------------------------------------------------------------------------------------
 struct TestLink {
@@ -403,6 +404,54 @@ static void testTimeApproach() {
 }
 
 int main() {
+    // "Disable logging": env wins, then the checkbox
+    assert(nbt::noLogWanted(NULL, false) == false);
+    assert(nbt::noLogWanted(NULL, true)  == true);
+    assert(nbt::noLogWanted("0", true)   == false);
+    assert(nbt::noLogWanted("1", false)  == true);
+    // nav settings: NBT_KOMBI_NAV_APPROACH / _APPROACH_MI each decide alone; the checkbox only when both are unset
+    assert(nbt::navAnyDistanceWanted(NULL, NULL, false) == false);
+    assert(nbt::navAnyDistanceWanted(NULL, NULL, true)  == true);
+    assert(nbt::navAnyDistanceWanted("distance", NULL, true) == false);   // env wins
+    assert(nbt::navAnyDistanceWanted(NULL, "2.5", true)      == false);   // ditto
+    assert(nbt::navAnyDistanceWanted("", "", true)           == true);    // empty = unset
+
+    // LD_PRELOAD is stripped for children unless the setting is explicitly turned off.
+    {
+        const char* old = getenv("NBT_CHILD_NO_PRELOAD");
+        unsetenv("NBT_CHILD_NO_PRELOAD");
+        assert(nbt::childNoPreload() == true);            // unset = on
+        setenv("NBT_CHILD_NO_PRELOAD", "", 1);
+        assert(nbt::childNoPreload() == true);            // empty = on
+        setenv("NBT_CHILD_NO_PRELOAD", "0", 1);
+        assert(nbt::childNoPreload() == false);           // explicit off
+        setenv("NBT_CHILD_NO_PRELOAD", "off", 1);
+        assert(nbt::childNoPreload() == false);
+        setenv("NBT_CHILD_NO_PRELOAD", "1", 1);
+        assert(nbt::childNoPreload() == true);
+        if (old) setenv("NBT_CHILD_NO_PRELOAD", old, 1); else unsetenv("NBT_CHILD_NO_PRELOAD");
+    }
+
+    // "Android Auto over USB" closes the wireless path: with NBT_USB set there is no Bluetooth advert and no TCP accept.
+    {
+        const char* oldUsb = getenv("NBT_USB");
+        const char* oldWl = getenv("NBT_WIRELESS");
+        unsetenv("NBT_USB");
+        unsetenv("NBT_WIRELESS");
+        assert(nbt::wirelessEnabledForTransport() == true);      // no USB: wireless as before
+        setenv("NBT_USB", "1", 1);
+        assert(nbt::wirelessEnabledForTransport() == false);     // USB selected: Wi-Fi is not offered
+        setenv("NBT_USB", "0", 1);
+        assert(nbt::wirelessEnabledForTransport() == true);
+        setenv("NBT_WIRELESS", "0", 1);
+        assert(nbt::wirelessEnabledForTransport() == false);     // NBT_WIRELESS=0 still wins
+        // every switch in nbt-aad.env parses the same way
+        assert(nbt::usbSettingOn("1", false) == true);
+        assert(nbt::usbSettingOn("0", true) == false);           // env forces it off
+        assert(nbt::usbSettingOn(NULL, true) == true);           // flag file, no env
+        if (oldUsb) setenv("NBT_USB", oldUsb, 1); else unsetenv("NBT_USB");
+        if (oldWl) setenv("NBT_WIRELESS", oldWl, 1); else unsetenv("NBT_WIRELESS");
+    }
     // in-place (default on the car): the first maneuver is the full graph; each next maneuver is the template's own
     // maneuver-0 update block (no route-start state 1), patched; a guidance gap (reroute) gets the full graph again;
     // a gap that comes back on the same maneuver doesn't; mode 2 leaves out the 0x07 guiding model

@@ -24,6 +24,15 @@ inline int envFlag(const char* name) {
     return -1;
 }
 
+// Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
+// the HMI. Each of them was loading a graphics stack it never uses (`ldd:FATAL: Could not preload library
+// libEGL_X.gpp.so` from audioconn, `unknown symbol: kdMain` on every LayerManagerControl run). Stripping LD_PRELOAD
+// for children is the default since v1.9.69: unset means strip. NBT_CHILD_NO_PRELOAD=0 / off / no keeps it, which is
+// only useful when a child is being debugged and needs the HMI's preloads.
+inline bool childNoPreload() {
+    return envFlag("NBT_CHILD_NO_PRELOAD") != 0;   // unset stays on
+}
+
 // HU-hosted wireless (Bluetooth RFCOMM -> Wi-Fi credentials -> TCP accept) is the default since
 // v1.4.2 (car-verified). NBT_WIRELESS=0 / off / no restores the legacy outbound phone scanner.
 inline bool wirelessEnabled() {
@@ -101,6 +110,11 @@ inline bool usbSettingOn(const char* env, bool flagFile) {
 }
 inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
 inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
+
+// With "Android Auto over USB" selected the wireless path is not offered at all: no Bluetooth SDP advert, no Wi-Fi
+// credentials and the session starter refuses a TCP connection. Without this the phone is offered wireless Android Auto
+// first and connects over Wi-Fi instead of the cable, which is the one thing USB mode is meant to avoid.
+inline bool wirelessEnabledForTransport() { return wirelessEnabled() && !usbEnabled(); }
 
 // "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag file kPhoneGpsFlagFile, a hand-made kPhoneGpsManualFile
 // also counts; NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna,
@@ -183,6 +197,26 @@ inline long envRange(const char* name, long def, long lo, long hi) {
         if (end && end != e) v = x;
     }
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// "Show directions at any distance" (Settings checkbox -> flag file): show the next maneuver at once instead of
+// inside the last mile or the last few seconds. Either env var decides on its own and beats the checkbox. Pure so
+// tests/test_kombi_nav.cpp covers the precedence.
+static const char* const kNavAnyDistFlagFile   = "/var/opt/aa/kombi-nav-anydist";
+static const char* const kNavAnyDistManualFile = "/opt/aa/kombi-nav-anydist";
+inline bool navAnyDistanceWanted(const char* envApproach, const char* envMi, bool flag) {
+    if (envApproach && *envApproach) return false;    // NBT_KOMBI_NAV_APPROACH=... decides
+    if (envMi && *envMi) return false;                // NBT_KOMBI_NAV_APPROACH_MI=... decides
+    return flag;
+}
+
+// "Disable logging (performance test)": silence both sides. NBT_NO_LOG wins over the checkbox, as with every
+// other setting. Pure so the host tests cover the precedence.
+static const char* const kNoLogFlagFile   = "/var/opt/aa/no-log";
+static const char* const kNoLogManualFile = "/opt/aa/no-log";
+inline bool noLogWanted(const char* envValue, bool flag) {
+    if (envValue && *envValue) return envValue[0] != '0';
+    return flag;
 }
 
 } // namespace nbt

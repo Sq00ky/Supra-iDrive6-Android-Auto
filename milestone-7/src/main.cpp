@@ -1265,6 +1265,15 @@ static nbt::Transport sessionOwner(void*) {
 static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t) {
     pthread_mutex_lock(&g_connectMutex);
     nbt::Transport cur = g_owner.get();
+    // "Android Auto over USB" closes the wireless path: the Bluetooth advert is off and this refuses the TCP
+    // connection, so a phone that was paired for Wi-Fi cannot take the session instead of the cable.
+    if (t == nbt::kTransportTcp && nbt::usbEnabled()) {
+        printf("[Main] [%9.3f] refusing the wireless connection on fd %d: Android Auto over USB is selected "
+               "(untick it to use Wi-Fi)\n", upSec(), client_fd);
+        close(client_fd);
+        pthread_mutex_unlock(&g_connectMutex);
+        return;
+    }
     if (!nbt::mayStart(cur, t)) {
         printf("[Main] [%9.3f] %s Android Auto session running: refusing the %s connection on fd %d\n", upSec(),
                nbt::transportName(cur), nbt::transportName(t), client_fd);
@@ -1720,7 +1729,11 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.57-cpcompat"
+#define NBT_AAD_BUILD "v1.9.76-navsettings"
+
+// Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
+// keep the prefix exact.
+extern "C" __attribute__((used)) const char kNbtAadVersionTag[] = "NBT-AAD-VERSION=" NBT_AAD_BUILD;
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
@@ -1738,7 +1751,8 @@ static bool g_ramLog = false;      // stdout is the RAM log now
 static bool g_ramUsed = false;     // the RAM log was opened this run (later opens append)
 static bool g_ramFull = false;     // cap reached: no more RAM logging this run
 
-static bool ramLogWanted() { return nbt::envFlag("NBT_RAM_LOG") != 0 && !g_ramFull; }
+static bool g_noLog = false;   // "Disable logging (performance test)": every sink off, stdout to /dev/null
+static bool ramLogWanted() { return !g_noLog && nbt::envFlag("NBT_RAM_LOG") != 0 && !g_ramFull; }
 
 static bool stdoutIsNull() {
     struct stat a, b;
@@ -1784,7 +1798,7 @@ static void printHuVersion() {
 
 static void serviceUsbLog(bool atStart) {
     if (g_logForced) return;
-    const bool on = nbt::usblog::enabled();
+    const bool on = !g_noLog && nbt::usblog::enabled();
     if (g_usbLogPath[0]) {
         char dir[192];
         snprintf(dir, sizeof(dir), "%s", g_usbLogPath);
@@ -1818,6 +1832,14 @@ static void serviceUsbLog(bool atStart) {
 }
 
 int main(int argc, char* argv[]) {
+    // "Disable logging (performance test)": set before the log redirection below, so the printf traces too cost
+    // only a write to /dev/null. Not on the one-shot --pf-* / --license paths: the app reads their output.
+    if (argc <= 1) {
+        g_noLog = nbt::noLogWanted(getenv("NBT_NO_LOG"),
+                                   access(nbt::kNoLogFlagFile, F_OK) == 0 ||
+                                   access(nbt::kNoLogManualFile, F_OK) == 0);
+        if (g_noLog) stdoutToNull();
+    }
     // pf_aa built in (src/pf_aa_embed.cpp): nbt-aad --pf-install | --pf-check | --pf-uninstall [--pf/--env/--backup f].
     // Before any of the daemon's start-up (log redirection, control port), so it never starts a second daemon.
     if (argc > 1 && !strncmp(argv[1], "--pf-", 5)) {
@@ -1858,14 +1880,15 @@ int main(int argc, char* argv[]) {
     // Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
     // the HMI. The bootloop log showed `ldd:FATAL: Could not preload library libEGL_X.gpp.so` from audioconn and
     // every LayerManagerControl run prints `unknown symbol: kdMain referenced from libKD.so.1`, i.e. each child loads
-    // the graphics stack it does not use. NBT_CHILD_NO_PRELOAD=1 (experiment, not car-verified) removes LD_PRELOAD
-    // for all children; the daemon itself is already loaded and keeps its libraries.
+    // the graphics stack it does not use. LD_PRELOAD is removed for all children by default since v1.9.69
+    // (nbt_env.hpp childNoPreload); NBT_CHILD_NO_PRELOAD=0 keeps it. The daemon itself is already loaded and keeps
+    // its libraries either way.
     {
         const char* pre = getenv("LD_PRELOAD");
-        const char* np = getenv("NBT_CHILD_NO_PRELOAD");
-        bool strip = np && np[0] == '1';
+        const bool strip = nbt::childNoPreload();
         printf("[Main] LD_PRELOAD=%s%s\n", pre ? pre : "(unset)",
-               pre && strip ? " -> removed for child processes (NBT_CHILD_NO_PRELOAD=1)" : "");
+               !pre ? "" : strip ? " -> removed for child processes (default; NBT_CHILD_NO_PRELOAD=0 keeps it)"
+                                 : " -> kept for child processes (NBT_CHILD_NO_PRELOAD=0)");
         if (pre && strip) unsetenv("LD_PRELOAD");
     }
 
@@ -2030,8 +2053,8 @@ int main(int argc, char* argv[]) {
 
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
-    if (nbt::wirelessEnabled()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
-    if (nbt::wirelessEnabled() && bluetooth.init()) {
+    if (nbt::wirelessEnabledForTransport()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
+    if (nbt::wirelessEnabledForTransport() && bluetooth.init()) {
         if (bluetooth.registerAndroidAutoSdp()) g_btMgr = &bluetooth;
     }
 
@@ -2088,14 +2111,15 @@ int main(int argc, char* argv[]) {
     if (!g_most.start("NBTAAD_MOST"))
         printf("[Main] MOST client failed to start: knob/keys, car GPS, car speed and parking brake disabled.\n");
 
-    if (nbt::wirelessEnabled()) {
+    if (nbt::wirelessEnabledForTransport()) {
         pthread_t wt;
         if (pthread_create(&wt, NULL, &wirelessThread, NULL) == 0) {
             pthread_detach(wt);
             printf("[Main] Wireless bring-up thread started (port %u)\n", (unsigned)g_aaPort);
         }
     } else {
-        printf("[Main] Wireless off (NBT_WIRELESS=0): outbound phone scanner mode.\n");
+        printf("[Main] Wireless off (%s): outbound phone scanner mode.\n",
+               nbt::usbEnabled() ? "Android Auto over USB is selected, so Wi-Fi is not offered" : "NBT_WIRELESS=0");
     }
 
     printf("[Main] Daemon running. Press Ctrl+C to terminate.\n");
