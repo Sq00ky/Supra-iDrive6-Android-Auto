@@ -15,6 +15,7 @@
 #include "touch_types.hpp"
 
 namespace nbt {
+namespace navdiag { class Recorder; }
 
 typedef void (*SessionEndedCallback)(void* user_data);
 typedef void (*VideoFrameCallback)(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data);
@@ -223,6 +224,7 @@ private:
     // Socket ownership: only the session thread closes the fd (at the end of sessionLoop).
     // stop()/start() merely shutdown() it to wake the thread and then join. fd_mutex_ keeps
     // "shutdown(fd)" from racing with the thread releasing that fd number.
+    navdiag::Recorder* nav_diag_; // optional, immutable while the RX thread runs
     int client_fd_;
     int running_;                      // guarded by fd_mutex_; use isRunning()/setRunning()
     pthread_t thread_;

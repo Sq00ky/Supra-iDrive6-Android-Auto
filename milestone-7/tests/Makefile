@@ -74,6 +74,7 @@ SRC_test_most_reassembler  :=
 SRC_test_most_registry     :=
 SRC_test_most_router       :=
 SRC_test_most_trace        := src/most/client.cpp src/most/trace.cpp tests/fake_dsi_client.cpp
+SRC_test_nav_diag          :=
 SRC_test_neutral_resume    :=
 SRC_test_keyframe_ask      :=
 SRC_test_pcm               := src/audio/pcm_ring.cpp src/audio/resampler.cpp $(SPEEX)
