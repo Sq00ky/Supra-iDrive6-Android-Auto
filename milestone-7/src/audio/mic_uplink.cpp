@@ -11,7 +11,7 @@ namespace nbt {
 
 bool micEnabled() {
     if (envFlag("NBT_MIC") == 0) return false;
-    return access("/opt/aa/mic.disable", F_OK) != 0;
+    return access(appFile(kMicDisableName).c_str(), F_OK) != 0;
 }
 
 bool MicUplink::start() {

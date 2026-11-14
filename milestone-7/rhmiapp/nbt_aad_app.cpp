@@ -7,7 +7,7 @@
 // this library, the UI description (NbtAad.xml) and the text/image DBs. The XML declares one entry button; its
 // placement comes from the XML (applicationType="Custom" + insertStateID/insertAfterFocusID, like ActiveSeating),
 // so iDrive itself creates and places the menu row. Pressing it opens our own menu (hmiState 10, pure XML hmiAction):
-//   Start Android Auto  (raAction 21) - launches /opt/aa/nbt-aad, or brings a running one to the front ("show");
+//   Start Android Auto  (raAction 21) - launches nbt-aad, or brings a running one to the front ("show");
 //                                       the row reads "Connecting..." / "Open Android Auto" with the daemon state
 //   Force Stop          (raAction 22) - "quit", then SIGTERM after 3 s, SIGKILL after 10 s
 //   Restart             (raAction 23) - Force Stop, then Start
@@ -29,6 +29,11 @@
 //   PluginApp::addHandler(actionId, Delegate<bool, const Parcel&>{obj, stub})
 // Our app object is a bmw::PluginApp built with the framework's own constructor; it gets its own copy of the
 // PluginApp vtable with onInit/onError/onFinalize replaced (what a C++ subclass would do - we have no BMW headers).
+//
+// Files (rhmiapp-65): src/nbt_paths.hpp. The daemon and the hand-made switches (*.disable, a touched flag) are in the
+// app dir, the checkbox flags and the bootloop guard in the data dir, nbt-aad.env in the conf dir: /opt/aa, /var/opt/aa
+// and /opt/aa on a hand install, the NBTApps agent's folders in a package install. Which one it is, libraryLoaded()
+// decides once, before create() and before any path is read.
 //
 // Logs (rhmiapp-10): slog major 0x4e41 always. Nothing is kept in RAM: with the "Save logs to USB" checkbox on, app
 // lines go to <stick>/nbt-aad-app.log and the daemon writes <stick>/nbt-aad.log itself (src/usb_log.hpp); the
@@ -67,7 +72,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-64-navsettings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-65-paths (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -205,9 +210,7 @@ private:
 
 namespace {
 
-const char* const kDaemon     = "/opt/aa/nbt-aad";
-const char* const kDisable    = "/opt/aa/app.disable";
-const char* const kDaemonEnv  = "/opt/aa/nbt-aad.env";
+const char* const kDisable    = "app.disable";              // in the app dir; the daemon is nbt::daemonPath()
 const char* const kDaemonLog  = "/dev/null";               // the daemon opens its own USB log (usb_log.hpp)
 const unsigned    kEntryAction = 2;          // <entryButton action="2"> / <raAction id="2"/> in NbtAad.xml
 const char* const kGearProperty = "driving.gear";   // CDS property (libhmiremoting.so property table)
@@ -223,7 +226,7 @@ const char* const kDayNightFile     = "/dev/shmem/nbt-aad-daynight";
 const char* const kPdcFile     = "/dev/shmem/nbt-aad-pdc";
 const uint16_t    kDaemonCtlPort = 52790;    // nbt-aad control port (UDP 127.0.0.1)
 const char* const kStateFile   = "/dev/shmem/nbt-aad-state";   // written by nbt-aad: "<idle|connecting|connected> <pid>"
-const char* const kStatusOff   = "/opt/aa/status.disable";      // keep the entry text static
+const char* const kStatusOff   = "status.disable";             // in the app dir: keep the entry text static
 const unsigned    kEntryTextModel = 3;       // <entryButton model="3"> = textIdModel 3 in NbtAad.xml
 const unsigned    kTextDefault    = 1;       // "Android Auto"           (NbtAad_ALL_Texts.zip, make_db.py)
 const unsigned    kTextConnecting = 2;       // "Android Auto: Connecting..."
@@ -274,13 +277,12 @@ const unsigned    kPropWaiting     = 8;       // LABEL_WAITINGANIMATION
 // phone that connects on its own gets Android Auto without opening the menu. The About row (hmiAction 25 -> hmiState
 // 12) is XML only.
 // The flag lives on the persistence partition: /var/opt is /fs/sda1/opt (qnx6, mounted rw at boot by create_sdc.sh,
-// survives reboots; HmiMain3D itself writes /var/opt/hmi/data/ID5/RHMI-Cache there). /opt/aa is usually on the
-// read-only application partition, so it is only READ (a hand-made `touch /opt/aa/autostart` also counts).
+// survives reboots; HmiMain3D itself writes /var/opt/hmi/data/ID5/RHMI-Cache there), in the data dir. /opt/aa is
+// usually on the read-only application partition, so the app dir is only READ (a hand-made `touch /opt/aa/autostart`
+// also counts). The same goes for every checkbox flag below: each constant is the file's name in both dirs.
 const unsigned    kActAutostart    = 24;
 const unsigned    kAutostartModel  = 34;
-const char* const kAutostartDir    = "/var/opt/aa";
-const char* const kAutostartFile   = "/var/opt/aa/autostart";
-const char* const kAutostartManual = "/opt/aa/autostart";
+const char* const kAutostartFlag   = "autostart";
 const long        kAutostartDelayS = 15;
 // About page (hmiState 12): a non-selectable <list> on a Richtext raListModel holding a 1x1 table whose cell is
 // TextID 17. The HMI wraps that text to the screen width and honours "\n" in the text DB. Same pattern as BMW's
@@ -289,31 +291,28 @@ const long        kAutostartDelayS = 15;
 const unsigned    kAboutModel      = 37;
 const unsigned    kAboutText       = 17;
 // "Save logs to USB" checkbox (rhmiapp-10): <checkbox action="26" model="38"> in hmiState 14, flag
-// /var/opt/aa/usblog (nbt::usblog). Off = no log files at all; on = both logs on the first /mnt/umass* stick.
+// usblog (nbt::usblog). Off = no log files at all; on = both logs on the first /mnt/umass* stick.
 const unsigned    kActUsbLog       = 26;
 const unsigned    kUsbLogModel     = 38;
 // "MENU key opens iDrive" checkbox (rhmiapp-14): <checkbox action="27" model="42"> in hmiState 14, flag file read by
 // nbt-aad on every MENU press. Off (default) = MENU opens Android Auto's menu and iDrive is put back on the blank state.
 const unsigned    kActMenuIdrive   = 27;
 const unsigned    kMenuIdriveModel = 42;
-const char* const kMenuIdriveFlag   = "/var/opt/aa/menu-idrive";
-const char* const kMenuIdriveManual = "/opt/aa/menu-idrive";
+const char* const kMenuIdriveFlag   = "menu-idrive";
 // "Show driving mode changes" checkbox (rhmiapp-21): <checkbox action="28" id="69" model="44" textModel="45">, off by
 // default. CDS driving.mode / driving.mode35up ('{"mode":%d}', libhmiremoting CCdsPropertyDrivingMode::onStatus;
 // 15 / 63 = not valid; which one a car publishes depends on its variant) go to the daemon as "drivemode <prop> <n>";
 // with the box ticked the daemon steps aside like in reverse so iDrive's driving-mode popup shows, then comes back.
 const unsigned    kActDriveMode     = 28;
 const unsigned    kDriveModeModel   = 44;
-const char* const kDriveModeFlag    = "/var/opt/aa/show-drivemode";
-const char* const kDriveModeManual  = "/opt/aa/show-drivemode";
+const char* const kDriveModeFlag    = "show-drivemode";
 const char* const kDriveModeProps[2] = { "driving.mode", "driving.mode35up" };
 // "Turn arrows in cluster/HUD" checkbox: <checkbox action="29" id="72" model="46" textModel="47">, off by default.
 // Flag file read by nbt-aad once a second (kombi_nav): when on, Android Auto's turn-by-turn shows in the J29 cluster
 // and HUD.
 const unsigned    kActKombiNav      = 29;
 const unsigned    kKombiNavModel    = 46;
-const char* const kKombiNavFlag     = "/var/opt/aa/kombi-nav";
-const char* const kKombiNavManual   = "/opt/aa/kombi-nav";
+const char* const kKombiNavFlag     = "kombi-nav";
 const long        kUsbLogRecheckS  = 5;   // stick lookup cache: a stick plugged in later is found within 5 s
 // "Show iDrive warnings" checkbox (rhmiapp-32): <checkbox action="30" id="73" model="48" textModel="49">, off by
 // default. While Android Auto holds state 13, CDS hmi.graphicalContext publishes
@@ -325,46 +324,39 @@ const long        kUsbLogRecheckS  = 5;   // stick lookup cache: a stick plugged
 // CarPlay. Unticked: the context is still logged, which is the cheapest way to learn the ids.
 const unsigned    kActWarnings     = 30;
 const unsigned    kWarnModel       = 48;
-const char* const kWarnFlag        = "/var/opt/aa/show-warnings";
-const char* const kWarnManual      = "/opt/aa/show-warnings";
+const char* const kWarnFlag        = "show-warnings";
 // "Android Auto over USB (beta)" checkbox (rhmiapp-40): <checkbox action="83" id="86" model="84" textModel="85"> on the
 // Settings page, off by default. Flag file read by nbt-aad once at start (nbt_env.hpp usbEnabled(); NBT_USB in
 // nbt-aad.env wins either way), so a change applies at the next Start / Restart.
 const unsigned    kActUsbAa        = 83;
 const unsigned    kUsbAaModel      = 84;
-const char* const kUsbAaFlag       = "/var/opt/aa/usb-aa";
-const char* const kUsbAaManual     = "/opt/aa/usb-aa";
+const char* const kUsbAaFlag       = "usb-aa";
 // "Use Phone GPS" and "Use WiFi Direct Network" checkboxes (rhmiapp-44) on the Settings page, both off by default:
 // <checkbox action="87" id="90" model="88" textModel="89"> and <checkbox action="91" id="94" model="92" textModel="93">.
 // Flag files read by nbt-aad at start (nbt_env.hpp phoneGpsEnabled(), alt_wifi.hpp altWifiMode()); NBT_PHONE_GPS /
 // NBT_ALT_WIFI in nbt-aad.env win either way, so a change applies at the next Start / Restart.
 const unsigned    kActPhoneGps     = 87;
 const unsigned    kPhoneGpsModel   = 88;
-const char* const kPhoneGpsFlag    = "/var/opt/aa/phone-gps";
-const char* const kPhoneGpsManual  = "/opt/aa/phone-gps";
+const char* const kPhoneGpsFlag    = "phone-gps";
 const unsigned    kActWfdOnly      = 91;
 const unsigned    kWfdOnlyModel    = 92;
-const char* const kWfdOnlyFlag     = "/var/opt/aa/wifi-direct";
-const char* const kWfdOnlyManual   = "/opt/aa/wifi-direct";
+const char* const kWfdOnlyFlag     = "wifi-direct";
 // "Use Native Audio instead of Bluetooth" and "Media Controls for LCI Steering Wheels" (rhmiapp-45), both off by default:
 // <checkbox action="120" id="123" model="121" textModel="122"> and <checkbox action="124" id="127" model="125"
 // textModel="126">. Flag files read by nbt-aad at start (audio/config.hpp nativeAudioFlagSet(), nbt_env.hpp
 // lciMediaKeysEnabled()); NBT_AUDIO_MODE / NBT_AUDIO_BT and NBT_LCI_MEDIA in nbt-aad.env win.
 const unsigned    kActNativeAudio  = 120;
 const unsigned    kNativeAudioModel = 121;
-const char* const kNativeAudioFlag = "/var/opt/aa/native-audio";
-const char* const kNativeAudioManual = "/opt/aa/native-audio";
+const char* const kNativeAudioFlag = "native-audio";
 const unsigned    kActLciMedia     = 124;
 const unsigned    kLciMediaModel   = 125;
-const char* const kLciMediaFlag    = "/var/opt/aa/lci-media";
-const char* const kLciMediaManual  = "/opt/aa/lci-media";
+const char* const kLciMediaFlag    = "lci-media";
 // "CarPlay compatibility" (rhmiapp-54-cpcompat), off by default: <checkbox action="159" id="162" model="160"
 // textModel="161">. Flag file read by nbt-aad at start (nbt_env.hpp cpCompatEnabled()); NBT_CP_COMPAT in nbt-aad.env
 // wins. Ids 155-158 are left to PR #167.
 const unsigned    kActCpCompat     = 159;
 const unsigned    kCpCompatModel   = 160;
-const char* const kCpCompatFlag    = "/var/opt/aa/carplay-compat";
-const char* const kCpCompatManual  = "/opt/aa/carplay-compat";
+const char* const kCpCompatFlag    = "carplay-compat";
 // Firewall (pf_aa) rows on the Settings page (rhmiapp-47), under a separator after the checkboxes, worked like Start /
 // Force Stop / Restart: <button action="132" id="135" model="134"> Install PF Rules, <button action="136" id="140"
 // model="138"> Check PF Rules, <button action="137" id="141" model="139"> Uninstall PF Rules. Each press runs
@@ -385,12 +377,10 @@ const unsigned    kAppVerModel      = 164;   // raDataModel Richtext: this app
 const unsigned    kActAnyDist       = 167;   // checkbox raAction
 const unsigned    kAnyDistModel     = 170;   // raBoolModel (checkbox state)
 const unsigned    kAnyDistTextModel = 168;   // textIdModel (checkbox label)
-const char* const kAnyDistFlag      = "/var/opt/aa/kombi-nav-anydist";
-const char* const kAnyDistManual    = "/opt/aa/kombi-nav-anydist";
+const char* const kAnyDistFlag      = "kombi-nav-anydist";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
 const unsigned    kNoLogModel       = 175;   // raBoolModel
-const char* const kNoLogFlag        = "/var/opt/aa/no-log";
-const char* const kNoLogManual      = "/opt/aa/no-log";
+const char* const kNoLogFlag        = "no-log";
 const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
 const unsigned    kPfRowLabel[3]   = { 29, 30, 31 };      // Install / Check / Uninstall PF Rules
 enum { kTxtPfWriting = 32, kTxtPfWritten = 33, kTxtPfActive = 34, kTxtPfChecking = 35, kTxtPfInPlace = 36,
@@ -403,6 +393,9 @@ const char* const kGctxFile        = "/dev/shmem/nbt-aad-gctx";
 // DSC / DTC button: "same as sport mode" - CDS driving.DSCActive flips when the button changes the stability
 // program, so the daemon steps aside for iDrive's own display for a few seconds, like a driving-mode change.
 const char* const kDscProperty     = "driving.DSCActive";
+
+// nbt-aad.env in the conf dir (src/nbt_paths.hpp), NULL when there is none.
+FILE* openDaemonEnv() { return fopen(nbt::confFile(nbt::kDaemonEnvName).c_str(), "r"); }
 
 // PluginApp vtable slots (index from the address point)
 enum { kSlotOnError = 21, kSlotOnInit = 22, kSlotOnFinalize = 23, kVtblSlots = 34 };
@@ -459,9 +452,9 @@ bool loggingOff() {
     s = 0;
     const char* e = getenv("NBT_NO_LOG");
     if (e && *e) s = (e[0] != '0');
-    else if (access("/var/opt/aa/no-log", F_OK) == 0 || access("/opt/aa/no-log", F_OK) == 0) s = 1;
+    else if (nbt::flagSet(kNoLogFlag)) s = 1;
     else {
-        FILE* f = fopen("/opt/aa/nbt-aad.env", "r");
+        FILE* f = openDaemonEnv();
         if (f) {
             char line[160];
             while (fgets(line, sizeof(line), f))
@@ -531,7 +524,7 @@ pid_t launchDaemon() {
     time_t now = time(NULL);
     if (g_lastLaunch && now - g_lastLaunch < 3) { alog("launch ignored (pressed again within 3 s)"); return -1; }
     g_lastLaunch = now;
-    if (!fileExists(kDaemon)) { alog("launch: %s not found", kDaemon); return -1; }
+    if (!fileExists(nbt::daemonPath())) { alog("launch: %s not found", nbt::daemonPath()); return -1; }
 
     static char envbuf[16][160];
     char* envp[16 + 64];
@@ -539,7 +532,7 @@ pid_t launchDaemon() {
     strcpy(envbuf[0], "PATH=/bin:/usr/bin:/opt/os/bin:/opt/sys/bin:/opt/core/bin:/opt/car/bin:/fs/sda0/opt/mm/bin");
     envp[ne++] = envbuf[0];
     int nb = 1;
-    FILE* f = fopen(kDaemonEnv, "r");
+    FILE* f = openDaemonEnv();
     if (f) {
         char line[160];
         while (nb < 16 && fgets(line, sizeof(line), f)) {
@@ -560,7 +553,7 @@ pid_t launchDaemon() {
     }
     envp[ne] = NULL;
 
-    char* argv[] = { const_cast<char*>(kDaemon), NULL };
+    char* argv[] = { const_cast<char*>(nbt::daemonPath()), NULL };
     int in  = open("/dev/null", O_RDONLY);
     int out = open(kDaemonLog, O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (in < 0 || out < 0) {
@@ -577,7 +570,7 @@ pid_t launchDaemon() {
     inh.pgroup = SPAWN_NEWPGROUP;
     sigfillset(&inh.sigdefault);
     sigemptyset(&inh.sigmask);
-    pid_t pid = spawn(kDaemon, 3, fdmap, &inh, argv, envp);
+    pid_t pid = spawn(nbt::daemonPath(), 3, fdmap, &inh, argv, envp);
 #else
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
@@ -585,14 +578,15 @@ pid_t launchDaemon() {
     posix_spawn_file_actions_adddup2(&fa, out, 1);
     posix_spawn_file_actions_adddup2(&fa, out, 2);
     pid_t pid = -1;
-    if (posix_spawn(&pid, kDaemon, &fa, NULL, argv, envp) != 0) pid = -1;
+    if (posix_spawn(&pid, nbt::daemonPath(), &fa, NULL, argv, envp) != 0) pid = -1;
     posix_spawn_file_actions_destroy(&fa);
 #endif
     int e = errno;
     close(in);
     close(out);
-    if (pid < 0) alog("launch: spawn %s failed (errno %d)", kDaemon, e);
-    else alog("launch: started %s pid %d (%d env overrides, output -> %s)", kDaemon, (int)pid, nb, kDaemonLog);
+    if (pid < 0) alog("launch: spawn %s failed (errno %d)", nbt::daemonPath(), e);
+    else alog("launch: started %s pid %d (%d env overrides, output -> %s)", nbt::daemonPath(), (int)pid, nb,
+              kDaemonLog);
     return pid;
 }
 
@@ -746,7 +740,7 @@ long monoSec() {
     return (long)ts.tv_sec;
 }
 
-bool driveModeOn() { return fileExists(kDriveModeFlag) || fileExists(kDriveModeManual); }
+bool driveModeOn() { return nbt::flagSet(kDriveModeFlag); }
 
 bool onDriveMode(int prop, const bmw::BasicString<unsigned short>& value) {
     char text[160];
@@ -779,7 +773,7 @@ bool onDriveMode0(void*, const bmw::BasicString<unsigned short>& v) { return onD
 bool onDriveMode1(void*, const bmw::BasicString<unsigned short>& v) { return onDriveMode(1, v); }
 
 // ---- "Show iDrive warnings" (rhmiapp-32) and DSC -> daemon ----------------------------------------------------------
-bool warningsOn() { return fileExists(kWarnFlag) || fileExists(kWarnManual); }
+bool warningsOn() { return nbt::flagSet(kWarnFlag); }
 
 // {"graphicalContext":{"visibleContext":13,"focusIndex":0,"listIndex":-1,"widgetType":"list","menuTitle":"..."}}
 void jsonStr(const char* json, const char* key, char* out, size_t n) {
@@ -843,7 +837,7 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>&);
 
 void runnableRun(void* /*self*/) {
     if (!g_runApp) return;
-    if (!fileExists("/opt/aa/gear.disable")) {
+    if (!fileExists(nbt::appFile("gear.disable").c_str())) {
         bmw::BasicString<char> prop(kGearProperty);
         bmw::CdsDelegate d;
         d.object = g_runApp;
@@ -1017,9 +1011,9 @@ time_t g_stopTime = 0;
 int g_stopStage = 0;           // 0 quit sent, 1 SIGTERM sent, 2 SIGKILL sent
 bool g_restartAfterStop = false;
 
-// Where to go once connected: NBT_MENU_RETURN in /opt/aa/nbt-aad.env = home (default) | media | off.
+// Where to go once connected: NBT_MENU_RETURN in nbt-aad.env = home (default) | media | off.
 unsigned menuReturnEvent() {
-    FILE* f = fopen(kDaemonEnv, "r");
+    FILE* f = openDaemonEnv();
     if (!f) return kEvGoHome;
     char line[160];
     unsigned ev = kEvGoHome;
@@ -1035,7 +1029,7 @@ unsigned menuReturnEvent() {
 }
 
 bool envFlagOn(const char* name, bool def) {
-    FILE* f = fopen(kDaemonEnv, "r");
+    FILE* f = openDaemonEnv();
     if (!f) return def;
     char line[160];
     size_t n = strlen(name);
@@ -1078,7 +1072,7 @@ void owInit() {
     static bool s_done = false;
     if (s_done) return;
     s_done = true;
-    FILE* f = fopen(kDaemonEnv, "r");
+    FILE* f = openDaemonEnv();
     char line[160];
     char list[160] = "";
     while (f && fgets(line, sizeof(line), f)) {
@@ -1108,7 +1102,7 @@ void onCameraContext(int vc, const char* widget, const char* title) {
     static int s_list[16];
     static int s_n = -1;
     if (s_n < 0) {
-        FILE* f = fopen(kDaemonEnv, "r");
+        FILE* f = openDaemonEnv();
         char line[160];
         char list[160] = "";
         while (f && fgets(line, sizeof(line), f)) {
@@ -1710,12 +1704,34 @@ void setConnectingAnimation(bmw::PluginApp* app, bool on) {
     }
 }
 
+// ---- checkbox flag files ------------------------------------------------------------------------------------------
+// A checkbox pressed: its flag files are the state (src/nbt_paths.hpp). On: both are removed, <data dir>/<name> and
+// the hand-made <app dir>/<name> (which may sit on a read-only partition). Off: <data dir>/<name> is created, with
+// "1\n" in it when `one`. `what` starts the log lines.
+void flipFlag(const char* name, const char* what, bool one) {
+    const nbt::FilePath flag = nbt::dataFile(name), manual = nbt::appFile(name);
+    if (fileExists(flag.c_str()) || fileExists(manual.c_str())) {
+        if (fileExists(flag.c_str()) && unlink(flag.c_str()) != 0)
+            alog("%s: cannot remove %s (errno %d)", what, flag.c_str(), errno);
+        if (fileExists(manual.c_str()) && unlink(manual.c_str()) != 0)
+            alog("%s: cannot remove %s (errno %d, read-only?): remove it by hand", what, manual.c_str(), errno);
+    } else {
+        nbt::makeDataDir();                              // EEXIST is fine
+        int fd = open(flag.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) alog("%s: cannot create %s (errno %d)", what, flag.c_str(), errno);
+        else {
+            if (one) { ssize_t w = write(fd, "1\n", 2); (void)w; }
+            close(fd);
+        }
+    }
+}
+
 // ---- start with the car --------------------------------------------------------------------------------------------
 time_t g_initTime = 0;
 bool g_autostartDone = false;
 bool g_autostartShown = false;
 
-bool autostartOn() { return fileExists(kAutostartFile) || fileExists(kAutostartManual); }
+bool autostartOn() { return nbt::flagSet(kAutostartFlag); }
 
 void showAutostart(bmw::PluginApp* app) {
     bool on = autostartOn();
@@ -1727,17 +1743,7 @@ void showAutostart(bmw::PluginApp* app) {
 // file is the state, and the checkbox is set from it afterwards.
 bool onAutostartToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     bool on = autostartOn();
-    if (on) {
-        if (fileExists(kAutostartFile) && unlink(kAutostartFile) != 0)
-            alog("start with the car: cannot remove %s (errno %d)", kAutostartFile, errno);
-        if (fileExists(kAutostartManual) && unlink(kAutostartManual) != 0)
-            alog("start with the car: cannot remove %s (errno %d, read-only?): remove it by hand", kAutostartManual, errno);
-    } else {
-        mkdir(kAutostartDir, 0755);                      // EEXIST is fine
-        int fd = open(kAutostartFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("start with the car: cannot create %s (errno %d)", kAutostartFile, errno);
-        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
-    }
+    flipFlag(kAutostartFlag, "start with the car", true);
     bool now = autostartOn();
     alog("menu: start with the car %s -> %s", on ? "on" : "off", now ? "on" : "off");
     if (g_runApp) showAutostart(g_runApp);
@@ -1755,19 +1761,8 @@ void showUsbLog(bmw::PluginApp* app) {
 // Same pattern as the autostart checkbox: the flag file is the state. The daemon notices within 5 s.
 bool onUsbLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     bool on = nbt::usblog::enabled();
-    if (on) {
-        alog("menu: save logs to USB -> off");             // last line into the USB app log
-        if (fileExists(nbt::usblog::kFlag) && unlink(nbt::usblog::kFlag) != 0)
-            alog("save logs to USB: cannot remove %s (errno %d)", nbt::usblog::kFlag, errno);
-        if (fileExists(nbt::usblog::kFlagManual) && unlink(nbt::usblog::kFlagManual) != 0)
-            alog("save logs to USB: cannot remove %s (errno %d, read-only?): remove it by hand",
-                 nbt::usblog::kFlagManual, errno);
-    } else {
-        mkdir(nbt::usblog::kFlagDir, 0755);               // EEXIST is fine
-        int fd = open(nbt::usblog::kFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("save logs to USB: cannot create %s (errno %d)", nbt::usblog::kFlag, errno);
-        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
-    }
+    if (on) alog("menu: save logs to USB -> off");     // last line into the USB app log
+    flipFlag(nbt::usblog::kFlagName, "save logs to USB", true);
     usbLogRecheck();
     char path[192];
     bool now = nbt::usblog::enabled();
@@ -1794,17 +1789,7 @@ void showWarnings(bmw::PluginApp* app) {
 
 bool onWarningsToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     bool on = warningsOn();
-    if (on) {
-        if (fileExists(kWarnFlag) && unlink(kWarnFlag) != 0)
-            alog("show iDrive warnings: cannot remove %s (errno %d)", kWarnFlag, errno);
-        if (fileExists(kWarnManual) && unlink(kWarnManual) != 0)
-            alog("show iDrive warnings: cannot remove %s (errno %d, read-only?): remove it by hand", kWarnManual, errno);
-    } else {
-        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
-        int fd = open(kWarnFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("show iDrive warnings: cannot create %s (errno %d)", kWarnFlag, errno);
-        else close(fd);
-    }
+    flipFlag(kWarnFlag, "show iDrive warnings", false);
     bool now = warningsOn();
     alog("menu: show iDrive warnings %s -> %s%s", on ? "on" : "off", now ? "on" : "off",
          now ? " (a visible iDrive context now steps Android Auto aside for good)" : " (context is only logged)");
@@ -1822,17 +1807,7 @@ void showDriveMode(bmw::PluginApp* app) {
 
 bool onDriveModeToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     bool on = driveModeOn();
-    if (on) {
-        if (fileExists(kDriveModeFlag) && unlink(kDriveModeFlag) != 0)
-            alog("show driving mode: cannot remove %s (errno %d)", kDriveModeFlag, errno);
-        if (fileExists(kDriveModeManual) && unlink(kDriveModeManual) != 0)
-            alog("show driving mode: cannot remove %s (errno %d, read-only?): remove it by hand", kDriveModeManual, errno);
-    } else {
-        mkdir(kAutostartDir, 0755);
-        int fd = open(kDriveModeFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("show driving mode: cannot create %s (errno %d)", kDriveModeFlag, errno);
-        else close(fd);
-    }
+    flipFlag(kDriveModeFlag, "show driving mode", false);
     bool now = driveModeOn();
     alog("menu: show driving mode changes %s -> %s", on ? "on" : "off", now ? "on" : "off");
     if (g_runApp) showDriveMode(g_runApp);
@@ -1841,7 +1816,7 @@ bool onDriveModeToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 
 // ---- Turn arrows in cluster/HUD ------------------------------------------------------------------------------------
 bool g_kombiNavShown = false;
-bool kombiNavOn() { return fileExists(kKombiNavFlag) || fileExists(kKombiNavManual); }
+bool kombiNavOn() { return nbt::flagSet(kKombiNavFlag); }
 
 void showKombiNav(bmw::PluginApp* app) {
     app->updateModel(kKombiNavModel, kombiNavOn());
@@ -1850,18 +1825,7 @@ void showKombiNav(bmw::PluginApp* app) {
 
 bool onKombiNavToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     bool on = kombiNavOn();
-    if (on) {
-        if (fileExists(kKombiNavFlag) && unlink(kKombiNavFlag) != 0)
-            alog("cluster/HUD arrows: cannot remove %s (errno %d)", kKombiNavFlag, errno);
-        if (fileExists(kKombiNavManual) && unlink(kKombiNavManual) != 0)
-            alog("cluster/HUD arrows: cannot remove %s (errno %d, read-only?): remove it by hand", kKombiNavManual,
-                 errno);
-    } else {
-        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
-        int fd = open(kKombiNavFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("cluster/HUD arrows: cannot create %s (errno %d)", kKombiNavFlag, errno);
-        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
-    }
+    flipFlag(kKombiNavFlag, "cluster/HUD arrows", true);
     bool now = kombiNavOn();
     alog("menu: turn arrows in cluster/HUD %s -> %s", on ? "on" : "off", now ? "on" : "off");
     if (g_runApp) showKombiNav(g_runApp);
@@ -1870,7 +1834,7 @@ bool onKombiNavToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 
 // ---- Android Auto over USB (beta) -------------------------------------------------------------------------------
 bool g_usbAaShown = false;
-bool usbAaOn() { return fileExists(kUsbAaFlag) || fileExists(kUsbAaManual); }
+bool usbAaOn() { return nbt::flagSet(kUsbAaFlag); }
 
 void showUsbAa(bmw::PluginApp* app) {
     app->updateModel(kUsbAaModel, usbAaOn());
@@ -1879,17 +1843,7 @@ void showUsbAa(bmw::PluginApp* app) {
 
 bool onUsbAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     bool on = usbAaOn();
-    if (on) {
-        if (fileExists(kUsbAaFlag) && unlink(kUsbAaFlag) != 0)
-            alog("Android Auto over USB: cannot remove %s (errno %d)", kUsbAaFlag, errno);
-        if (fileExists(kUsbAaManual) && unlink(kUsbAaManual) != 0)
-            alog("Android Auto over USB: cannot remove %s (errno %d, read-only?): remove it by hand", kUsbAaManual, errno);
-    } else {
-        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
-        int fd = open(kUsbAaFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("Android Auto over USB: cannot create %s (errno %d)", kUsbAaFlag, errno);
-        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
-    }
+    flipFlag(kUsbAaFlag, "Android Auto over USB", true);
     bool now = usbAaOn();
     alog("menu: Android Auto over USB %s -> %s (applies at the next Start / Restart; NBT_USB in nbt-aad.env wins)",
          on ? "on" : "off", now ? "on" : "off");
@@ -1898,64 +1852,55 @@ bool onUsbAaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 }
 
 // ---- Use Phone GPS / Use WiFi Direct Network (rhmiapp-44) ---------------------------------------------------------
-// Flip a checkbox flag: remove both files when on, create the /var one when off. Returns the new state.
-bool toggleFlagFile(const char* flag, const char* manual, const char* what) {
-    bool on = fileExists(flag) || fileExists(manual);
-    if (on) {
-        if (fileExists(flag) && unlink(flag) != 0) alog("%s: cannot remove %s (errno %d)", what, flag, errno);
-        if (fileExists(manual) && unlink(manual) != 0)
-            alog("%s: cannot remove %s (errno %d, read-only?): remove it by hand", what, manual, errno);
-    } else {
-        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
-        int fd = open(flag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("%s: cannot create %s (errno %d)", what, flag, errno);
-        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
-    }
-    bool now = fileExists(flag) || fileExists(manual);
+// Flip a checkbox flag (flipFlag) and log it. Returns the new state.
+bool toggleFlagFile(const char* name, const char* what) {
+    bool on = nbt::flagSet(name);
+    flipFlag(name, what, true);
+    bool now = nbt::flagSet(name);
     alog("menu: %s %s -> %s (applies at the next Start / Restart)", what, on ? "on" : "off", now ? "on" : "off");
     return now;
 }
 
 bool g_phoneGpsShown = false;
-bool phoneGpsOn() { return fileExists(kPhoneGpsFlag) || fileExists(kPhoneGpsManual); }
+bool phoneGpsOn() { return nbt::flagSet(kPhoneGpsFlag); }
 void showPhoneGps(bmw::PluginApp* app) {
     app->updateModel(kPhoneGpsModel, phoneGpsOn());
     g_phoneGpsShown = true;
 }
 bool onPhoneGpsToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kPhoneGpsFlag, kPhoneGpsManual, "Use Phone GPS (NBT_PHONE_GPS in nbt-aad.env wins)");
+    toggleFlagFile(kPhoneGpsFlag, "Use Phone GPS (NBT_PHONE_GPS in nbt-aad.env wins)");
     if (g_runApp) showPhoneGps(g_runApp);
     return true;
 }
 
 bool g_wfdOnlyShown = false;
-bool wfdOnlyOn() { return fileExists(kWfdOnlyFlag) || fileExists(kWfdOnlyManual); }
+bool wfdOnlyOn() { return nbt::flagSet(kWfdOnlyFlag); }
 void showWfdOnly(bmw::PluginApp* app) {
     app->updateModel(kWfdOnlyModel, wfdOnlyOn());
     g_wfdOnlyShown = true;
 }
 bool onWfdOnlyToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kWfdOnlyFlag, kWfdOnlyManual, "Use WiFi Direct Network (NBT_ALT_WIFI in nbt-aad.env wins)");
+    toggleFlagFile(kWfdOnlyFlag, "Use WiFi Direct Network (NBT_ALT_WIFI in nbt-aad.env wins)");
     if (g_runApp) showWfdOnly(g_runApp);
     return true;
 }
 
 // ---- Use Native Audio instead of Bluetooth / Media Controls for LCI Steering Wheels (rhmiapp-45) -----------------
 bool g_nativeAudioShown = false;
-bool nativeAudioOn() { return fileExists(kNativeAudioFlag) || fileExists(kNativeAudioManual); }
+bool nativeAudioOn() { return nbt::flagSet(kNativeAudioFlag); }
 void showNativeAudio(bmw::PluginApp* app) {
     app->updateModel(kNativeAudioModel, nativeAudioOn());
     g_nativeAudioShown = true;
 }
 bool onNativeAudioToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kNativeAudioFlag, kNativeAudioManual,
+    toggleFlagFile(kNativeAudioFlag,
                    "Use Native Audio instead of Bluetooth (NBT_AUDIO_MODE / NBT_AUDIO_BT in nbt-aad.env win)");
     if (g_runApp) showNativeAudio(g_runApp);
     return true;
 }
 
 bool g_lciMediaShown = false;
-bool lciMediaOn() { return fileExists(kLciMediaFlag) || fileExists(kLciMediaManual); }
+bool lciMediaOn() { return nbt::flagSet(kLciMediaFlag); }
 void showLciMedia(bmw::PluginApp* app) {
     app->updateModel(kLciMediaModel, lciMediaOn());
     g_lciMediaShown = true;
@@ -1980,7 +1925,7 @@ void pfRowText(bmw::PluginApp* app, int op, unsigned text, bool busy) {
 
 // nbt-aad carries pf_aa (v1.9.44+): its binary holds the embedded banner text. Read on each press; ~1 MB.
 bool daemonHasPfAa() {
-    FILE* f = fopen(kDaemon, "rb");
+    FILE* f = fopen(nbt::daemonPath(), "rb");
     if (!f) return false;
     static char buf[65536 + 32];
     const size_t m = strlen(kPfAaEmbedMark);
@@ -2011,13 +1956,13 @@ void startPfOp(int op) {
     g_pfNext = 0;
     g_pfLabelMs = 0;
     if (!daemonHasPfAa()) {
-        alog("menu: %s: %s has no pf_aa built in (older than v1.9.44): update nbt-aad", kNames[op], kDaemon);
+        alog("menu: %s: %s has no pf_aa built in (older than v1.9.44): update nbt-aad", kNames[op], nbt::daemonPath());
         pfRowText(g_runApp, op, kTxtPfFailed, false);
         g_pfLabelMs = nowMs() + 8000;
         return;
     }
     char* argv[4];
-    argv[0] = const_cast<char*>(kDaemon);
+    argv[0] = const_cast<char*>(nbt::daemonPath());
     argv[1] = const_cast<char*>(op == kPfInstall ? "--pf-install" : op == kPfCheck ? "--pf-check" : "--pf-uninstall");
     argv[2] = op == kPfCheck ? NULL : const_cast<char*>("--load");
     argv[3] = NULL;
@@ -2040,21 +1985,21 @@ void startPfOp(int op) {
         posix_spawn_file_actions_adddup2(&fa, in, 0);
         posix_spawn_file_actions_adddup2(&fa, out, 1);
         posix_spawn_file_actions_adddup2(&fa, out, 2);
-        if (posix_spawn(&pid, kDaemon, &fa, NULL, argv, envp) != 0) pid = -1;
+        if (posix_spawn(&pid, nbt::daemonPath(), &fa, NULL, argv, envp) != 0) pid = -1;
         posix_spawn_file_actions_destroy(&fa);
     }
     int err = errno;
     if (in >= 0) close(in);
     if (out >= 0) close(out);
     if (pid <= 0) {
-        alog("menu: %s: cannot start %s %s (errno %d)", kNames[op], kDaemon, argv[1], err);
+        alog("menu: %s: cannot start %s %s (errno %d)", kNames[op], nbt::daemonPath(), argv[1], err);
         pfRowText(g_runApp, op, kTxtPfFailed, false);
         g_pfLabelMs = nowMs() + 8000;
         return;
     }
     g_pfPid = pid;
     g_pfStart = time(NULL);
-    alog("menu: %s -> %s %s%s (pid %d)", kNames[op], kDaemon, argv[1], argv[2] ? " --load" : "", (int)pid);
+    alog("menu: %s -> %s %s%s (pid %d)", kNames[op], nbt::daemonPath(), argv[1], argv[2] ? " --load" : "", (int)pid);
     pfRowText(g_runApp, op, op == kPfInstall ? kTxtPfWriting : op == kPfCheck ? kTxtPfChecking : kTxtPfRemoving, true);
 }
 
@@ -2117,26 +2062,26 @@ void servicePfOps(bmw::PluginApp* app) {
 }
 
 bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kLciMediaFlag, kLciMediaManual, "Media Controls for LCI Steering Wheels (NBT_LCI_MEDIA in nbt-aad.env wins)");
+    toggleFlagFile(kLciMediaFlag, "Media Controls for LCI Steering Wheels (NBT_LCI_MEDIA in nbt-aad.env wins)");
     if (g_runApp) showLciMedia(g_runApp);
     return true;
 }
 
 bool g_cpCompatShown = false;
-bool cpCompatOn() { return fileExists(kCpCompatFlag) || fileExists(kCpCompatManual); }
+bool cpCompatOn() { return nbt::flagSet(kCpCompatFlag); }
 void showCpCompat(bmw::PluginApp* app) {
     app->updateModel(kCpCompatModel, cpCompatOn());
     g_cpCompatShown = true;
 }
 bool onCpCompatToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kCpCompatFlag, kCpCompatManual,
+    toggleFlagFile(kCpCompatFlag,
                    "CarPlay compatibility (applies at the next Start / Restart; NBT_CP_COMPAT in nbt-aad.env wins)");
     if (g_runApp) showCpCompat(g_runApp);
     return true;
 }
 
 bool g_menuIdriveShown = false;
-bool menuIdriveOn() { return fileExists(kMenuIdriveFlag) || fileExists(kMenuIdriveManual); }
+bool menuIdriveOn() { return nbt::flagSet(kMenuIdriveFlag); }
 
 void showMenuIdrive(bmw::PluginApp* app) {
     app->updateModel(kMenuIdriveModel, menuIdriveOn());
@@ -2145,17 +2090,7 @@ void showMenuIdrive(bmw::PluginApp* app) {
 
 bool onMenuIdriveToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     bool on = menuIdriveOn();
-    if (on) {
-        if (fileExists(kMenuIdriveFlag) && unlink(kMenuIdriveFlag) != 0)
-            alog("MENU opens iDrive: cannot remove %s (errno %d)", kMenuIdriveFlag, errno);
-        if (fileExists(kMenuIdriveManual) && unlink(kMenuIdriveManual) != 0)
-            alog("MENU opens iDrive: cannot remove %s (errno %d, read-only?): remove it by hand", kMenuIdriveManual, errno);
-    } else {
-        mkdir(kAutostartDir, 0755);                      // /var/opt/aa, EEXIST is fine
-        int fd = open(kMenuIdriveFlag, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) alog("MENU opens iDrive: cannot create %s (errno %d)", kMenuIdriveFlag, errno);
-        else { ssize_t w = write(fd, "1\n", 2); (void)w; close(fd); }
-    }
+    flipFlag(kMenuIdriveFlag, "MENU opens iDrive", true);
     bool now = menuIdriveOn();
     alog("menu: MENU key opens iDrive %s -> %s (%s)", on ? "on" : "off", now ? "on" : "off",
          now ? "MENU minimizes Android Auto" : "MENU opens Android Auto's menu");
@@ -2172,7 +2107,7 @@ bool onMenuIdriveToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 // 15 min only happen when something resets the unit. With the RTC unset (1980, common at boot: issue #84) the stamps
 // have no age, so the file counts boots with no window (boot_guard.hpp); rhmiapp-20..31 skipped counting there and
 // the guard never tripped on those cars.
-const char* const kBootGuardFile = "/var/opt/aa/bootguard";
+const char* const kBootGuardName = "bootguard";   // in the data dir
 const int  kBootGuardMax = 3;
 const long kBootGuardWindowS = 15 * 60;
 
@@ -2183,7 +2118,8 @@ bool bootGuardAllows() {
         alog("bootloop guard: wall clock not set (%ld): counting boots with no time window", (long)now);
     long raw[8], t[8];
     int nr = 0;
-    FILE* f = fopen(kBootGuardFile, "r");
+    const nbt::FilePath guard = nbt::dataFile(kBootGuardName);
+    FILE* f = fopen(guard.c_str(), "r");
     if (f) {
         long v;
         while (nr < 8 && fscanf(f, "%ld", &v) == 1) raw[nr++] = v;
@@ -2196,9 +2132,10 @@ bool bootGuardAllows() {
              n, kBootGuardWindowS / 60);
         return false;
     }
-    f = fopen(kBootGuardFile, "w");
+    if (nbt::packaged()) nbt::makeDataDir();             // a hand install never made /var/opt/aa here
+    f = fopen(guard.c_str(), "w");
     if (!f) {
-        alog("bootloop guard: cannot write %s (errno %d): not counting this boot", kBootGuardFile, errno);
+        alog("bootloop guard: cannot write %s (errno %d): not counting this boot", guard.c_str(), errno);
         return true;
     }
     int from = n >= kBootGuardMax ? n - kBootGuardMax + 1 : 0;
@@ -2212,7 +2149,7 @@ bool bootGuardAllows() {
 }
 
 void bootGuardReset(const char* why) {
-    if (unlink(kBootGuardFile) == 0) alog("bootloop guard reset (%s)", why);
+    if (unlink(nbt::dataFile(kBootGuardName).c_str()) == 0) alog("bootloop guard reset (%s)", why);
 }
 
 // Monotonic seconds of the autostart (0 = none this HMI run). A reset loop restarts the HMI within a minute or two, so
@@ -2233,7 +2170,8 @@ void serviceAutostart() {
     DaemonState d = readDaemonState();
     if (d.pid != 0) { alog("start with the car: nbt-aad already running (pid %d)", d.pid); return; }
     if (!bootGuardAllows()) return;
-    alog("start with the car: launching nbt-aad (%s)", fileExists(kAutostartFile) ? kAutostartFile : kAutostartManual);
+    const nbt::FilePath flag = nbt::dataFile(kAutostartFlag), manual = nbt::appFile(kAutostartFlag);
+    alog("start with the car: launching nbt-aad (%s)", fileExists(flag.c_str()) ? flag.c_str() : manual.c_str());
     pid_t pid = launchDaemon();
     if (pid > 0) {
         g_autostartPid = pid;                             // wait for this daemon's first projection
@@ -2270,13 +2208,13 @@ bool serviceAutostartHandoff(bmw::PluginApp* app, const DaemonState& d, bool con
 
 // ---- Version page + "Show directions at any distance" (rhmiapp-55-navset) -------------------------------------
 bool g_anyDistShown = false;
-bool anyDistOn() { return fileExists(kAnyDistFlag) || fileExists(kAnyDistManual); }
+bool anyDistOn() { return nbt::flagSet(kAnyDistFlag); }
 void showAnyDist(bmw::PluginApp* app) { app->updateModel(kAnyDistModel, anyDistOn()); g_anyDistShown = true; }
 bool g_noLogShown = false;
-bool noLogOn() { return fileExists(kNoLogFlag) || fileExists(kNoLogManual) || loggingOff(); }
+bool noLogOn() { return nbt::flagSet(kNoLogFlag) || loggingOff(); }
 void showNoLog(bmw::PluginApp* app) { app->updateModel(kNoLogModel, noLogOn()); g_noLogShown = true; }
 bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kNoLogFlag, kNoLogManual,
+    toggleFlagFile(kNoLogFlag,
                    "Disable logging (performance test; NBT_NO_LOG in nbt-aad.env wins)");
     resetLoggingOff();                                   // the cached answer is stale after the flags changed
     if (g_runApp) showNoLog(g_runApp);
@@ -2284,7 +2222,7 @@ bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 }
 
 bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kAnyDistFlag, kAnyDistManual,
+    toggleFlagFile(kAnyDistFlag,
                    "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
     if (g_runApp) showAnyDist(g_runApp);
     return true;
@@ -2320,7 +2258,7 @@ void showVersions(bmw::PluginApp* app) {
     if (!app) return;
     char ver[48];
     char l[64];
-    if (scanFileFor("/opt/aa/nbt-aad", "NBT-AAD-VERSION=", ver, sizeof(ver)) && ver[0]) {
+    if (scanFileFor(nbt::daemonPath(), "NBT-AAD-VERSION=", ver, sizeof(ver)) && ver[0]) {
         snprintf(l, sizeof(l), "Android Auto: %s", ver);
     } else {
         snprintf(l, sizeof(l), "Android Auto: not installed");
@@ -2370,7 +2308,7 @@ void statusRun(void* /*self*/) {
         alog("entry text -> %u (%s)", want, want == kTextConnecting ? "connecting" : "default");
         g_shownText = want;
     }
-    if (!fileExists("/opt/aa/spinner.disable")) setConnectingAnimation(app, connecting);
+    if (!fileExists(nbt::appFile("spinner.disable").c_str())) setConnectingAnimation(app, connecting);
     unsigned row = connected ? kTextRowOpen : connecting ? kTextRowConnecting : kTextStart;   // our menu's Start row
     if (row != g_shownRow) {
         bmw::TextID text(row);
@@ -2407,7 +2345,11 @@ void statusRun(void* /*self*/) {
 }
 
 void startStatusPolling(bmw::PluginApp* app) {
-    if (fileExists(kStatusOff)) { alog("status polling disabled by %s (no live texts, no return to menu, no stop timeouts)", kStatusOff); return; }
+    const nbt::FilePath statusOff = nbt::appFile(kStatusOff);
+    if (fileExists(statusOff.c_str())) {
+        alog("status polling disabled by %s (no live texts, no return to menu, no stop timeouts)", statusOff.c_str());
+        return;
+    }
     void** base = reinterpret_cast<void**>(dlsym(RTLD_DEFAULT, "_ZTVN3bmw8RunnableE"));
     if (base) memcpy(g_statusVtbl, base, sizeof(g_statusVtbl));
     else { g_statusVtbl[0] = NULL; g_statusVtbl[1] = NULL; }
@@ -2635,7 +2577,8 @@ void appOnFinalize(bmw::PluginApp* self) {
 
 bmw::PluginApp* createApp(bmw::IDispatcher& dispatcher, const char* name, const bmw::Bundle& params, const bmw::Bundle& config) {
     alog("create(name=%s) %s", name ? name : "(null)", NBT_AAD_APP_VERSION);
-    if (fileExists(kDisable)) { alog("disabled by %s", kDisable); return NULL; }
+    const nbt::FilePath disable = nbt::appFile(kDisable);
+    if (fileExists(disable.c_str())) { alog("disabled by %s", disable.c_str()); return NULL; }
     if (g_app) { alog("create: already created"); return NULL; }
 
     void* mem = ::operator new(bmw::kPluginAppStorage);
@@ -2666,10 +2609,16 @@ void destroyApp(void* app) {
 }
 
 __attribute__((constructor)) void libraryLoaded() {
+    // Hand install or NBTApps package (src/nbt_paths.hpp), decided here and only here. The loader runs this inside
+    // dlopen, before the HMI can look up pluginAppInfo and call create(), and before any thread of ours exists (the
+    // ones started later see the value through pthread_create). alog() just below already reads the logging flags.
+    nbt::initPathsForApp();
     alog("library loaded into pid %d, %s", (int)getpid(), NBT_AAD_APP_VERSION);
     char v[96];
     nbt::huVersion(v, sizeof(v));
     alog("HU software / nav version: %s", v);
+    alog("files: %s (daemon %s, settings %s, nbt-aad.env %s)", nbt::installName(), nbt::daemonPath(), nbt::dataDir(),
+         nbt::confDir());
 }
 
 } // namespace

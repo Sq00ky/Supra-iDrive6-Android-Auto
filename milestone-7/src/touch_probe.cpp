@@ -4,6 +4,7 @@
 #include "touch_frame.hpp"
 #include "car_config.hpp"
 #include "gesture_pdu.hpp"
+#include "nbt_paths.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,17 +160,18 @@ bool parsePeer(const char* e, sockaddr_in* out) {
 }
 
 // The touch controller's address, learned from a real touch PDU, is kept here so the next daemon start connects at
-// once (before it, gesture camera PDUs are still swallowed until the screen is touched).
+// once (before it, gesture camera PDUs are still swallowed until the screen is touched). In the data dir
+// (nbt_paths.hpp: /var/opt/aa on a hand install).
 #ifdef NBT_HOST_TEST
 // Host tests: never the real file. test_touch learns its own ephemeral port; kept in /var/opt/aa it made the NEXT run
 // connect to that stale port and miss every frame (test_touch.cpp:90). test_touch removes this one at start.
-const char* const kTouchPeerFile = "/tmp/nbt-test-touch-peer";
+FilePath touchPeerFile() { return FilePath("/tmp", "nbt-test-touch-peer"); }
 #else
-const char* const kTouchPeerFile = "/var/opt/aa/touch-peer";
+FilePath touchPeerFile() { return dataFile("touch-peer"); }
 #endif
 
 bool loadPeerFile(sockaddr_in* out) {
-    FILE* f = fopen(kTouchPeerFile, "r");
+    FILE* f = fopen(touchPeerFile().c_str(), "r");
     if (!f) return false;
     char line[64] = "";
     bool ok = fgets(line, sizeof(line), f) != NULL;
@@ -181,9 +183,10 @@ bool loadPeerFile(sockaddr_in* out) {
 }
 
 void savePeerFile(const sockaddr_in& p) {
-    mkdir("/var/opt/aa", 0755);
-    FILE* f = fopen(kTouchPeerFile, "w");
-    if (!f) { printf("[TouchFwd] cannot write %s (%s)\n", kTouchPeerFile, strerror(errno)); return; }
+    makeDataDir();
+    const FilePath path = touchPeerFile();
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) { printf("[TouchFwd] cannot write %s (%s)\n", path.c_str(), strerror(errno)); return; }
     fprintf(f, "%s:%u\n", inet_ntoa(p.sin_addr), (unsigned)ntohs(p.sin_port));
     fclose(f);
 }
@@ -262,7 +265,7 @@ void* forwardMain(void* p) {
     if (havePeer) printf("[TouchFwd] touch controller from NBT_TOUCH_PEER: %s:%u\n", inet_ntoa(peer.sin_addr), (unsigned)ntohs(peer.sin_port));
     else if (connectPeer && loadPeerFile(&peer)) {
         havePeer = true;
-        printf("[TouchFwd] touch controller from %s: %s:%u (learned from an earlier touch)\n", kTouchPeerFile,
+        printf("[TouchFwd] touch controller from %s: %s:%u (learned from an earlier touch)\n", touchPeerFile().c_str(),
                inet_ntoa(peer.sin_addr), (unsigned)ntohs(peer.sin_port));
     }
     // Gestures that reached us (iDrive did not get them), logged decoded: one line per run of the same gesture.

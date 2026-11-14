@@ -327,8 +327,19 @@ void FactoryRouteWatch::line(const char* s, double now) {
 
 // ---- KombiNav -----------------------------------------------------------------------------------------------------
 
-const char* KombiNav::kFlagFile = "/var/opt/aa/kombi-nav";
-const char* KombiNav::kManualFile = "/opt/aa/kombi-nav";
+namespace {
+const char* const kKombiNavFlagName = "kombi-nav";
+
+// The checkbox flag: the usual pair of files (nbt_paths.hpp), or the paths a host test put in kFlagFile / kManualFile.
+bool kombiNavFlagSet() {
+    if (!KombiNav::kFlagFile && !KombiNav::kManualFile) return nbt::flagSet(kKombiNavFlagName);
+    return (KombiNav::kFlagFile && access(KombiNav::kFlagFile, F_OK) == 0) ||
+           (KombiNav::kManualFile && access(KombiNav::kManualFile, F_OK) == 0);
+}
+} // namespace
+
+const char* KombiNav::kFlagFile = NULL;     // NULL: nbt::flagSet(kKombiNavFlagName)
+const char* KombiNav::kManualFile = NULL;
 const char* KombiNav::kShownFile = "/dev/shmem/nbt-aad-kombi-nav.shown";
 unsigned KombiNav::kWatchSkip = 0;
 
@@ -356,7 +367,7 @@ KombiNav::~KombiNav() {
 bool KombiNav::settingOn() {
     int f = envFlag("NBT_KOMBI_NAV");
     if (f >= 0) return f == 1;
-    return access(kFlagFile, F_OK) == 0 || access(kManualFile, F_OK) == 0;
+    return kombiNavFlagSet();
 }
 
 bool KombiNav::quitting(void* self) {
@@ -380,7 +391,7 @@ bool KombiNav::linkCancel(void* self, std::string* detail) {
 
 bool KombiNav::enabledNow() const {
     if (forced_ >= 0) return forced_ == 1;
-    return access(kFlagFile, F_OK) == 0 || access(kManualFile, F_OK) == 0;
+    return kombiNavFlagSet();
 }
 
 void KombiNav::logLine(const char* line, void* /*user*/) {
@@ -475,8 +486,7 @@ void KombiNav::readApproach() {
     // The Settings checkbox "Show directions at any distance": at once, no distance/time gate - but only while
     // neither env var above is set (they are the documented overrides).
     if (nbt::navAnyDistanceWanted(getenv("NBT_KOMBI_NAV_APPROACH"), getenv("NBT_KOMBI_NAV_APPROACH_MI"),
-                                  access(nbt::kNavAnyDistFlagFile, F_OK) == 0 ||
-                                  access(nbt::kNavAnyDistManualFile, F_OK) == 0)) {
+                                  nbt::flagSet(nbt::kNavAnyDistFlagName))) {
         settings_.approach = kApproachOff;
         settings_.approach_mi = 0;
         printf("[KombiNav] \"Show directions at any distance\" on: approach off, shown at once\n");

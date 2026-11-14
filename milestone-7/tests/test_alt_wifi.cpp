@@ -273,7 +273,9 @@ int main() {
     CHECK(nbt::altWifiSetting("carplay", true) == nbt::ALT_WIFI_CARPLAY);
     CHECK(nbt::altWifiSetting("both", true) == nbt::ALT_WIFI_CARPLAY);   // a set NBT_ALT_WIFI wins, even retired BOTH
     CHECK(nbt::altWifiSetting("direct", false) == nbt::ALT_WIFI_DIRECT);
-    CHECK(strcmp(nbt::kWfdOnlyFlagFile, "/var/opt/aa/wifi-direct") == 0);
+    CHECK(strcmp(nbt::kWfdOnlyFlagName, "wifi-direct") == 0);
+    CHECK(strcmp(nbt::dataFile(nbt::kWfdOnlyFlagName).c_str(), "/var/opt/aa/wifi-direct") == 0);   // hand install
+    CHECK(strcmp(nbt::appFile(nbt::kWfdOnlyFlagName).c_str(), "/opt/aa/wifi-direct") == 0);
     printf(fails ? "test_alt_wifi: %d FAILED\n" : "test_alt_wifi: all passed\n", fails);
     return fails ? 1 : 0;
 }

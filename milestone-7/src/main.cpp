@@ -223,14 +223,13 @@ static volatile int g_camera = 0;
 // iDrive menu checkbox "Show driving mode changes" (flag file below, read on every change) a change of mode makes
 // Android Auto step aside for NBT_DRIVEMODE_SHOW_MS (default 3500) so iDrive's own driving-mode popup is visible, then
 // it comes back by itself. The first value after start is only the baseline. Not car-verified.
-static const char* const kDriveModeFlag   = "/var/opt/aa/show-drivemode";
-static const char* const kDriveModeManual = "/opt/aa/show-drivemode";
+static const char* const kDriveModeFlag   = "show-drivemode";   // nbt_paths.hpp flagSet()
 static volatile int g_driveMode = -1;              // last valid mode (-1 = none yet)
 static volatile uint32_t g_dmPeekUntil = 0;        // upMs() until which iDrive keeps the screen (0 = never set)
 static volatile uint32_t g_dmPeekFrom = 0;         // upMs() from which it does (change + NBT_DRIVEMODE_DELAY_MS)
 static volatile sig_atomic_t g_dmShown = 0;        // main loop: currently stepped aside for it
 static volatile sig_atomic_t g_mainWake = 0;       // cuts the main loop's 250 ms sleep short (driving-mode change)
-static bool showDriveModeOn() { return access(kDriveModeFlag, F_OK) == 0 || access(kDriveModeManual, F_OK) == 0; }
+static bool showDriveModeOn() { return nbt::flagSet(kDriveModeFlag); }
 static int driveModeShowMs() {
     const char* e = getenv("NBT_DRIVEMODE_SHOW_MS");
     int v = (e && *e) ? atoi(e) : 3500;
@@ -487,7 +486,8 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
 // The iDrive app's "Start automatically" bootloop guard (rhmiapp-20): it records each autostart here and skips the
 // autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
-static const char* const kBootGuardFile = "/var/opt/aa/bootguard";
+// <data dir>/bootguard (nbt_paths.hpp).
+static const char* const kBootGuardName = "bootguard";
 static void writeUiState(const char* state, int overlay) {
     // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
     // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
@@ -581,17 +581,18 @@ static void configureSppSilence() {
 
 // Who opened each link (src/spp_direction.hpp): Android Auto links are opened by the phone (a GAP ServiceRequest
 // comes first), BMW Apps links (MyBMW / BMW Connected / AAIdrive) by the car. Once this car has shown that (an Android
-// Auto reply on a phone-opened link; remembered in /var/opt/aa/spp-model), car-opened links are never read or written:
+// Auto reply on a phone-opened link; remembered in <data dir>/spp-model), car-opened links are never read or written:
 // the car's A4AHandler keeps them. NBT_SPP_DIRECTION: 0 off, 1 always, 2 learn first (BMW/MINI default; Toyota 0).
-static const char* const kSppModelFile = "/var/opt/aa/spp-model";
+static const char* const kSppModelName = "spp-model";
 static bool g_sppSeen[kSppNodes];      // node existed at the last scan
 static bool g_sppPhone[kSppNodes];     // ... and the phone opened it
 static bool g_sppCarOwned[kSppNodes];  // ... the car opened it and the rule applies: leave it alone until it is gone
 
 static void saveSppModel(int model) {
-    mkdir("/var/opt/aa", 0755);
-    FILE* f = fopen(kSppModelFile, "w");
-    if (!f) { printf("[Wireless] could not save %s: %s\n", kSppModelFile, strerror(errno)); return; }
+    nbt::makeDataDir();
+    const nbt::FilePath path = nbt::dataFile(kSppModelName);
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) { printf("[Wireless] could not save %s: %s\n", path.c_str(), strerror(errno)); return; }
     fprintf(f, "%s\n", nbt::SppDirection::modelName((nbt::SppDirection::Model)model));
     fclose(f);
 }
@@ -607,7 +608,8 @@ static void configureSppDirection() {
     const char* w = getenv("NBT_SPP_DIRECTION_WINDOW_S");
     int win = (w && *w) ? atoi(w) : 15;
     int model = nbt::SppDirection::kUnknown;
-    FILE* f = fopen(kSppModelFile, "r");
+    const nbt::FilePath path = nbt::dataFile(kSppModelName);
+    FILE* f = fopen(path.c_str(), "r");
     if (f) {
         char buf[32] = { 0 };
         if (fgets(buf, sizeof(buf), f)) model = nbt::SppDirection::parseModel(buf);
@@ -618,7 +620,7 @@ static void configureSppDirection() {
     printf("[Wireless] Bluetooth link direction check %s (NBT_SPP_DIRECTION=%d, model '%s' from %s): Android Auto links "
            "are opened by the phone; links the car opens itself are its BMW Apps link (MyBMW / BMW Connected / "
            "AAIdrive)%s\n", mode == 1 ? "on" : "learning", mode, nbt::SppDirection::modelName((nbt::SppDirection::Model)model),
-           kSppModelFile, nbt::sppDirGate() ? " and are left to the car" : "; they are left to the car once Android Auto "
+           path.c_str(), nbt::sppDirGate() ? " and are left to the car" : "; they are left to the car once Android Auto "
            "has answered on a phone-opened link");
 }
 
@@ -633,7 +635,7 @@ static void noteSppDirection(const char* path, bool spoke) {
                "(its BMW Apps link: MyBMW / BMW Connected / AAIdrive) are left to the car\n");
     else
         printf("[Wireless] Android Auto answered on a link the car opened: the direction check is switched off on this "
-               "car (delete %s to learn again)\n", kSppModelFile);
+               "car (delete %s to learn again)\n", nbt::dataFile(kSppModelName).c_str());
     saveSppModel(m);
 }
 
@@ -1614,10 +1616,9 @@ static uint32_t backHoldMs() {
 // (overlay 3 for 3 s) and the iDrive app puts iDrive straight back on the blank state instead of treating it as a hard
 // key. "MENU key opens iDrive" (iDrive menu checkbox, flag file below): MENU is not sent to the phone and Android Auto
 // minimizes at once, like MENU leaving native CarPlay.
-static const char* const kMenuIdriveFlag   = "/var/opt/aa/menu-idrive";
-static const char* const kMenuIdriveManual = "/opt/aa/menu-idrive";
+static const char* const kMenuIdriveFlag   = "menu-idrive";   // nbt_paths.hpp flagSet()
 static volatile uint32_t g_keyToPhoneMs = 0;   // monoMs() of the last MENU / COM / MEDIA / NAV / MAP press sent to the phone
-static bool menuOpensIdrive() { return access(kMenuIdriveFlag, F_OK) == 0 || access(kMenuIdriveManual, F_OK) == 0; }
+static bool menuOpensIdrive() { return nbt::flagSet(kMenuIdriveFlag); }
 
 // The car's GPS fix (DSI callback thread, about 1 Hz) -> AA LOCATION sensor. Kept between sessions, age-checked at sending.
 static void onCarLocation(const nbt::LocationFix& fix, void* user) {
@@ -1730,7 +1731,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.81-pr223"
+#define NBT_AAD_BUILD "v1.9.82-paths"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -1738,7 +1739,7 @@ extern "C" __attribute__((used)) const char kNbtAadVersionTag[] = "NBT-AAD-VERSI
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag
-// /var/opt/aa/usblog, usb_log.hpp) makes us append to <stick>/nbt-aad.log on the first writable /mnt/umass* stick;
+// usblog in the data dir, usb_log.hpp) makes us append to <stick>/nbt-aad.log on the first writable /mnt/umass* stick;
 // checked at start and every 5 s, so a stick plugged in later is picked up and a removed one is let go.
 static bool g_logForced = false;
 static char g_usbLogPath[192] = "";
@@ -1833,12 +1834,12 @@ static void serviceUsbLog(bool atStart) {
 }
 
 int main(int argc, char* argv[]) {
+    // Hand install or NBTApps package (nbt_paths.hpp): from where we were started, before anything reads a setting.
+    nbt::initPaths(argc > 0 ? argv[0] : NULL);
     // "Disable logging (performance test)": set before the log redirection below, so the printf traces too cost
     // only a write to /dev/null. Not on the one-shot --pf-* / --license paths: the app reads their output.
     if (argc <= 1) {
-        g_noLog = nbt::noLogWanted(getenv("NBT_NO_LOG"),
-                                   access(nbt::kNoLogFlagFile, F_OK) == 0 ||
-                                   access(nbt::kNoLogManualFile, F_OK) == 0);
+        g_noLog = nbt::noLogWanted(getenv("NBT_NO_LOG"), nbt::flagSet(nbt::kNoLogFlagName));
         if (g_noLog) stdoutToNull();
     }
     // pf_aa built in (src/pf_aa_embed.cpp): nbt-aad --pf-install | --pf-check | --pf-uninstall [--pf/--env/--backup f].
@@ -1846,8 +1847,25 @@ int main(int argc, char* argv[]) {
     if (argc > 1 && !strncmp(argv[1], "--pf-", 5)) {
         static char mode[32];
         snprintf(mode, sizeof(mode), "--%s", argv[1] + 5);
-        argv[1] = mode;
-        int rc = nbt::pfaa::run(argc, argv);
+        // nbt-aad.env and pf.bak live in the conf dir (nbt_paths.hpp): handed to pf_aa ahead of the caller's own
+        // options, so a --env / --backup given here still wins (pf_aa takes the last one). On a hand install they are
+        // pf_aa's own defaults, /opt/aa/nbt-aad.env and /opt/aa/pf.bak.
+        static char envPath[160], bakPath[160];
+        snprintf(envPath, sizeof(envPath), "%s", nbt::confFile(nbt::kDaemonEnvName).c_str());
+        snprintf(bakPath, sizeof(bakPath), "%s", nbt::confFile(nbt::kPfBackupName).c_str());
+        if (nbt::packaged()) nbt::makeDataDir();      // the conf dir is the data dir there
+        static char optEnv[] = "--env", optBak[] = "--backup";
+        char* pfArgv[64];
+        int pfArgc = 0;
+        pfArgv[pfArgc++] = argv[0];
+        pfArgv[pfArgc++] = mode;
+        pfArgv[pfArgc++] = optEnv;
+        pfArgv[pfArgc++] = envPath;
+        pfArgv[pfArgc++] = optBak;
+        pfArgv[pfArgc++] = bakPath;
+        for (int i = 2; i < argc && pfArgc < 63; ++i) pfArgv[pfArgc++] = argv[i];
+        pfArgv[pfArgc] = NULL;
+        int rc = nbt::pfaa::run(pfArgc, pfArgv);
         // Last line for the iDrive app: it cannot wait for us (the HMI ignores SIGCHLD), so it reads the result here.
         printf("pf_aa-exit: %d\n", rc);
         fflush(stdout);
@@ -1871,6 +1889,8 @@ int main(int argc, char* argv[]) {
     printf("  OS: QNX Neutrino RTOS (ARMv7LE)                   \n");
     printf("  Build: " NBT_AAD_BUILD " (%s %s)\n", __DATE__, __TIME__);
     printHuVersion();
+    printf("  Files: %s (app %s, settings %s, nbt-aad.env %s)\n", nbt::installName(), nbt::appDir(), nbt::dataDir(),
+           nbt::confDir());
     if (g_ramLog) printf("  Log: RAM %s (fresh per run, 5 MB cap; NBT_RAM_LOG=0 = off)\n", nbt::ramlog::kDaemonPath);
     nbt::printNbtAadBannerNotice();
     printf("====================================================\n");
@@ -2170,7 +2190,8 @@ int main(int argc, char* argv[]) {
     nbt::MicUplink mic(&onMicData, NULL);   // the standalone uplink (every mode but A2I, which has its own)
     bool mic_live = false;
     unsigned log_sync_ticks = 0;
-    printf("[Mic] car microphone for the Assistant: %s\n", mic_on ? "on" : "off (NBT_MIC=0 or /opt/aa/mic.disable)");
+    printf("[Mic] car microphone for the Assistant: %s%s%s\n", mic_on ? "on" : "off (NBT_MIC=0 or ",
+           mic_on ? "" : nbt::appFile(nbt::kMicDisableName).c_str(), mic_on ? "" : ")");
     g_audioBackend->setMicCallback(&onMicData, NULL);
     nbt::VoiceScenario voice;   // default on (NBT_VOICE_SCENARIO=0 disables): AudioMatrix mic scenario while the phone has the mic open
     if (mic_on) voice.init();
@@ -2251,7 +2272,8 @@ int main(int argc, char* argv[]) {
             mic_live = false;
         }
         ++log_sync_ticks;
-        if (log_sync_ticks == 2400 && unlink(kBootGuardFile) == 0)   // 10 min up: not part of a bootloop
+        // 10 min up: not part of a bootloop
+        if (log_sync_ticks == 2400 && unlink(nbt::dataFile(kBootGuardName).c_str()) == 0)
             printf("[Main] running for 10 min: autostart bootloop guard cleared\n");
         if ((log_sync_ticks % 20) == 0) serviceUsbLog(false);   // every 5 s: stick plugged in / removed, checkbox
         checkRamLogCap();                                         // every tick: RAM log 5 MB cap
@@ -2514,7 +2536,7 @@ int main(int argc, char* argv[]) {
 
     if (g_ctlFd >= 0) close(g_ctlFd);
     unlink(kUiStateFile);   // plugin falls back to the plain "Android Auto" entry
-    unlink(kBootGuardFile); // clean exit: the iDrive app's autostart bootloop guard starts from zero
+    unlink(nbt::dataFile(kBootGuardName).c_str());   // clean exit: the app's autostart bootloop guard starts from zero
     printf("[Main] [%9.3f] nbt-aad shutdown complete (%.2f s)%s.\n", upSec(), upSec() - t0,
            g_cpYielded ? ": yielded to CarPlay (decoder context, windows and window group released)" : "");
     fflush(stdout);
