@@ -68,17 +68,19 @@ inline bool carParkingBrakeEnabled() {
 
 // Video profile (PR #66). NBT_VID_RES: 1 = 800x480, 2 = 1280x720 (default), 3 = 1920x1080; anything else = 2. It is
 // the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
-// Defined below, with the USB settings: the video profile asks about both.
-inline bool sessionIsUsb();
+// Defined below, with the USB settings.
 inline bool usb1080pEnabled();
 
 inline int videoResolution() {
     const char* e = getenv("NBT_VID_RES");
     if (e && strcmp(e, "1") == 0) return 1;
     if (e && strcmp(e, "3") == 0) return 3;
-    // "1080p over USB" (rhmiapp-59): only a session that runs on the cable gets it. Over Wi-Fi this stays 720p whatever
-    // the checkbox says, because the phone would spend the wireless link on pixels it cannot deliver in time.
-    if (sessionIsUsb() && usb1080pEnabled()) return 3;
+    // "1080p over USB": decided once at start-up, like every other video setting. It cannot be a per-session answer -
+    // the decoder size, the panel insets, the DPI and the touch mapping are all computed before a session exists
+    // (car_config / video_manager / touchScale), so a session-only change would leave touch mapped for 720p while the
+    // phone rendered 1080p. A wireless session cannot happen while "Android Auto over USB" is selected (the wireless
+    // path is closed), so this can only ever apply to the cable.
+    if (usb1080pEnabled()) return 3;
     return 2;
 }
 inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
