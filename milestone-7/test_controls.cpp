@@ -300,6 +300,9 @@ int main(int argc, char** argv) {
         printf("test_controls: observe-only MOST controller monitor, %d s. Turn the knob, push it, tilt it, press hard keys.\n", secs);
 
     DsiClient cli;
+    // Parsed MOST messages are printed below; suppress DsiClient's duplicate packet dumps unless raw output is asked for.
+    cli.setQuiet(!g_raw);
+    cli.setQuietTx(!g_raw);
     cli.setCallbacks(&onAttached, &onData, NULL);
     if (!cli.open("DSYSMOSTServer", "MOSTSubSystem", 4, 5)) {
         printf("DSI open FAILED\n");
