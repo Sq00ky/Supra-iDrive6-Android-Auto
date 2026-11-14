@@ -80,9 +80,19 @@ inline int videoResolution() {
     // (car_config / video_manager / touchScale), so a session-only change would leave touch mapped for 720p while the
     // phone rendered 1080p. A wireless session cannot happen while "Android Auto over USB" is selected (the wireless
     // path is closed), so this can only ever apply to the cable.
-    if (usb1080pEnabled()) return 3;
+    if (usb1080pEnabled() && usb1080PanelOk()) return 3;
     return 2;
 }
+
+// Whether the panel can actually show a 1920x1080 canvas. main() clears this at start-up when the panel is smaller: the
+// video path would show a 1920x720 window of the 1080p canvas and scale it down, i.e. the AA UI laid out for 1080p with
+// its bottom third cropped and everything shrunk. An 1080p canvas is only right where it is shown 1:1.
+inline bool& usb1080PanelOkSlot() {
+    static bool ok = true;
+    return ok;
+}
+inline bool usb1080PanelOk() { return usb1080PanelOkSlot(); }
+inline void setUsb1080PanelOk(bool ok) { usb1080PanelOkSlot() = ok; }
 inline int videoCanvasWidth() { return videoResolution() == 1 ? 800 : videoResolution() == 3 ? 1920 : 1280; }
 inline int videoCanvasHeight() { return videoResolution() == 1 ? 480 : videoResolution() == 3 ? 1080 : 720; }
 

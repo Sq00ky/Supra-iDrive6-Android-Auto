@@ -67,7 +67,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-62-navsettings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-63-navsettings (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -455,8 +455,10 @@ int g_ramLogOn = -1;   // NBT_RAM_LOG, read once
 
 // "Disable logging (performance test)": one flag silences the app log, the RAM log and slog. Cached, because
 // this runs per line and the check must not become the cost we are trying to measure.
+int g_loggingOffCache = -1;                 // -1 unknown; cleared by every toggle
+void resetLoggingOff() { g_loggingOffCache = -1; }
 bool loggingOff() {
-    static int s = -1;
+    int& s = g_loggingOffCache;
     if (s >= 0) return s == 1;
     s = 0;
     const char* e = getenv("NBT_NO_LOG");
@@ -2280,6 +2282,7 @@ void showNoLog(bmw::PluginApp* app) { app->updateModel(kNoLogModel, noLogOn()); 
 bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kNoLogFlag, kNoLogManual,
                    "Disable logging (performance test; NBT_NO_LOG in nbt-aad.env wins)");
+    resetLoggingOff();                                   // the cached answer is stale after the flags changed
     if (g_runApp) showNoLog(g_runApp);
     return true;
 }

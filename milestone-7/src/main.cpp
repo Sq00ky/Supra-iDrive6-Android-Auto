@@ -1748,7 +1748,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.74-navsettings"
+#define NBT_AAD_BUILD "v1.9.75-navsettings"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -1851,6 +1851,18 @@ static void serviceUsbLog(bool atStart) {
 }
 
 int main(int argc, char* argv[]) {
+
+    // "1080p over USB" needs a panel that can show a 1920x1080 canvas 1:1. On a 1280x480 (or any 2.67:1) panel the video
+    // path shows a 1920x720 window of that canvas and scales it to the panel: the AA UI, laid out for 1080p, loses its
+    // bottom third and everything shrinks. Decided here, before the car config or the decoder reads videoResolution().
+    {
+        const nbt::CarConfig& early = nbt::carConfig();
+        if (nbt::usb1080pEnabled() && (early.screenW < 1920 || early.screenH < 1080)) {
+            nbt::setUsb1080PanelOk(false);
+            printf("[Car] 1080p over USB is selected but the panel is %dx%d: staying at 720p, a 1080p canvas would be "
+                   "cropped and shrunk\n", early.screenW, early.screenH);
+        }
+    }
     // "Disable logging (performance test)": set before the log redirection below, so the printf traces too cost
     // only a write to /dev/null. Not on the one-shot --pf-* / --license paths: the app reads their output.
     if (argc <= 1) {
