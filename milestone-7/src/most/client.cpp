@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#include "most/latency_diag.hpp"
 #include "most/client.hpp"
 
 #include <stdio.h>
@@ -174,8 +175,19 @@ uint16_t Client::selfAddress() const {
     return a;
 }
 
+uint32_t Client::registeredHeaderTag() const {
+    pthread_mutex_lock(&lock_);
+    uint32_t tag = clientId_;
+    pthread_mutex_unlock(&lock_);
+    return tag;
+}
+
 bool Client::request(DsiClient* c, uint32_t id, const std::vector<uint8_t>& p) {
+    if(latencydiag::enabled())latencydiag::record(latencydiag::BeforeSendLock,
+        latencydiag::dsiMetadata(id,p.empty()?NULL:&p[0],p.size(),true),0,0,c);
     pthread_mutex_lock(&sendLock_);
+    if(latencydiag::enabled())latencydiag::record(latencydiag::AfterSendLock,
+        latencydiag::dsiMetadata(id,p.empty()?NULL:&p[0],p.size(),true),0,0,c);
     bool ok = c->sendRequest(id, p);
     pthread_mutex_unlock(&sendLock_);
     return ok;
@@ -190,7 +202,7 @@ bool Client::notify(DsiClient* c, uint32_t attr) {
 
 // The DSI library's comment says a send belongs on the connection thread. Sending from another thread, with one lock
 // around every send, is what tools/hud_probe did on the car, and the cluster answered every call.
-bool Client::send(const Msg& m) {
+bool Client::send(const Msg& m, bool registeredHeaderTag) {
     bool allowed = false;
     uint16_t key = registryKey(m.fblock, m.inst);
     for (int i = 0; i < nSendKeys_; ++i)
@@ -209,10 +221,12 @@ bool Client::send(const Msg& m) {
 
     Msg out = m;
     out.src = self;
+    if (registeredHeaderTag) out.hdrTag = client; // JayJay: return routing tag, scoped opt-in for 6WB
     std::vector<uint8_t> req;
     putLe32(req, client);
     std::vector<uint8_t> body = buildMessage(out);
     req.insert(req.end(), body.begin(), body.end());
+    if (registeredHeaderTag) while (req.size() % 4) req.push_back(0);
     bool ok = request(&dsi_, kReqProcessMessage, req);
     pthread_mutex_lock(&lock_);
     if (ok) ++total_.sent;
@@ -250,7 +264,7 @@ void Client::onDetached() {
 
 void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
     if (id == kInfoMessage) {
-        onMessage(p, len);
+        onMessage(p, len, nowMs());
         return;
     }
     if (infoTap_) infoTap_(id, p, len, infoTapUser_);
@@ -308,7 +322,8 @@ void Client::noteFirst(const View& m, MsgClass c, bool wanted) {
     }
 }
 
-void Client::onMessage(const uint8_t* p, uint32_t len) {
+void Client::onMessage(const uint8_t* p, uint32_t len, uint32_t deliveryMs) {
+    const uint64_t diagnosticParse=latencydiag::stamp();
     View m;
     if (!parseView(p, len, m)) {
         pthread_mutex_lock(&lock_);
@@ -317,6 +332,12 @@ void Client::onMessage(const uint8_t* p, uint32_t len) {
         return;
     }
     m.rxMs = nowMs();
+    m.deliveryMs = deliveryMs;
+    if(latencydiag::enabled()) {
+        latencydiag::Meta dm=latencydiag::metadata(m);
+        if(latencydiag::hud(dm))latencydiag::record(latencydiag::MostParsed,dm,diagnosticParse,0,&dsi_);
+    }
+    const uint64_t diagnosticHandler=latencydiag::stamp();
     MsgClass c = classify(m);
     bool wanted = router_.wants(m);
     noteFirst(m, c, wanted);
@@ -335,6 +356,8 @@ void Client::onMessage(const uint8_t* p, uint32_t len) {
     } else if (c != kTxStatus) {
         ran = router_.dispatch(m);
     }
+    if(latencydiag::enabled())latencydiag::record(latencydiag::MostHandlerSpan,
+        latencydiag::metadata(m),diagnosticHandler,0,&dsi_);
     uint32_t took = nowMs() - m.rxMs;
 
     pthread_mutex_lock(&lock_);

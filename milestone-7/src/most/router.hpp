@@ -8,6 +8,7 @@
 // messages arrive once per receiver, and the decoders compare against their last state. Pure, no allocation.
 
 #include "most/msg.hpp"
+#include "most/latency_diag.hpp"
 
 namespace nbt {
 namespace most {
@@ -40,7 +41,10 @@ public:
         int ran = 0;
         for (int i = 0; i < n_; ++i) {
             if (!matches(routes_[i], m)) continue;
+            const uint64_t diagnosticEntry=latencydiag::stamp();
             routes_[i].h(m, routes_[i].user);
+            if(latencydiag::enabled())latencydiag::record(latencydiag::MostRouteSpan,
+                latencydiag::metadata(m),diagnosticEntry,0,routes_[i].user);
             ++ran;
         }
         return ran;

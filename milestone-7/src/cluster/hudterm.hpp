@@ -230,11 +230,14 @@ inline std::string decodeText(const uint8_t* p, size_t n) {
 }
 
 // The shape each function we send must have. Anything else, IsVisible included, is refused.
-inline bool payloadShapeOk(uint16_t fkt, const std::vector<uint8_t>& p) {
+inline bool payloadShapeOk(uint16_t fkt, const std::vector<uint8_t>& p, bool extended = false) {
     size_t n = p.size();
     switch (fkt) {
         case kSetVisibility: return n == 3 && p[2] <= 1;
-        case kRemoveAllItems: case kGetSize: return n == 2;
+        case kRemoveAllItems: return n == 2;
+        case kGetSize: return n == 2 || (extended && n == 3 && p[2] == 1);
+        case 0x227: return extended && n == 7 && p[6] == 2;
+        case 0xC05: return extended && n >= 18 && n <= 4096 && p[6] == 1 && p[7] == 1 && p[8] == 0;
         case kSwitchVisibility: return n == 4;
         case kSetFillColor: case kSetLineColor: case kSetLineWidth: case kSetFillMode: return n == 3;
         case kAddCircle: case kAddCircleDiameter: {
@@ -243,6 +246,7 @@ inline bool payloadShapeOk(uint16_t fkt, const std::vector<uint8_t>& p) {
             return a0 >= -kMaxAngle && a0 <= kMaxAngle && a1 >= -kMaxAngle && a1 <= kMaxAngle;
         }
         case kTextareaSetText:
+            if (extended && n >= 4 && n <= 259 && p[2] == 1 && p[n-1] == 0) return true;
             return n >= 5 && (n - 3) % 2 == 0 && n <= 3 + 2 * (kMaxTextChars + 1) && p[2] == 0x00 && p[n - 1] == 0 &&
                    p[n - 2] == 0;
         case kAddPolygon:
@@ -255,24 +259,25 @@ inline bool payloadShapeOk(uint16_t fkt, const std::vector<uint8_t>& p) {
 // ---- calls ----
 
 struct Call {
+    int txType; // -1: transport default; 0: single bitmap on the control channel
     uint16_t fkt;
     std::vector<uint8_t> payload;
-    Call() : fkt(0) {}
-    Call(uint16_t f, const std::vector<uint8_t>& p) : fkt(f), payload(p) {}
+    Call() : txType(-1), fkt(0) {}
+    Call(uint16_t f, const std::vector<uint8_t>& p) : txType(-1), fkt(f), payload(p) {}
     uint16_t handle() const { return payload.size() >= 2 ? rdBe16(&payload[0]) : 0; }
 };
 
 // Whether a call keeps every limit: the shape, its handle, and for SwitchVisibility the second handle too.
-inline bool callOk(const Call& c, const HandleSet& allowed) {
-    if (!payloadShapeOk(c.fkt, c.payload) || !allowed.has(c.handle())) return false;
+inline bool callOk(const Call& c, const HandleSet& allowed, bool extended = false) {
+    if ((c.txType != -1 && !(extended && c.txType == 0 && c.fkt == 0xC05)) || !payloadShapeOk(c.fkt, c.payload, extended) || !allowed.has(c.handle())) return false;
     if (c.fkt == kSwitchVisibility && !allowed.has(rdBe16(&c.payload[2]))) return false;
     return true;
 }
 
 // The MOST message for one call, without the sender address: most::Client::send fills that in from its registration.
 // False, with out untouched, when a limit is broken.
-inline bool buildCall(uint16_t host, const Call& c, uint32_t tag, const HandleSet& allowed, most::Msg& out) {
-    if (!isRingNode(host) || !callOk(c, allowed)) return false;
+inline bool buildCall(uint16_t host, const Call& c, uint32_t tag, const HandleSet& allowed, most::Msg& out, bool extended = false) {
+    if (!isRingNode(host) || !callOk(c, allowed, extended)) return false;
     out.txType = 0;
     out.varTag = 1;
     out.varVal = 0;

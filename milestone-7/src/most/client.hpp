@@ -92,10 +92,11 @@ public:
 
     // This client's MOST address from its registration, 0 while unregistered or refused.
     uint16_t selfAddress() const;
+    uint32_t registeredHeaderTag() const; // return-routing tag used by the 6WB sender
 
     // Sends one command (see the top of this file), from any thread. m.src is ignored: the registered address is used.
     // False when refused here or not handed to the server; the answer, if any, arrives on a route like any message.
-    bool send(const Msg& m);
+    bool send(const Msg& m, bool registeredHeaderTag = false);
 
     // One line with the counters since the last call, so a silent client still shows. From main's loop, every 60 s.
     void logHealth();
@@ -107,7 +108,7 @@ private:
     void onAttached(DsiClient* c);
     void onDetached();
     void onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len);
-    void onMessage(const uint8_t* p, uint32_t len);
+    void onMessage(const uint8_t* p, uint32_t len, uint32_t deliveryMs);
     void noteFirst(const View& m, MsgClass c, bool wanted);
     LinkState deriveStateLocked() const;
     void updateStateLocked();         // call with lock_ held: unlocks it, then tells the listeners about a change

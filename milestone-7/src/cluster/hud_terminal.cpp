@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#include "most/latency_diag.hpp"
 #include "cluster/hud_terminal.hpp"
 
 #include <errno.h>
@@ -50,15 +51,21 @@ const char* submitResultName(SubmitResult r) {
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
 Core::Core(const Config& cfg)
-    : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), routeOn_(false),
-      frameOff_(false),
+    : currentBatchId_(0), nextBatchId_(0), lastGraphicMs_(0), haveGraphicTime_(false), replyTag_(0xffffu), cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(cfg.initialNavActive),
+      routeOn_(cfg.initialNavActive), frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false), havePending_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
+    if (cfg_.pacedGraphics) {
+        if (!cfg_.graphicIntervalMs) cfg_.graphicIntervalMs=15;
+        if (!cfg_.graphicReplyMs) cfg_.graphicReplyMs=8000;
+        graphicKeys_.reserve(kMaxGraphicKeys); graphics_.reserve(kMaxGraphics);
+    }
     memset(&stats_, 0, sizeof(stats_));
 }
 
 void Core::dropWork(uint32_t now) {
+    if (cfg_.pacedGraphics) abandonGraphics();
     stats_.batchesDropped += (haveCurrent_ ? 1 : 0) + (havePending_ ? 1 : 0);
     if (haveCurrent_ || havePending_) ++epoch_;
     haveCurrent_ = havePending_ = false;
@@ -110,6 +117,7 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
     if (!up) {
         if (!linkUp_) return;
         linkUp_ = false;          // self_ stays, so late answers to our old address are not taken for the navigation
+        if (cfg_.initialNavActive) { navActive_=true; routeOn_=true; frameOff_=false; sizes_.clear(); }
         refresh("link down", now);
         return;
     }
@@ -122,6 +130,9 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
     if (linkUp_ && self == self_) return;
     linkUp_ = true;
     self_ = self;
+    if (cfg_.pacedGraphics) ++epoch_; // invalidate the 6WB renderer even if no batch was active
+    if (cfg_.initialNavActive) { navActive_=true; routeOn_=true; frameOff_=false; }
+    sizes_.clear();
     failed_ = false;
     dropWork(now);
     char why[48];
@@ -136,11 +147,14 @@ void Core::setHost(uint16_t host, uint32_t now) {
     if (host) snprintf(why, sizeof(why), "82/00 host %04X%s", host, host_ ? " (changed)" : "");
     else snprintf(why, sizeof(why), "no 82/00 host on a ring node in the registry");
     host_ = host;
+    if (cfg_.pacedGraphics) ++epoch_; // cached dimensions belong to this actual peer
     failed_ = false;
-    navActive_ = false;
-    routeOn_ = false;
+    navActive_ = cfg_.initialNavActive;
+    routeOn_ = cfg_.initialNavActive;
     frameOff_ = false;
+    sizes_.clear();
     recent_.clear();
+    echoes_.clear();
     dropWork(now);
     dropped_.clear();                          // answers from the old host are not ours to match
     refresh(why, now);
@@ -160,7 +174,7 @@ SubmitResult Core::submit(const Batch& b, uint32_t) {
     }
     for (size_t i = 0; i < b.calls.size(); ++i) {
         const Call& c = b.calls[i];
-        if (callOk(c, cfg_.handles)) continue;
+        if (callOk(c, cfg_.handles, cfg_.extendedCalls)) continue;
         ++stats_.refused;
         printf("[HudTerm] batch '%s' refused: call %u, %03X %s handle %u, %u bytes, breaks a limit\n", b.label.c_str(),
                (unsigned)i, c.fkt, fktName(c.fkt), c.handle(), (unsigned)c.payload.size());
@@ -170,6 +184,7 @@ SubmitResult Core::submit(const Batch& b, uint32_t) {
     if (!haveCurrent_) {
         ++stats_.batches;
         current_ = b;
+        currentBatchId_=++nextBatchId_;
         haveCurrent_ = true;
         nextCall_ = 0;
         batchStartMs_ = 0;
@@ -217,41 +232,224 @@ bool Core::merge(const Batch& b) {
     return true;
 }
 
+// Explicit setter/drawing whitelist. C04 needs dimensions; unknown methods stay gated.
+// C05 uploads are queued before visibility changes, without an acknowledgement barrier.
+bool Core::graphicFunction(uint16_t fkt) const {
+    switch(fkt) {
+        case kSetVisibility: case kSwitchVisibility: case kTextareaSetText:
+        case kSetLineWidth: case kSetFillColor: case kAddPolygon:
+        case kRemoveAllItems: case 0x227: case 0xC05: return true;
+        default: return false;
+    }
+}
+bool Core::asynchronous(const Call& c) const { return cfg_.pacedGraphics && graphicFunction(c.fkt); }
+
+void Core::abandonGraphics() {
+    for(size_t i=0;i<graphics_.size();++i) {
+        Graphic& g=graphics_[i];
+        if(g.outcome!=Graphic::kPending)continue;
+        g.outcome=Graphic::kAbandoned;++stats_.graphicsAbandoned;
+        if(latencydiag::enabled()) {
+            const GraphicKey& k=graphicKeys_[g.key];latencydiag::Meta m;
+            m.src=k.self;m.dst=k.host;m.fb=kFBlock;m.fkt=k.fkt;m.handle=k.handle;m.tag=k.tag;
+            latencydiag::record(latencydiag::GraphicAbandoned,m,0,g.id,this);
+        }
+    }
+}
+void Core::expireGraphics(uint32_t now) {
+    size_t keep=0;
+    for(size_t i=0;i<graphics_.size();++i) {
+        const Graphic& g=graphics_[i];
+        if(left(g.sentMs,cfg_.graphicReplyMs,now)>0) {
+            if(keep!=i)graphics_[keep]=g;
+            ++keep;continue;
+        }
+        if(g.outcome==Graphic::kPending) {
+            ++stats_.graphicsUnconfirmed;
+            if(latencydiag::enabled()) {
+                const GraphicKey& k=graphicKeys_[g.key];latencydiag::Meta m;
+                m.src=k.self;m.dst=k.host;m.fb=kFBlock;m.fkt=k.fkt;m.handle=k.handle;m.tag=k.tag;
+                latencydiag::record(latencydiag::GraphicUnconfirmed,m,0,g.id,this);
+            }
+        }
+    }
+    graphics_.resize(keep);
+}
+bool Core::rememberGraphic(const Call& c,uint32_t tag,uint32_t now,uint32_t id) {
+    expireGraphics(now);
+    if(graphics_.size()>=kMaxGraphics) {fail("graphics correlation ledger full",now);return false;}
+    size_t key=0;
+    while(key<graphicKeys_.size()) {
+        const GraphicKey& k=graphicKeys_[key];
+        if(k.host==host_ && k.self==self_ && k.tag==tag && k.fkt==c.fkt && k.handle==c.handle())break;
+        ++key;
+    }
+    if(key==graphicKeys_.size()) {
+        if(key>=kMaxGraphicKeys) {fail("graphics registration history full",now);return false;}
+        GraphicKey k;k.host=host_;k.self=self_;k.tag=tag;k.fkt=c.fkt;k.handle=c.handle();k.reused=false;
+        graphicKeys_.push_back(k);
+    } else graphicKeys_[key].reused=true;
+    Graphic g;g.call=c;g.key=key;g.sentMs=now;g.id=id;g.batch=currentBatchId_;g.outcome=Graphic::kPending;
+    graphics_.push_back(g);++stats_.graphicsSent;return true;
+}
+// Results echo method-specific payloads. This is a validation check, not a
+// transaction identifier. Reused keys remain ambiguous even when bytes match.
+static bool graphicPayload(const Call& c,const most::View& m) {
+    size_t n=c.payload.size();
+    if(c.fkt==0xC05)return n>=10 && m.len==4 && m.data[2]==c.payload[9] && m.data[3]==1;
+    if(c.fkt==kTextareaSetText) {
+        if(n>=4 && c.payload[2]==1 && m.len==n-1)--n;
+        else if(n>=5 && c.payload[2]==0 && m.len==n-2)n-=2;
+    }
+    return m.len==n && n && !memcmp(m.data,&c.payload[0],n);
+}
+bool Core::onGraphicAnswer(const most::View& m,uint32_t now) {
+    expireGraphics(now);
+    if(m.op==most::kOpError && m.hdrTag==(cfg_.useFixedTag && cfg_.fixedTag!=0xffffu ? cfg_.fixedTag : replyTag_) && m.dst==self_) {
+        // Error(F) has no proven handle: report, never attach it to a newer batch.
+        ++stats_.errors;++stats_.graphicsAmbiguous;
+        if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,0,this);
+        return true;
+    }
+    if(!m.data || m.len<2 || (m.op!=most::kOpResultAck && m.op!=most::kOpErrorAck &&
+       m.op!=most::kOpProcessingAck && m.op!=most::kOpProcessing)) {++stats_.strays;return false;}
+    if(m.op==most::kOpErrorAck && m.len<3) {++stats_.strays;return false;}
+    const uint16_t handle=rdBe16(m.data);
+    for(size_t i=0;i<graphics_.size();++i) {
+        Graphic& g=graphics_[i];const GraphicKey& k=graphicKeys_[g.key];
+        if(m.src!=k.host || m.hdrTag!=k.tag || m.fkt!=k.fkt || handle!=k.handle ||
+           (m.dst!=k.self && !(cfg_.acceptMirroredAnswers && isAppAddress(m.dst))))continue;
+        if(m.op==most::kOpResultAck && !graphicPayload(g.call,m))continue;
+        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing)return true;
+        if(k.reused) {
+            ++stats_.graphicsAmbiguous;
+            if(m.op==most::kOpErrorAck)++stats_.errors;
+            if(latencydiag::enabled())latencydiag::record(m.op==most::kOpErrorAck ? latencydiag::GraphicError :
+                latencydiag::GraphicAmbiguous,latencydiag::metadata(m),0,0,this);
+            return true;
+        }
+        if(g.outcome!=Graphic::kPending) {
+            if(m.op==most::kOpErrorAck && g.outcome!=Graphic::kError) {
+                // Contradictory/already abandoned results are observable errors,
+                // but must never invalidate work submitted since that command.
+                g.outcome=Graphic::kError;++stats_.errors;++stats_.lateErrors;
+                if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,g.id,this);
+            } else ++stats_.copies;
+            return true;
+        }
+        if(now-g.sentMs>=cfg_.replyMs) {
+            ++stats_.graphicsLate;
+            if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicLate,latencydiag::metadata(m),0,g.id,this);
+        }
+        if(m.op==most::kOpErrorAck) {
+            g.outcome=Graphic::kError;++stats_.errors;
+            if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,g.id,this);
+            // A positively correlated error in the latest generation is structural.
+            // An older generation must not invalidate newly queued/sent work.
+            if(g.batch==currentBatchId_ && status_==kReady)fail("explicit ErrorAck to current graphics batch",now);
+            else ++stats_.lateErrors;
+        } else {
+            g.outcome=Graphic::kAnswered;++stats_.answers;++stats_.graphicsAnswered;
+            if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicAck,latencydiag::metadata(m),0,g.id,this);
+        }
+        return true;
+    }
+    if(m.op==most::kOpErrorAck) {
+        // The payload ledger has a finite lifetime; registration history does
+        // not. An expired known key is reportable, never assigned to new work.
+        for(size_t i=0;i<graphicKeys_.size();++i) {
+            const GraphicKey& k=graphicKeys_[i];
+            if(m.src==k.host && m.hdrTag==k.tag && m.fkt==k.fkt && handle==k.handle &&
+               (m.dst==k.self || (cfg_.acceptMirroredAnswers && isAppAddress(m.dst)))) {
+                ++stats_.errors;++stats_.graphicsAmbiguous;
+                if(latencydiag::enabled())latencydiag::record(latencydiag::GraphicError,latencydiag::metadata(m),0,0,this);
+                return true;
+            }
+        }
+    }
+    ++stats_.strays;return false;
+}
+
 bool Core::next(uint32_t now, most::Msg& out) {
     if (status_ != kReady || !haveCurrent_ || nextCall_ >= current_.calls.size()) return false;
     if (inFlight_.size() >= cfg_.maxInFlight) return false;
     const Call& c = current_.calls[nextCall_];
-    if (!buildCall(host_, c, tag_, cfg_.handles, out)) {   // checked at submit: only a host change could do this
+    // Do not cross an information/bitmap barrier, even when maxInFlight > 1.
+    if (cfg_.pacedGraphics && !inFlight_.empty()) return false;
+    if (cfg_.pacedGraphics && haveGraphicTime_ &&
+        left(lastGraphicMs_,cfg_.graphicIntervalMs,now)>0) return false;
+    if (!buildCall(host_, c, tag_, cfg_.handles, out, cfg_.extendedCalls)) {   // checked at submit: only a host change could do this
         fail("a queued call no longer builds", now);
         return false;
     }
     if (nextCall_ == 0) batchStartMs_ = now;
+    out.txType = c.txType >= 0 ? (uint32_t)c.txType : cfg_.txType;
+    if (cfg_.useFixedTag) out.hdrTag = cfg_.fixedTag;
+    const uint32_t replyTag = cfg_.useFixedTag && cfg_.fixedTag == 0xffffu ? replyTag_ : out.hdrTag;
+    if (cfg_.strictAnswers && c.fkt == kGetSize) {
+        if (replyTag == 0xffffu) { fail("no registered return tag for ImageGetSize", now); return false; }
+        for (size_t i=0; i<sizeQueries_.size(); ++i) {
+            const SizeQuery& q=sizeQueries_[i];
+            if(q.host==host_ && q.self==self_ && q.tag==replyTag && q.handle==c.handle()) {
+                fail("ImageGetSize already issued for this registration; refusing ambiguous retry", now);
+                return false;
+            }
+        }
+        if (sizeQueries_.size() >= 128) { fail("ImageGetSize registration history full", now); return false; }
+        SizeQuery q; q.host=host_; q.self=self_; q.tag=replyTag; q.handle=c.handle();
+        sizeQueries_.push_back(q);
+        printf("[HudTerm] +%u DISPATCH ImageGetSize host %04X self %04X tag %u handle %04X deadline +%u ms\n",
+               now, host_, self_, replyTag, c.handle(), cfg_.sizeReplyMs ? cfg_.sizeReplyMs : cfg_.replyMs);
+    }
+    if(latencydiag::enabled())latencydiag::record(latencydiag::Dispatch,latencydiag::metadata(out),0,tag_,this);
+    if (asynchronous(c) && !rememberGraphic(c,replyTag,now,tag_)) return false;
     ++tag_;
     ++nextCall_;
     InFlight f;
     f.fkt = c.fkt;
     f.handle = c.handle();
     f.sentMs = now;
-    inFlight_.push_back(f);
+    f.tag = replyTag;
+    f.warned = false;
+    f.diagnosticId = tag_-1;
+    if (!asynchronous(c)) inFlight_.push_back(f);
+    if (cfg_.pacedGraphics) { lastGraphicMs_=now; haveGraphicTime_=true; }
     recent_.add(c.fkt, f.handle, now);
+    if(cfg_.strictAnswers && !asynchronous(c)) {
+        Echo e; e.fkt=c.fkt; e.ms=now; e.tag=replyTag; e.payload=c.payload;
+        if(echoes_.size()>=128)echoes_.erase(echoes_.begin());
+        echoes_.push_back(e);
+    }
     ++stats_.calls;
     return true;
 }
 
 void Core::sendFailed(uint32_t now) { fail("the MOST client did not send a call", now); }
+void Core::sent(uint32_t now) {
+    if(cfg_.pacedGraphics) {
+        // Space successful local sends even if the vendor send itself took time.
+        lastGraphicMs_=now;
+        finishIfDone(now);
+    }
+}
 
 void Core::finishIfDone(uint32_t now) {
     if (!haveCurrent_ || nextCall_ < current_.calls.size() || !inFlight_.empty()) return;
     ++stats_.batchesDone;
     if (cfg_.logBatches)
-        printf("[HudTerm] batch '%s': %u calls answered in %u ms\n", current_.label.c_str(),
-               (unsigned)current_.calls.size(), now - batchStartMs_);
+        printf("[HudTerm] batch '%s': %u calls %s in %u ms\n", current_.label.c_str(),
+               (unsigned)current_.calls.size(), cfg_.pacedGraphics ? "dispatched (graphics acknowledgements asynchronous)" : "answered", now - batchStartMs_);
+    if(cfg_.pacedGraphics && latencydiag::enabled()) {
+        latencydiag::Meta m;m.src=self_;m.dst=host_;m.fb=kFBlock;
+        latencydiag::record(latencydiag::BatchDispatched,m,0,currentBatchId_,this);
+    }
     haveCurrent_ = false;
     if (!havePending_) {
         current_ = Batch();
         return;
     }
     current_ = pending_;
+    currentBatchId_=++nextBatchId_;
     pending_ = Batch();
     havePending_ = false;
     haveCurrent_ = true;
@@ -260,29 +458,102 @@ void Core::finishIfDone(uint32_t now) {
 
 void Core::onMessage(const most::View& m, uint32_t now) {
     if (m.fblock != kFBlock || m.inst != kInst || !host_) return;
+    if (cfg_.pacedGraphics && graphicFunction(m.fkt) && m.src==host_) {
+        onGraphicAnswer(m,now);
+        return;
+    }
+    if (cfg_.strictAnswers && m.src == host_ && m.fkt == kGetSize &&
+        (m.dst == self_ || cfg_.acceptMirroredAnswers)) {
+        onAnswer(m, now);
+        return;
+    }
     if (self_ && m.src == self_) return;                      // our own, if the server shows them to us
     if (self_ && m.dst == self_) {
         if (m.src == host_) onAnswer(m, now);
         return;
     }
     if (m.src != host_ && m.dst != host_) return;             // not this terminal
-    if (m.src == host_ && recent_.isCopy(m.fkt, m.data, m.len, now)) {
+    if (cfg_.acceptMirroredAnswers && m.src==host_ && ownEcho(m,now)) {
+        // Some NBT terminals mirror results only to the original navigation client.
+        // Accept only matching function+handle AND method-specific payload, never an arbitrary host packet.
+        onAnswer(m,now); ++stats_.copies; return;
+    }
+    if (!cfg_.strictAnswers && m.src == host_ && recent_.isCopy(m.fkt, m.data, m.len, now)) {
         ++stats_.copies;
         return;
     }
     onNav(m, now);
 }
 
+bool Core::ownEcho(const most::View& m,uint32_t now) const {
+    if(m.len<2 || !m.data)return false;
+    for(size_t i=echoes_.size();i>0;--i) {
+        const Echo& e=echoes_[i-1];
+        if(e.fkt!=m.fkt || e.tag!=m.hdrTag || now-e.ms>=cfg_.replyMs || e.payload.size()<2 ||
+           e.payload[0]!=m.data[0] || e.payload[1]!=m.data[1])continue;
+        if(m.op==most::kOpErrorAck)return m.len>=3;
+        if(m.op!=most::kOpResultAck && m.op!=most::kOpStatus &&
+           m.op!=most::kOpProcessingAck && m.op!=most::kOpProcessing)return false;
+        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing)return true;
+        if(m.fkt==kGetSize)return m.len==6 && rdBe16(m.data+2)>0 && rdBe16(m.data+4)>0;
+        if(m.fkt==0xC05)return m.len==4 && e.payload.size()>=10 && m.data[2]==e.payload[9] && m.data[3]==1;
+        size_t n=e.payload.size();
+        if(m.fkt==kTextareaSetText) {
+            if(n>=4 && e.payload[2]==1 && m.len==n-1) --n;
+            else if(n>=5 && e.payload[2]==0 && m.len==n-2) n-=2;
+        }
+        if(m.len==n && !memcmp(m.data,&e.payload[0],n))return true;
+    }
+    return false;
+}
+
 // ErrorAck (9) carries the handle first, like every answer to an Ack method; Error (F) does not, so it matches on the
 // function alone. An error fails the terminal even when it matches nothing in flight: one of our calls is wrong. Only
 // an answer to a call we dropped a moment ago is let go (see the header).
 void Core::onAnswer(const most::View& m, uint32_t now) {
+    if(latencydiag::enabled())latencydiag::record(latencydiag::CoreAnswer,
+        latencydiag::metadata(m),0,inFlight_.empty()?0:inFlight_[0].diagnosticId,this);
+    if (cfg_.strictAnswers && m.fkt == kGetSize) {
+        // Expiry is evaluated on receipt too, even if the send thread has not
+        // ticked yet. Validation never consumes or extends a pending request.
+        tick(now);
+        size_t i=0;
+        while(i<inFlight_.size() && !(inFlight_[i].fkt==m.fkt &&
+              inFlight_[i].tag==m.hdrTag && m.data && m.len>=2 &&
+              inFlight_[i].handle==rdBe16(m.data))) ++i;
+        if(status_!=kReady || i==inFlight_.size()) { ++stats_.strays; return; }
+        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing) return;
+        if(m.op==most::kOpResultAck) {
+            // F31 capture: handle BE16, width BE16, height BE16. No selector
+            // byte in the result; the old seven-byte shape was synthetic only.
+            if(m.len!=6 || !rdBe16(m.data+2) || !rdBe16(m.data+4)) {
+                ++stats_.strays; return;
+            }
+            const InFlight f=inFlight_[i];
+            Size sz; sz.handle=f.handle; sz.width=rdBe16(m.data+2); sz.height=rdBe16(m.data+4);
+            size_t k=0; while(k<sizes_.size() && sizes_[k].handle!=sz.handle) ++k;
+            if(k==sizes_.size()) sizes_.push_back(sz); else sizes_[k]=sz;
+            inFlight_.erase(inFlight_.begin()+i);
+            ++stats_.answers;
+            printf("[HudTerm] +%u RX ImageGetSize tag %u handle %04X %ux%u elapsed %u ms\n",
+                   now, m.hdrTag, sz.handle, sz.width, sz.height, now-f.sentMs);
+            finishIfDone(now);
+            return;
+        }
+        // Unacknowledged Error has no proven handle correlation here.
+        if(m.op!=most::kOpErrorAck || m.len<3) { ++stats_.strays; return; }
+        // A correlated error still follows the existing fail-closed path.
+    }
     if (m.op == most::kOpProcessingAck || m.op == most::kOpProcessing) return;   // still working: the timeout stands
+    if (cfg_.strictAnswers && (m.len < 2 || !m.data)) { ++stats_.strays; return; }
+    if (cfg_.strictAnswers && (m.op==most::kOpResultAck || m.op==most::kOpStatus) && !ownEcho(m,now)) {
+        ++stats_.strays; return;
+    }
     bool error = m.op != most::kOpResultAck && m.op != most::kOpStatus;
     bool byHandle = m.op != most::kOpError && m.len >= 2;
     uint16_t h = byHandle ? rdBe16(m.data) : 0;
     size_t i = 0;
-    while (i < inFlight_.size() && !(inFlight_[i].fkt == m.fkt && (!byHandle || inFlight_[i].handle == h))) ++i;
+    while (i < inFlight_.size() && !(inFlight_[i].fkt == m.fkt && (!cfg_.strictAnswers || inFlight_[i].tag == m.hdrTag) && (!byHandle || inFlight_[i].handle == h))) ++i;
     bool matched = i < inFlight_.size();
     if (matched) inFlight_.erase(inFlight_.begin() + i);
     if (error && !matched && takeDropped(m.fkt, byHandle, h, now)) {
@@ -291,6 +562,7 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
                most::opName(m.op), m.op, m.fkt, fktName(m.fkt), h);
         return;
     }
+    if (cfg_.strictAnswers && !matched) { ++stats_.strays; return; }
     if (error) {
         ++stats_.errors;
         char why[160];
@@ -327,6 +599,7 @@ static bool draws(const most::View& m) {
 
 void Core::onNav(const most::View& m, uint32_t now) {
     ++stats_.navMsgs;
+    if (cfg_.ignoreFactoryNav) return;
     lastNavMs_ = now;
     if (m.fkt == kSetVisibility && m.len >= 3 && cfg_.navFrame > 0 && rdBe16(m.data) == cfg_.navFrame) {
         routeOn_ = m.data[2] != 0;
@@ -343,11 +616,25 @@ void Core::onNav(const most::View& m, uint32_t now) {
 }
 
 void Core::tick(uint32_t now) {
-    if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
+    if(cfg_.pacedGraphics) expireGraphics(now);
+    if (status_ == kReady && !inFlight_.empty() && inFlight_[0].fkt==kGetSize &&
+        cfg_.sizeReplyMs>cfg_.replyMs && !inFlight_[0].warned &&
+        left(inFlight_[0].sentMs,cfg_.replyMs,now)==0 &&
+        left(inFlight_[0].sentMs,deadline(inFlight_[0]),now)>0) {
+        inFlight_[0].warned=true;
+        printf("[HudTerm] +%u ImageGetSize handle %04X diagnostic threshold %u ms; same request pending until +%u\n",
+               now,inFlight_[0].handle,cfg_.replyMs,inFlight_[0].sentMs+deadline(inFlight_[0]));
+    }
+    if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, deadline(inFlight_[0]), now) == 0) {
+        if(latencydiag::enabled()) {
+            latencydiag::Meta m;m.src=self_;m.dst=host_;m.fb=kFBlock;m.inst=kInst;
+            m.fkt=inFlight_[0].fkt;m.handle=inFlight_[0].handle;m.tag=inFlight_[0].tag;
+            latencydiag::record(latencydiag::Timeout,m,0,inFlight_[0].diagnosticId,this);
+        }
         ++stats_.timeouts;
         char why[96];
-        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
-                 inFlight_[0].handle, cfg_.replyMs);
+        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms (sent +%u, now +%u)", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
+                 inFlight_[0].handle, deadline(inFlight_[0]), inFlight_[0].sentMs, now);
         fail(why, now);
     }
     if (navActive_ && !routeOn_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
@@ -360,14 +647,33 @@ void Core::tick(uint32_t now) {
 uint32_t Core::msUntilDeadline(uint32_t now) const {
     uint32_t d = 0xFFFFFFFFu;
     if (status_ == kReady && !inFlight_.empty()) {
-        uint32_t t = left(inFlight_[0].sentMs, cfg_.replyMs, now);
+        uint32_t t = left(inFlight_[0].sentMs, deadline(inFlight_[0]), now);
+        if (inFlight_[0].fkt==kGetSize && cfg_.sizeReplyMs>cfg_.replyMs && !inFlight_[0].warned) {
+            uint32_t diagnostic=left(inFlight_[0].sentMs,cfg_.replyMs,now);
+            if(diagnostic<t)t=diagnostic;
+        }
         if (t < d) d = t;
+    }
+    if(cfg_.pacedGraphics) {
+        if(status_==kReady && haveCurrent_ && nextCall_<current_.calls.size() && inFlight_.empty()) {
+            uint32_t t=haveGraphicTime_ ? left(lastGraphicMs_,cfg_.graphicIntervalMs,now) : 0;
+            if(t<d)d=t;
+        }
+        for(size_t i=0;i<graphics_.size();++i) {
+            uint32_t t=left(graphics_[i].sentMs,cfg_.graphicReplyMs,now);
+            if(t<d)d=t;
+        }
     }
     if (navActive_ && !routeOn_) {
         uint32_t t = left(lastNavMs_, cfg_.navQuietMs, now);
         if (t < d) d = t;
     }
     return d;
+}
+
+bool Core::imageSize(uint16_t h, uint16_t& w, uint16_t& height) const {
+    for(size_t i=0;i<sizes_.size();++i) if(sizes_[i].handle==h) { w=sizes_[i].width; height=sizes_[i].height; return true; }
+    return false;
 }
 
 bool Core::takeStatusChange(Status& s) {
@@ -381,7 +687,7 @@ bool Core::takeStatusChange(Status& s) {
 
 HudTerminal::HudTerminal(const Config& cfg)
     : core_(cfg), client_(NULL), send_(NULL), sendUser_(NULL), statusCb_(NULL), statusUser_(NULL), running_(false),
-      stop_(false) {
+      stop_(false), registeredTag_(cfg.useFixedTag && cfg.fixedTag == 0xffffu) {
     memset(&lastHealth_, 0, sizeof(lastHealth_));
     pthread_mutex_init(&lock_, NULL);
     pthread_condattr_t a;
@@ -493,6 +799,12 @@ bool HudTerminal::waitIdle(uint32_t ms) {
     }
 }
 
+bool HudTerminal::imageSize(uint16_t h, uint16_t& w, uint16_t& height) const {
+    pthread_mutex_lock(&lock_);
+    bool ok=core_.imageSize(h,w,height);
+    pthread_mutex_unlock(&lock_);return ok;
+}
+
 TerminalStats HudTerminal::stats() const {
     pthread_mutex_lock(&lock_);
     TerminalStats s = core_.stats();
@@ -513,17 +825,29 @@ void HudTerminal::logHealth() {
            t.replaced - l.replaced, t.merged - l.merged, t.refused - l.refused, t.calls - l.calls, t.answers - l.answers, t.copies - l.copies,
            t.strays - l.strays, t.navMsgs - l.navMsgs, t.timeouts - l.timeouts, t.errors - l.errors,
            t.lateErrors - l.lateErrors);
+    if(t.graphicsSent || l.graphicsSent)
+        printf("[HudTerm] graphics: dispatched %u, acknowledged %u, unconfirmed %u, ambiguous replies %u, late %u, abandoned %u (non-blocking)\n",
+               t.graphicsSent-l.graphicsSent,t.graphicsAnswered-l.graphicsAnswered,t.graphicsUnconfirmed-l.graphicsUnconfirmed,
+               t.graphicsAmbiguous-l.graphicsAmbiguous,t.graphicsLate-l.graphicsLate,t.graphicsAbandoned-l.graphicsAbandoned);
 }
 
 void HudTerminal::onMessage(const most::View& m) {
+    if(latencydiag::enabled())latencydiag::record(latencydiag::TerminalEntry,latencydiag::metadata(m),0,0,this);
+    const uint32_t entryMs=nowMs();
     pthread_mutex_lock(&lock_);
-    core_.onMessage(m, nowMs());
+    const uint32_t coreMs=nowMs();
+    const bool diagnostic=registeredTag_ && m.fblock==kFBlock && m.inst==kInst && m.fkt==kGetSize;
+    core_.onMessage(m, coreMs);
     wake();
     pthread_mutex_unlock(&lock_);
+    if(diagnostic)
+        printf("[HudTerm] ImageGetSize receive DSI callback +%u MOST +%u terminal +%u core +%u tag %u len %u\n",
+               m.deliveryMs,m.rxMs,entryMs,coreMs,m.hdrTag,(unsigned)m.len);
 }
 
 void HudTerminal::onLink(bool up, uint16_t self) {
     pthread_mutex_lock(&lock_);
+    if (up && client_) core_.setReplyTag(client_->registeredHeaderTag());
     core_.setLink(up, self, nowMs());
     wake();
     pthread_mutex_unlock(&lock_);
@@ -552,7 +876,7 @@ void HudTerminal::regTramp(const std::vector<most::RegistryEntry>& reg, void* se
 
 bool HudTerminal::clientSend(const most::Msg& m, void* self) {
     HudTerminal* t = static_cast<HudTerminal*>(self);
-    return t->client_ && t->client_->send(m);
+    return t->client_ && t->client_->send(m, t->registeredTag_);
 }
 
 void* HudTerminal::threadMain(void* self) {
@@ -572,10 +896,15 @@ void HudTerminal::run() {
             SendFn fn = send_;
             void* user = sendUser_;
             pthread_mutex_unlock(&lock_);
+            const uint32_t dispatchMs = nowMs();
             bool ok = fn && fn(m, user);
+            if (registeredTag_ && m.fkt == kGetSize)
+                printf("[HudTerm] +%u ImageGetSize send returned %s after %u ms\n",
+                       nowMs(), ok ? "OK" : "FAILED", nowMs()-dispatchMs);
             pthread_mutex_lock(&lock_);
             now = nowMs();
             if (!ok) core_.sendFailed(now);
+            else core_.sent(now);
         }
         Status s;
         if (core_.takeStatusChange(s)) {

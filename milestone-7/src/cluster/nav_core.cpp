@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/nav_core.hpp"
+#include "cluster/hud6wb_display.hpp"
+#include "cluster/hud6wb_config.hpp"
 #include "nbt_env.hpp"
 
 #include <errno.h>
@@ -388,7 +390,36 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         stopHint_ = "a call failed, or this cluster is not laid out like the 6wa profile: see the [HudTerm] lines";
         return true;
     }
-    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa): cluster arrows disabled\n", id);
+    if (!strcmp(id, "6wb")) {
+        if (!most) return false;
+        const char* mode=getenv("NBT_HUDTERM");
+        shadow_=!mode || strcmp(mode,"on")!=0;
+        hudterm::Bmw6wbProfile p;
+        hudterm::configure6wb(p);
+        p.roadShields=envFlag("NBT_6WB_ROAD_SHIELDS")==1;
+        hudterm::Config c;
+        c.handles=hudterm::handlesOf(p); c.navFrame=p.base.frame;
+        c.txType=p.vectorTx; c.fixedTag=p.headerTag; c.useFixedTag=true;
+        c.strictAnswers=true; c.acceptMirroredAnswers=true; c.extendedCalls=true;
+        c.ignoreFactoryNav=true;
+        c.initialNavActive=false;
+        yield_enabled_=false;
+        printf("[KombiNav] 6wb experimental: OEM navigation checks disabled\n");
+        c.replyMs=3000; c.sizeReplyMs=5000;
+        c.pacedGraphics=true; c.graphicIntervalMs=15; c.graphicReplyMs=8000;
+        c.maxInFlight=1; c.maxBatch=128; c.logBatches=!shadow_;
+        terminal_=new hudterm::HudTerminal(c);
+        if(!terminal_->attach(*most,!shadow_) || !terminal_->start()) return false;
+        display_=new Hud6wbDisplay(*terminal_,p,shadow_);
+        settings_.approach=kApproachOff; // 6WB bar carries distance; keep the full AA distance text.
+        settings_.approach_mi=0;
+        target_="experimental BMW 6WB HUDTerminal (registry host)";
+        stopHint_="6WB: matching ImageGetSize results required; never reset after errors";
+        printf("[KombiNav] 6wb %s: F31 profile unverified; %s\n",shadow_?"SHADOW":"LIVE OPT-IN",
+            shadow_?"no HUDTerminal commands sent":"checking surfaces when AA guidance arrives; no OEM prerequisite");
+        return true;
+    }
+    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa, 6wb): cluster arrows disabled\n", id);
     return false;
 }
 
@@ -496,10 +527,12 @@ void KombiNav::start(most::Client* most) {
                settings_.lanes ? "on" : "off", settings_.inplace);
     else
         printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %s, iDrive-route yield %s (and the "
-               "factory navigation on the terminal, always)\n", enabledNow() ? "ON" : "off",
+               "%s)\n", enabledNow() ? "ON" : "off",
                forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", display_->name(), target_.c_str(),
                shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "", approachText().c_str(),
-               yield_enabled_ ? "on" : "off");
+               yield_enabled_ ? "on" : "off",
+               !strcmp(display_->name(),"6wb") ?
+               "experimental OEM checks bypassed" : "factory navigation on the terminal, always");
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
         return;
@@ -539,7 +572,9 @@ void KombiNav::onFatalSignal() {
 // cancel (or a yield: the factory graph owns the models then), so the next start retries a cancel that failed.
 // The shadow mode draws nothing and never touches it: a file a live run left stays for the next live run to clear.
 void KombiNav::markShown(bool on, bool force) {
-    if (shadow_ || on == marked_) return;
+    if (shadow_) return;
+    if (display_ && !strcmp(display_->name(), "6wb")) on = display_->sentAny();
+    if (on == marked_) return;
     if (on) {
         int fd = open(kShownFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) close(fd);

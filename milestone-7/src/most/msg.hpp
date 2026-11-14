@@ -45,6 +45,7 @@ struct View {
     uint32_t hdrTag;
     const uint8_t* data;
     size_t   len;
+    uint32_t deliveryMs; // entry into MOST client DSI callback, not bus arrival
     uint32_t rxMs;      // monotonic ms when our callback ran (0 until the client sets it); later than arrival after a stall
 };
 
@@ -65,6 +66,7 @@ inline bool parseView(const uint8_t* p, size_t len, View& m) {
     if (n > len - 32) return false;
     m.data = p + 32;
     m.len  = n;
+    m.deliveryMs = 0;
     m.rxMs = 0;
     return true;
 }
