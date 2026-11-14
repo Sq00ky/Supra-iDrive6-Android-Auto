@@ -26,6 +26,9 @@ public:
     // A Status payload of kFBlock/kFkt. True: a new level, in level and max (0 <= level <= max, max > 0).
     bool feed(const uint8_t* d, size_t n, uint32_t rxMs, int& level, int& max) {
         if (!d || n < 5) return false;
+        // Byte 0 is the AudioMaster channel. 0x01 is main entertainment volume.
+        // Ignore other channels (0x02 nav prompt, 0x03 phone, 0x06 gong/PDC) so guidance doesn't trigger OSD.
+        if (d[0] != 0x01) return false;
         int lv = d[2], mx = d[4];
         if (mx <= 0 || lv > mx) return false;
         if (lv == level_ && mx == max_ && rxMs - ms_ < (uint32_t)kDupMs) return false;   // the same step, repeated
