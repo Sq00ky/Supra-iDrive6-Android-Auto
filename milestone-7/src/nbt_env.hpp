@@ -70,6 +70,7 @@ inline bool carParkingBrakeEnabled() {
 // the canvas the phone renders, and decoder size, insets, DPI and touch all follow it (car_config.hpp).
 // Defined below, with the USB settings.
 inline bool usb1080pEnabled();
+inline bool usb1080PanelOk();
 
 inline int videoResolution() {
     const char* e = getenv("NBT_VID_RES");
