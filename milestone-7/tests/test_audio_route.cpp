@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test: AudioRoute build retries and the "granted" callback (drives NBT_BT_PLAY).
+// Host test: AudioRoute build retries (and builds without them) and the "granted" callback (drives NBT_BT_PLAY).
 // A fake audioconn (shell script) refuses the first FAILS calls like the car's "AMCommand error", then succeeds.
 #include "audio/audio_route.hpp"
 #include <assert.h>
@@ -13,12 +13,18 @@
 static volatile int g_granted = 0;
 static void onGranted(void* user) { g_granted = *(int*)user; }
 
-static void writeFake(const char* path, const char* counter, int fails) {
+// removeFocus() completion: the tag, negated when audioconn did not run.
+static volatile int g_removed = 0;
+static void onRemoved(void* user, bool ran) { g_removed = ran ? *(int*)user : -*(int*)user; }
+
+// sleep_s: the fake holds the one audioconn slot this long after counting the call.
+static void writeFake(const char* path, const char* counter, int fails, int sleep_s = 0) {
     FILE* f = fopen(path, "w");
     assert(f);
-    fprintf(f, "#!/bin/sh\nn=$(cat %s 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > %s\n"
+    fprintf(f, "#!/bin/sh\nn=$(cat %s 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > %s\nsleep %d\n"
                "echo \"requestFocus($2,$3)\"\nif [ $n -le %d ]; then echo 'AMCommand error in execution!!!'; exit 255; fi\n"
-               "echo \"makeAudible($2,$3)\"\necho 'AMCommand successfully executed'\nexit 0\n", counter, counter, fails);
+               "echo \"makeAudible($2,$3)\"\necho 'AMCommand successfully executed'\nexit 0\n", counter, counter, sleep_s,
+            fails);
     fclose(f);
     chmod(path, 0755);
     unlink(counter);
@@ -84,6 +90,44 @@ int main() {
     assert(calls(counter) == 1);   // removes are not retried
     assert(r.remove(0xb8));        // no callback = no crash
     sleep(1);
+
+    // 5) removeFocus() completion: ran = audioconn ran (any exit status), not when cancelled before it could run.
+    writeFake(fake, counter, 0);
+    tag = 11;
+    g_removed = 0;
+    assert(r.removeFocus(0x1a, 0x1, &onRemoved, &tag));
+    assert(waitFor(&g_removed, 11, 4));
+    writeFake(fake, counter, 99);
+    tag = 12;
+    g_removed = 0;
+    assert(r.removeFocus(0x1a, 0x1, &onRemoved, &tag));
+    assert(waitFor(&g_removed, 12, 4));   // refused, but it ran
+    assert(calls(counter) == 1);
+    writeFake(fake, counter, 0, 2);
+    assert(r.removeFocus(0x1a, 0x1));     // no callback = no crash; holds the slot for 2 s
+    for (int i = 0; i < 40 && calls(counter) < 1; ++i) usleep(100000);
+    assert(calls(counter) == 1);
+    tag = 13;
+    g_removed = 0;
+    assert(r.removeFocus(0x1a, 0x1, &onRemoved, &tag));   // waits for the slot
+    r.cancelPending();
+    assert(waitFor(&g_removed, -13, 4));
+    sleep(2);   // the running one finishes; the cancelled one never ran
+    assert(calls(counter) == 1);
+
+    // 6) buildFocus(retry = false): one attempt only, and the build slot is free again afterwards.
+    setenv("NBT_AUDIOCONN_RETRY_S", "1", 1);   // a retrying build would try again after 1 s
+    writeFake(fake, counter, 1);
+    tag = 14;
+    g_granted = 0;
+    assert(r.buildFocus(0x1a, 0x1, &onGranted, &tag, 0, false));
+    sleep(3);
+    assert(g_granted == 0 && calls(counter) == 1);
+    writeFake(fake, counter, 0);
+    tag = 15;
+    assert(r.buildFocus(0x1a, 0x1, &onGranted, &tag, 0, false));
+    assert(waitFor(&g_granted, 15, 4));
+    assert(calls(counter) == 1);
 
     unlink(fake);
     unlink(counter);
