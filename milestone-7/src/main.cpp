@@ -1162,7 +1162,8 @@ static void onMicData(const uint8_t* pcm_data, size_t size, void* user_data) {
     nbt::micLevelMeter(pcm_data, size);
 }
 
-static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data) {
+static void onVideoFrame(uint32_t frame_index, std::vector<uint8_t>& frame_data, size_t data_offset,
+                         size_t nal_len, uint64_t pts, void* user_data) {
     // [VideoRate] (PR #66): phone video frames counted at the AA callback boundary, before queueing; one average every
     // five seconds, next to what the phone was asked for (NBT_VID_FPS, default 30) and the decoder rate.
     struct VideoRateProbe {
@@ -1192,7 +1193,7 @@ static void onVideoFrame(uint32_t frame_index, const uint8_t* nal_data, size_t n
     nbt::VideoManager* video = reinterpret_cast<nbt::VideoManager*>(user_data);
     if (video) {
         // Feed raw H.264 slice straight into the car's hardware video decoder (/dev/name/local/mdev)
-        video->postVideoFrame(nal_data, nal_len, pts);
+        video->postVideoFrame(frame_data, data_offset, nal_len, pts);
         video->onVideoFrameReceived(frame_index, nal_len);
     }
 }

@@ -80,6 +80,9 @@ private:
     int32_t  spx_trim_;       // trim the speex ratio was last set for
     uint64_t spx_since_;      // output frames since that ratio was set
     std::vector<int16_t> spx_buf_;
+    // callers reuse these across PCM chunks instead of allocating vectors each time.
+    std::vector<int16_t> bytes_src_;
+    std::vector<int16_t> bytes_dst_;
     uint64_t in_count_, out_count_;
 
     uint32_t src_rate_;

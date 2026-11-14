@@ -100,8 +100,8 @@ public:
     screen_context_t screenContext() const { return sink_.ctx; }
     screen_window_t  screenWindow()  const { return sink_.win; }
 
-    // Push raw H.264 NAL units from aasdk
-    bool postVideoFrame(const uint8_t* data, size_t length, uint64_t pts = 0);
+    // Queue the H.264 payload within an AA frame. Takes ownership of frame_data on a successful enqueue
+    bool postVideoFrame(std::vector<uint8_t>& frame_data, size_t offset, size_t length, uint64_t pts = 0);
     bool postCodecConfig(const uint8_t* data, size_t length);
     void onVideoFrameReceived(uint32_t frame_index, size_t byte_len);
 

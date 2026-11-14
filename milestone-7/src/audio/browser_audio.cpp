@@ -32,6 +32,10 @@ const uint32_t kLeadMs = 150;        // never run more than this ahead of real t
 const uint32_t kWaitStepMs = 2;             // waiting for late input is checked this often
 const size_t kFadeFrames = 32;              // ~0.7 ms fade at a real gap (padding, end of a prompt)
 
+static size_t pendingSamples(const StreamInput::Mix& mix) {
+    return mix.pending.size() - mix.pending_offset;
+}
+
 uint64_t nowMs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -219,6 +223,7 @@ bool BrowserAudio::openPcm() {
         stream_[s].mix.rs.configure(stream_[s].mix.rs_rate, audioSourceChannels(s), dev_.rate(), kOutCh);
         stream_[s].mix.rs.resetCounters();
         stream_[s].mix.pending.clear();
+        stream_[s].mix.pending_offset = 0;
     }
     mixer_.configure(dev_.rate(), kOutCh, duck_cfg_);
     return true;
@@ -303,27 +308,29 @@ void BrowserAudio::stopMixer() {
 // Takes `frames` converted frames of stream s into out (zero-padded). Mixer thread only.
 bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_t* got_out) {
     if (got_out) *got_out = 0;
-    std::vector<int16_t>& q = stream_[s].mix.pending;
-    if (stream_[s].in.flush) { stream_[s].in.flush = false; q.clear(); stream_[s].mix.rs.reset(); }
+    StreamInput::Mix& mix = stream_[s].mix;
+    std::vector<int16_t>& q = mix.pending;
+    if (stream_[s].in.flush) { stream_[s].in.flush = false; q.clear(); mix.pending_offset = 0; mix.rs.reset(); }
     const uint32_t src = stream_[s].in.src_rate;
     if (src != stream_[s].mix.rs_rate) {   // the session thread measured a different rate for this stream
         stream_[s].mix.rs_rate = src;
         stream_[s].mix.rs.configure(src, audioSourceChannels(s), dev_.rate(), kOutCh);
         stream_[s].mix.rs.resetCounters();   // the ratio check must not mix two rates
         q.clear();
+        mix.pending_offset = 0;
     }
     const size_t need = frames * kOutCh;
     // 10 ms of AA PCM per read, but never more than this buffer (sized for 48 kHz stereo): a stream that declares a
     // higher rate is read in more, smaller steps instead of overflowing it.
     uint8_t raw[48000 / 100 * 2 * 2];
     const size_t raw_block = pcmChunkBytes(src, audioSourceChannels(s), 10u, sizeof(raw));
-    while (q.size() < need) {
+    while (q.size() - mix.pending_offset < need) {
         size_t got = stream_[s].in.ring->read(raw, raw_block);
         if (got == 0) break;
         consumed(s, got);
-        std::vector<uint8_t> conv;
+        mix.converted.clear();
         const uint64_t t0 = nowUs();
-        stream_[s].mix.rs.processBytes(raw, got, conv);
+        mix.rs.processBytes(raw, got, mix.converted);
         rs_us_ += nowUs() - t0;
         if (rs_engine_ == PcmResampler::SPEEX && stream_[s].mix.rs.engine() != PcmResampler::SPEEX && !rs_failed_) {
             // PcmResampler couldn't set speexdsp up and carried on with linear interpolation: make that visible and
@@ -334,13 +341,14 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
             setResampler(PcmResampler::LINEAR, "speexdsp could not start");
         }
         size_t old = q.size();
-        q.resize(old + conv.size() / 2);
-        if (!conv.empty()) memcpy(&q[old], &conv[0], conv.size());
+        q.resize(old + mix.converted.size() / 2);
+        if (!mix.converted.empty()) memcpy(&q[old], &mix.converted[0], mix.converted.size());
     }
-    size_t take = q.size() < need ? q.size() : need;
+    const size_t available = q.size() - mix.pending_offset;
+    size_t take = available < need ? available : need;
     if (got_out) *got_out = take;
     if (take == 0) { stream_[s].mix.gap = true; return false; }
-    memcpy(out, &q[0], take * 2);
+    memcpy(out, &q[mix.pending_offset], take * 2);
     const size_t take_frames = take / kOutCh;
     // A real gap (padding that waiting could not avoid, or a prompt's end) fades instead of clicking: the audio
     // before the padding ramps down, the first block after it ramps up.
@@ -350,7 +358,16 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
         memset(out + take, 0, (need - take) * 2);
         stream_[s].mix.gap = true;
     }
-    q.erase(q.begin(), q.begin() + take);
+    mix.pending_offset += take;
+    if (mix.pending_offset == q.size()) {
+        q.clear();
+        mix.pending_offset = 0;
+    } else if (mix.pending_offset >= q.capacity() / 2) {
+        const size_t remaining = q.size() - mix.pending_offset;
+        memmove(&q[0], &q[mix.pending_offset], remaining * sizeof(q[0]));
+        q.resize(remaining);
+        mix.pending_offset = 0;
+    }
     bool loud = false;
     for (size_t i = 0; i < take && !loud; ++i) loud = (out[i] > kAudibleLevel || out[i] < -kAudibleLevel);
     if (audible) *audible = loud;
@@ -637,7 +654,7 @@ void BrowserAudio::mixerLoop() {
         bool queued = false, any_started = false;
         for (int s = 0; s < NSTREAMS; ++s) {
             if (stream_[s].in.started) any_started = true;
-            if (stream_[s].in.ring->size() > 0 || !stream_[s].mix.pending.empty()) queued = true;
+            if (stream_[s].in.ring->size() > 0 || pendingSamples(stream_[s].mix) > 0) queued = true;
         }
         if (any_started || queued) requestRoute(any_started ? "AA stream started" : "AA audio queued");
 
@@ -675,7 +692,7 @@ void BrowserAudio::mixerLoop() {
                 const uint32_t seq = stream_[s].in.start_seq;
                 if (seq != stream_[s].mix.seen_seq) { stream_[s].mix.seen_seq = seq; stream_[s].mix.gate.restart(); }
                 const bool started = stream_[s].in.started;
-                const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), stream_[s].mix.pending.size(), stream_[s].in.src_rate, audioSourceChannels(s),
+                const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), pendingSamples(stream_[s].mix), stream_[s].in.src_rate, audioSourceChannels(s),
                                                        dev_.rate(), kOutCh);
                 mix[s] = stream_[s].mix.gate.ready(started, avail, now);
                 live[s] = started && mix[s];
@@ -695,7 +712,7 @@ void BrowserAudio::mixerLoop() {
             for (;;) {
                 bool wait = false;
                 for (int s = 0; s < NSTREAMS; ++s) {
-                    const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), stream_[s].mix.pending.size(), stream_[s].in.src_rate,
+                    const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), pendingSamples(stream_[s].mix), stream_[s].in.src_rate,
                                                            audioSourceChannels(s), dev_.rate(), kOutCh);
                     if (stream_[s].mix.guard.shouldWait(live[s], avail, block, waited, can_wait)) wait = true;
                 }
@@ -727,7 +744,7 @@ void BrowserAudio::mixerLoop() {
         if (drift_on_ && play && stream_[MEDIA].in.started) {
             const uint64_t in_bps = (uint64_t)stream_[MEDIA].in.src_rate * audioSourceChannels(MEDIA) * 2u;
             const double fill_ms = (in_bps ? (double)stream_[MEDIA].in.ring->size() * 1000.0 / (double)in_bps : 0.0) +
-                                   (double)(stream_[MEDIA].mix.pending.size() / kOutCh) * 1000.0 / (double)dev_.rate();
+                                   (double)(pendingSamples(stream_[MEDIA].mix) / kOutCh) * 1000.0 / (double)dev_.rate();
             // Deferred acks: a phone held to the window keeps ~window x frame length queued, and no trim lowers that.
             // The target cap must cover it (plus a block and some jitter), or the loop pins the trim at +500 ppm.
             const uint32_t frame_us = media_frame_us_;
@@ -808,6 +825,7 @@ void BrowserAudio::onSessionEnded() {
         stream_[s].in.started = false;
         if (stream_[s].in.ring) stream_[s].in.ring->clear();
         stream_[s].mix.pending.clear();
+        stream_[s].mix.pending_offset = 0;
         stream_[s].mix.rs.reset();
         stream_[s].in.flush = false;
         stream_[s].in.frames_in = 0;

@@ -158,11 +158,13 @@ VideoManager::VideoManager()
       idr_wanted_(false),
       decoder_gen_(0), frames_in_gen_(0), window_ready_(false), overlay_surface_(0), overlay_verified_(false),
       overlay_failed_(false), aa_surface_seen_(false), aa_surface_logged_(false), aa_surface_ticks_(0),
-      cp_ctx_(NULL), cp_detached_(false) {
+      cp_ctx_(NULL), cp_detached_(false), frame_queue_(nbt::videoQueueCapacity()) {
     memset(&sink_, 0, sizeof(sink_));
     pthread_mutex_init(&queue_mutex_, NULL);
     pthread_mutex_init(&decoder_mutex_, NULL);
     pthread_cond_init(&queue_cond_, NULL);
+    printf("[VideoManager] video queue capacity=%u frames (NBT_VIDEO_QUEUE; default 15)\n",
+           static_cast<unsigned int>(frame_queue_.capacity()));
 }
 
 VideoManager::~VideoManager() {
@@ -1658,6 +1660,14 @@ static FILE* g_dump = NULL;
 static int g_dumpState = 0;        // 0 = not yet decided, 1 = active, 2 = off
 static size_t g_dumpBytes = 0;
 static int g_dumpFrames = 0;
+static bool videoDumpMayRun() {
+    if (g_dumpState == 1) return true;
+    if (g_dumpState == 2) return false;
+    const char* e = getenv("NBT_VIDEO_DUMP");
+    if (!e || !*e) { g_dumpState = 2; return false; }
+    return true;
+}
+
 static void dumpVideo(const uint8_t* d, size_t n, bool is_config) {
     if (g_dumpState == 0) {
         const char* e = getenv("NBT_VIDEO_DUMP");
@@ -1715,14 +1725,28 @@ static bool looksLikeIdr(const uint8_t* d, size_t n) {
     return false;
 }
 
-bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t pts) {
-    if (!data || length == 0) return false;
+bool VideoManager::postVideoFrame(std::vector<uint8_t>& frame_data, size_t offset, size_t length, uint64_t pts) {
+    if (length == 0 || offset > frame_data.size() || length > frame_data.size() - offset) return false;
+    const uint8_t* data = &frame_data[offset];
+
+    // IDR detection scans the H.264 access unit. Do that once, before taking queue_mutex_, so the network receive
+    // thread does not hold the decoder worker behind the scan.
+    const bool is_idr = looksLikeIdr(data, length);
+
+    // Video dumping is opt-in and may block on storage. Preserve the usual gating while keeping file I/O outside the
+    // queue lock; in normal runs this branch is skipped entirely.
+    if (videoDumpMayRun()) {
+        pthread_mutex_lock(&queue_mutex_);
+        const bool should_dump = accepting_ && (!wait_idr_ || is_idr);
+        pthread_mutex_unlock(&queue_mutex_);
+        if (should_dump) dumpVideo(data, length, false);
+    }
 
     // Non-blocking enqueue: network thread pushes frame and returns immediately!
     pthread_mutex_lock(&queue_mutex_);
     if (!accepting_) { pthread_mutex_unlock(&queue_mutex_); return false; }
     if (wait_idr_) {
-        if (!looksLikeIdr(data, length)) { ++idr_dropped_; pthread_mutex_unlock(&queue_mutex_); return true; }
+        if (!is_idr) { ++idr_dropped_; pthread_mutex_unlock(&queue_mutex_); return true; }
         wait_idr_ = false;
         printf("[VideoManager] keyframe after the decoder rebuild (%u frames without one dropped)\n", idr_dropped_);
     }
@@ -1730,18 +1754,24 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
     item.raw_size = length;
     item.inline_config_size = cached_codec_config_.size();
     item.has_inline_config = item.inline_config_size != 0;
-    if (item.has_inline_config) {
-        item.data.resize(item.inline_config_size + length);
-        memcpy(&item.data[0], &cached_codec_config_[0], item.inline_config_size);
-        memcpy(&item.data[item.inline_config_size], data, length);
+    if (item.inline_config_size <= VideoQueueItem::kInlineConfigCapacity) {
+        if (item.inline_config_size)
+            memcpy(item.inline_config_data, &cached_codec_config_[0], item.inline_config_size);
     } else {
-        item.data.assign(data, data + length);
+        item.large_inline_config.assign(cached_codec_config_.begin(), cached_codec_config_.end());
     }
+    item.data_offset = offset;
+    item.data_length = length;
+    item.data.swap(frame_data);   // hand off the decrypted AA message without copying the H.264 access unit
     item.pts = pts;
     item.is_config = false;
-    item.is_idr = looksLikeIdr(data, length);
+    item.is_idr = is_idr;
     // The queue takes the bytes (no copy), and drops the oldest plain frame when it is full (frame_queue.hpp).
     const FrameQueue::PushResult pushed = frame_queue_.push(item);
+    // The slot's previous allocation (or the rejected input allocation) is now back in the session-thread scratch
+    // vector. Keep its capacity for the next decrypted message instead of freeing it with this stack item.
+    frame_data.swap(item.data);
+    frame_data.clear();
     const size_t queued_before_push = frame_queue_.size() - (pushed == FrameQueue::kRejectedFullOfConfig ? 0 : 1);
     const size_t dropped_size = frame_queue_.lastDroppedSize();
     if (pushed != FrameQueue::kRejectedFullOfConfig) {
@@ -1763,7 +1793,6 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
         printf("[VideoManager] Warning: video queue full; dropped oldest non-config frame (%u bytes), queued=%u.\n",
                static_cast<unsigned int>(dropped_size), static_cast<unsigned int>(queued_before_push));
     }
-    dumpVideo(data, length, false);
     return true;
 }
 
@@ -1796,7 +1825,7 @@ void VideoManager::workerLoop() {
                 // into that dispatcher, even when it is later reported unchanged.
                 bool ok = sendMdevSync() &&
                           sendMdevFormat((uint32_t)nbt::videoCanvasWidth(), (uint32_t)vidEnvInt("NBT_VID_SRC_H", nbt::videoCanvasHeight()), sink_.config.fps) &&
-                          sendMdevConfig(&item.data[0], item.data.size());
+                          sendMdevConfig(&item.data[item.data_offset], item.data_length);
                 mdev_initialized_ = ok;
                 if (!ok) {
                     printf("[VideoManager] Warning: mdev initialization handshake failed; frames will wait for retry.\n");
@@ -1822,7 +1851,7 @@ void VideoManager::workerLoop() {
 
                 memset(&hdr, 0, sizeof(hdr));
                 hdr.msg_code = 3; // 3 = MDEV_PACKET_DATA
-                hdr.payload_len = static_cast<uint32_t>(item.data.size() + 8);
+                hdr.payload_len = static_cast<uint32_t>(item.inline_config_size + item.data_length + 8);
 
                 // Always calculate microsecond PTS matching local QNX CLOCK_MONOTONIC timebase
                 // (Matches mdev_streamer FUN_00015828 clock_gettime(2, &ts) / GraphClock)
@@ -1830,16 +1859,23 @@ void VideoManager::workerLoop() {
                 clock_gettime(CLOCK_MONOTONIC, &ts);
                 uint64_t pts = static_cast<uint64_t>(ts.tv_sec) * 1000000ULL + ts.tv_nsec / 1000ULL;
 
-                iov_t iov[3];
+                iov_t iov[4];
                 SETIOV(&iov[0], &hdr, sizeof(hdr));
                 SETIOV(&iov[1], &pts, sizeof(pts));
-                SETIOV(&iov[2], &item.data[0], item.data.size());
+                int iov_count = 3;
+                if (item.inline_config_size) {
+                    SETIOV(&iov[2], item.inlineConfigData(), item.inline_config_size);
+                    SETIOV(&iov[3], &item.data[item.data_offset], item.data_length);
+                    iov_count = 4;
+                } else {
+                    SETIOV(&iov[2], &item.data[item.data_offset], item.data_length);
+                }
 
                 uint32_t next_frame = frame_count + 1;
                 if (next_frame <= 35 || (next_frame % 30) == 0) {
                     printf("[VideoManager] mdev frame #%u BEGIN (%u bytes%s, raw=%u, cfg=%u, queue_after_pop=%u)\n",
                            next_frame,
-                           static_cast<unsigned int>(item.data.size()),
+                           static_cast<unsigned int>(item.inline_config_size + item.data_length),
                            item.has_inline_config ? " incl-config" : "",
                            static_cast<unsigned int>(item.raw_size),
                            static_cast<unsigned int>(item.inline_config_size),
@@ -1858,7 +1894,7 @@ void VideoManager::workerLoop() {
                                  _NTO_TIMEOUT_SEND | _NTO_TIMEOUT_REPLY,
                                  NULL, &send_timeout_ns, NULL);
                     errno = 0;
-                    ret = MsgSendvs_r(mdev_fd_, iov, 3, NULL, 0);
+                    ret = MsgSendvs_r(mdev_fd_, iov, iov_count, NULL, 0);
                     if (ret == 0) break;
                     err = (ret < 0) ? -ret : errno;
                     break;
@@ -1878,7 +1914,7 @@ void VideoManager::workerLoop() {
                 }
                 if (ret != 0 || frame_count <= 35 || (frame_count % 30) == 0) {
                     printf("[VideoManager] mdev frame #%u END (%u bytes%s, raw=%u, cfg=%u, pts=%llu, elapsed=%llu us) -> MsgSendvs_r ret=%d (status: %s)\n",
-                           frame_count, static_cast<unsigned int>(item.data.size()),
+                           frame_count, static_cast<unsigned int>(item.inline_config_size + item.data_length),
                            item.has_inline_config ? " incl-config" : "",
                            static_cast<unsigned int>(item.raw_size),
                            static_cast<unsigned int>(item.inline_config_size),
