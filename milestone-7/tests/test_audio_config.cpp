@@ -234,6 +234,26 @@ int main() {
         CHECK(strcmp(audioModeName(AUDIO_MODE_A2I), "a2i") == 0);
     }
 
+    // 5. Speech settings: the same in both audio modes; NBT_SPEECH_HOLD_MS clamped to 0..5000.
+    {
+        const BrowserConfig b = readBrowserConfig();
+        CHECK(!b.speech.enabled && b.speech.src == 0 && b.speech.sink == 0x1 && b.speech.hold_ms == 500);
+        setenv("NBT_SPEECH", "1", 1);
+        setenv("NBT_SPEECH_EP", "/input_mono_0", 1);
+        setenv("NBT_SPEECH_SRC", "0x1a", 1);
+        const BrowserConfig b2 = readBrowserConfig();
+        const BtConfig t2 = readBtConfig();
+        CHECK(b2.speech.enabled && same(b2.speech.endpoint, "/input_mono_0") && b2.speech.src == 0x1a);
+        CHECK(t2.speech.enabled && same(t2.speech.endpoint, "/input_mono_0") && t2.speech.src == 0x1a);
+        setenv("NBT_SPEECH_HOLD_MS", "9000", 1);
+        CHECK(readBrowserConfig().speech.hold_ms == 5000 && readBtConfig().speech.hold_ms == 5000);
+        setenv("NBT_SPEECH_HOLD_MS", "-5", 1);
+        CHECK(readBrowserConfig().speech.hold_ms == 0);
+        setenv("NBT_SPEECH_HOLD_MS", "abc", 1);
+        CHECK(readBrowserConfig().speech.hold_ms == 500);
+        clearAll();
+    }
+
     if (fails) { printf("test_audio_config: %d failure(s)\n", fails); return 1; }
     printf("test_audio_config OK\n");
     return 0;
