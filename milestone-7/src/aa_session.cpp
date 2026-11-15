@@ -1322,13 +1322,16 @@ void AASession::sessionLoop() {
                 reassembly_wire_[channel] = length;
                 continue; // Wait for remaining fragments
             } else if (frame_type == 0x00) { // MIDDLE
+                if (reassembly_total_.find(channel) == reassembly_total_.end()) {
+                    printf("[AASession] MIDDLE fragment on channel %u with no FIRST: dropping\n", channel);
+                    continue;
+                }
                 reassembly_[channel].insert(reassembly_[channel].end(),
                                              decrypted_chunk.begin(), decrypted_chunk.end());
                 reassembly_wire_[channel] += length;
                 continue; // Wait for remaining fragments
             } else if (frame_type == 0x02) { // LAST
-                bool had_first = reassembly_total_.find(channel) != reassembly_total_.end() ||
-                                 !reassembly_[channel].empty();
+                bool had_first = reassembly_total_.find(channel) != reassembly_total_.end();
                 reassembly_[channel].insert(reassembly_[channel].end(),
                                              decrypted_chunk.begin(), decrypted_chunk.end());
                 reassembly_wire_[channel] += length;
@@ -1350,6 +1353,9 @@ void AASession::sessionLoop() {
                     continue;
                 }
             } else { // 0x03 = BULK (Single unfragmented message)
+                reassembly_[channel].clear();
+                reassembly_total_.erase(channel);
+                reassembly_wire_.erase(channel);
                 frame_data.swap(decrypted_chunk);
             }
 
