@@ -6,12 +6,12 @@
 Style matched to the factory assets in /opt/hmi/ID5/data/ro/j29/id6l/:
   aa_content_preview_549x484.png  main-menu content preview (cf. content_preview/cp_carplay/cp_carplay.png):
                                   grey gradient line glyph on a dark soft vignette, transparent edges
-  aa_row_icon_63x54.png           shipped Android Auto arrow (copied, not regenerated)
+  aa_row_icon_63x54.png           list-row icon: white glyph + soft dark shadow (cf. 63x54 RGBA row icons)
   aa_statusbar_54x54.png          status-bar audio-source icon (cf. statusbar_main_audiosource/carplay.png)
 Glyph: a road in perspective forming an "A" (original artwork, not the Google logo).
 Usage: python3 make_icons.py [outdir]
 """
-import sys, os, shutil
+import sys, os
 from PIL import Image, ImageDraw, ImageFilter, ImageChops
 from PIL.PngImagePlugin import PngInfo
 
@@ -67,10 +67,13 @@ def main():
     prev = bg.copy(); prev.alpha_composite(shadow); prev.alpha_composite(fill)
     save(prev, os.path.join(out, "aa_content_preview_549x484.png"))
 
-    icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aa_row_icon_63x54.png")
-    target = os.path.join(out, "aa_row_icon_63x54.png")
-    if os.path.abspath(icon) != os.path.abspath(target):
-        shutil.copyfile(icon, target)
+    w, h = 63, 54
+    gm = glyph_mask(w, h, (14, 4, 49, 48), 5.0, ss=8)
+    sh = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    sh.putalpha(ImageChops.offset(gm, 1, 1).filter(ImageFilter.GaussianBlur(1)).point(lambda v: int(v * 0.65)))
+    wh = Image.new("RGBA", (w, h), (255, 255, 255, 0)); wh.putalpha(gm)
+    row = sh.copy(); row.alpha_composite(wh)
+    save(row, os.path.join(out, "aa_row_icon_63x54.png"))
 
     gm = glyph_mask(54, 54, (9, 5, 45, 49), 4.6, ss=8)
     sb = Image.new("RGBA", (54, 54), (255, 255, 255, 0)); sb.putalpha(gm)
