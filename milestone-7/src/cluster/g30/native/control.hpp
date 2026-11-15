@@ -8,8 +8,11 @@
 using namespace kombi::pip::detail;
 static volatile int interrupted;
 static uint32_t end_time;
+static bool service_mode;
 static void on_signal(int) { interrupted=1; }
-static bool expired() { return interrupted || int32_t(millis()-end_time)>=0; }
+// The owning AA session bounds service lifetime. Individual network operations
+// still have deadlines; only standalone trials have a whole-process deadline.
+static bool expired() { return interrupted || (!service_mode && int32_t(millis()-end_time)>=0); }
 enum { PollRead=1, PollWrite=2, PollErrorOrHangup=0x60 };
 struct Address { uint8_t length,family; uint16_t port; uint32_t ip; uint8_t zero[8]; };
 static const uint32_t ProducerIP=0x78c730a0; // temporary vlan73 alias 160.48.199.120
@@ -19,6 +22,10 @@ struct Control {
     int control, udp, guidance;
     unsigned port, rpc_session;
     uint32_t handle, renewed;
+    unsigned pending_method, pending_session, reply_used, reply_size;
+    bool pending_reply, broken_stream;
+    uint32_t cleanup_deadline;
+    uint8_t reply_bytes[4096];
     bool stopped() const { return expired(); }
     void refresh() {
         uint32_t now=millis();
@@ -66,7 +73,14 @@ struct Control {
     }
     bool close() {
         bool ok=true;
-        if(guidance>=0 && handle) {
+        // A stopped/expired read may have consumed only part of a reply. Finish
+        // that exact transaction before sending cancellation on the same TCP
+        // stream. Never mistake its late acknowledgement for the Stop reply.
+        cleanup_deadline=millis()+6000;
+        if(guidance>=0 && pending_reply)
+            ok=finish_guidance(guidance,millis()+1000,true,pending_method==1?&handle:0);
+        ok=ok&&!broken_stream;
+        if(ok && guidance>=0 && handle) {
             uint8_t body[512];
             for(unsigned i=0;i<nbt::kombinav::tmpl::cancel_count;++i) {
                 const nbt::kombinav::tmpl::Frame& f=nbt::kombinav::tmpl::cancel[i];

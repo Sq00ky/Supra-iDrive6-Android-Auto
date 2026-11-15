@@ -7,18 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include "native/qnx_abi.hpp"
-#ifdef IDRIVER_QNX_SDK
 #include <pthread.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include "service_spawn.hpp"
+#include "service_log.hpp"
 #include "../video_settings.hpp"
-#else
-extern "C" {
-int pthread_create(unsigned*,const void*,void* (*)(void*),void*);
-int pthread_detach(unsigned);
-}
-#endif
 using namespace aa_cluster;
 using kombi::pip::detail::millis;
 namespace {
@@ -42,33 +36,34 @@ static unsigned change_state(bool active) {
 static bool enqueue(unsigned epoch,const uint8_t* config,unsigned nc,const uint8_t* frame,unsigned nf,uint64_t pts) {
     return queue.push(epoch,config,nc,frame,nf,pts);
 }
-#ifdef IDRIVER_QNX_SDK
 // Only the socket worker owns the helper PID. The helper owns its temporary
 // alias/lock and watches this daemon independently, including after SIGKILL.
 struct Service {
     pid_t pid;
+    ServiceLog logs;
     bool attempted,external;
     Service():pid(-1),attempted(false),external(false) {
         const char* p=getenv("NBT_G30_CLUSTER_EXTERNAL_PLAYER");external=p&&!strcmp(p,"1");
     }
     void stop() {
-        if(pid<=0)return;
+        if(pid<=0) {logs.finish();return;}
         if(waitpid(pid,0,WNOHANG)==0) {
             kill(pid,SIGTERM);
             // The helper escalates only its own player, then removes the alias.
             for(unsigned i=0;i<120;++i) {
-                if(waitpid(pid,0,WNOHANG)==pid) {pid=-1;return;}
+                if(waitpid(pid,0,WNOHANG)==pid) {pid=-1;logs.finish();return;}
                 usleep(100000);
             }
             printf("[AA cluster] service cleanup still pending pid=%ld\n",(long)pid);
             return; // Never kill the cleanup owner or launch a competing helper.
         }
-        pid=-1;
+        pid=-1;logs.finish();
     }
     bool tick() {
         if(external)return true;
         int status=0;
         if(pid>0&&waitpid(pid,&status,WNOHANG)==pid) {
+            logs.finish();
             printf("[AA cluster] service ended pid=%ld exit=%d signal=%d; toggle map off/on to retry\n",
                    (long)pid,WIFEXITED(status)?WEXITSTATUS(status):-1,
                    WIFSIGNALED(status)?WTERMSIG(status):0);pid=-1;
@@ -78,20 +73,30 @@ struct Service {
         if(pid>0)return true;
         if(attempted)return false;
         attempted=true;
+        // Retain an explicit legacy supervisor override for existing benches.
+        // Normal installations launch the player's compiled supervisor directly.
         const char* path=getenv("NBT_G30_CLUSTER_SERVICE");
-        if(!path||!*path)path="/opt/aa/g30-pip/service.sh";
-        if(access(path,R_OK)) {printf("[AA cluster] service missing: %s\n",path);return false;}
-        pid=spawn_service(path);
+        bool legacy=path&&*path;
+        if(!legacy) {
+            path=getenv("NBT_G30_CLUSTER_PLAYER");
+            if(!path||!*path)path="/opt/aa/kombi-player";
+        }
+        if(access(path,legacy?R_OK:X_OK)) {printf("[AA cluster] player/supervisor missing: %s\n",path);return false;}
+        int log_fd=-1;
+        pid=spawn_service(path,legacy,&log_fd);
         if(pid<0) {
             int error=errno;
             printf("[AA cluster] service spawn failed errno=%d: %s\n",error,strerror(error));
             return false;
         }
+        if(!logs.start(log_fd)) {
+            printf("[AA cluster] kombi-player log relay failed; stopping helper\n");
+            stop();return false;
+        }
         printf("[AA cluster] service start pid=%ld method=qnx_spawn\n",(long)pid);
         return pid>0;
     }
 };
-#endif
 // The worker alone touches the loopback socket. At most 4 MiB are queued and
 // every I/O operation has a deadline; the AA receive/ACK thread cannot block.
 static bool transfer(int fd,const void* data,unsigned n,bool sending) {
@@ -116,16 +121,12 @@ static bool transfer(int fd,const void* data,unsigned n,bool sending) {
 }
 static void* worker(void*) {
     int fd=-1;unsigned sent_state=~0u;uint32_t retry=0;
-#ifdef IDRIVER_QNX_SDK
     Service service;
-#endif
     for(;;) {
-#ifdef IDRIVER_QNX_SDK
         if(!service.tick()) {
             if(fd>=0) {store(&connected,0);close(fd);fd=-1;}
             queue.discard();usleep(20000);continue;
         }
-#endif
         if(fd<0) {
             // Old compressed packets must not survive decoder disconnection.
             queue.discard();
@@ -179,14 +180,12 @@ extern "C" void idriver_cluster_configure_acks(ClusterAck callback) { if(!acknow
 extern "C" unsigned idriver_cluster_ack_window() { return router.enabled&&acknowledge?4:0; }
 extern "C" void idriver_cluster_tick(void* session) {
     if(!router.enabled)return;
-#ifdef IDRIVER_QNX_SDK
     uint32_t now=millis();
     if(!setting_checked||uint32_t(now-setting_checked)>=250) {
         setting_checked=now;bool on=setting_enabled();
         if(router.allowed!=on)printf("[AA cluster] setting %s (live)\n",on?"on":"off");
         store(&wanted,on);router.allow(session,on);
     }
-#endif
     router.tick(session);
 }
 extern "C" void idriver_cluster_drain_acks(void* session) {
@@ -195,26 +194,13 @@ extern "C" void idriver_cluster_drain_acks(void* session) {
     while(count--)acknowledge(session,2);
 }
 extern "C" void idriver_cluster_init(ClusterSetup setup,ClusterFocus focus) {
-#ifdef IDRIVER_QNX_SDK
     store(&session_live,1);store(&wanted,setting_enabled());setting_checked=0;
     if(router.enabled)return;
-#else
-    const char* enabled=getenv("NBT_G30_CLUSTER_VIDEO");
-    if(!enabled||strcmp(enabled,"1")||router.enabled)return;
-#endif
     const char* timeout=getenv("NBT_G30_LOCAL_IO_TIMEOUT_MS");
     if(timeout) { int ms=atoi(timeout);if(ms>=500&&ms<=15000)io_timeout_ms=unsigned(ms); }
     router.hooks={setup,focus,ready,resync,change_state,enqueue,millis};
-#ifdef IDRIVER_QNX_SDK
     router.allowed=setting_enabled();
-#else
-    router.allowed=true;
-#endif
-#ifdef IDRIVER_QNX_SDK
     pthread_t thread=0;
-#else
-    unsigned thread=0;
-#endif
     if(pthread_create(&thread,0,worker,0)) { printf("[AA cluster] worker creation failed\n");return; }
     pthread_detach(thread);router.enabled=true;
     printf("[AA cluster] independent display_id=2 channel=2 enabled; decoder must be ready before focus\n");

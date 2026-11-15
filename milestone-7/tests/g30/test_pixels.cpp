@@ -2,12 +2,11 @@
 #include "cluster/g30/protocol.hpp"
 #include "cluster/g30/native/native_screen.hpp"
 #include "fake_screen.hpp"
-extern "C" { void* fopen(const char*,const char*);size_t fread(void*,size_t,size_t,void*);int fclose(void*); }
 extern "C" int usleep(unsigned) {return 0;}
 static uint8_t payload[aa_cluster::MaxPayload],pixels[620*313*4];
 int main() {
     using namespace aa_cluster;
-    Decoder decoder;void* f=fopen("fixture.acp","rb");if(!f)return 1;
+    Decoder decoder;FILE* f=fopen("fixture.acp","rb");if(!f)return 1;
     screen_peer::reset();kombi::pip::screen::ScreenOutput screen={};
     if(!screen.inspect(1)||!screen.create())return 2;
     uint8_t h[HeaderSize];unsigned count=0;

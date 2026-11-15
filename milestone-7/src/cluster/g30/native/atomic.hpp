@@ -1,6 +1,6 @@
 #pragma once
 namespace kombi { namespace pip { namespace detail {
-#if defined(IDRIVER_QNX_SDK) && defined(__arm__) && __GNUC__ == 4 && __GNUC_MINOR__ < 7
+#if defined(__QNXNTO__) && defined(__arm__) && __GNUC__ == 4 && __GNUC_MINOR__ < 7
 // QNX GCC 4.4 emits unresolved __sync_* calls for ARM. These aligned 32-bit
 // accesses use the ARMv7 acquire/release barriers directly. Exchange is the
 // only read-modify-write operation and retries when its exclusive store loses.

@@ -1,4 +1,7 @@
 # Installation Guide
+
+Using the experimental G30 cluster-map build? Follow the
+[three-file installation steps](#g30-cluster-map-build) below.
 **11/6/2026 Update - Self Service Install**
 The following tool can be used to enable SSH temporarily: https://ssh.bavarian-aa.uk/
 The following tool can be used to install Android Auto: https://turbocode.shop/nbt-evo-android-auto/
@@ -130,3 +133,135 @@ If you're installing it yourself, read the logs. It'll often tell you what's wro
 ### Common Issues
 /dev/btspp0 (No such file or directory)? - Re-pair your phone to the car.
 WiFi Information seen but phone not connecting? - Turn off your hotspot. Check ``/var/opt/conn/carplay/*.cfg | grep -i pass`` and see if the network passwords vary. Reboot your phone.
+
+## G30 cluster-map build
+
+This experimental build adds **Show map in instrument cluster** to the Android
+Auto settings. Download these three assets from the same custom build:
+
+- `nbt-aad`
+- `kombi-player`
+- `Releases.zip`
+
+Extract `Releases.zip` onto the FAT32/exFAT USB drive. Copy the other two files
+to its root. Leave the text and image ZIPs inside `Releases/` compressed:
+
+```text
+USB drive/
+  nbt-aad
+  kombi-player
+  Releases/
+    libNbtAad.so
+    NbtAad.manifest
+    NbtAad.xml
+    NbtAad_ALL_Texts.zip
+    NbtAad_ALL_Images.zip
+```
+
+Enable SSH using the instructions above. Keep the car parked and awake; use
+**Force Stop** in the Android Auto menu before updating. Connect to the OMAP
+node (usually `169.254.199.119`) and confirm `uname -n` prints `hu-omap`.
+Use `ls /mnt` to find your USB drive, then replace `umassXXXXX` below.
+
+Run in a root shell on OMAP. The subshell stops on a failed command and restores
+the read-only mount. A backup is kept in `/opt/aa/g30-backup-PID`; note the
+printed path. It stages replacements first and renames the loaded plugin
+directory instead of overwriting its library.
+
+```sh
+(
+set -e
+g30_usb=/mnt/umassXXXXX
+test "$(uname -n)" = hu-omap
+test -s "$g30_usb/nbt-aad"
+test -s "$g30_usb/kombi-player"
+test ! -d /tmp/idriver-kombi-demo.lock
+g30_processes=$(pidin ar)
+if echo "$g30_processes" | grep '[n]bt-aad' >/dev/null; then
+    echo 'Force Stop Android Auto before updating.'
+    exit 1
+fi
+mount -uw /fs/sda0
+trap 'mount -ur /fs/sda0' 0
+g30_backup=/opt/aa/g30-backup-$$
+mkdir -p /opt/aa
+mkdir "$g30_backup"
+echo "Backup: $g30_backup"
+mkdir "$g30_backup/new-plugin"
+for g30_file in NbtAad.manifest NbtAad.xml NbtAad_ALL_Texts.zip NbtAad_ALL_Images.zip libNbtAad.so; do
+    cp "$g30_usb/Releases/$g30_file" "$g30_backup/new-plugin/$g30_file"
+    diff -q "$g30_usb/Releases/$g30_file" "$g30_backup/new-plugin/$g30_file"
+done
+for g30_file in nbt-aad kombi-player; do
+    cp "$g30_usb/$g30_file" "$g30_backup/new-$g30_file"
+    diff -q "$g30_usb/$g30_file" "$g30_backup/new-$g30_file"
+    chmod 755 "$g30_backup/new-$g30_file"
+    if test -f "/opt/aa/$g30_file"; then
+        cp -p "/opt/aa/$g30_file" "$g30_backup/$g30_file"
+    fi
+done
+chmod 644 "$g30_backup/new-plugin/"*
+chmod 755 "$g30_backup/new-plugin/libNbtAad.so"
+if test -f /opt/aa/nbt-aad.env; then
+    cp -p /opt/aa/nbt-aad.env "$g30_backup/nbt-aad.env"
+fi
+g30_plugin=/opt/hmi/ID5/data/ro/Plugins/NbtAad
+if test -d "$g30_plugin"; then mv "$g30_plugin" "$g30_backup/NbtAad"; fi
+mkdir -p /opt/hmi/ID5/data/ro/Plugins
+mv "$g30_backup/new-plugin" "$g30_plugin"
+mv "$g30_backup/new-nbt-aad" /opt/aa/nbt-aad
+mv "$g30_backup/new-kombi-player" /opt/aa/kombi-player
+echo 'Files installed. Review environment and firewall before restarting.'
+)
+```
+
+If any step fails, keep the printed backup and restore the files before
+restarting. In `/opt/aa/nbt-aad.env`, preserve unrelated settings and set
+`NBT_VEHICLE=bmw`, `NBT_KOMBI_NAV=0` and `NBT_KEEP_PF=1`. Remove any old
+`NBT_G30_CLUSTER_*` overrides so the installed player and checkbox are used.
+Remount writable only while editing, then run `mount -ur /fs/sda0` again.
+
+For a first installation, use the daemon's built-in firewall tool:
+
+```sh
+(
+set -e
+mount -uw /fs/sda0
+trap 'mount -ur /fs/sda0' 0
+/opt/aa/nbt-aad --pf-install
+g30_pf_result=0
+/opt/aa/nbt-aad --pf-check || g30_pf_result=$?
+case "$g30_pf_result" in
+    0) echo 'Firewall rules verified.' ;;
+    9) echo 'Rules saved; full head-unit restart required.' ;;
+    *) echo 'Firewall check failed; inspect before restarting.'; exit 1 ;;
+esac
+)
+```
+
+A separate `pf_aa` download is not required. Restart iDrive after the files
+and checks are complete; a full head-unit restart is needed if persistent
+firewall rules changed.
+
+Cancel BMW route guidance and turn HUD navigation off for the first test.
+Start Android Auto, open Google Maps and enable **Settings → Show map in
+instrument cluster**. The player starts automatically. Switching the setting
+off restores the dial; switching it on requests the map again. No reboot is
+needed for toggling. Video buffers stay in RAM. Kombi diagnostics use the daemon's existing log destination.
+
+The reference setup is a G30 with NBT Evo 007.039.008. Firmware version is
+reported in the log and does not reject a different version by itself. Live
+network/display checks still apply; other firmware and cluster combinations
+remain unvalidated. Custom HUD video and concurrent factory navigation are
+not supported by this experimental integration. Consult the custom build's
+test notes before installing.
+
+For diagnostics, save `/dev/shmem/nbt-aad.log`. Lines from the supervisor and
+decoder carry the `[kombi-player]` prefix in this same file, including successful
+sessions and failures. The daemon's logging-off setting, RAM limit and USB log
+destination apply to these lines too. There is no separate player log to collect.
+To roll back, Force
+Stop Android Auto, restore the saved daemon, player, plugin directory and
+environment from the printed backup, remount read-only and restart iDrive.
+If the previous installation had no `kombi-player`, remove only the newly installed
+`/opt/aa/kombi-player` during rollback.

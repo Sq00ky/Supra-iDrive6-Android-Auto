@@ -37,8 +37,9 @@ archive=OUT/'decoder.a'
 archive.unlink(missing_ok=True)
 run('archive',['ar','rcs',archive,*objects])
 run('fixture',[sys.executable,HERE/'make_fixture.py',OUT])
-for name in ('router','router_faults','encoded_queue','live_setting','screen','control','pixels','player_lifecycle'):
-    run('compile-'+name,[*compiler,*flags,*inc,HERE/f'test_{name}.cpp',*([archive] if name in ('pixels','player_lifecycle') else []),'-o',OUT/name])
+for name in ('router','router_faults','encoded_queue','live_setting','screen','control','control_recovery','pixels','player_lifecycle','service_log'):
+    test_flags=['-DNBT_G30_HOST_TEST','-I'+str(HERE)] if name in ('screen','control','control_recovery','pixels','player_lifecycle') else []
+    run('compile-'+name,[*compiler,*flags,*test_flags,'-pthread',*inc,HERE/f'test_{name}.cpp',*([archive] if name in ('pixels','player_lifecycle') else []),'-o',OUT/name])
     run(name,[OUT/name],OUT);passed.append(name);print('PASS',name,flush=True)
 ssl_flags=shlex.split(os.environ.get('OPENSSL_CFLAGS',''))
 if not ssl_flags:
@@ -47,4 +48,8 @@ if not ssl_flags:
     ssl_flags=shlex.split(p.stdout)
 run('compile-source-session',[*compiler,*flags,'-pthread','-DNBT_HOST_TEST','-DIDRIVER_G30_CLUSTER','-include',ROOT/'tests/stub_cryptor.hpp','-I'+str(ROOT/'src'),'-I'+str(ROOT/'include'),*ssl_flags,HERE/'test_source_session.cpp',*(ROOT/p for p in ('src/aa_session.cpp','src/audio/audio_acks.cpp','src/crash_handler.cpp','src/sdr_builder.cpp')),'-o',OUT/'source-session'])
 run('source-session',[OUT/'source-session']);passed.append('source-session');print('PASS source-session',flush=True)
+run('compile-supervisor', [*compiler,*flags,*inc,HERE/'supervisor_fixture.cpp',SRC/'supervisor.cpp','-o',OUT/'supervisor-fixture'])
+env['G30_TEST_SUPERVISOR_BIN']=str(OUT/'supervisor-fixture')
+run('supervisor',[sys.executable,HERE/'test_supervisor.py'])
+passed.append('native-supervisor (15 tests)');print('PASS native-supervisor (15 tests)',flush=True)
 (OUT/'result.json').write_text(json.dumps({'passed':passed,'native_qnx_build':False,'physical_car_test':False},indent=2)+'\n')

@@ -1,9 +1,12 @@
-// QNX Screen 6.5 SP1 ABI. See README for the verified enum sources.
+// NBT's Screen 6.5 SP1 binding: its header is absent from the base SDP 6.5.
+// Keep these car-verified property values independent of other Screen versions.
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
 #include "native_metadata.hpp"
-#ifdef IDRIVER_QNX_SDK
+#ifdef NBT_G30_HOST_TEST
+#include <qnx_api_stub.hpp>
+#else
 #include <stdio.h>
 #include <unistd.h>
 #endif
@@ -25,11 +28,6 @@ int screen_get_buffer_property_iv(void*, int, int*);
 int screen_get_buffer_property_pv(void*, int, void**);
 int screen_post_window(void*, void*, int, const int*, int);
 int screen_flush_context(void*, int);
-#ifndef IDRIVER_QNX_SDK
-int printf(const char*, ...);
-int fflush(void*);
-int usleep(unsigned);
-#endif
 }
 
 namespace kombi { namespace pip { namespace screen {

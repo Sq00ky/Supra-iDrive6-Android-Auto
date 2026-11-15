@@ -68,8 +68,8 @@ CSRCS = src/audio/speex.c
 CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 
 OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
-# Optional G30 map bridge. Installation and service supervision are supplied
-# by the deployment environment; these targets only compile source.
+# Optional G30 map bridge. The player includes process/address supervision;
+# these targets compile source and do not install anything.
 # A clean rebuild is required when toggling this option; ordinary builds and
 # existing host tests retain the upstream behavior.
 ifeq ($(G30_PIP),1)
@@ -92,8 +92,6 @@ check-g30:
 	$(MAKE) -C tests check-g30
 
 all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
-
-src/cluster/g30/bridge.o: CXXFLAGS += -DIDRIVER_QNX_SDK
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -211,11 +209,11 @@ OPENH264_OBJS = $(patsubst $(OPENH264)/%.cpp,$(G30_OUT)/decoder/%.o,$(OPENH264_S
 OPENH264_INCLUDES = -I$(OPENH264)/codec/api -I$(OPENH264)/codec/api/wels \
                     -I$(OPENH264)/codec/common/inc -I$(OPENH264)/codec/decoder/core/inc \
                     -I$(OPENH264)/codec/decoder/plus/inc
-G30_FLAGS = -O2 -Wall -D_QNX_SOURCE -DIDRIVER_QNX_SDK -Wc,-std=gnu++0x \
+G30_FLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x \
             -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp
 
 .PHONY: g30-player g30-inspect
-g30-player: $(G30_OUT)/player
+g30-player: $(G30_OUT)/kombi-player
 g30-inspect: $(G30_OUT)/inspect
 
 $(G30_OUT)/decoder/%.o: $(OPENH264)/%.cpp
@@ -230,8 +228,8 @@ $(G30_OUT)/libopenh264-decoder.a: $(OPENH264_OBJS)
 	rm -f $@
 	$(QNX_AR) rcs $@ $(OPENH264_OBJS)
 
-$(G30_OUT)/player: $(G30_SRC)/player.cpp $(G30_HEADERS) $(G30_OUT)/libopenh264-decoder.a
-	$(CXX) $(G30_FLAGS) -fno-exceptions -fno-rtti $(OPENH264_INCLUDES) $< $(G30_OUT)/libopenh264-decoder.a -L./lib -lscreen -lsocket -lm -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
+$(G30_OUT)/kombi-player: $(G30_SRC)/player.cpp $(G30_SRC)/supervisor.cpp $(G30_HEADERS) $(G30_OUT)/libopenh264-decoder.a
+	$(CXX) $(G30_FLAGS) -fno-rtti $(OPENH264_INCLUDES) $(G30_SRC)/player.cpp $(G30_SRC)/supervisor.cpp $(G30_OUT)/libopenh264-decoder.a -L./lib -lscreen -lsocket -lm -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
 
 $(G30_OUT)/inspect: $(G30_SRC)/inspect.cpp $(G30_HEADERS)
 	@mkdir -p $(@D)

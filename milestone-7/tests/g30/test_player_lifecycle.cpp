@@ -17,7 +17,9 @@
 #define accept fake_accept
 #define signal fake_signal
 #include "cluster/g30/player.cpp"
+#define screen_post_window underlying_post_window
 #include "fake_screen.hpp"
+#undef screen_post_window
 
 static void check(bool yes, const char* label) {
     if (!yes) { printf("FAIL %s\n", label); exit(1); }
@@ -26,9 +28,9 @@ namespace peer {
 enum Role { Unassigned, Server, Client, Sink, Discovery, Guidance };
 struct Socket { Role role; bool open; unsigned size, offset; uint8_t reply[64]; };
 static Socket sockets[32];
-static unsigned next_fd, clock_ms, subscriptions, cancellations, rpc_count, fail_rpc;
+static unsigned next_fd, clock_ms, subscriptions, cancellations, rpc_count, fail_rpc, rpc_delay;
 static unsigned methods[256], handles[256];
-static bool handle_created, stall, hangup, failure_injected;
+static bool handle_created, stall, hangup, failure_injected, interrupt_post;
 static uint8_t stream[aa_cluster::MaxPayload + 1024];
 static unsigned size, offset;
 static int allocate(Role role) {
@@ -38,8 +40,9 @@ static int allocate(Role role) {
 }
 static void reset() {
     memset(sockets, 0, sizeof(sockets)); next_fd = 10;
-    clock_ms = subscriptions = cancellations = rpc_count = fail_rpc = size = offset = 0;
-    handle_created = stall = hangup = failure_injected = false;
+    clock_ms = subscriptions = cancellations = rpc_count = fail_rpc = rpc_delay = size = offset = 0;
+    handle_created = stall = hangup = failure_injected = interrupt_post = false;
+    *__get_errno_ptr() = 0;
     interrupted = 0; service_mode = false; discovery_session = 1; discovery_reboot = true;
     screen_peer::reset();
 }
@@ -51,11 +54,11 @@ static void packet(unsigned kind, unsigned epoch, const uint8_t* data = 0, unsig
     uint8_t h[aa_cluster::HeaderSize]; aa_cluster::header(h, kind, epoch, n, 0);
     append(h, sizeof(h)); if (n) append(data, n);
 }
-static void cleaned(bool with_handle, unsigned expected_posts) {
+static void cleaned(bool with_handle, unsigned expected_posts, unsigned sessions=1) {
     check(unsigned(screen_peer::posts) == expected_posts, "expected frame presentation count");
     check(!screen_peer::contexts && !screen_peer::windows, "no owned Screen objects remain");
     for (unsigned i = 10; i < next_fd; ++i) check(!sockets[i].open, "every socket closed");
-    check(cancellations == subscriptions, "discovery subscription released");
+    check(cancellations == (subscriptions ? sessions : 0u), "discovery subscription released, including renewals");
     check(handle_created == with_handle, "expected Guidance ownership");
     if (with_handle) {
         // Literal cancellation sequence; no calls from the model's start path
@@ -70,8 +73,12 @@ static void cleaned(bool with_handle, unsigned expected_posts) {
 }
 }
 extern "C" int* __get_errno_ptr() { static int error; return &error; }
+extern "C" int screen_post_window(void* window,void* buffer,int count,const int* damage,int flags) {
+    if(peer::interrupt_post) { on_signal(15);*__get_errno_ptr()=4;return -1; }
+    return underlying_post_window(window,buffer,count,damage,flags);
+}
 extern "C" int fake_clock(int, PipClock* p) {
-    p->seconds = peer::clock_ms / 1000; p->nanoseconds = (peer::clock_ms % 1000) * 1000000;
+    p->tv_sec = peer::clock_ms / 1000; p->tv_nsec = (peer::clock_ms % 1000) * 1000000;
     return 0;
 }
 extern "C" int fake_usleep(unsigned n) { peer::clock_ms += n / 1000; return 0; }
@@ -128,6 +135,7 @@ extern "C" int fake_send(int fd, const void* data, unsigned n, int) {
     if (s.role == peer::Sink) { check(n == 18 && p[16] == 1, "sink acknowledgement"); return n; }
     check(s.role == peer::Guidance && n >= 16 && peer::rpc_count < 256, "Guidance call shape");
     unsigned method = get16(p + 2), index = peer::rpc_count++;
+    peer::clock_ms += peer::rpc_delay;
     peer::methods[index] = method; peer::handles[index] = n >= 20 ? get32(p + 16) : 0;
     s.size = method == 1 ? 24 : 16; s.offset = 0;
     memset(s.reply, 0, sizeof(s.reply)); memcpy(s.reply, p, 16);
@@ -156,11 +164,28 @@ static void prepare() {
     peer::reset(); peer::packet(Reset, 3); peer::packet(Video, 3, first_frame, first_size);
 }
 int main() {
-    void* f = fopen("fixture.acp", "rb"); check(f != 0, "generated H264 fixture");
+    FILE* f = fopen("fixture.acp", "rb"); check(f != 0, "generated H264 fixture");
     uint8_t h[HeaderSize]; check(fread(h, 1, sizeof(h), f) == sizeof(h), "fixture reset");
     check(fread(h, 1, sizeof(h), f) == sizeof(h) && be32(h + 4) == Video, "fixture video");
     first_size = be32(h + 12); check(first_size <= MaxPayload, "fixture frame bound");
     check(fread(first_frame, 1, first_size, f) == first_size, "fixture frame"); fclose(f);
+
+    // More than ten seconds in total, but every individual reply is prompt.
+    // A service must not inherit the old shared ten-second trial deadline.
+    prepare(); service_mode = true; peer::rpc_delay = 120;
+    check(demo_main() == 0, "service startup survives slow total Guidance setup");
+    peer::cleaned(true, 1);
+    check(peer::clock_ms > 10000 && peer::clock_ms < 20000, "slow startup reproduced");
+
+    prepare(); service_mode = true; peer::interrupt_post = true;
+    check(demo_main() == 0, "SIGTERM during Screen post is orderly cancellation");peer::cleaned(true,0);
+    prepare(); peer::stall = true;
+    check(demo_main() == 0, "standalone trial deadline still ends idle playback");peer::cleaned(true,1);
+    check(peer::clock_ms >= 65000 && peer::clock_ms < 66000, "standalone trial remains bounded");
+
+    prepare(); service_mode=true; peer::rpc_delay=120;
+    peer::packet(Stop,4);peer::packet(Reset,5);peer::packet(Video,5,first_frame,first_size);peer::packet(Stop,6);
+    check(demo_main()==0,"two slow map activations share one player connection");peer::cleaned(true,2,2);
 
     prepare(); check(demo_main() == 0, "EOF after an active map"); peer::cleaned(true, 1);
     prepare(); peer::hangup = true;

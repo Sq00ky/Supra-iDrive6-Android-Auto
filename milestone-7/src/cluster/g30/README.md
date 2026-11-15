@@ -23,33 +23,64 @@ make G30_PIP=1 nbt-aad rhmiapp g30-player g30-inspect
 ```
 
 Override `QCC` and `QNX_AR` when necessary. Outputs are `nbt-aad`,
-`rhmiapp/libNbtAad.so`, `build/g30/player` and `build/g30/inspect`.
+`rhmiapp/libNbtAad.so`, `build/g30/kombi-player` and `build/g30/inspect`.
 The plugin also requires its matching manifest, XML, text and image bundles
 from `rhmiapp/`. These targets compile source; packaging and installation are
 the user's deployment responsibility. Run `make clean` before switching
 between enabled and ordinary builds. Ordinary builds leave G30 PiP disabled.
 
+Production always uses the QNX SDK's POSIX, thread and time APIs; no custom
+SDK-selection define is needed. `G30_PIP=1` is the feature switch. The older
+QNX ARM compiler's atomic workaround is selected by compiler/platform macros.
+Host regressions explicitly select `NBT_G30_HOST_TEST` and obtain mock API
+declarations from `tests/g30/`, which is absent from production include paths.
+NBT's Screen header is not part of the base SDP 6.5 installation, so
+`native/native_screen.hpp` retains the car-verified Screen binding and property
+values. This is independent of the host test stubs.
+
 ## Runtime integration
 
-The feature requires an externally supplied supervisor. The daemon uses QNX
-`spawn()` to invoke `/bin/sh` with the script path and owning daemon PID. The
-default script path is `/opt/aa/g30-pip/service.sh`; set
-`NBT_G30_CLUSTER_SERVICE` to select another path. The source-directory layout
-does not change that existing on-car path. A missing supervisor is logged and
-the cluster stream remains unavailable.
+Install `nbt-aad` and `kombi-player` in `/opt/aa/`, plus the matching five RHMI
+plugin files in `/opt/hmi/ID5/data/ro/Plugins/NbtAad/`. The release consists of
+`nbt-aad`, `kombi-player` and `Releases.zip`. See the
+[installation guide](../../../../install.md#g30-cluster-map-build).
 
-The supervisor must validate the target firmware and Screen managers, preserve
-the factory window, own the temporary producer address `160.48.199.120` on
-`vlan73`, launch `player --service`, and monitor the owning daemon. It must
-terminate/wait for its player and remove only its own address and lock on exit
-or parent death. Player diagnostics should survive failures. This lifecycle is
-required for a working deployment; copying the daemon alone is insufficient.
-The supervisor is deployment-specific and is maintained outside this repository.
+The daemon uses QNX `spawn()` to launch `kombi-player --supervise OWNER_PID` directly.
+The player's compiled supervisor checks the live network and Screen layout,
+acquires the temporary producer address `160.48.199.120` on `vlan73`, and starts
+a decoding child using the same executable. Inspection is built in as
+`kombi-player --inspect`; no additional installed helper or shell script is required.
+The supervisor monitors both the owning daemon and the child. Shutdown sends
+TERM, escalates only its own child after eight seconds, reaps it, and removes
+its own address and lock. The daemon drains both child output streams into its current log with a
+`[kombi-player]` prefix. Successful playback and failures remain in
+`/dev/shmem/nbt-aad.log` by default; the existing USB logging, RAM cap and
+logging-off controls apply. No separate player log file is created. Failed
+address cleanup retains the lock to prevent a competing start.
+
+Firmware version is logged for diagnostics. There is no exact-version
+allowlist. The live checks still require the OMAP node, expected internal
+network addresses, existing Screen managers, an 800×480 secondary output,
+and either an empty output or the known factory window 1056 with matching
+geometry. Accepting a different firmware string does not establish support
+for every firmware or cluster.
+
+`NBT_G30_CLUSTER_PLAYER` can override the executable path. The explicit legacy
+`NBT_G30_CLUSTER_SERVICE` override remains available for existing deployment
+integrations, but ordinary installations do not set it. Remove old
+`NBT_G30_CLUSTER_*` overrides when upgrading to the default player integration.
 
 The iDrive setting **Show map in instrument cluster** applies live. Off releases
 PiP and restores the dial; on requests a fresh map stream. The helper can remain
 available for the same Android Auto session. Video stays in RAM; only the
 two-byte preference at `/var/opt/aa/kombi-video` persists.
+
+Service lifetime follows the owning AA connection, with a separate two-second
+deadline for each Guidance transaction. Slow startup does not consume a shared
+ten-second service timer. Standalone trials retain their 65-second limit.
+If cancellation interrupts a reply, the player preserves partial bytes and
+finishes that exact transaction before sending cleanup. Cleanup ignores the
+stop signal but remains bounded; malformed or unrelated replies fail closed.
 
 ## Output contract and validation
 

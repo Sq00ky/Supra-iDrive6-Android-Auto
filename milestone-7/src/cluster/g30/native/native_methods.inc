@@ -3,17 +3,24 @@ Address address(uint32_t ip, unsigned port) {
     Address a = {}; a.length = sizeof(a); a.family = 2;
     a.ip = ip; a.port = uint16_t((port << 8) | (port >> 8)); return a;
 }
-bool wait_fd(int fd, short events, bool cleanup = false) {
-    for (int n = 0; n < (cleanup ? 10 : 20) && (cleanup || !stopped()); ++n) {
+bool wait_until(int fd, short events, uint32_t deadline, bool cleanup) {
+    while (cleanup || !stopped()) {
+        int remaining = int32_t(deadline - millis());
+        if (remaining <= 0) break;
         PollFD p = { fd, events, 0 };
-        if (poll(&p, 1, 100) > 0) {
+        int rc = poll(&p, 1, remaining < 100 ? remaining : 100);
+        if (rc < 0 && *__get_errno_ptr() == 4) continue;
+        if (rc < 0) return false;
+        if (rc > 0) {
             bool ready = (p.revents & events) && !(p.revents & PollErrorOrHangup);
             if (!ready) { printf("[KombiPiP] Socket not ready fd=%d events=%x returned=%x\n", fd, events, p.revents); fflush(0); }
             return ready;
         }
     }
-    if (cleanup || !stopped()) { printf("[KombiPiP] Socket wait timed out fd=%d events=%x\n", fd, events); fflush(0); }
     return false;
+}
+bool wait_fd(int fd, short events, bool cleanup = false) {
+    return wait_until(fd, events, millis() + (cleanup ? 1000 : 2000), cleanup);
 }
 int open_tcp(uint32_t ip, unsigned port) {
     int fd = socket(2, 1, 0);
@@ -31,26 +38,24 @@ int open_tcp(uint32_t ip, unsigned port) {
     }
     return fd;
 }
-bool transfer(int fd, uint8_t* data, unsigned size, bool sending, bool cleanup = false) {
-    unsigned retries = 0;
-    while (size && (cleanup || !stopped())) {
-        if (!wait_fd(fd, sending ? PollWrite : PollRead, cleanup)) return false;
-        int n = sending ? send(fd, data, size, 0x0800) : recv(fd, data, size, 0);
+bool transfer_until(int fd, uint8_t* data, unsigned size, unsigned& done,
+                    bool sending, uint32_t deadline, bool cleanup) {
+    while (done < size && (cleanup || !stopped())) {
+        if (!wait_until(fd, sending ? PollWrite : PollRead, deadline, cleanup)) return false;
+        int n = sending ? send(fd, data + done, size - done, 0x0800) : recv(fd, data + done, size - done, 0);
         int error = n < 0 ? *__get_errno_ptr() : 0;
-        // Readiness is a snapshot; nonblocking I/O may still be interrupted or
-        // return EAGAIN. Retry without losing the partial message, with a bound.
-        if (n < 0 && (error == 4 || error == 11) && retries++ < 20) {
-            usleep(10000);
-            continue;
-        }
-        if (n <= 0 || unsigned(n) > size) {
-            printf("[KombiPiP] Socket transfer failed fd=%d sending=%u result=%d errno=%d remaining=%u\n", fd, unsigned(sending), n, error, size); fflush(0);
+        if (n < 0 && (error == 4 || error == 11)) { usleep(1000); continue; }
+        if (n <= 0 || unsigned(n) > size - done) {
+            printf("[KombiPiP] Socket transfer failed fd=%d sending=%u result=%d errno=%d remaining=%u\n", fd, unsigned(sending), n, error, size - done); fflush(0);
             return false;
         }
-        retries = 0;
-        size -= unsigned(n); data += n;
+        done += unsigned(n);
     }
-    return !size;
+    return done == size;
+}
+bool transfer(int fd, uint8_t* data, unsigned size, bool sending, bool cleanup = false) {
+    unsigned done = 0;
+    return transfer_until(fd, data, size, done, sending, millis() + (cleanup ? 1000 : 2000), cleanup);
 }
 void subscribe(int udp, unsigned port, unsigned ttl) {
     uint8_t p[56] = {};
@@ -76,30 +81,58 @@ int message(int fd, uint8_t* p, unsigned capacity, bool cleanup = false, bool sk
     }
     return -1;
 }
+bool finish_guidance(int fd, uint32_t deadline, bool cleanup, uint32_t* returned_handle) {
+    for (unsigned cookies = 0; cookies < 16; ++cookies) {
+        if (reply_used < 16 && !transfer_until(fd, reply_bytes, 16, reply_used, false, deadline, cleanup)) return false;
+        if (!reply_size) {
+            unsigned length = get32(reply_bytes + 4);
+            if (length < 8 || length > sizeof(reply_bytes) - 8) { broken_stream = true; return false; }
+            reply_size = length + 8;
+        }
+        if (!transfer_until(fd, reply_bytes, reply_size, reply_used, false, deadline, cleanup)) return false;
+        unsigned n = reply_size;
+        reply_used = reply_size = 0;
+        if (get32(reply_bytes) == 0xffff8000 && n == 16) continue;
+        // Only the exact outstanding request is admissible. Unrelated replies
+        // are protocol errors, not something to skip until a request matches.
+        if (get32(reply_bytes) != (0xb0060000u | pending_method) || get16(reply_bytes + 8) != 0x434e
+            || get16(reply_bytes + 10) != pending_session || reply_bytes[12] != 1 || reply_bytes[13] != 1
+            || (reply_bytes[14] != 0x80 && reply_bytes[14] != 0x81)) {
+            broken_stream = true; return false;
+        }
+        pending_reply = false;
+        if (reply_bytes[14] != 0x80 || reply_bytes[15]) return false;
+        if (returned_handle) {
+            if (n < 24) return false;
+            *returned_handle = get32(reply_bytes + 16);
+            if (!*returned_handle || *returned_handle == 0xffffffff) return false;
+        }
+        return true;
+    }
+    return false;
+}
 bool guidance_call(int fd, unsigned method, uint8_t* body, unsigned size,
                           unsigned session, uint32_t* handle = 0, bool cleanup = false) {
-    uint8_t h[528] = {}, reply[4096];
-    if (size > sizeof(h) - 16) return false;
+    uint8_t h[528] = {};
+    if (size > sizeof(h) - 16 || pending_reply || broken_stream) return false;
+    uint32_t began = millis(), deadline = began + (cleanup ? 1000 : 2000);
+    if (cleanup && int32_t(cleanup_deadline - deadline) < 0) deadline = cleanup_deadline;
     put16(h, 0xb006); put16(h + 2, method); put32(h + 4, size + 8);
     put16(h + 8, 0x434e); put16(h + 10, session); h[12] = h[13] = 1;
     for (unsigned i = 0; i < size; ++i) h[16 + i] = body[i];
+    unsigned written = 0;
     // One write avoids the Nagle/delayed-ACK pause between header and body.
-    if (!transfer(fd, h, 16 + size, true, cleanup)) {
-        printf("[KombiPiP] Guidance write failed method=%u session=%u\n", method, session); fflush(0);
+    if (!transfer_until(fd, h, 16 + size, written, true, deadline, cleanup)) {
+        // Sending another request after a partial write would corrupt framing.
+        if (written) broken_stream = true;
+        printf("[KombiPiP] Guidance write failed method=%u session=%u bytes=%u\n", method, session, written); fflush(0);
         return false;
     }
-    int n = message(fd, reply, sizeof(reply), cleanup);
-    if (n < 16 || get32(reply) != (0xb0060000u | method) || get16(reply + 8) != 0x434e
-        || get16(reply + 10) != session || reply[12] != 1 || reply[13] != 1
-        || reply[14] != 0x80 || reply[15]) {
-        printf("[KombiPiP] Guidance reply failed method=%u session=%u bytes=%d type=%u code=%u\n",
-               method, session, n, n >= 16 ? reply[14] : 255, n >= 16 ? reply[15] : 255); fflush(0);
+    pending_method = method; pending_session = session; pending_reply = true;
+    if (!finish_guidance(fd, deadline, cleanup, handle)) {
+        printf("[KombiPiP] Guidance reply failed method=%u session=%u buffered=%u pending=%u broken=%u elapsed_ms=%u interrupted=%d\n",
+               method, session, reply_used, unsigned(pending_reply), unsigned(broken_stream), millis()-began, int(interrupted)); fflush(0);
         return false;
-    }
-    if (handle) {
-        if (n < 24) return false;
-        *handle = get32(reply + 16);
-        if (!*handle || *handle == 0xffffffff) return false;
     }
     return true;
 }

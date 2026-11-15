@@ -18,7 +18,7 @@ static unsigned next_fd=10, available[16], consumed[16], calls, closed, resource
 static unsigned failure;
 static uint8_t replies[16][64];
 extern "C" int* __get_errno_ptr() { static int error; return &error; }
-extern "C" int fake_clock(int,PipClock* p) { p->seconds=p->nanoseconds=0; return 0; }
+extern "C" int fake_clock(int,PipClock* p) { p->tv_sec=p->tv_nsec=0; return 0; }
 extern "C" int fake_usleep(unsigned) { return 0; }
 extern "C" int fake_socket(int,int,int) { return next_fd++; }
 extern "C" int fake_connect(int,const void*,unsigned) { return 0; }
