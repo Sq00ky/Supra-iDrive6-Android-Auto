@@ -12,8 +12,8 @@ using namespace hudterm;
 namespace {
 uint16_t other(uint16_t v,const Surface& s) {return v==s.a?s.b:s.a;}
 uint32_t kitColor(sixwbkit::Color::Value c) {
-    switch(c){case sixwbkit::Color::Graphite:return 0xff353b43;case sixwbkit::Color::Gold:return 0xffc4a36a;
-    case sixwbkit::Color::White:return 0xffffffff;case sixwbkit::Color::Gray:return 0xff858d98;case sixwbkit::Color::Black:return 0xff000000;default:return 0;}
+    switch(c){case sixwbkit::Color::Graphite:return 0xff303030;case sixwbkit::Color::Gold:return 0xff858585;
+    case sixwbkit::Color::White:return 0xffffffff;case sixwbkit::Color::Gray:return 0xff858d98;case sixwbkit::Color::Black:return 0xff303030;case sixwbkit::Color::Red:return 0xffff0000;default:return 0;}
 }
 bool inside(const sixwbkit::Shape& s,double x,double y) {
     bool hit=false;for(size_t c=0;c<s.contours.size();++c){const std::vector<sixwbkit::Point>& ps=s.contours[c].points;
@@ -96,7 +96,7 @@ Batch Hud6wbDisplay::calibrationBatch() const {
     // relying on 218 or placing white behind a tested fill. The top stays open
     // so the first sample row can start exactly on the surface boundary.
     const int referenceX[]={21,69,117,165,210};
-    b.add(kSetFillColor,setFillColor(target,2)); // known white reference, not a tested sample
+    b.add(kSetFillColor,setFillColor(target,6)); // expected white reference, independent of tested samples
     for(unsigned marker=0;marker<10;++marker) {
         int left=21,top=0,right=212,bottom=169;
         if(marker<5) {
@@ -127,10 +127,62 @@ Batch Hud6wbDisplay::calibrationBatch() const {
         b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x80+index),kPolygon,points));
     }
     // Hide only non-calibration elements. Never show a half-built chart.
-    const uint16_t hidden[]={p_.lanes.a,p_.lanes.b,p_.icons.a,p_.icons.b,p_.bar,p_.base.street,p_.base.distance,p_.base.unit};
+    const uint16_t hidden[]={p_.lanes.a,p_.lanes.b,p_.bar,p_.base.street,p_.base.distance,p_.base.unit};
     for(size_t i=0;i<sizeof(hidden)/sizeof(*hidden);++i)b.add(kSetVisibility,setVisibility(hidden[i],false));
     b.add(kSwitchVisibility,switchVisibility(mainVisible_,target));
-    b.add(kSetVisibility,setVisibility(p_.base.frame,true));return b;
+    b.add(kSetVisibility,setVisibility(p_.base.frame,true));
+    if(!appendCalibrationBitmap(b,0))return errorBatch("6wb-kit-error: calibration bitmap exceeds verified C05 limit");
+    return b;
+}
+bool Hud6wbDisplay::appendCalibrationBitmap(Batch& b,unsigned test) const {
+    if(p_.icons.width!=305||p_.icons.height!=44)return false;
+    const uint16_t target=other(iconVisible_,p_.icons);
+    std::vector<uint8_t> payload=bitmap(target,0,calibrationPicture(test),305,44,p_.maxBitmapBytes);
+    if(payload.empty())return false;
+    b.add(kRemoveAllItems,removeAllItems(target));
+    Call c(0xC05,payload);c.txType=0;b.calls.push_back(c);
+    b.add(kSwitchVisibility,switchVisibility(iconVisible_,target));
+    b.add(kSetVisibility,setVisibility(target,true));return true;
+}
+Batch Hud6wbDisplay::geometryCalibrationBatch() const {
+    Batch b("6wb-geometry-calibration",false);
+    const uint16_t target=other(mainVisible_,p_.main);
+    b.add(kRemoveAllItems,removeAllItems(target));
+    for(unsigned side=0;side<2;++side) {
+        b.add(kSetFillColor,setFillColor(target,side?5:6));
+        for(unsigned i=0;i<41;++i) {
+            const int a=5*(int)std::min(i,40-i),next=std::min(i+1,40u);
+            const int z=5*(int)std::min((unsigned)next,40-(unsigned)next);
+            const int top=5*(int)i,bottom=top+5;
+            int xy[6][2];unsigned count=6;
+            if(z>=a) {
+                const int q[6][2]={{a,top},{a+2,top},{a+2,bottom-2},{z+2,bottom-2},{z+2,bottom},{a,bottom}};
+                for(unsigned k=0;k<6;++k){xy[k][0]=q[k][0];xy[k][1]=q[k][1];}
+            } else {
+                const int q[6][2]={{a,top},{a+2,top},{a+2,bottom},{z,bottom},{z,bottom-2},{a,bottom-2}};
+                for(unsigned k=0;k<6;++k){xy[k][0]=q[k][0];xy[k][1]=q[k][1];}
+            }
+            if(a==z){count=4;xy[0][0]=a;xy[0][1]=top;xy[1][0]=a+2;xy[1][1]=top;
+                xy[2][0]=a+2;xy[2][1]=bottom;xy[3][0]=a;xy[3][1]=bottom;}
+            std::vector<hudterm::Point> points;
+            for(unsigned k=0;k<count;++k){hudterm::Point p={(int16_t)(side?232-xy[k][0]:xy[k][0]),(int16_t)xy[k][1]};points.push_back(p);}
+            if(side)std::reverse(points.begin(),points.end()); // retain the same filled-polygon winding after mirroring
+            b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x100+side*64+i),kPolygon,points));
+            // Right-only detached ticks at rows 0,5,...40 distinguish sides without colour.
+            if(side && i%5==0) {
+                std::vector<hudterm::Point> tick;
+                const int left=232-a-6,right=232-a-3;
+                hudterm::Point p[]={{(int16_t)left,(int16_t)(top+1)},{(int16_t)right,(int16_t)(top+1)},
+                    {(int16_t)right,(int16_t)(top+3)},{(int16_t)left,(int16_t)(top+3)}};
+                tick.assign(p,p+4);b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x200+i),kPolygon,tick));
+            }
+        }
+    }
+    const uint16_t hidden[]={p_.lanes.a,p_.lanes.b,p_.bar,p_.base.street,p_.base.distance,p_.base.unit};
+    for(size_t i=0;i<sizeof(hidden)/sizeof(*hidden);++i)b.add(kSetVisibility,setVisibility(hidden[i],false));
+    b.add(kSwitchVisibility,switchVisibility(mainVisible_,target));b.add(kSetVisibility,setVisibility(p_.base.frame,true));
+    if(!appendCalibrationBitmap(b,1))return errorBatch("6wb-kit-error: calibration bitmap exceeds verified C05 limit");
+    return b;
 }
 bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
     const hudterm::PaletteCalibration::Phase before=calibration_.phase();
@@ -150,25 +202,29 @@ bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
         return true;
     }
     if(!canDraw())return true; // existing C04 procedure and local dispatch gate
+    if(calibration_.due(now) && calibration_.test()==0)calibration_.nextTest();
     if(calibration_.phase()==hudterm::PaletteCalibration::Pending) {
-        Batch b=calibrationBatch();
+        Batch b=calibration_.test()==0?calibrationBatch():geometryCalibrationBatch();
         if(b.label.find("6wb-kit-error:")==0){log(b.label);calibration_.cancel();return false;}
         for(size_t i=0;i<b.calls.size();++i)if(!callOk(b.calls[i],handlesOf(p_),true)) {
             log("6wb-kit-error: invalid calibration frame");calibration_.cancel();return false;
         }
+        if(b.calls.size()>128){log("6wb calibration: batch limit exceeded");calibration_.cancel();return false;}
         if(!submit(b))return true;
-        mainVisible_=other(mainVisible_,p_.main);sent_=!shadow_;calibration_.queued();
-        log("6wb palette: indices 0..19 queued; waiting for local dispatch completion");return true;
+        mainVisible_=other(mainVisible_,p_.main);iconVisible_=other(iconVisible_,p_.icons);sent_=!shadow_;calibration_.queued();
+        log(calibration_.test()==0?"6wb calibration A: palette + bitmap 1 queued":"6wb calibration B: steps + bitmap 2 queued");return true;
     }
     if(calibration_.phase()==hudterm::PaletteCalibration::Dispatching) {
         calibration_.dispatched(now);
-        log("6wb palette: local dispatch complete; monotonic hold deadline +10000 ms");return true;
+        log(calibration_.test()==0?"6wb calibration A: local dispatch complete; monotonic hold +10000 ms":
+            "6wb calibration B: local dispatch complete; monotonic hold +10000 ms");return true;
     }
     if(calibration_.phase()==hudterm::PaletteCalibration::Holding && !calibration_.due(now))return true;
     if(!calibrationClearQueued_) {
         Batch clear("6wb-palette-clear",false);
-        clear.add(kRemoveAllItems,removeAllItems(mainVisible_));
-        clear.add(kSetVisibility,setVisibility(mainVisible_,false));
+        const uint16_t handles[]={p_.main.a,p_.main.b,p_.icons.a,p_.icons.b};
+        for(unsigned i=0;i<4;++i){clear.add(kRemoveAllItems,removeAllItems(handles[i]));
+            clear.add(kSetVisibility,setVisibility(handles[i],false));}
         if(!submit(clear))return true;
         calibrationClearQueued_=true;calibration_.clearQueued();return true;
     }
@@ -176,7 +232,7 @@ bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
     // latest snapshot, never the maneuver captured at the beginning of the hold.
     calibration_.finished();calibrationClearQueued_=false;fresh_=true;dirty_=true;sent_=false;
     queuedPicture_=Batch();queuedCall_=0;
-    log("6wb palette: cleared; resume current navigation snapshot");return false;
+    log("6wb calibration: both surfaces cleared; resume current navigation snapshot");return false;
 }
 bool Hud6wbDisplay::mainChanged(const NavView& v) const {
     return fresh_ || v.aa_type!=shown_.aa_type || v.has_exit_angle!=shown_.has_exit_angle ||

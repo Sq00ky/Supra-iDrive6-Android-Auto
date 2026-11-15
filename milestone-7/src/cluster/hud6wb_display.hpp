@@ -29,9 +29,11 @@ public:
     void navigationRouteStarted() {calibration_.reset();calibration_.observe(1);calibrationClearQueued_=false;}
     void navigationPresentationCancelled() {calibration_.cancel();calibrationClearQueued_=false;}
     hudterm::Batch calibrationBatch() const;
+    hudterm::Batch geometryCalibrationBatch() const;
     hudterm::Batch render(const NavView& v) const;
     hudterm::Batch clearBatch() const;
 private:
+    bool appendCalibrationBitmap(hudterm::Batch& b,unsigned test) const;
     Result health();
     bool canDraw();
     bool submit(const hudterm::Batch& b);

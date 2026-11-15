@@ -1,3 +1,7 @@
+> Historical integration notes through 1574be1. The current experimental flat
+> design, 3/2/6/5 palette and two-stage calibration supersede the rendering and
+> single-calibration descriptions below. See [6WB_DUAL_CALIBRATION_FLAT.md](6WB_DUAL_CALIBRATION_FLAT.md).
+
 # Grafite/oro source release candidate — F31
 
 This integration is based on the working `feature/bmw-6wb` tree at

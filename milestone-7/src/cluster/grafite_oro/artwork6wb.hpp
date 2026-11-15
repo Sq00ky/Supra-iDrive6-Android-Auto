@@ -7,7 +7,7 @@ struct Maneuver { enum Value {
 #include "maneuvers.inc"
 }; };
 struct PlanePolicy { enum Value { Hidden, DistanceBased, FlatOnly }; };
-struct Color { enum Value { None, Graphite, Gold, White, Gray, Black }; };
+struct Color { enum Value { None, Graphite, Gold, White, Gray, Black, Red }; };
 struct Point { double x,y; };
 struct Rect { double x,y,width,height; Rect(double a=0,double b=0,double w=0,double h=0):x(a),y(b),width(w),height(h){} };
 struct Contour { bool closed; std::vector<Point> points; Contour():closed(false){} };

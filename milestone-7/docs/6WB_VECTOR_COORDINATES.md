@@ -1,3 +1,7 @@
+> Coordinate history and palette-sample mapping. Current two-stage operation,
+> expected-white reference index 6, bitmap tests and 64/106-call budgets are
+> documented in [6WB_DUAL_CALIBRATION_FLAT.md](6WB_DUAL_CALIBRATION_FLAT.md).
+
 # Experimental 6WB vector coordinates and identifiable palette grid
 
 ## Evidence and distinct dimensions
@@ -48,7 +52,7 @@ The shared HudProfile type does not impose the 6WA's canvas. The 6WB-specific
 validation and optional NBT_6WB_ARROW_* settings now use 233x206 as their limit.
 Explicit user overrides are still honoured; calibration uses the full canvas
 independently of those arrow overrides. No final palette assignment changes:
-Contour=2, Infill=14, ActiveSelection=3 provisional.
+Road=3, road edge=2, guidance=6, outline=5 provisional.
 
 ## Palette reference: 4 columns x 5 rows
 
@@ -59,8 +63,8 @@ with no vertical offset, and narrows the columns to the user-requested bounds.
 The full vector profile and all maneuver geometries remain unchanged.
 
 Five vertical and five horizontal **filled white reference bars** identify the
-cells. They use **21B index 2** and 21D type 03, without 218. White 2 is the
-existing reference choice and is labelled white in JayJay's source (line 46).
+cells. They use **21B index 6** and 21D type 03, without 218. Index 6 is the user-selected expected-white reference,
+not an inferred definitive RGB value.
 The top of the grid is open: a top bar at Y=0 would overlap the required first
 sample row. Every cell has white side references and a bottom reference. These
 references are separate from the samples, with no white backing: a transparent
@@ -68,7 +72,7 @@ fill exposes the background instead of becoming indistinguishable from white.
 Reference bars may cross each other; samples overlap neither bars nor samples.
 
 Sample IDs are `0x80..0x93`, reference IDs `0x40..0x49`. Sample indices are decimal
-0..19 exactly once, left to right, top to bottom. One additional index-2 selection
+0..19 exactly once, left to right, top to bottom. One additional index-6 selection
 colours all reference bars. Indices 0, 1 and 10 are not assumed transparent.
 
 ### Exact sample bounds (input coordinates)
@@ -98,9 +102,9 @@ layout override or perspective compensation is applied by calibration code.
 
 All sample/reference coordinates lie within (0,0)..(232,205). The full reference
 envelope is (21,0)..(212,169), with gaps separating every sample from the bars.
-The total is **62 calls**: 1 clear, 1 reference colour, 10 reference polygons,
-20*(1 tested colour + 1 sample polygon), 8 hidden elements, 1 A/B switch and
-1 container visibility. Four vertices per polygon remain below the 99-point
+The palette phase now totals **64 calls**, including the upper bitmap test:
+1 clear, 1 reference colour, 10 reference polygons, 40 sample calls, 6 hidden
+elements, 1 central A/B switch, 1 container visibility and 4 bitmap calls. Four vertices per polygon remain below the 99-point
 limit; the batch remains below the 128-call implementation budget.
 
 The existing C04 gate, once-per-navigation lifecycle, local-dispatch-based

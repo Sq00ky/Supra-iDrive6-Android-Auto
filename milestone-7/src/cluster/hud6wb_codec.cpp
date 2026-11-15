@@ -70,6 +70,33 @@ std::vector<uint8_t> bitmap(uint16_t h,uint8_t id,const std::vector<uint32_t>& p
     p.push_back(1);p.push_back(1);p.push_back(0);p.push_back(id);
     p.insert(p.end(),r.begin(),r.end());return p;
 }
+std::vector<uint32_t> calibrationPicture(unsigned test) {
+    if(test>1)return std::vector<uint32_t>();
+    const unsigned w=305,h=44,scale=2;
+    const uint32_t background=test?0xffff0000:0xffffff00;
+    const uint32_t ink=test?0xff00ffff:0xff00ff00;
+    std::vector<uint32_t> p(w*h,background);
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x)
+        if(x==0||x==w-1||y==0||y==h-1||
+           (((x>=3&&x<=7)||(x>=w-8&&x<=w-4))&&((y>=3&&y<=7)||(y>=h-8&&y<=h-4))))p[y*w+x]=ink;
+    // 5x7 cell glyphs, nearest-neighbour integer scale; no font/runtime dependency.
+    static const char alphabet[]="BITMAP ES12";
+    static const uint8_t glyphs[][7]={
+        {30,17,17,30,17,17,30},{31,4,4,4,4,4,31},{31,4,4,4,4,4,4},
+        {17,27,21,21,17,17,17},{14,17,17,31,17,17,17},{30,17,17,30,16,16,16},
+        {0,0,0,0,0,0,0},{31,16,16,30,16,16,31},{15,16,16,14,1,1,30},
+        {4,12,4,4,4,4,14},{14,17,1,2,4,8,31}};
+    const char* text=test?"BITMAP TEST 2":"BITMAP TEST 1";
+    const unsigned length=13,x0=(w-(length*6-1)*scale)/2,y0=(h-7*scale)/2;
+    for(unsigned k=0;k<length;++k) {
+        unsigned g=0;while(alphabet[g]&&alphabet[g]!=text[k])++g;
+        if(!alphabet[g])continue;
+        for(unsigned y=0;y<7;++y)for(unsigned x=0;x<5;++x)if(glyphs[g][y]&(1<<(4-x)))
+            for(unsigned yy=0;yy<scale;++yy)for(unsigned xx=0;xx<scale;++xx)
+                p[(y0+y*scale+yy)*w+x0+k*6*scale+x*scale+xx]=ink;
+    }
+    return p;
+}
 RoadShield roadShield(const std::string& s) {
     RoadShield r;if(s.size()<2 || (s[0]!='A' && s[0]!='B'))return r;
     size_t i=1;while(i<s.size() && s[i]==' ')++i;

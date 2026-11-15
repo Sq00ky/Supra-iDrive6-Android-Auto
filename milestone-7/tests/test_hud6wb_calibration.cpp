@@ -1,6 +1,7 @@
 // Deterministic C++ tests prepared only: no compilation/execution in Codex.
 #include "cluster/hud6wb_calibration.hpp"
 #include "cluster/hud6wb_display.hpp"
+#include "cluster/hud6wb_codec.hpp"
 #include "hud6wb_kit_test_util.hpp"
 #include <assert.h>
 using namespace nbt::hudterm;
@@ -31,22 +32,26 @@ void lifecycleIntegration() {
     port.busy=false;assert(display.interceptNavigation(&first,1,2)); // hold deadline = 12
     nbt::kombinav::NavView latest=first;latest.aa_type=7;latest.road="Latest";latest.step_m=90;latest.dist_text="90";
     assert(display.interceptNavigation(&latest,1,11.999999));assert(port.batches.size()==2);
-    assert(display.interceptNavigation(NULL,3,12)); // rerouting does not freeze the deadline
-    assert(port.batches.size()==3&&port.batches.back().label=="6wb-palette-clear");
-    port.busy=false;assert(!display.interceptNavigation(&latest,1,12.01));
-    assert(!display.interceptNavigation(&latest,1,20));assert(port.batches.size()==3);
+    assert(display.interceptNavigation(NULL,3,12)); // stage B queues immediately, no NAV interleaving
+    assert(port.batches.size()==3&&port.batches.back().label=="6wb-geometry-calibration");
+    port.busy=false;assert(display.interceptNavigation(&latest,1,12.01)); // B deadline 22.01
+    assert(display.interceptNavigation(&latest,1,22.009999));assert(port.batches.size()==3);
+    assert(display.interceptNavigation(NULL,3,22.01));
+    assert(port.batches.size()==4&&port.batches.back().label=="6wb-palette-clear");
+    port.busy=false;assert(!display.interceptNavigation(&latest,1,22.02));
+    assert(!display.interceptNavigation(&latest,1,30));assert(port.batches.size()==4);
     Batch current=display.render(latest);bool foundLatest=false;
     for(size_t i=0;i<current.calls.size();++i)if(current.calls[i].fkt==kTextareaSetText&&current.calls[i].handle()==profile.base.street)
         foundLatest=std::string(current.calls[i].payload.begin()+3,current.calls[i].payload.end()-1)=="Latest";
     assert(foundLatest);
-    display.interceptNavigation(NULL,2,21);display.navigationRouteStarted();
-    assert(display.interceptNavigation(&latest,1,22));assert(port.batches.back().label=="6wb-palette-calibration");
+    display.interceptNavigation(NULL,2,31);display.navigationRouteStarted();
+    assert(display.interceptNavigation(&latest,1,32));assert(port.batches.back().label=="6wb-palette-calibration");
     // The next route uses the other A/B buffer, with the same filled chart.
     unsigned polygons=0;
     for(size_t i=0;i<port.batches.back().calls.size();++i) {
         const Call& c=port.batches.back().calls[i];
         assert(c.fkt!=kSetLineColor);
-        if(c.fkt==kAddPolygon){assert(c.handle()==0x20&&c.payload[4]==0x03&&c.payload[5]==4);
+        if(c.fkt==kAddPolygon){assert(c.handle()==0x1f&&c.payload[4]==0x03&&c.payload[5]==4);
             if(rdBe16(&c.payload[2])>=0x80)++polygons;}
     }
     assert(polygons==20);
@@ -59,6 +64,8 @@ int main() {
     c.dispatched(100);assert(!c.due(109.999999));assert(c.due(110));
     c.observe(1);c.observe(3);c.observe(1);assert(c.phase()==PaletteCalibration::Holding);
     assert(!c.due(109.999999));assert(c.due(110));
+    assert(c.test()==0);c.nextTest();assert(c.test()==1&&c.phase()==PaletteCalibration::Pending);
+    c.queued();c.dispatched(110);assert(!c.due(119.999999));assert(c.due(120));
     c.clearQueued();c.finished();assert(c.phase()==PaletteCalibration::Done);
     c.observe(1);assert(!c.active());c.observe(2);c.observe(1);assert(c.phase()==PaletteCalibration::Pending);
     c.cancel();c.observe(3);c.observe(1);assert(!c.active());
@@ -66,7 +73,7 @@ int main() {
     PaletteCalibration disabled(false);disabled.observe(1);assert(!disabled.active());
     CalibrationPort port;nbt::hudterm::Bmw6wbProfile profile;
     nbt::kombinav::Hud6wbDisplay display(port,profile,true,testKit());
-    Batch chart=display.calibrationBatch();assert(chart.calls.size()==62&&chart.calls.size()<=128);
+    Batch chart=display.calibrationBatch();assert(chart.calls.size()==64&&chart.calls.size()<=128);
     unsigned colors=0,rectangles=0,markers=0,references=0;bool seen[20]={false};
     for(size_t i=0;i<chart.calls.size();++i) {
         const Call& call=chart.calls[i];assert(callOk(call,handlesOf(profile),true));
@@ -76,7 +83,7 @@ int main() {
             assert(i+1<chart.calls.size()&&chart.calls[i+1].fkt==kAddPolygon);
             uint16_t item=rdBe16(&chart.calls[i+1].payload[2]);
             if(item>=0x80){assert(colors<20&&call.payload[2]==colors&&!seen[colors]);seen[colors]=true;++colors;}
-            else {assert(i==1&&item==0x40&&call.payload[2]==2);++references;}
+            else {assert(i==1&&item==0x40&&call.payload[2]==6);++references;}
         }
         if(call.fkt==kAddPolygon) {
             assert(call.handle()==0x1f&&call.payload.size()==22&&call.payload[4]==0x03&&call.payload[5]==4);
@@ -101,6 +108,22 @@ int main() {
     }
     assert(colors==20&&rectangles==20&&markers==10&&references==1);
     for(unsigned i=0;i<20;++i)assert(seen[i]);
+    Batch steps=display.geometryCalibrationBatch();assert(steps.calls.size()==106);
+    unsigned left=0,right=0,ticks=0,bitmaps=0;
+    for(size_t i=0;i<steps.calls.size();++i) {
+        const Call& c=steps.calls[i];assert(callOk(c,handlesOf(profile),true));assert(c.fkt!=kSetLineColor);
+        if(c.fkt==0xC05){assert(c.txType==0&&c.handle()==0x18&&c.payload.size()<=4096);++bitmaps;}
+        if(c.fkt==kAddPolygon){unsigned item=rdBe16(&c.payload[2]);
+            if(item>=0x100&&item<=0x128)++left;
+            else if(item>=0x140&&item<=0x168)++right;
+            else {assert(item>=0x200&&item<=0x228&&(item-0x200)%5==0);++ticks;}
+            for(unsigned j=0;j<c.payload[5];++j){assert(rdBe16(&c.payload[6+4*j])<=232);assert(rdBe16(&c.payload[8+4*j])<=205);}
+        }
+    }
+    assert(left==41&&right==41&&ticks==9&&bitmaps==1);
+    for(unsigned test=0;test<2;++test){std::vector<uint32_t> px=calibrationPicture(test);assert(px.size()==305*44);
+        assert(px[305+1]==(test?0xffff0000:0xffffff00));assert(px[0]==(test?0xff00ffff:0xff00ff00));
+        assert(!bitmap(0x18,0,px,305,44,4096).empty());}
     nbt::sixwbkit::HudTerminalPalette p=provisionalKitPalette();
-    assert(p.white==3&&p.graphite==14&&p.gray==14&&p.black==14&&p.gold==2);
+    assert(p.white==6&&p.graphite==3&&p.gray==2&&p.black==3&&p.gold==2&&p.red==5);
 }

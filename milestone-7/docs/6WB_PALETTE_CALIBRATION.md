@@ -1,141 +1,35 @@
-# Built-in 6WB palette startup presentation
+# 6WB dual startup calibration
 
-This change uses the existing 6WB display, C04 cache, transport and worker. It
-does not install a separate diagnostic application, service, IPC or new thread.
+Current implementation: [6WB_DUAL_CALIBRATION_FLAT.md](6WB_DUAL_CALIBRATION_FLAT.md).
 
-## Sequence
+After the existing C04 validation, one sequence runs per new NAV route:
 
-1. A real navigation start (INACTIVE -> ACTIVE, or first ACTIVE) arms one chart.
-   A generation counter in the existing NAV callback preserves rapid stop/start
-   transitions between worker snapshots; it does not change stored NAV bodies.
-   Duplicate ACTIVE and REROUTING do not restart the chart. An AA session end
-   resets the lifecycle. Turning arrows off cancels it without restarting it on
-   the same route.
-2. Existing surface validation must succeed, and already accepted drawing chunks
-   finish first. No chart is sent before `BmwResources::advance()` verifies the
-   configured surfaces. Existing valid C04 results remain cached as before.
-3. The inactive buffer in the verified 1F/20 pair is cleared. Its experimental
-   vector canvas is 233x206; C04 still verifies the measured 221x158 separately.
-   A shared white grid uses 21B index 2 and ten filled reference bars. Inside
-   it, a **4-column x 5-row grid of 20 filled samples** uses indices 0..19.
-   For each sample the commands are adjacent: `21B [handle:u16][index:u8]`, then
-   `21D [handle:u16][item:u16][03][04][four x/y pairs]`. There is no 218
-   (SetLineColor), polyline, or new line-width setting in this chart.
-   The complete **62-command** batch is within the existing 128-call limit.
-4. Other navigation elements are hidden, then the finished chart is exposed by
-   the existing A/B visibility switch. The clock is armed only after local
-   dispatch completes; asynchronous Ack latency does not start another wait.
-5. Deadline = observed local dispatch completion + exactly 10.0 monotonic
-   seconds. NAV messages continue through the normal decoder/storage callback;
-   they cannot replace the chart or restart its clock. The worker still advances
-   the countdown during REROUTING/no current NavView.
-6. At the deadline, the chart is cleared/hidden. Once that short ordered clear
-   is locally dispatched, the same tick passes the latest current NavView into
-   Core. No stale maneuver from the start of calibration is replayed and there
-   is no additional ten-second delay. Normal geometry delivery still takes its
-   normal finite transport dispatch time.
+1. Palette 0..19 and BITMAP TEST 1: ten-second monotonic hold.
+2. Left/right stepped rulers and BITMAP TEST 2: ten-second monotonic hold.
+3. Clear both visible surfaces and resume the latest normal NAV snapshot.
 
-An explicit navigation end, arrow setting off, daemon shutdown or link failure
-can cancel the presentation. Those are cancellation/lifecycle events, not an
-interruption by incoming navigation instructions. No retry/reset of a failed
-terminal is introduced. A link change during an already displayed chart aborts
-that attempt; it is not resent within the same navigation. Initial discovery
-while a chart is still pending does not consume its one attempt.
+Each hold starts after observed local dispatch completion. Dispatch/scheduling
+add finite transition time, so software holds are not measured panel-light
+presentation timestamps. No sleeps, new worker, Ack wait or retry is introduced.
+Duplicate ACTIVE/reroute does not restart the sequence; existing cancellations
+remain. Set ENABLE_PALETTE_CALIBRATION=false to disable both tests.
 
-## Grid reference for photographs
+Palette samples retain exactly the 1574be1 coordinates:
 
-Indices below are **decimal**, increasing left to right, then top to bottom.
-The corresponding colour bytes range from 0x00 to 0x13, not 0x00 to 0x19.
-Do not renumber a cell if its fill is invisible/transparent or looks identical
-to an adjacent cell. No colour identity is inferred in advance.
+| Indices | Y |
+|---|---|
+| 0–3 | 0..17 |
+| 4–7 | 37..54 |
+| 8–11 | 74..91 |
+| 12–15 | 111..128 |
+| 16–19 | 148..165 |
 
-| Row (top to bottom) | Column 1 (left) | Column 2 | Column 3 | Column 4 (right) |
-|---|---:|---:|---:|---:|
-| 1 | 0 | 1 | 2 | 3 |
-| 2 | 4 | 5 | 6 | 7 |
-| 3 | 8 | 9 | 10 | 11 |
-| 4 | 12 | 13 | 14 | 15 |
-| 5 | 16 | 17 | 18 | 19 |
+X columns: 25..64, 73..112, 121..160, 169..208. No horizon or extra offset.
+The separate reference bars now use expected-white index 6. Geometry is unchanged;
+transparent sample positions remain identifiable independently of their fills.
 
-Input coordinates before the terminal's perspective transform:
-
-* Full canvas: **(0,0)..(232,205)**, unchanged. No horizon assumption or
-  additional vertical offset is applied: the first samples start at **Y=0**.
-* Sample x extents by column: **25..64**, **73..112**, **121..160**, **169..208**.
-* Sample y extents by row: **0..17**, **37..54**, **74..91**, **111..128**, **148..165**.
-* Samples span 39x17 coordinate units, with pitches of 48 horizontally and 37
-  vertically. White side/bottom reference bars identify transparent samples;
-  the top stays open to avoid overlapping the first row. There is no backing
-  behind a sample. Reference and sample polygons never overlap.
-* Reference vertical x ranges: **21..23, 69..71, 117..119, 165..167, 210..212**,
-  y=0..169. Horizontal y ranges: **19..21, 56..58, 93..95, 130..132, 167..169**,
-  x=21..212. Index 2 is selected once more for these ten bars.
-* See [6WB_VECTOR_COORDINATES.md](6WB_VECTOR_COORDINATES.md) for all 20 exact
-  rectangles, reference bar bounds, pinned JayJay evidence and experimental
-  visibility limits. Physical sizes are transformed by the cluster.
-
-The first real F31 trial displayed all previous 218-coloured lines as white.
-This test isolates the 21B fill selector instead. The normal maneuver renderer,
-including its current 218 contour handling and provisional 2/14/3 roles, is
-unchanged. A later 21B trial produced distinct colours, but only three rows
-were visible and lateral cells faded. This revision changes only chart placement
-and sample sizes, leaving permanent palette assignments for a later test.
-
-## Timing precision
-
-The source implements a **10,000 ms software deadline**, not a physical-display
-measurement. The existing worker can wake on that deadline, with at most 50 ms
-sleep slices for shutdown responsiveness; it polls local send completion every
-10 ms without blocking the NAV receiver. An overdue deadline cannot busy-spin.
-
-QNX scheduling, the gap between actual last dispatch and its observation, MOST
-transmission, command execution and actual panel visibility are not timestamped
-as hardware presentation events. Therefore exact 10.000 seconds of visible
-light on the panel cannot be guaranteed or claimed without a vehicle measurement.
-There is no blocking sleep(10) and no timeout increase.
-
-## Colour roles
-
-In `src/cluster/hud6wb_kit.cpp`:
-
-```
-static const uint8_t COLOR_CONTOUR = 2;
-static const uint8_t COLOR_INFILL = 14;
-static const uint8_t COLOR_ACTIVE_SELECTION = 3;
-```
-
-Kit Gold (edges) -> Contour; Graphite, Gray and Black -> Infill; kit White
-(guidance arrows and selected infill) -> ActiveSelection.
-The geometries and painter order are unchanged. Index 3 is deliberately
-provisional: the code does not assume its actual displayed colour. Index 14 is used as requested,
-including if the car's chart reveals a different/transparent appearance.
-`GrafiteKit` and the display no longer read `6wb-kit.palette` at all. Calibration
-and every central maneuver use only 0x1F/0x20 with the existing A/B buffering and
-verified input coordinates. No separate central pair is configured or required.
-The existing eight C04 checks remain; colours and normal rendering work without
-the file.
-
-## Disable
-
-Set `ENABLE_PALETTE_CALIBRATION = false` in
-`src/cluster/hud6wb_calibration.hpp` before the user's next local compilation.
-Colours still use the three compiled indices. No env entry or new application
-is required. SHADOW follows the same lifecycle and logs commands without sending.
-
-## Checks
-
-Executed in Codex for this change: four expanded-geometry contracts, seven
-calibration source/data tests, five single-surface contracts and eight kit
-source/data checks (24 checks total),
-plus whitespace/static review. For this placement revision, isolation checks
-allow only the calibrationBatch body to differ in production sources from
-`1e4d5314add90fc727af8489549619b34d16e6a1`. No C++ or QNX
-compilation/execution. `test_hud6wb_calibration.cpp` is prepared for subsequent
-runtime checking of the exact boundary, duplicate ACTIVE/REROUTING, route restart,
-disabled mode, both A/B buffers, all 20 fill/polygon payload pairs, four vertices
-per sample and reference bar, grid indices, full bounds, exact 62-call budget
-and unchanged provisional roles.
-
-Remaining F31 checks: rectangle visibility/colour/order, meaning of all 20 indices,
-visible hold duration, normal guidance resumption with updated maneuvers, and
-start/stop/reroute behavior. No binary was built or installed by this change.
+Both central tests use only 1F/20; upper bitmaps alternate 18/19. All four
+surface contents are restored/hidden through the normal ordered lifecycle.
+See the detailed document for all 41 step coordinates, nine right-side markers,
+NBT_RLE32/C05 layout, literal bitmap colours and exact 64/106-call budgets.
+Physical visibility and vector colour meanings remain experimental.

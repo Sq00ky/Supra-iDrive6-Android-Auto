@@ -11,17 +11,17 @@ KIT=(ROOT/'src/cluster/hud6wb_kit.cpp').read_text()
 
 class PaletteCalibrationTests(unittest.TestCase):
     def test_compiled_indices_and_complete_semantic_mapping(self):
-        for name,value in [('COLOR_CONTOUR',2),('COLOR_INFILL',14),('COLOR_ACTIVE_SELECTION',3)]:
+        for name,value in [('COLOR_ROAD_FILL',3),('COLOR_ROAD_EDGE',2),('COLOR_GUIDANCE_FILL',6),('COLOR_GUIDANCE_EDGE',5)]:
             self.assertRegex(KIT,r'static const uint8_t '+name+r'\s*=\s*'+str(value)+r';')
-        self.assertIn('p.graphite=COLOR_INFILL;p.gray=COLOR_INFILL;p.black=COLOR_INFILL',KIT)
-        self.assertIn('p.gold=COLOR_CONTOUR;p.white=COLOR_ACTIVE_SELECTION',KIT)
+        self.assertIn('p.graphite=COLOR_ROAD_FILL;p.black=COLOR_ROAD_FILL',KIT)
+        self.assertIn('p.white=COLOR_GUIDANCE_FILL;p.red=COLOR_GUIDANCE_EDGE',KIT)
         constructor=KIT.split('GrafiteKit::GrafiteKit()',1)[1].split('KitBarState kitBarState(',1)[0]
         self.assertNotIn('configuration()',constructor)
         self.assertNotIn('readProfile()',KIT)
         self.assertNotIn('palette(const Configuration&',KIT)
 
     def test_twenty_filled_rectangles_and_separated_grid(self):
-        body=DISPLAY.split('Batch Hud6wbDisplay::calibrationBatch()',1)[1].split('bool Hud6wbDisplay::interceptNavigation(',1)[0]
+        body=DISPLAY.split('Batch Hud6wbDisplay::calibrationBatch()',1)[1].split('bool Hud6wbDisplay::appendCalibrationBitmap(',1)[0]
         self.assertIn('p_.main.a!=0x1f||p_.main.b!=0x20',body)
         self.assertIn('index<20',body)
         self.assertNotIn('kPerspectiveHorizon',body)
@@ -40,7 +40,7 @@ class PaletteCalibrationTests(unittest.TestCase):
         self.assertNotIn('setLineColor(',body)
         self.assertNotIn('kPolyline',body)
         self.assertNotIn('kSetLineWidth',body)
-        self.assertIn('setFillColor(target,2)',body)
+        self.assertIn('setFillColor(target,6)',body)
         self.assertRegex(body,r'b.add\(kSetFillColor,setFillColor\(target,\(uint8_t\)index\)\);\s*b.add\(kAddPolygon,addPolygon\(target,\(uint16_t\)\(0x80\+index\),kPolygon,points\)\);')
         samples=[(25+(i%4)*48,(i//4)*37,64+(i%4)*48,17+(i//4)*37)for i in range(20)]
         markers=[(x,0,x+2,169)for x in (21,69,117,165,210)]
@@ -57,21 +57,21 @@ class PaletteCalibrationTests(unittest.TestCase):
         self.assertEqual([[row*4+col for col in range(4)]for row in range(5)],
                          [[0,1,2,3],[4,5,6,7],[8,9,10,11],[12,13,14,15],[16,17,18,19]])
         self.assertLess(body.index('addPolygon('),body.index('kSwitchVisibility'))
-        self.assertEqual(1+1+10+20*2+8+2,62)
-        self.assertLessEqual(62,128)
+        self.assertEqual(1+1+10+20*2+6+2+4,64)
+        self.assertLessEqual(64,128)
 
-    def test_only_calibration_batch_changes(self):
-        base='1e4d5314add90fc727af8489549619b34d16e6a1'
-        old=subprocess.check_output(['git','show',base+':milestone-7/src/cluster/hud6wb_display.cpp'],cwd=ROOT.parent,text=True)
-        start='Batch Hud6wbDisplay::calibrationBatch()';end='bool Hud6wbDisplay::interceptNavigation('
-        self.assertEqual(DISPLAY.split(start,1)[0],old.split(start,1)[0])
-        self.assertEqual(DISPLAY.split(end,1)[1],old.split(end,1)[1])
-        allowed=['hud6wb_display.cpp']
+    def test_only_renderer_calibration_and_bitmap_sources_change(self):
+        base='1574be1c311e8058d1de06d8ed28fe741a022104'
+        allowed=['hud6wb_display.cpp','hud6wb_display.hpp','hud6wb_kit.cpp','hud6wb_codec.cpp',
+                 'hud6wb_codec.hpp','hud6wb_calibration.hpp','grafite_oro/artwork6wb.cpp',
+                 'grafite_oro/artwork6wb.hpp','grafite_oro/hudterminal_palette.cpp','grafite_oro/hudterminal_palette.hpp']
         result=subprocess.check_output(['git','diff',base,'--','milestone-7/src']+
             [':(exclude)milestone-7/src/cluster/'+name for name in allowed],cwd=ROOT.parent)
         self.assertEqual(result,b'')
-        originalKit=subprocess.check_output(['git','show',base+':milestone-7/src/cluster/hud6wb_kit.cpp'],cwd=ROOT.parent,text=True)
-        self.assertEqual(KIT,originalKit)
+        # Actual palette rectangles/reference geometry remains byte-for-byte unchanged.
+        old=subprocess.check_output(['git','show',base+':milestone-7/src/cluster/hud6wb_display.cpp'],cwd=ROOT.parent,text=True)
+        start='    // Fixed F31 coordinate experiment:';end='    // Hide only non-calibration elements.'
+        self.assertEqual(DISPLAY.split(start,1)[1].split(end,1)[0],old.split(start,1)[1].split(end,1)[0].replace('setFillColor(target,2)); // known white reference, not a tested sample','setFillColor(target,6)); // expected white reference, independent of tested samples'))
         definitions=(ROOT/'src/cluster/hudterm.hpp').read_text()
         self.assertIn('kSetFillColor = 0x21B',definitions)
         self.assertIn('kAddPolygon = 0x21D',definitions)

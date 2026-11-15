@@ -30,20 +30,24 @@ class SingleSurfaceChecks(unittest.TestCase):
         self.assertIn('if(h!=0x1f && h!=0x20)return false',read('hud6wb_kit.cpp'))
         self.assertIn('p.main.a!=0x1f || p.main.b!=0x20',read('hud6wb_profile.hpp'))
 
-    def test_calibration_clock_and_interceptor_are_unchanged(self):
-        for start,end in [('bool Hud6wbDisplay::interceptNavigation(', 'bool Hud6wbDisplay::mainChanged(')]:
-            self.assertEqual(section(read('hud6wb_display.cpp'),start,end),section(original('hud6wb_display.cpp'),start,end))
-        self.assertEqual(read('hud6wb_calibration.hpp'),original('hud6wb_calibration.hpp'))
+    def test_dual_calibration_keeps_nonblocking_dispatch_clock(self):
+        clock=read('hud6wb_calibration.hpp');display=read('hud6wb_display.cpp')
+        self.assertIn('PALETTE_CALIBRATION_SECONDS = 10.0',clock)
+        self.assertIn('deadline_=now+PALETTE_CALIBRATION_SECONDS',clock)
+        self.assertIn('calibration_.dispatched(now)',display)
+        self.assertIn('calibration_.nextTest()',display)
+        self.assertIn('calibration_.test()==0?calibrationBatch():geometryCalibrationBatch()',display)
         self.assertEqual(section(read('hud6wb_kit.cpp'),'KitBarState kitBarState(', 'sixwbkit::Maneuver::Value'),
                          section(original('hud6wb_kit.cpp'),'KitBarState kitBarState(', 'KitPlane kitPlane('))
 
-    def test_geometry_colours_decoder_and_transport_unchanged(self):
-        paths=['src/cluster/grafite_oro','src/cluster/nav_msg.hpp','src/cluster/hud6wb_codec.cpp','src/cluster/hud_terminal.cpp',
+    def test_decoder_transport_bitmap_codec_and_data_are_unchanged(self):
+        paths=['src/cluster/grafite_oro/artwork_data.inc','src/cluster/nav_msg.hpp','src/cluster/hud_terminal.cpp',
                'src/cluster/hud_terminal.hpp','src/most','src/dsi_client.cpp','src/aa_session.cpp']
         result=subprocess.check_output(['git','diff',BASE,'--']+['milestone-7/'+p for p in paths],cwd=ROOT.parent)
         self.assertEqual(result,b'')
-        for name,value in [('COLOR_CONTOUR',2),('COLOR_INFILL',14),('COLOR_ACTIVE_SELECTION',3)]:
-            self.assertRegex(read('hud6wb_kit.cpp'),r'static const uint8_t '+name+r'\s*=\s*'+str(value)+r';')
+        now=read('hud6wb_codec.cpp');old=original('hud6wb_codec.cpp')
+        self.assertEqual(section(now,'static void pixel(', 'std::vector<uint32_t> calibrationPicture('),
+                         section(old,'static void pixel(', 'RoadShield roadShield('))
 
     def test_resources_query_only_existing_eight_handles(self):
         source=read('hud6wb_resources.hpp')

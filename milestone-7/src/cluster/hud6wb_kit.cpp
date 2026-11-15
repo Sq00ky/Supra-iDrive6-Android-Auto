@@ -33,6 +33,7 @@ bool polygon(Batch& b,uint16_t h,const std::vector<Point>& p,const Rect& bounds,
             y0=std::min(y0,(int)q[i].y);y1=std::max(y1,(int)q[i].y);}
         return x1-x0<=1||y1-y0<=1; // reject a nontrivial zero-area/self-crossed figure
     }
+    if(area<0)std::reverse(q.begin(),q.end()); // consistent winding for filled geometry
     b.add(kAddPolygon,addPolygon(h,(uint16_t)item++,kPolygon,q));return true;
 }
 // Even-odd scan decomposition at all vertices and edge crossings. It preserves
@@ -106,20 +107,20 @@ bool stroke(Batch& b,uint16_t h,const sixwbkit::Contour& c,double width,const Re
 }
 }
 namespace {
-static const uint8_t COLOR_CONTOUR = 2;          // White, user-selected
-static const uint8_t COLOR_INFILL = 14;          // Gray, user-selected
-static const uint8_t COLOR_ACTIVE_SELECTION = 3; // PROVISIONAL: actual colour unknown
+static const uint8_t COLOR_ROAD_FILL = 3;
+static const uint8_t COLOR_ROAD_EDGE = 2;
+static const uint8_t COLOR_GUIDANCE_FILL = 6;
+static const uint8_t COLOR_GUIDANCE_EDGE = 5;
 }
+
 sixwbkit::HudTerminalPalette provisionalKitPalette() {
     sixwbkit::HudTerminalPalette p;
-    p.graphite=COLOR_INFILL;p.gray=COLOR_INFILL;p.black=COLOR_INFILL;
-    // Kit gold describes edges; kit white describes guidance/selected infill.
-    p.gold=COLOR_CONTOUR;p.white=COLOR_ACTIVE_SELECTION;
-    return p;
+    p.graphite=COLOR_ROAD_FILL;p.black=COLOR_ROAD_FILL;
+    p.gold=COLOR_ROAD_EDGE;p.gray=COLOR_ROAD_EDGE;
+    p.white=COLOR_GUIDANCE_FILL;p.red=COLOR_GUIDANCE_EDGE;return p;
 }
 GrafiteKit::GrafiteKit():main_(provisionalKitPalette()),lanes_(main_) {
-    printf("[6wb kit] compiled colours: contour=%u, infill=%u, active=%u (active colour provisional); no palette-file colour loading\n",
-           (unsigned)COLOR_CONTOUR,(unsigned)COLOR_INFILL,(unsigned)COLOR_ACTIVE_SELECTION);
+    printf("[6wb kit] experimental flat colours: road=3, road edge=2, guidance=6, outline=5; physical colours unconfirmed\n");
 }
 KitBarState kitBarState(const kombinav::NavView& v,unsigned range) {
     KitBarState s;double metres=0;s.visible=kombinav::distanceMetres(v,metres);
@@ -205,25 +206,11 @@ bool GrafiteKit::encode(const sixwbkit::Scene& scene,const sixwbkit::HudTerminal
         }
         if(sixwbkit::hudColorIndex(palette,s.stroke,color)==sixwbkit::HudPaint::Mapped) {
             if(!sixwbkit::finite(s.strokeWidth)||s.strokeWidth<=0||s.strokeWidth>255)return false;
-            unsigned width=(unsigned)floor(s.strokeWidth+.5);if(!width)width=1;
-            b.add(kSetLineColor,setLineColor(h,color));b.add(kSetLineWidth,setLineWidth(h,(uint8_t)width));
-            for(size_t c=0;c<s.contours.size();++c) {
-                const sixwbkit::Contour& contour=s.contours[c];std::vector<hudterm::Point> ps;
-                for(size_t j=0;j<contour.points.size();++j) {
-                    const sixwbkit::Point& p=contour.points[j];
-                    if(!sixwbkit::finite(p.x)||!sixwbkit::finite(p.y)||p.x<bounds.x0||p.x>bounds.x1||p.y<bounds.y0||p.y>bounds.y1)return false;
-                    hudterm::Point q;q.x=(int16_t)floor(p.x+.5);q.y=(int16_t)floor(p.y+.5);
-                    if(ps.empty()||ps.back().x!=q.x||ps.back().y!=q.y)ps.push_back(q);
-                }
-                if(contour.closed && !ps.empty() && (ps.front().x!=ps.back().x||ps.front().y!=ps.back().y))ps.push_back(ps.front());
-                for(size_t first=0;first<ps.size();) {
-                    size_t end=std::min(first+99,ps.size());
-                    std::vector<hudterm::Point> part(ps.begin()+first,ps.begin()+end);
-                    b.add(kAddPolygon,addPolygon(h,(uint16_t)item++,kPolyline,part));
-                    if(b.calls.size()>2048)return false;
-                    if(end==ps.size())break;first=end-1;
-                }
-            }
+            // Never treat 218 as the 21B selector. Stroke geometry is expanded
+            // to filled polygons, using the SAME verified colour path as fills.
+            b.add(kSetFillColor,setFillColor(h,color));
+            for(size_t c=0;c<s.contours.size();++c)
+                if(!stroke(b,h,s.contours[c],s.strokeWidth,bounds,item))return false;
         }
         if(b.calls.size()>2048)return false;
     }

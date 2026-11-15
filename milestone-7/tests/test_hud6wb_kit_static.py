@@ -93,7 +93,9 @@ class KitStaticTests(unittest.TestCase):
 
     def test_encoding_bounds_and_atomic_failure(self):
         self.assertIn('p.size()>99',ADAPTER)
-        self.assertIn('first+99',ADAPTER)
+        self.assertIn('if(!stroke(b,h,s.contours[c],s.strokeWidth,bounds,item))return false',ADAPTER)
+        self.assertNotIn('b.add(kSetLineColor',ADAPTER)
+        self.assertNotIn('b.add(kSetLineWidth',ADAPTER)
         self.assertIn('kPolygon',ADAPTER)
         self.assertIn('if(xs.size()%2)return false',ADAPTER)
         self.assertIn('out.calls.insert(out.calls.end(),b.calls.begin(),b.calls.end())',ADAPTER)

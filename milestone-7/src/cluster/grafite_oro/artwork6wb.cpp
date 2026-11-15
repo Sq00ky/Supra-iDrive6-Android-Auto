@@ -33,8 +33,8 @@ Shape line(double x,double top,double bottom,Color::Value color,double width) {
 bool finite(double v) {return v==v&&v<=std::numeric_limits<double>::max()&&v>=-std::numeric_limits<double>::max();}
 const ManeuverInfo& describe(Maneuver::Value m) {return entry(m).info;}
 const char* rgb(Color::Value c) {
-    switch(c) {case Color::Graphite:return "#353b43";case Color::Gold:return "#c4a36a";
-    case Color::White:return "#ffffff";case Color::Gray:return "#858d98";case Color::Black:return "#000000";default:return "none";}
+    switch(c) {case Color::Graphite:return "#303030";case Color::Gold:return "#858585";
+    case Color::White:return "#ffffff";case Color::Gray:return "#858d98";case Color::Black:return "#303030";case Color::Red:return "#ff0000";default:return "none";}
 }
 // Dynamic primitives share the kit's exact semantic colours and design units.
 namespace {
@@ -51,13 +51,6 @@ void quadratic(std::vector<Point>& ps,Point control,Point end) {
     Point begin=ps.back();for(unsigned i=1;i<=8;++i) {double t=i/8.0,u=1-t;
         ps.push_back(xy(u*u*begin.x+2*u*t*control.x+t*t*end.x,u*u*begin.y+2*u*t*control.y+t*t*end.y));}
 }
-void triangle(Scene& scene,Point tip,Point direction,double length,double half) {
-    double n=sqrt(direction.x*direction.x+direction.y*direction.y);if(n<1e-9)return;
-    double dx=direction.x/n,dy=direction.y/n;std::vector<Point> ps;
-    ps.push_back(tip);ps.push_back(xy(tip.x-dx*length-dy*half,tip.y-dy*length+dx*half));
-    ps.push_back(xy(tip.x-dx*length+dy*half,tip.y-dy*length-dx*half));
-    scene.push_back(contour(ps,true,Color::White,Color::None,0));
-}
 void exitNumber(Scene& scene,unsigned number) {
     if(!number||number>99)return;
     static const unsigned mask[]={0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f};
@@ -69,46 +62,158 @@ void exitNumber(Scene& scene,unsigned number) {
             scene.push_back(contour(ps,false,Color::None,Color::White,17));}
     }
 }
+// Flat composition in design units. Area fitting is separate and always uniform.
+// A single closed silhouette contains the shaft AND head; no fat native line.
+std::vector<Point> silhouette(const std::vector<Point>& input,double half,bool head) {
+    // Adjacent arc/quadratic primitives share endpoints. Remove only those
+    // duplicates before computing normals; never change the maneuver angle.
+    std::vector<Point> path;
+    for(size_t i=0;i<input.size();++i)
+        if(path.empty()||fabs(input[i].x-path.back().x)>1e-9||fabs(input[i].y-path.back().y)>1e-9)path.push_back(input[i]);
+    std::vector<Point> left,right,out;if(path.size()<2)return out;
+    for(size_t i=0;i<path.size();++i) {
+        Point before=i?xy(path[i].x-path[i-1].x,path[i].y-path[i-1].y):xy(path[1].x-path[0].x,path[1].y-path[0].y);
+        Point after=i+1<path.size()?xy(path[i+1].x-path[i].x,path[i+1].y-path[i].y):before;
+        double a=sqrt(before.x*before.x+before.y*before.y),b=sqrt(after.x*after.x+after.y*after.y);
+        if(a<1e-9||b<1e-9)return out;
+        before.x/=a;before.y/=a;after.x/=b;after.y/=b;
+        Point normal=xy(-before.y-after.y,before.x+after.x);double n=sqrt(normal.x*normal.x+normal.y*normal.y);
+        if(n<1e-9)normal=xy(-after.y,after.x);else {normal.x/=n;normal.y/=n;}
+        double cosine=normal.x*(-after.y)+normal.y*after.x;
+        double distance=half/std::max(0.5,cosine); // bounded miter, no perspective
+        left.push_back(xy(path[i].x+normal.x*distance,path[i].y+normal.y*distance));
+        right.push_back(xy(path[i].x-normal.x*distance,path[i].y-normal.y*distance));
+    }
+    out=left;
+    if(head) {
+        Point end=path.back(),prev=path[path.size()-2];double dx=end.x-prev.x,dy=end.y-prev.y,n=sqrt(dx*dx+dy*dy);dx/=n;dy/=n;
+        out.push_back(xy(end.x-dy*half*2.3,end.y+dx*half*2.3));
+        out.push_back(xy(end.x+dx*half*2.5,end.y+dy*half*2.5));
+        out.push_back(xy(end.x+dy*half*2.3,end.y-dx*half*2.3));
+    }
+    for(size_t i=right.size();i>0;--i)out.push_back(right[i-1]);return out;
+}
+Shape road(const std::vector<Point>& path,double half) {
+    return contour(silhouette(path,half,false),true,Color::Graphite,Color::Gold,6);
+}
+Shape guidance(const std::vector<Point>& path,double half,bool head=true) {
+    return contour(silhouette(path,half,head),true,Color::White,Color::Red,6);
+}
+std::vector<Point> roadPath(int direction,bool uturn) {
+    std::vector<Point> p;
+    if(uturn) {
+        const int side=direction<0?-1:1;
+        p.push_back(xy(500-side*250,900));p.push_back(xy(500-side*250,350));
+        for(unsigned i=1;i<=16;++i){double a=3.141592653589793*i/16;
+            p.push_back(xy(500-side*250*cos(a),350-250*sin(a)));}
+        p.push_back(xy(500+side*250,650));return p;
+    }
+    p.push_back(xy(500,900));
+    if(!direction){p.push_back(xy(500,100));return p;}
+    p.push_back(xy(500,560));
+    if(direction==90||direction==-90||direction==135||direction==-135) {
+        int side=direction<0?-1:1;const unsigned steps=(direction==90||direction==-90)?8:12;
+        double turn=(direction<0?-direction:direction)*3.141592653589793/180;
+        for(unsigned i=1;i<=steps;++i){double a=turn*i/steps;
+            p.push_back(xy(500+side*220*(1-cos(a)),560-220*sin(a)));}
+        Point end=p.back();p.push_back(xy(end.x+side*sin(turn)*330,end.y-cos(turn)*330));
+    } else {
+        double a=direction*3.141592653589793/180;
+        p.push_back(xy(500+sin(a)*500,560-cos(a)*500));
+    }
+    return p;
+}
+Scene flatRoad(Maneuver::Value m) {
+    int direction=0;bool uturn=false,branch=false,merge=false;
+    switch(m) {
+    case Maneuver::KeepLeft:case Maneuver::ForkLeft:direction=-35;branch=true;break;
+    case Maneuver::KeepRight:case Maneuver::ForkRight:direction=35;branch=true;break;
+    case Maneuver::SlightLeft:direction=-45;break;case Maneuver::SlightRight:direction=45;break;
+    case Maneuver::Left:direction=-90;break;case Maneuver::Right:direction=90;break;
+    case Maneuver::SharpLeft:direction=-135;break;case Maneuver::SharpRight:direction=135;break;
+    case Maneuver::UTurnLeft:direction=-1;uturn=true;break;case Maneuver::UTurnRight:direction=1;uturn=true;break;
+    case Maneuver::RampSlightLeft:case Maneuver::ExitSlightLeft:direction=-45;branch=true;break;
+    case Maneuver::RampSlightRight:case Maneuver::ExitSlightRight:direction=45;branch=true;break;
+    case Maneuver::RampLeft:case Maneuver::ExitLeft:direction=-90;branch=true;break;
+    case Maneuver::RampRight:case Maneuver::ExitRight:direction=90;branch=true;break;
+    case Maneuver::RampSharpLeft:direction=-135;branch=true;break;
+    case Maneuver::RampSharpRight:direction=135;branch=true;break;
+    case Maneuver::RampUTurnLeft:direction=-1;uturn=true;break;
+    case Maneuver::RampUTurnRight:direction=1;uturn=true;break;
+    case Maneuver::MergeLeft:case Maneuver::MergeRight:case Maneuver::Merge:merge=true;break;
+    default:break;
+    }
+    Scene scene;std::vector<Point> route=roadPath(direction,uturn);
+    const double half=uturn?120:direction?180:310;
+    // Junctions use full-size roads meeting the shared carriageway, not two
+    // reduced copies of a single arrow. The recommended route stays continuous.
+    if(branch)scene.push_back(road(roadPath(direction<0?35:-35,false),180));
+    if(merge) {
+        int side=m==Maneuver::MergeRight?1:-1;
+        std::vector<Point> incoming;incoming.push_back(xy(500+side*520,900));incoming.push_back(xy(500,500));incoming.push_back(xy(500,100));
+        scene.push_back(road(incoming,180));
+        if(m==Maneuver::Merge){incoming[0].x=1020;scene.push_back(road(incoming,180));}
+    }
+    scene.push_back(road(route,half));
+    // Shorten the body centreline by the head length so its tip meets the road
+    // endpoint. Fit the whole composition without cropping or axis stretching.
+    std::vector<Point> arrow=route;
+    Point& end=arrow.back();Point previous=arrow[arrow.size()-2];double dx=end.x-previous.x,dy=end.y-previous.y,n=sqrt(dx*dx+dy*dy);
+    const double arrowHalf=uturn?45:60;
+    end.x-=dx/n*arrowHalf*2.5;end.y-=dy/n*arrowHalf*2.5;
+    scene.push_back(guidance(arrow,uturn?45:60));return scene;
+}
+void symbolStyle(Scene& scene) {
+    for(size_t i=0;i<scene.size();++i) {
+        Shape& s=scene[i];
+        if(s.stroke==Color::White&&!s.contours.empty()&&!s.contours[0].closed) {
+            s=guidance(s.contours[0].points,s.strokeWidth/2,false);
+        } else {
+            if(s.stroke!=Color::None){s.stroke=Color::Red;s.strokeWidth=6;}
+            if(s.fill==Color::White&&s.stroke==Color::None){s.stroke=Color::Red;s.strokeWidth=6;}
+        }
+    }
+}
+
 Scene roundabout(const NavigationEvent& e) {
     Scene scene;bool cw=e.maneuver==Maneuver::RoundaboutCW||e.maneuver==Maneuver::RoundaboutCWAngle||
         e.maneuver==Maneuver::RoundaboutEnterCW||e.maneuver==Maneuver::RoundaboutExitCW;
     double sign=cw?1:-1;bool enter=e.maneuver==Maneuver::RoundaboutEnterCW||e.maneuver==Maneuver::RoundaboutEnterCCW;
     bool known=e.hasExitAngle&&finite(e.exitAngle)&&e.exitAngle>=1&&e.exitAngle<=360&&!enter;
     double exit=180+sign*e.exitAngle;
-    // Kit ring: centre (500,475), outer radius 315, inner radius 139,
-    // graphite carriageway, 17-unit gold curbs, 49-unit white guidance.
+    // Kit ring: centre (500,475), outer radius 360, inner radius 190,
+    // wide carriageway, 6-unit curbs, filled white/red guidance.
     Shape ring;ring.fill=Color::Graphite;Contour outer,inner;outer.closed=inner.closed=true;
-    arc(outer.points,0,352.5,315);arc(inner.points,0,352.5,139);
+    arc(outer.points,0,352.5,360);arc(inner.points,0,352.5,190);
     ring.contours.push_back(outer);ring.contours.push_back(inner);scene.push_back(ring);
-    scene.push_back(contour(outer.points,true,Color::None,Color::Gold,17));
-    scene.push_back(contour(inner.points,true,Color::None,Color::Gold,17));
+    scene.push_back(contour(outer.points,true,Color::None,Color::Gold,6));
+    scene.push_back(contour(inner.points,true,Color::None,Color::Gold,6));
     // Draw branch roads over the ring's exterior curb, retaining the inner hole.
     std::vector<Point> entry;entry.push_back(xy(414,700));entry.push_back(xy(586,700));entry.push_back(xy(586,900));entry.push_back(xy(414,900));
     scene.push_back(contour(entry,true,Color::Graphite,Color::None,0));
-    scene.push_back(line(414,700,900,Color::Gold,17));scene.push_back(line(586,700,900,Color::Gold,17));
+    scene.push_back(line(414,700,900,Color::Gold,6));scene.push_back(line(586,700,900,Color::Gold,6));
     if(known) {
         double a=exit*3.141592653589793/180,dx=sin(a),dy=-cos(a),nx=-dy*86,ny=dx*86;
-        Point begin=polar(exit,227),end=polar(exit,425);std::vector<Point> road;
+        Point begin=polar(exit,275),end=polar(exit,425);std::vector<Point> road;
         road.push_back(xy(begin.x+nx,begin.y+ny));road.push_back(xy(end.x+nx,end.y+ny));
         road.push_back(xy(end.x-nx,end.y-ny));road.push_back(xy(begin.x-nx,begin.y-ny));
         scene.push_back(contour(road,true,Color::Graphite,Color::None,0));
         for(int side=-1;side<=1;side+=2) {std::vector<Point> curb;curb.push_back(xy(begin.x+nx*side,begin.y+ny*side));curb.push_back(xy(end.x+nx*side,end.y+ny*side));
-            scene.push_back(contour(curb,false,Color::None,Color::Gold,17));}
+            scene.push_back(contour(curb,false,Color::None,Color::Gold,6));}
     }
     std::vector<Point> path;path.push_back(xy(500,897));path.push_back(xy(500,782));
     double sweep=known?e.exitAngle:50;double bend=std::min(20.0,sweep/3);
-    quadratic(path,xy(500,702),polar(180+sign*bend,227));
+    quadratic(path,xy(500,702),polar(180+sign*bend,275));
     if(known) {
-        if(sweep>2*bend)arc(path,180+sign*bend,exit-sign*bend,227);
-        quadratic(path,polar(exit,227),polar(exit,350));
-        scene.push_back(contour(path,false,Color::None,Color::White,49));
-        Point tip=polar(exit,410),before=polar(exit,350);triangle(scene,tip,xy(tip.x-before.x,tip.y-before.y),77,58);
+        if(sweep>2*bend)arc(path,180+sign*bend,exit-sign*bend,275);
+        quadratic(path,polar(exit,275),polar(exit,350));
+        scene.push_back(guidance(path,28));
     } else {
-        arc(path,180+sign*bend,180+sign*50,227);
-        scene.push_back(contour(path,false,Color::None,Color::White,49));
+        arc(path,180+sign*bend,180+sign*50,275);
+        scene.push_back(guidance(path,28,false));
         // Generic circulation only: no invented exit branch or radial arrow.
     }
-    if(e.hasExitNumber)exitNumber(scene,e.exitNumber);return scene;
+    if(e.hasExitNumber){Scene digits;exitNumber(digits,e.exitNumber);symbolStyle(digits);scene.insert(scene.end(),digits.begin(),digits.end());}return scene;
 }
 void fit(Scene& scene,Rect area,double margin) {
     double l=std::numeric_limits<double>::max(),t=l,r=-l,b=-l;
@@ -141,7 +246,7 @@ Shape laneArrow(int shape,bool highlighted) {
     std::vector<Point> outline=left;
     outline.push_back(xy(end.x-dy*23,end.y+dx*23));outline.push_back(xy(end.x+dx*30,end.y+dy*30));outline.push_back(xy(end.x+dy*23,end.y-dx*23));
     for(size_t i=right.size();i>0;--i)outline.push_back(right[i-1]);
-    return contour(outline,true,highlighted?Color::White:Color::Graphite,highlighted?Color::Gold:Color::Gray,3.5);
+    return contour(outline,true,highlighted?Color::White:Color::Graphite,highlighted?Color::Red:Color::Gray,3.5);
 }
 }
 Scene renderManeuver(const NavigationEvent& e,Rect area,double margin) {
@@ -150,7 +255,8 @@ Scene renderManeuver(const NavigationEvent& e,Rect area,double margin) {
     bool round=(e.maneuver>=Maneuver::RoundaboutCompatA&&e.maneuver<=Maneuver::RoundaboutCCWAngle)||
         (e.maneuver>=Maneuver::RoundaboutEnterCW&&e.maneuver<=Maneuver::RoundaboutExitCCW);
     if(round)scene=roundabout(e);
-    else for(unsigned i=0;i<a.count;++i)scene.push_back(load(a.offset+i));
+    else if((e.maneuver>=Maneuver::Start&&e.maneuver<=Maneuver::Merge)||e.maneuver==Maneuver::Straight)scene=flatRoad(e.maneuver);
+    else {for(unsigned i=0;i<a.count;++i)scene.push_back(load(a.offset+i));symbolStyle(scene);}
     fit(scene,area,margin);return scene;
 }
 Scene renderLanes(const std::vector<Lane>& lanes,Rect area) {
@@ -178,7 +284,7 @@ Scene renderLanes(const std::vector<Lane>& lanes,Rect area) {
         }
         if(uniform&&mask) {
             Shape arrow=load(laneOffsets[mask-1]);arrow.fill=highlighted?Color::White:Color::None;
-            arrow.stroke=highlighted?Color::Gold:Color::Gray;arrow.strokeWidth=3.5;
+            arrow.stroke=highlighted?Color::Red:Color::Gray;arrow.strokeWidth=3.5;
             double l=std::numeric_limits<double>::max(),t=l,r=-l,b=-l;
             for(size_t j=0;j<arrow.contours[0].points.size();++j){const Point& p=arrow.contours[0].points[j];
                 l=std::min(l,p.x);r=std::max(r,p.x);t=std::min(t,p.y);b=std::max(b,p.y);}

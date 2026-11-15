@@ -20,6 +20,11 @@ int main() {
         e.hasExitAngle=true;e.exitAngle=angles[i];e.hasExitNumber=true;e.exitNumber=2;
         Scene s=renderManeuver(e,box);contained(s,box);
         assert(s[0].contours.size()==2); // hole retained as even-odd geometry
+        const std::vector<Point>& outer=s[0].contours[0].points;Point center={0,0};
+        for(size_t j=0;j<outer.size();++j){center.x+=outer[j].x/outer.size();center.y+=outer[j].y/outer.size();}
+        double rx=outer[0].x-center.x,ry=outer[0].y-center.y,radius=sqrt(rx*rx+ry*ry);
+        for(size_t j=0;j<outer.size();++j){double x=outer[j].x-center.x,y=outer[j].y-center.y;
+            assert(fabs(sqrt(x*x+y*y)-radius)<1e-6);}
     }
     NavigationEvent generic;generic.maneuver=Maneuver::RoundaboutCCW;contained(renderManeuver(generic,box),box);
     for(unsigned count=2;count<=6;++count) {
@@ -38,9 +43,13 @@ int main() {
         kombinav::NavView view;view.aa_type=type;view.has_exit_angle=type>=30&&type<=35;
         view.exit_angle=225;view.has_exit_number=view.has_exit_angle;view.exit_number=2;
         hudterm::Batch central;uint16_t handle=which?0x20:0x1f;
+        if((type>=1&&type<=29)||type==36){NavigationEvent e;e.maneuver=hudterm::GrafiteKit::maneuver(type);
+            Scene flat=renderManeuver(e,box,0);contained(flat,box);assert(!flat.empty());
+            const Shape& arrow=flat.back();assert(arrow.fill==Color::White&&arrow.stroke==Color::Red);
+            assert(arrow.contours.size()==1&&arrow.contours[0].closed);}
         assert(kit.central(view,handle,fixedProfile.base.glyph,central));
         for(size_t i=0;i<central.calls.size();++i) {
-            const hudterm::Call& c=central.calls[i];assert(c.handle()==handle);
+            const hudterm::Call& c=central.calls[i];assert(c.handle()==handle);assert(c.fkt!=hudterm::kSetLineColor&&c.fkt!=hudterm::kSetLineWidth);
             if(c.fkt==hudterm::kAddPolygon)for(unsigned j=0;j<c.payload[5];++j) {
                 int x=hudterm::rdBe16(&c.payload[6+j*4]),y=hudterm::rdBe16(&c.payload[8+j*4]);
                 assert(x>=0&&x<=232&&y>=0&&y<=205);
@@ -58,7 +67,7 @@ int main() {
     assert(hudPaletteSwatches(Rect(0,0,282,39),10).size()==20);
     // Serializing the parametric ring must retain bounded method payloads.
     NavigationEvent ring;ring.maneuver=Maneuver::RoundaboutCCWAngle;ring.hasExitAngle=true;ring.exitAngle=225;
-    HudTerminalPalette measuredFixture;measuredFixture.graphite=0;measuredFixture.gold=1;measuredFixture.white=2;
+    HudTerminalPalette measuredFixture;measuredFixture.graphite=0;measuredFixture.gold=1;measuredFixture.white=2;measuredFixture.red=5;
     hudterm::Batch encoded;hudterm::Rect drawingBounds={0,0,232,205};
     assert(hudterm::GrafiteKit::encode(renderManeuver(ring,box),measuredFixture,0x1f,drawingBounds,encoded));
     hudterm::Bmw6wbProfile profile;
