@@ -45,7 +45,9 @@ for name, path in sources.items():
 for name in ('favourites-update.sh', 'favourites-restore.sh'):
     # A Windows checkout may use CRLF; the QNX shell requires LF.
     (out / name).write_text((root / 'tools' / name).read_text(), newline='\n')
-(out / 'README.md').write_text((root / 'FAVOURITE-KEYS.md').read_text().replace('../LICENSE.md', 'LICENSE.md'))
+readme = (root / 'FAVOURITE-KEYS.md').read_text().replace('../LICENSE.md', 'LICENSE.md')
+readme = readme.replace('](update.md)', '](https://github.com/Sq00ky/Supra-iDrive6-Android-Auto/blob/main/milestone-7/update.md)')
+(out / 'README.md').write_text(readme)
 shutil.copyfile(root.parent / 'LICENSE.md', out / 'LICENSE.md')
 metadata = {
     'name': 'BMW Favorite Keys for NBT-AAD', 'source_commit': args.commit,
