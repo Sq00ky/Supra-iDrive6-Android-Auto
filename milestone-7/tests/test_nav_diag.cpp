@@ -69,13 +69,48 @@ void testRecorderAndRotation(){
     }
     unlink(path.c_str());
     {
-        FileLog f(path.c_str(),1024);std::string line="{\"padding\":\""+std::string(700,'x')+"\"}";
+        FileLog f(path.c_str(),3072);std::string line="{\"padding\":\""+std::string(700,'x')+"\"}";
         for(int i=0;i<7;++i)assert(f.write(line));
         assert(f.rotations()==6);
-        assert(!f.write(std::string(1025,'x')));
+        assert(!f.write(std::string(1024,'x')));
     }
     for(int i=0;i<3;++i){std::string file=path+(i==0?"":i==1?".1":".2");assert(!stat(file.c_str(),&st));
         assert(st.st_size<=1024&&(st.st_mode&0777)==0600);std::string contents=readFile(file);assert(!contents.empty()&&contents[contents.size()-1]=='\n');unlink(file.c_str());}
-    FileLog missing((std::string(dir)+"/absent/nav").c_str(),1024);assert(!missing.write("{}"));rmdir(dir);
+    std::string parent=std::string(dir)+"/absent",child=parent+"/nav";
+    {FileLog created(child.c_str(),3072);assert(created.write("{}"));}
+    assert(!stat(parent.c_str(),&st)&&S_ISDIR(st.st_mode)&&(st.st_mode&0777)==0700);
+    unlink(child.c_str());rmdir(parent.c_str());
+    std::string blocked=std::string(dir)+"/not-a-directory";
+    {std::ofstream f(blocked.c_str());f<<"blocked";}
+    {FileLog failure((blocked+"/nav").c_str(),3072);assert(!failure.write("{}"));}
+    unlink(blocked.c_str());rmdir(dir);
 }
-int main(){testModern();testLegacyUnknownMalformed();testRecorderAndRotation();puts("test_nav_diag OK");}
+uint64_t retainedBytes(const std::string& path){
+    uint64_t sum=0;for(unsigned i=0;i<3;++i){std::string name=path+(i==0?"":i==1?".1":".2");struct stat st;
+        if(!stat(name.c_str(),&st)){assert(st.st_size<=5*1024*1024);sum+=(uint64_t)st.st_size;}
+        else assert(errno==ENOENT);
+    }assert(sum<=15u*1024u*1024u);return sum;
+}
+void testPersistentBudgetAndReopen(){
+    Config defaults;assert(!defaults.enabled&&!defaults.text);
+    assert(!strcmp(defaults.path,"/opt/aa/logs/nbt-aad-nav-diag.jsonl"));assert(defaults.maxTotalBytes==15u*1024u*1024u);
+    char dir[]="/tmp/nav-persist-XXXXXX";assert(mkdtemp(dir));std::string path=std::string(dir)+"/nav.jsonl";
+    const size_t segment=5u*1024u*1024u,total=3*segment;
+    std::string line=std::string("{\"padding\":\"")+std::string(segment-15,'x')+"\"}";
+    assert(line.size()+1==segment);
+    {FileLog f(path.c_str(),total);
+        for(unsigned i=0;i<6;++i){assert(f.write(line));assert(retainedBytes(path)==(i<2?i+1:3)*segment);}
+        assert(f.rotations()==5);
+    }
+    // Simulated daemon restart: existing generations are appended/rotated, not cleared.
+    {FileLog f(path.c_str(),total);assert(f.write("{\"restart\":1}"));assert(retainedBytes(path)<=total);}
+    assert(readFile(path).find("restart")!=std::string::npos);
+    // Normalize preexisting oversized files before accepting another record.
+    for(unsigned i=0;i<3;++i){std::string name=path+(i==0?"":i==1?".1":".2");
+        int fd=::open(name.c_str(),O_WRONLY|O_CREAT|O_TRUNC,0600);assert(fd>=0);
+        assert(!ftruncate(fd,(off_t)(segment+1)));close(fd);
+    }
+    {FileLog f(path.c_str(),total);assert(f.write("{}"));assert(retainedBytes(path)<=total);}
+    for(unsigned i=0;i<3;++i){std::string name=path+(i==0?"":i==1?".1":".2");unlink(name.c_str());}rmdir(dir);
+}
+int main(){testModern();testLegacyUnknownMalformed();testRecorderAndRotation();testPersistentBudgetAndReopen();puts("test_nav_diag OK");}

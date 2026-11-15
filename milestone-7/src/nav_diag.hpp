@@ -25,8 +25,8 @@ enum { Capacity=32, MaxBody=8192, MaxFields=512, MaxDepth=8, MaxText=256 };
 inline uint64_t stamp(){timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;return (uint64_t)t.tv_sec*1000000000ull+t.tv_nsec;}
 inline bool flag(const char* name){const char* p=getenv(name);return p && !strcmp(p,"1");}
 struct Config {
-    bool enabled,text;const char* path;const char* source;size_t maxFileBytes;
-    Config():enabled(false),text(false),path("/dev/shmem/nbt-aad-nav-diag.jsonl"),source("unspecified"),maxFileBytes(2u*1024u*1024u){}
+    bool enabled,text;const char* path;const char* source;size_t maxTotalBytes;
+    Config():enabled(false),text(false),path("/opt/aa/logs/nbt-aad-nav-diag.jsonl"),source("unspecified"),maxTotalBytes(15u*1024u*1024u){}
 };
 inline Config environment(){Config c;c.enabled=flag("NBT_NAV_DIAG");c.text=flag("NBT_NAV_DIAG_TEXT");
     const char* s=getenv("NBT_NAV_DIAG_SOURCE");if(s && (!strcmp(s,"maps")||!strcmp(s,"waze")))c.source=s;return c;}
@@ -131,26 +131,60 @@ private:
 };
 class FileLog {
 public:
-    FileLog(const char* path,size_t maximum):path_(path),maximum_(maximum),file_(NULL),bytes_(0),rotations_(0){}
+    // maximum is the TOTAL budget: current + .1 + .2, including newlines.
+    FileLog(const char* path,size_t maximum):path_(path),maximum_(maximum),segment_(maximum/3),file_(NULL),bytes_(0),rotations_(0){}
     ~FileLog(){if(file_)fclose(file_);}
     bool write(const std::string& line){
-        if(line.size()+1>maximum_)return false;
+        if(line.size()>=segment_)return false; // whole record, including newline, must fit one file
+        const size_t incoming=line.size()+1;
         if(!file_&&!open())return false;
-        if(bytes_+line.size()+1>maximum_&&!rotate())return false;
+        // Rotate between whole JSON records. Three 5 MiB files stay within
+        // the 15 MiB total budget; never split or truncate message content.
+        if(bytes_ && (bytes_>segment_ || incoming>segment_-bytes_) && !rotate())return false;
+        if(!trim(incoming))return false;
         if(fwrite(line.data(),1,line.size(),file_)!=line.size()||fputc('\n',file_)==EOF||fflush(file_))return false;
-        bytes_+=line.size()+1;return true;
+        bytes_+=incoming;return true;
     }
     unsigned rotations()const{return rotations_;}
 private:
-    std::string path_;size_t maximum_;FILE* file_;size_t bytes_;unsigned rotations_;
-    bool open(){int flags=O_WRONLY|O_CREAT|O_APPEND;
+    std::string path_;size_t maximum_,segment_;FILE* file_;uint64_t bytes_;unsigned rotations_;
+    bool ensureParent(){
+        const size_t slash=path_.find_last_of('/');if(slash==std::string::npos)return true;
+        const std::string parent=slash?path_.substr(0,slash):std::string("/");
+        // /opt/aa is the existing installation parent. Create only its missing
+        // logs directory, not an installation tree or any unrelated directory.
+        if(mkdir(parent.c_str(),0700) && errno!=EEXIST)return false;
+        struct stat st;return stat(parent.c_str(),&st)==0 && S_ISDIR(st.st_mode);
+    }
+    static bool sizeOf(const std::string& path,uint64_t& bytes){
+        struct stat st;bytes=0;
+        if(lstat(path.c_str(),&st))return errno==ENOENT;
+        if(!S_ISREG(st.st_mode)||st.st_size<0)return false;
+        bytes=(uint64_t)st.st_size;return true;
+    }
+    bool trim(size_t incoming){
+        if(bytes_>maximum_ || incoming>maximum_-bytes_)return false;
+        const uint64_t available=maximum_-bytes_-incoming;
+        std::string one=path_+".1",two=path_+".2";uint64_t previous=0,oldest=0;
+        if(!sizeOf(one,previous)||!sizeOf(two,oldest))return false;
+        // Subtraction, rather than summing arbitrary preexisting file sizes,
+        // avoids overflow even for an unexpectedly large file at startup.
+        if(oldest>segment_ || previous>segment_ || previous>available || oldest>available-previous){
+            if(unlink(two.c_str()) && errno!=ENOENT)return false;
+        }
+        if(previous>segment_ || previous>available){if(unlink(one.c_str()) && errno!=ENOENT)return false;}
+        return true;
+    }
+    bool open(){
+        if(!ensureParent())return false;
+        int flags=O_WRONLY|O_CREAT|O_APPEND;
 #ifdef O_NOFOLLOW
         flags|=O_NOFOLLOW;
 #endif
         int fd=::open(path_.c_str(),flags,0600);if(fd<0)return false;
-        struct stat st;if(fstat(fd,&st)||!S_ISREG(st.st_mode)||fchmod(fd,0600)){close(fd);return false;}
+        struct stat st;if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_size<0||fchmod(fd,0600)){close(fd);return false;}
         int old=fcntl(fd,F_GETFD);if(old<0||fcntl(fd,F_SETFD,old|FD_CLOEXEC)<0){close(fd);return false;}
-        bytes_=(size_t)st.st_size;file_=fdopen(fd,"a");if(!file_){close(fd);return false;}return true;
+        bytes_=(uint64_t)st.st_size;file_=fdopen(fd,"a");if(!file_){close(fd);return false;}return true;
     }
     bool rotate(){if(file_){if(fclose(file_)){file_=NULL;return false;}file_=NULL;}
         std::string one=path_+".1",two=path_+".2";
@@ -190,7 +224,7 @@ private:
     Config config_;char path_[512],source_[16];Record* records_;unsigned read_,write_;bool active_,threaded_,stop_,failed_,lockReady_;
     uint32_t session_;uint64_t sequence_,run_;Stats stats_,final_;pthread_mutex_t lock_;pthread_t thread_;
     bool begin(bool threaded){
-        if(active_||!lockReady_||!config_.enabled||!path_[0]||config_.maxFileBytes<1024)return false;
+        if(active_||!lockReady_||!config_.enabled||!path_[0]||config_.maxTotalBytes<1024)return false;
         // Record contains Stats, so use proper construction rather than calloc.
         records_=new(std::nothrow) Record[Capacity];if(!records_)return false;
         active_=true;stop_=failed_=false;read_=write_=0;
@@ -226,7 +260,7 @@ private:
     static void* threadMain(void* p){static_cast<Recorder*>(p)->run();return NULL;}
     void run(){
         try {
-            FileLog file(path_,config_.maxFileBytes);
+            FileLog file(path_,config_.maxTotalBytes);
             for(;;){Record r;bool have=false,finish=false;
                 pthread_mutex_lock(&lock_);
                 if(read_!=write_){r=records_[read_%Capacity];++read_;have=true;}

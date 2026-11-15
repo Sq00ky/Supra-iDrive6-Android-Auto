@@ -1,7 +1,7 @@
 # Optional Android Auto channel 10 diagnostic
 
-Source-only implementation for `feature/bmw-6wb`, based on
-`20045d8e97d7d6ea14b071106fdfe07fbff73922`. No QNX or host compilation was
+Source-only implementation for `feature/bmw-6wb`. The persistence update uses
+`46d77e0f4e878ba6c4859da281b3581d96136067` as its base. No QNX or host compilation was
 performed for this change. Runtime, scheduler impact and QNX compatibility
 still require validation on the user's PC and vehicle. No installation,
 autostart, renderer, MOST/DSI, OEM bypass or navigation logic changes.
@@ -16,15 +16,33 @@ the dispatcher evaluates only the channel/pointer condition.
 
 The diagnostic file is **JSON Lines, not CSV**:
 
-* `/dev/shmem/nbt-aad-nav-diag.jsonl` — current, appended across sessions/runs.
-* `/dev/shmem/nbt-aad-nav-diag.jsonl.1` — previous.
-* `/dev/shmem/nbt-aad-nav-diag.jsonl.2` — oldest retained.
+* `/opt/aa/logs/nbt-aad-nav-diag.jsonl` — current, appended across sessions/runs.
+* `/opt/aa/logs/nbt-aad-nav-diag.jsonl.1` — previous.
+* `/opt/aa/logs/nbt-aad-nav-diag.jsonl.2` — oldest retained.
 
-Each file is limited to 2 MiB; rotation occurs between complete records.
-Permission is 0600. The exporter creates the file after its first queued event,
+The retention budget is **15 MiB total (15,728,640 bytes)**, split across three
+files of at most **5 MiB each (5,242,880 bytes)**, including newline bytes.
+Rotation occurs between complete records: the old `.2` is removed, `.1` becomes
+`.2`, and the current file becomes `.1`. Recording continues in a new current
+file. A pre-write quota check removes the oldest generations if preexisting
+files exceed these limits. No JSON record is split or reformatted by rotation.
+A single record larger than one entire segment is rejected rather than silently
+truncated; the unchanged bounded NAV encoder normally produces much smaller
+records. There is one exporter/writer, as before.
+
+`/opt/aa/logs` is on the requested nonvolatile installation path. The exporter
+creates this directory automatically if missing (0700), with `/opt/aa` already
+present as the installation parent. Existing directory permissions are preserved.
+File permissions remain 0600. Creation, quota checks, rotations and writes all
+remain on the exporter thread. A directory/open/write error stops only diagnostic
+export, never Android Auto. Read-only/full storage must be resolved separately.
+The exporter creates the file after its first queued event,
 normally `session_start`, shortly after a phone connects, not merely at daemon
 startup or only at shutdown. USB logging settings do not redirect this file.
-`/dev/shmem` is volatile: retrieve it before switching off the NBT.
+Retained files survive an ordinary NBT restart on persistent storage; they are
+not deleted at recorder startup. An existing current file is appended until its
+segment fills. This is bounded rolling retention, not an unlimited archive.
+Older files at the former `/dev/shmem` path are not automatically migrated.
 Startup logs contain `[NavDiag] enabled: ...`, or `[NavDiag] unavailable` on
 initialization failure. An exporter error prints `[NavDiag] export stopped`;
 Android Auto continues, but subsequent diagnostic captures are dropped.
@@ -91,8 +109,11 @@ Counters on each record are producer snapshots. A normal observer destruction
 (after RX joins) drains the queue and writes final counters. Existing daemon
 exit paths can use `_exit`, signals or termination that bypass destruction;
 a final footer and the last queued records are **not guaranteed**. File errors,
-rotation and a power loss can also limit retained history. Do not change daemon
-shutdown behavior just to collect this diagnostic.
+rotation and a power loss can also limit retained history. Files are flushed
+with the existing fflush policy, without a new per-message fsync. The final RAM
+queue and filesystem writes not yet durable at abrupt power loss are not
+promised; normal persistent files are no longer lost merely because shmem is
+cleared. Do not change daemon shutdown behavior just to collect this diagnostic.
 
 ## Future vehicle operation — one command at a time
 
@@ -135,7 +156,7 @@ This does not enable daemon autostart. Check the ordinary daemon log for the
 NavDiag enablement/error messages and, over SSH, check the dedicated file:
 
 ```sh
-ls -l /dev/shmem/nbt-aad-nav-diag.jsonl
+ls -l /opt/aa/logs/nbt-aad-nav-diag.jsonl
 ```
 
 If absent after AA connection, inspect the enablement/error message and loaded
@@ -154,21 +175,22 @@ is created; the temporary file is a staging file, not an automatic rollback.
 
 ## Copy to Windows without text conversion
 
-End navigation, allow the exporter to drain while the NBT is still running,
-then use HMI Force Stop. Retrieve before vehicle power-off; abrupt exit may
-still lose the tail. In Windows PowerShell, replace `NBT_SSH_HOST` with the same
+End navigation, allow the exporter to drain, then use HMI Force Stop so copies
+are stable. Files remain at the persistent path after a normal restart; abrupt
+exit may still lose the not-yet-exported tail. Copy all existing generations
+before another diagnostic run if you want to preserve the complete retained set. In Windows PowerShell, replace `NBT_SSH_HOST` with the same
 actual host used for SSH. Use a fresh PC destination folder. Execute separately:
 
 ```powershell
-scp -O root@NBT_SSH_HOST:/dev/shmem/nbt-aad-nav-diag.jsonl .
+scp -O root@NBT_SSH_HOST:/opt/aa/logs/nbt-aad-nav-diag.jsonl .
 ```
 
 ```powershell
-scp -O root@NBT_SSH_HOST:/dev/shmem/nbt-aad-nav-diag.jsonl.1 .
+scp -O root@NBT_SSH_HOST:/opt/aa/logs/nbt-aad-nav-diag.jsonl.1 .
 ```
 
 ```powershell
-scp -O root@NBT_SSH_HOST:/dev/shmem/nbt-aad-nav-diag.jsonl.2 .
+scp -O root@NBT_SSH_HOST:/opt/aa/logs/nbt-aad-nav-diag.jsonl.2 .
 ```
 
 Older generations may not exist yet. SCP preserves bytes; `-O` selects the legacy
@@ -194,7 +216,13 @@ remains in the original JSONL, not the summary.
 
 ## Checks performed versus pending
 
-Executable-free checks: Python static contract tests (schema correspondence,
+Executable-free persistence checks: seven Python source/model tests exercise
+three 5 MiB files and the 15 MiB aggregate budget, oldest-first rotation, exact
+boundaries, oversized-record rejection, append after restart, automatic parent
+creation, malformed parent failure and normalization of oversized generations.
+These tests run an independent filesystem model, NOT the C++ FileLog.
+
+Additional executable-free checks: Python static contract tests (schema correspondence,
 hook order/scope, RX restrictions, bounded/private defaults, lexical delimiters,
 unchanged 6WB/MOST sources), Python reader tests using synthetic JSONL, and diff
 whitespace checks. These are not a compiler or proof of thread/running behavior.
@@ -202,7 +230,9 @@ whitespace checks. These are not a compiler or proof of thread/running behavior.
 `tests/test_nav_diag.cpp` is prepared for subsequent compilation/testing on the
 user's PC. It covers modern fixture helpers, legacy messages, repeated fields,
 unknown fields/IDs/fixed wire sizes, malformed varints/lengths, limits, privacy,
-disabled recorder, deterministic queue contention/overflow and file rotation.
+disabled recorder, deterministic queue contention/overflow, directory creation,
+three 5 MiB generations, 15 MiB budget, oversized startup files, persistent
+reopening, and file rotation.
 It has **not been compiled or executed**. Existing C++ regression tests likewise
 were not run under the explicit stop on all compilation. No new executable,
 size or executable SHA-256 is available from this work.
