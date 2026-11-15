@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "date": "2026-11-15",
+  "upstream_base": "ade1b2774be8afff05578211163e345e008b79ee",
+  "firmware_tested": "007.039.008 / ID5_2111",
+  "host_regressions": [
+    "router",
+    "encoded_queue",
+    "live_setting",
+    "screen",
+    "control",
+    "pixels",
+    "source-session",
+    "helper (8 tests)"
+  ],
+  "host_sanitizers": [
+    "AddressSanitizer",
+    "UndefinedBehaviorSanitizer"
+  ],
+  "native_qnx_build": {
+    "passed": true,
+    "sdk": "QNX SDP 6.5 / native qcc / ARMv7LE",
+    "exit_code": 0,
+    "source_snapshot_sha256": "24d16411337e7dbc7a8fcd12972f06e20a11a5577d58e2048a6b8f586107a2c7",
+    "guest_source_files_verified": 414,
+    "artifacts": {
+      "nbt-aad": "bc1eb1b13e7f7782e068bd1653f176ba0230d210c7768a00afa7f69114dab528",
+      "player": "a6bbe7680d5867f51a4dc286fd6e2361e2e54216e1540731ac7830efbf32a6bc",
+      "inspect": "d1b4fba813ce9f87ef396211db28611f3f0fc3cde785972d56d845aabe17aa67",
+      "libNbtAad.so": "c52f804a4404df75fdda514b32cc04372f994c9c7c6a4fd26c515a3f01c53983"
+    },
+    "main_display_substitute_symbols_absent": true,
+    "rebuilt_artifacts_tested_in_car": false
+  },
+  "source_relocation": {
+    "production_files": 28,
+    "changes": "include paths only",
+    "matched_working_source": true
+  },
+  "main_video_manager": {
+    "modified_from_upstream_base": false,
+    "sha256": "6afffad2818cf3933bf83ddc9746286d5d6632bb4aef301e1f6f09d7b0561119"
+  },
+  "physical_car_evidence": {
+    "precursor_source_layout_verified": true,
+    "public_layout_retested_in_car": false,
+    "observations": [
+      "Map appears",
+      "Dial returns, then map; main screen stays connected"
+    ],
+    "recorded_posts": 840,
+    "map_sessions": 2,
+    "guidance_cleanup_acknowledged": true,
+    "long_duration_driving_test": false
+  }
+}

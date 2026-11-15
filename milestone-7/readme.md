@@ -1487,3 +1487,7 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
+
+## Experimental G30 cluster map
+
+See [G30 independent Android Auto map](g30-pip/README.md) for the native PiP implementation, build instructions and tested firmware.

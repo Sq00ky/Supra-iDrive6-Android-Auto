@@ -19,6 +19,7 @@
       <raAction id="30"/>
       <raAction id="167"/>
       <raAction id="173"/>
+      <raAction id="177"/>
       <hmiAction id="25" target="12"/>
       <hmiAction id="81" target="15"/>
       <hmiAction id="80" target="14"/>
@@ -81,6 +82,8 @@
       <textIdModel id="168" textId="46">
         <synonyms/>
       </textIdModel>
+      <raBoolModel id="179"/>
+      <textIdModel id="180" textId="48"><synonyms/></textIdModel>
       <raBoolModel id="175"/>
       <textIdModel id="176" textId="47">
         <synonyms/>
@@ -241,6 +244,7 @@
           <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
           <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
           <checkbox action="29" id="72" model="46" text="Show navigation in HUD/gauge cluster" textModel="47"/>
+          <checkbox action="177" id="178" model="179" text="Show map in instrument cluster" textModel="180"/>
           <checkbox action="167" id="169" model="170" text="Show directions at any distance" textModel="168"/>
           <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>

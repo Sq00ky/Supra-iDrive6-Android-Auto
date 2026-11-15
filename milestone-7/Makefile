@@ -68,6 +68,13 @@ CSRCS = src/audio/speex.c
 CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 
 OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
+# Optional G30 map bridge built by g30-pip/build.sh.
+# A clean rebuild is required when toggling this option; ordinary builds and
+# existing host tests retain the upstream behavior.
+ifneq ($(G30_BRIDGE_OBJECT),)
+CXXFLAGS += -DIDRIVER_G30_CLUSTER
+OBJS += $(G30_BRIDGE_OBJECT)
+endif
 TARGET = nbt-aad
 
 .PHONY: all clean check
@@ -178,3 +185,7 @@ lmrestore: tools/lmrestore.cpp
 # kdprobe: the supported overlay path -- KD window + EGL/GLES surface (see tools/kdprobe.cpp).
 kdprobe: tools/kdprobe.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/kdprobe.cpp -L./lib -lscreen -lKD -lEGL -lGLESv2 -lang-c++ -lm
+
+.PHONY: g30-pip
+g30-pip:
+	sh g30-pip/build.sh

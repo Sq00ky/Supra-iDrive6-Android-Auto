@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "aa_cryptor.hpp"
+#ifdef IDRIVER_G30_CLUSTER
+#include "cluster/g30/bridge.hpp"
+#endif
 #include <stdio.h>
 #include <string.h>
 #include <openssl/rsa.h>
@@ -186,6 +189,9 @@ bool AACryptor::processHandshakeData(const uint8_t* in_data, size_t in_len, std:
 }
 
 bool AACryptor::encrypt(const uint8_t* plain_data, size_t plain_len, std::vector<uint8_t>& out_encrypted) {
+#ifdef IDRIVER_G30_CLUSTER
+    plain_data=idriver_cluster_manifest(plain_data,plain_len);
+#endif
     if (!ssl_ || !is_handshake_complete_) return false;
 
     SSL_write(ssl_, plain_data, plain_len);

@@ -2,6 +2,9 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/nav_core.hpp"
 #include "nbt_env.hpp"
+#ifdef IDRIVER_G30_CLUSTER
+#include "cluster/video_settings.hpp"
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -314,6 +317,9 @@ KombiNav::~KombiNav() {
 }
 
 bool KombiNav::settingOn() {
+#ifdef IDRIVER_G30_CLUSTER
+    if(aa_cluster::setting_enabled()||access(aa_cluster::ActiveMarker,F_OK)==0)return false;
+#endif
     int f = envFlag("NBT_KOMBI_NAV");
     if (f >= 0) return f == 1;
     return access(kFlagFile, F_OK) == 0 || access(kManualFile, F_OK) == 0;
@@ -339,6 +345,11 @@ bool KombiNav::linkCancel(void* self, std::string* detail) {
 }
 
 bool KombiNav::enabledNow() const {
+#ifdef IDRIVER_G30_CLUSTER
+    // Both renderers use Guidance handle 200. Resume arrows only after PiP's
+    // cancellation has completed, including when the checkbox just turned off.
+    if(aa_cluster::setting_enabled()||access(aa_cluster::ActiveMarker,F_OK)==0)return false;
+#endif
     if (forced_ >= 0) return forced_ == 1;
     return access(kFlagFile, F_OK) == 0 || access(kManualFile, F_OK) == 0;
 }
