@@ -17,7 +17,7 @@ Under **Android Auto → Settings → BMW Favorite Keys**:
   hue slider, with a preview and Save/Cancel. There are no numeric input fields.
 
 White + colour ambient schemes use their coloured component. The volume indicator
-uses the same selected colour. The Media/Radio entry uses the Android Auto arrow.
+uses the same selected colour. The Media/Radio entry retains the upstream icon (unchanged).
 
 ## How the native bar is shown
 
