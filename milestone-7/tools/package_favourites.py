@@ -24,6 +24,9 @@ for value in (args.commit, args.base):
 out = args.output.resolve()
 if out.exists():
     parser.error('Output directory already exists; use a new directory to preserve prior releases')
+archive = out.parent / (out.name + '.zip')
+if archive.exists():
+    parser.error('Archive already exists; choose a new output name')
 payload = ['nbt-aad', 'nbt-aa-favourites']
 plugin = ['libNbtAad.so', 'NbtAad.manifest', 'NbtAad.xml', 'NbtAad_ALL_Texts.zip', 'NbtAad_ALL_Images.zip']
 sources = {name: root / name for name in payload}
@@ -40,7 +43,8 @@ out.mkdir(parents=True)
 for name, path in sources.items():
     shutil.copyfile(path, out / name)
 for name in ('favourites-update.sh', 'favourites-restore.sh'):
-    shutil.copyfile(root / 'tools' / name, out / name)
+    # A Windows checkout may use CRLF; the QNX shell requires LF.
+    (out / name).write_text((root / 'tools' / name).read_text(), newline='\n')
 (out / 'README.md').write_text((root / 'FAVOURITE-KEYS.md').read_text().replace('../LICENSE.md', 'LICENSE.md'))
 shutil.copyfile(root.parent / 'LICENSE.md', out / 'LICENSE.md')
 metadata = {
@@ -63,9 +67,6 @@ with (out / 'SHA256SUMS.txt').open('w', newline='\n') as log:
     for path in sorted(out.rglob('*')):
         if path.is_file() and path.name != 'SHA256SUMS.txt':
             log.write(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.relative_to(out).as_posix() + '\n')
-archive = out.with_suffix('.zip')
-if archive.exists():
-    parser.error('Archive already exists; choose a new output name')
 with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
     for path in sorted(out.rglob('*')):
         if path.is_file():
