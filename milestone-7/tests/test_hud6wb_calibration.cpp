@@ -66,7 +66,7 @@ int main() {
     PaletteCalibration disabled(false);disabled.observe(1);assert(!disabled.active());
     CalibrationPort port;nbt::hudterm::Bmw6wbProfile profile;
     nbt::kombinav::Hud6wbDisplay display(port,profile,true,testKit());
-    Batch chart=display.calibrationBatch();assert(chart.calls.size()==63&&chart.calls.size()<=128);
+    Batch chart=display.calibrationBatch();assert(chart.calls.size()==62&&chart.calls.size()<=128);
     unsigned colors=0,rectangles=0,markers=0,references=0;bool seen[20]={false};
     for(size_t i=0;i<chart.calls.size();++i) {
         const Call& call=chart.calls[i];assert(callOk(call,handlesOf(profile),true));
@@ -84,22 +84,22 @@ int main() {
             if(item>=0x80) {
                 assert(rectangles<20&&item==0x80+rectangles);
                 assert(i>0&&chart.calls[i-1].fkt==kSetFillColor&&chart.calls[i-1].payload[2]==rectangles);
-                left=5+(rectangles%4)*58;right=left+48;top=75+(rectangles/4)*27;bottom=top+17;++rectangles;
+                left=25+(rectangles%4)*48;right=left+39;top=(rectangles/4)*37;bottom=top+17;++rectangles;
             } else {
-                assert(markers<11&&item==0x40+markers);left=0;right=232;top=70;bottom=205;
-                if(markers<5){left=markers==4?230:markers*58;right=left+2;}
-                else {unsigned row=markers-5;top=row==5?203:70+row*27;bottom=top+2;}
+                assert(markers<10&&item==0x40+markers);left=21;right=212;top=0;bottom=169;
+                if(markers<5){const int xs[]={21,69,117,165,210};left=xs[markers];right=left+2;}
+                else {top=19+(markers-5)*37;bottom=top+2;}
                 ++markers;
             }
             const int expected[4][2]={{left,top},{right,top},{right,bottom},{left,bottom}};
             for(unsigned vertex=0;vertex<4;++vertex) {
                 int x=rdBe16(&call.payload[6+vertex*4]),y=rdBe16(&call.payload[8+vertex*4]);
                 assert(x==expected[vertex][0]&&y==expected[vertex][1]);
-                assert(x>=0&&x<=232&&y>=70&&y<=205);
+                assert(x>=0&&x<=232&&y>=0&&y<=205);
             }
         }
     }
-    assert(colors==20&&rectangles==20&&markers==11&&references==1);
+    assert(colors==20&&rectangles==20&&markers==10&&references==1);
     for(unsigned i=0;i<20;++i)assert(seen[i]);
     nbt::sixwbkit::HudTerminalPalette p=provisionalKitPalette();
     assert(p.white==3&&p.graphite==14&&p.gray==14&&p.black==14&&p.gold==2);

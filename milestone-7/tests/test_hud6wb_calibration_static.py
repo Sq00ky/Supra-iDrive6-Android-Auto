@@ -24,11 +24,16 @@ class PaletteCalibrationTests(unittest.TestCase):
         body=DISPLAY.split('Batch Hud6wbDisplay::calibrationBatch()',1)[1].split('bool Hud6wbDisplay::interceptNavigation(',1)[0]
         self.assertIn('p_.main.a!=0x1f||p_.main.b!=0x20',body)
         self.assertIn('index<20',body)
-        self.assertIn('const Rect& canvas=p_.base.canvas',body)
-        self.assertIn('Bmw6wbProfile::kPerspectiveHorizon',body)
-        self.assertIn('columnStep=(canvas.x1-canvas.x0)/4',body)
-        self.assertIn('rowStep=(canvas.y1-horizon)/5',body)
-        self.assertIn('marker<11',body)
+        self.assertNotIn('kPerspectiveHorizon',body)
+        self.assertNotIn('p_.base.glyph',body)
+        self.assertIn('left=25+(int)(index%4)*48',body)
+        self.assertIn('top=(int)(index/4)*37',body)
+        self.assertIn('right=left+39',body)
+        self.assertIn('bottom=top+17',body)
+        self.assertIn('referenceX[]={21,69,117,165,210}',body)
+        self.assertIn('top=19+(int)(marker-5)*37;bottom=top+2',body)
+        self.assertIn('left=21,top=0,right=212,bottom=169',body)
+        self.assertIn('marker<10',body)
         self.assertIn('0x40+marker',body)
         self.assertIn('kPolygon,points',body)
         self.assertNotIn('kSetLineColor',body)
@@ -37,36 +42,36 @@ class PaletteCalibrationTests(unittest.TestCase):
         self.assertNotIn('kSetLineWidth',body)
         self.assertIn('setFillColor(target,2)',body)
         self.assertRegex(body,r'b.add\(kSetFillColor,setFillColor\(target,\(uint8_t\)index\)\);\s*b.add\(kAddPolygon,addPolygon\(target,\(uint16_t\)\(0x80\+index\),kPolygon,points\)\);')
-        samples=[(5+(i%4)*58,75+(i//4)*27,53+(i%4)*58,92+(i//4)*27)for i in range(20)]
-        markers=[(x,70,x+2,205)for x in (0,58,116,174,230)]
-        markers += [(0,y,232,y+2)for y in (70,97,124,151,178,203)]
+        samples=[(25+(i%4)*48,(i//4)*37,64+(i%4)*48,17+(i//4)*37)for i in range(20)]
+        markers=[(x,0,x+2,169)for x in (21,69,117,165,210)]
+        markers += [(21,y,212,y+2)for y in (19,56,93,130,167)]
         def overlap(a,b):return min(a[2],b[2])>max(a[0],b[0]) and min(a[3],b[3])>max(a[1],b[1])
         for i,box in enumerate(samples):
             self.assertGreaterEqual(box[0],0);self.assertLessEqual(box[2],232)
-            self.assertGreaterEqual(box[1],70);self.assertLessEqual(box[3],205)
-            self.assertEqual((box[2]-box[0],box[3]-box[1]),(48,17))
+            self.assertGreaterEqual(box[1],0);self.assertLessEqual(box[3],205)
+            self.assertEqual((box[2]-box[0],box[3]-box[1]),(39,17))
             for other in samples[i+1:]+markers:self.assertFalse(overlap(box,other))
         for box in markers:
-            self.assertTrue(0<=box[0]<box[2]<=232 and 70<=box[1]<box[3]<=205)
+            self.assertTrue(0<=box[0]<box[2]<=232 and 0<=box[1]<box[3]<=205)
         self.assertEqual(len(set(samples)),20)
         self.assertEqual([[row*4+col for col in range(4)]for row in range(5)],
                          [[0,1,2,3],[4,5,6,7],[8,9,10,11],[12,13,14,15],[16,17,18,19]])
         self.assertLess(body.index('addPolygon('),body.index('kSwitchVisibility'))
-        self.assertEqual(1+1+11+20*2+8+2,63)
-        self.assertLessEqual(63,128)
+        self.assertEqual(1+1+10+20*2+8+2,62)
+        self.assertLessEqual(62,128)
 
-    def test_only_chart_and_geometry_configuration_change(self):
-        base='c55ce6a2f7322f5d718bc88f8c863eb90680780b'
+    def test_only_calibration_batch_changes(self):
+        base='1e4d5314add90fc727af8489549619b34d16e6a1'
         old=subprocess.check_output(['git','show',base+':milestone-7/src/cluster/hud6wb_display.cpp'],cwd=ROOT.parent,text=True)
         start='Batch Hud6wbDisplay::calibrationBatch()';end='bool Hud6wbDisplay::interceptNavigation('
         self.assertEqual(DISPLAY.split(start,1)[0],old.split(start,1)[0])
         self.assertEqual(DISPLAY.split(end,1)[1],old.split(end,1)[1])
-        allowed=['hud6wb_display.cpp','hud6wb_profile.hpp','hud6wb_resources.hpp','hud6wb_kit.cpp']
+        allowed=['hud6wb_display.cpp']
         result=subprocess.check_output(['git','diff',base,'--','milestone-7/src']+
             [':(exclude)milestone-7/src/cluster/'+name for name in allowed],cwd=ROOT.parent)
         self.assertEqual(result,b'')
         originalKit=subprocess.check_output(['git','show',base+':milestone-7/src/cluster/hud6wb_kit.cpp'],cwd=ROOT.parent,text=True)
-        self.assertEqual(KIT.replace('renderManeuver(e,area,0.0)','renderManeuver(e,area)'),originalKit)
+        self.assertEqual(KIT,originalKit)
         definitions=(ROOT/'src/cluster/hudterm.hpp').read_text()
         self.assertIn('kSetFillColor = 0x21B',definitions)
         self.assertIn('kAddPolygon = 0x21D',definitions)

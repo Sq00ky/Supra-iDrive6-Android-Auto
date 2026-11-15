@@ -140,7 +140,7 @@ kit styling and the existing ABGR/RLE32 codec and 4096-byte cap.
 
 ## Tests and remaining validation
 
-Executed for the expanded-grid update without compilation (24 Python checks in total):
+Executed for the grid-placement update without compilation (24 Python checks in total):
 
 * 4 expanded-geometry contracts (full input, unchanged C04 expectation, no 6WA
   canvas restriction and no unrelated protocol/NAV changes).
@@ -148,7 +148,7 @@ Executed for the expanded-grid update without compilation (24 Python checks in t
   unchanged calibration lifecycle, geometry/colour/decoder/transport invariants and eight C04 checks.
 * 7 calibration source/data checks: 4x5 filled grid, adjacent 21B/21D pairs,
   unique indices, reference frames for transparent samples, bounds, gaps,
-  63-call budget and isolated production diff.
+  62-call budget and isolated production diff.
 * 8 Python source/data tests: all 6612 imported coordinates and 585 styles,
   explicit enum mapping, no exit-example selection, angular mirror convention,
   uniform fits against the supplied geometry at 180x77, 220x157, 232x205 and 282x39, with zero/two-unit margins,
