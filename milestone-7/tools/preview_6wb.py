@@ -47,15 +47,15 @@ const char* submitResultName(SubmitResult) { throw std::logic_error("Preview has
 int main() {
     const std::string street((std::istreambuf_iterator<char>(std::cin)),
                              std::istreambuf_iterator<char>());
-    Bmw6wbProfile p;p.flat.a=0x21;p.flat.b=0x22; // SYNTHETIC preview, not F31 mapping
+    Bmw6wbProfile p;
     if (!validProfile(p)) throw std::runtime_error("Invalid 6WB profile");
     PreviewPort port;
     sixwbkit::HudTerminalPalette colors;colors.graphite=0;colors.gold=1;colors.white=2;colors.gray=3;colors.black=4;
-    GrafiteKit kit(colors,colors,colors);
+    GrafiteKit kit(colors,colors);
     Hud6wbDisplay display(port, p, true,kit);
     std::cout << "{\"handles\":[" << p.base.street << ',' << p.base.distance << ','
               << p.base.unit << ',' << p.bar << "],\"surfaces\":[";
-    size(p.main); std::cout << ','; size(p.lanes); std::cout << ','; size(p.icons); std::cout << ','; size(p.flat);
+    size(p.main); std::cout << ','; size(p.lanes); std::cout << ','; size(p.icons);
     std::cout << "],\"scenes\":[";
 
     struct Scenario { int type, angle, exit; };
@@ -268,7 +268,6 @@ function draw() {
     svg.replaceChildren();
     drawText(state,street,180,45,font.value);
     drawSurface(state,data.surfaces[0],180,10);
-    drawSurface(state,data.surfaces[3],180,10); // same preview location; no claim of physical placement
     drawText(state,distance,160,216,34);
     drawText(state,unit,207,216,17);
     const gauge = state.get(bar);

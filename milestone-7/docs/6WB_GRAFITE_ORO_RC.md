@@ -76,32 +76,30 @@ strip remains 283x40; the new data structure never uses the perspective plane.
 An empty list clears/hides the strip. More than eight lanes or an unsupported
 shape is an explicit representation error, not a partial/shifted lane row.
 
-## Plane choice — exact user-confirmed bar rule
+## Central surface — one verified A/B pair
 
-`kitBarState()` contains the OLD bar calculation, with the same distance fallback,
-range and 0..255 value. Both the 227 payload and 204 visibility use that state.
-The user's explicit answer chose **visibility**, not value<255:
+All central indications now use **only 0x1F/0x20**, regardless of family,
+distance, bar visibility, optional angle or exit number. This includes arrows,
+roundabouts, U-turns, ferry/train ferry and destination flags. The known surface
+is 221x158; the existing input rectangle remains `(20,74)..(200,151)` by default.
+The generator and all its vector geometries are unchanged: it fits each scene
+uniformly into this same verified rectangle.
 
-* `DistanceBased` arrow + visible bar => perspective plane.
-* Any other case => flat plane.
-* Roundabouts, ferry/train ferry and destination are always FlatOnly.
-* Unknown is Hidden and removes the previous central graphic.
+The renderer always draws into the inactive central buffer, then uses the
+existing SwitchVisibility A/B operation. It never selects a separate central
+plane. The old kit policy labels remain asset metadata; only Hidden controls
+whether a central picture is present. They no longer select handles.
 
-IMPORTANT: in the existing renderer the bar is visible whenever a maneuver
- distance can be obtained, including >=1000 m where its value is saturated at
-255. Therefore a known distant maneuver ALSO selects perspective. This is the
-consequence of reusing visibility exactly; it is not a new proximity threshold.
-A different near/far rule would need a new explicit requirement.
+The lateral distance bar retains exactly its previous calculation and visibility;
+it no longer influences selection of the central drawing surface. Lane strip,
+RoadIcon buffers and native text handles are unchanged.
 
-The source kit emits 2D vectors; it does not supply a calibrated 3D camera,
-inverse projection or separate perspective artwork. This RC fits the vectors
-uniformly into the chosen input rectangle and uses the terminal's transformation
-on the perspective plane. **A custom calibrated perspective representation
-beyond that hardware transformation is NOT implemented or verified.** It cannot
-be claimed from the supplied kit or the available F31 logs. Perspective
-compensation must not be fabricated from a photograph.
+There is no optional flat pair, additional surface check or file-based handle
+override. The normal eight C04 checks cover the container, both central buffers,
+both RoadIcon buffers, both lane buffers and the bar. Cached validation, ordered
+chunk submission and transport matching remain unchanged.
 
-## Compiled provisional colours and surface configuration
+## Compiled provisional colours — no configuration file required
 
 Colour roles no longer depend on `/opt/aa/6wb-kit.palette`:
 
@@ -119,31 +117,16 @@ explicit provisional assignments, not new colour measurements. Main maneuvers,
 roundabouts and lanes use the same mapping. Native bitmap RGB is a separate
 codec path and does not interpret HUDTerminal indices as RGB.
 
-The old file remains optional **only for surface-pair configuration**. Its
-colour entries are ignored. Supported surface keys are `perspective.a`,
-`perspective.b` (default 1F/20) and `flat.a`, `flat.b` (default unset).
-Missing/invalid colour files cannot block colour initialization. Missing flat
-surface mapping can still block a FlatOnly scene; that is a separate unresolved
-mapping issue. Invalid geometry and unknown maneuver codes are still reported,
-not silently drawn in an unrelated style.
+The backend no longer opens or parses `6wb-kit.palette` for any purpose.
+An absent, obsolete or malformed file cannot affect calibration, colours,
+central handles or normal drawing. Neither `flat.a` nor `flat.b` exists in the
+active profile. The main pair is fixed to 1F/20 and rejected if changed in code
+to other handles. Unsupported AA codes/invalid geometry still report errors;
+there is no unrelated-style fallback.
 
 At each navigation start, the built-in palette presentation runs before normal
 guidance. See [6WB_PALETTE_CALIBRATION.md](6WB_PALETTE_CALIBRATION.md) for the
 20-line ordering, monotonic ten-second deadline and source disable switch.
-
-The published JayJay reference describes **both 1F/20 as a perspective A/B pair**,
-and groups 21/22 with perspective-sized surfaces; it does not establish a flat
-central pair on this F31. The hypothesis "1F perspective /20 flat" is NOT
-established by their being two buffers. This RC requires distinct A/B pairs
-for its atomic swaps; it does not silently reinterpret one buffer of a pair as
-a different plane. Dimensions stay 221x158 for both configured central pairs.
-C04 validates configured flat handles too (10 checks instead of the former 8).
-ACK/dimension agreement is not proof of visible flat rendering.
-
-Consequently the flat pair must be supplied from actual vehicle evidence before
-an end-to-end flat/roundabout test can succeed. There is no default guessed 21/22
-assignment. This is an unresolved hardware mapping, not an assertion that the
-release candidate is already operational on the car.
 
 The kit's swatch helper remains available, and the startup presentation now
 shows 20 native lines through the existing display worker. No separate test
@@ -154,12 +137,15 @@ kit styling and the existing ABGR/RLE32 codec and 4096-byte cap.
 
 ## Tests and remaining validation
 
-Executed without compilation:
+Executed without compilation (21 Python checks in total):
 
+* 5 single-surface regression contracts: fixed pair, no file/flat dependencies,
+  unchanged calibration, geometry/colour/decoder/transport invariants and eight C04 checks.
+* 6 calibration lifecycle/source checks.
 * 8 Python source/data tests: all 6612 imported coordinates and 585 styles,
   explicit enum mapping, no exit-example selection, angular mirror convention,
   uniform fits against the supplied geometry at 180x77, 220x157 and 282x39,
-  per-direction lane preservation, shared bar condition, no legacy draw calls,
+  per-direction lane preservation, one central pair with unchanged bar logic, no legacy draw calls,
   build lists, C++98 lexical subset, delimiters, command limits and atomic append.
 * 2 Python navigation-log reader tests.
 * Git whitespace/diff review; no new binaries, logs or credentials in the change.
@@ -167,7 +153,9 @@ Executed without compilation:
 These are source/data checks. The independent Python maths checks do NOT execute
 C++. `tests/test_hud6wb_kit.cpp` prepares deterministic runtime tests for angles
 1,15,90,127,180,225,270,359,360 in both directions, generic rotatories, 2..6 lanes,
-per-branch highlighting, bounds, palette zero/unmapped cases and bar/plane rules.
+per-branch highlighting, bounds, palette zero/unmapped cases and the shared central pair. Additional renderer
+cases exercise all 46 supported visible AA codes with and without distance, and
+the adapter tests both 1F and 20 plus rejection of 21.
 Existing renderer tests use explicitly synthetic colour indices, never car
 measurements. No C++ tests were compiled or executed, and no QNX compiler/SDK
 was searched or configured.
@@ -176,8 +164,8 @@ Still required on Windows/F31:
 
 1. Compile and run appropriate C++ checks on the user's environment; verify the
    resulting ARM ELF separately. Compilation and ABI compatibility are unproven.
-2. Observe the provisional colour roles and identify the flat A/B pair. Verify
-   actual C04 dimensions and each pair's visibility; do not infer visibility from ACK.
+2. Observe the provisional colour roles and verify normal 1F/20 A/B rendering
+   of each maneuver family after calibration; no separate central pair is needed.
 3. Validate native joins, subpixel stroke quantization, graphite/gold contrast,
    optional black checker cells and Comfort/Sport/Eco presentation.
 4. Validate real exit-angle convention and joins for clockwise/counter-clockwise
@@ -185,10 +173,9 @@ Still required on Windows/F31:
 5. Validate 2..6 lanes, mixed highlights, obliques/sharp turns, U-turns and unknown
    positions using the actual decoded data. Only Google data was captured in
    the available JSONL; Waze operation is not claimed as hardware-tested.
-6. Check chunked update ordering, plane transitions using the exact bar visibility,
+6. Check chunked update ordering, central A/B swaps,
    ending navigation/reconnecting and absence of a stale/doubled picture.
-7. Define a measured perspective compensation if a custom 3D representation is
-   required beyond the terminal's native projection. It is not supplied by the kit.
+
 
 No new executable, installation, automatic startup, GitHub release or positive
 vehicle test is produced by this source candidate.

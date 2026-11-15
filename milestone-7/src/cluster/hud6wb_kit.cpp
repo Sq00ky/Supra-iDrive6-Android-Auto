@@ -4,8 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <map>
-#include <errno.h>
 namespace nbt { namespace hudterm {
 namespace {
 using sixwbkit::Point;
@@ -108,22 +106,6 @@ bool stroke(Batch& b,uint16_t h,const sixwbkit::Contour& c,double width,const Re
 }
 }
 namespace {
-typedef std::map<std::string,long> Configuration;
-Configuration configuration() {
-    Configuration values;FILE* f=fopen("/opt/aa/6wb-kit.palette","r");if(!f)return values;
-    char line[128];unsigned count=0;bool ok=true;
-    while(fgets(line,sizeof(line),f)) {
-        if(++count>48||(!strchr(line,'\n')&&!feof(f))){ok=false;break;}
-        if(line[0]=='#'||line[0]=='\n'||line[0]=='\r')continue;
-        char* eq=strchr(line,'=');if(!eq){ok=false;break;}*eq++=0;char* end=NULL;errno=0;long v=strtol(eq,&end,0);
-        while(end&&(*end=='\r'||*end=='\n'))++end;
-        if(errno||end==eq||!end||*end||values.count(line)){ok=false;break;}values[line]=v;
-    }
-    if(ferror(f))ok=false;fclose(f);if(!ok)values.clear();return values;
-}
-long setting(const Configuration& c,const char* name,long fallback) {Configuration::const_iterator i=c.find(name);return i==c.end()?fallback:i->second;}
-}
-namespace {
 static const uint8_t COLOR_CONTOUR = 2;          // White, user-selected
 static const uint8_t COLOR_INFILL = 14;          // Gray, user-selected
 static const uint8_t COLOR_ACTIVE_SELECTION = 3; // PROVISIONAL: actual colour unknown
@@ -135,24 +117,13 @@ sixwbkit::HudTerminalPalette provisionalKitPalette() {
     p.gold=COLOR_CONTOUR;p.white=COLOR_ACTIVE_SELECTION;
     return p;
 }
-GrafiteKit::GrafiteKit():main_(provisionalKitPalette()),flat_(main_),lanes_(main_) {
+GrafiteKit::GrafiteKit():main_(provisionalKitPalette()),lanes_(main_) {
     printf("[6wb kit] compiled colours: contour=%u, infill=%u, active=%u (active colour provisional); no palette-file colour loading\n",
            (unsigned)COLOR_CONTOUR,(unsigned)COLOR_INFILL,(unsigned)COLOR_ACTIVE_SELECTION);
-}
-void configureKitPlanes(Bmw6wbProfile& p) {
-    Configuration c=configuration();long fa=setting(c,"flat.a",0),fb=setting(c,"flat.b",0);
-    long pa=setting(c,"perspective.a",p.main.a),pb=setting(c,"perspective.b",p.main.b);
-    if(fa>0&&fa<=255&&fb>0&&fb<=255){p.flat.a=(uint16_t)fa;p.flat.b=(uint16_t)fb;}
-    if(pa>0&&pa<=255&&pb>0&&pb<=255){p.main.a=(uint16_t)pa;p.main.b=(uint16_t)pb;p.base.bufA=p.main.a;p.base.bufB=p.main.b;}
-    // Dimensions remain the documented 221x158; actual C04 must match. The
-    // unidentified flat pair has NO default. No scanning or temporary test backend dependency.
 }
 KitBarState kitBarState(const kombinav::NavView& v,unsigned range) {
     KitBarState s;double metres=0;s.visible=kombinav::distanceMetres(v,metres);
     s.value=metres<=0?0:metres>=range?255:(int)(metres*255/range);return s;
-}
-KitPlane kitPlane(sixwbkit::PlanePolicy::Value policy,bool visible) {
-    return policy==sixwbkit::PlanePolicy::DistanceBased&&visible?KitPerspective:KitFlat;
 }
 sixwbkit::Maneuver::Value GrafiteKit::maneuver(int aaType) {
     // Explicit AA mapping: 0..46 are the model families already used by nav_msg.hpp.
@@ -258,13 +229,14 @@ bool GrafiteKit::encode(const sixwbkit::Scene& scene,const sixwbkit::HudTerminal
     }
     out.calls.insert(out.calls.end(),b.calls.begin(),b.calls.end());return true;
 }
-bool GrafiteKit::central(const kombinav::NavView& v,uint16_t h,const Rect& r,bool perspective,Batch& out)const {
+bool GrafiteKit::central(const kombinav::NavView& v,uint16_t h,const Rect& r,Batch& out)const {
+    if(h!=0x1f && h!=0x20)return false;
     if(v.aa_type<0||v.aa_type>46)return false; // report an unsupported code, never substitute straight-on
     sixwbkit::NavigationEvent e;e.maneuver=maneuver(v.aa_type);
     e.hasExitAngle=v.has_exit_angle;e.exitAngle=(double)v.exit_angle;e.hasExitNumber=v.has_exit_number;e.exitNumber=(unsigned)v.exit_number;
     if(e.hasExitAngle&&(!sixwbkit::finite(e.exitAngle)||e.exitAngle<1||e.exitAngle>360))return false;
     sixwbkit::Rect area(r.x0,r.y0,r.x1-r.x0,r.y1-r.y0);
-    return encode(sixwbkit::renderManeuver(e,area),perspective?main_:flat_,h,r,out);
+    return encode(sixwbkit::renderManeuver(e,area),main_,h,r,out);
 }
 bool GrafiteKit::lanes(const kombinav::NavView& v,uint16_t h,unsigned w,unsigned height,Batch& out)const {
     sixwbkit::NavigationEvent e;if(!laneEvent(v,e))return false;

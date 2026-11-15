@@ -15,7 +15,7 @@ class PaletteCalibrationTests(unittest.TestCase):
             self.assertRegex(KIT,r'static const uint8_t '+name+r'\s*=\s*'+str(value)+r';')
         self.assertIn('p.graphite=COLOR_INFILL;p.gray=COLOR_INFILL;p.black=COLOR_INFILL',KIT)
         self.assertIn('p.gold=COLOR_CONTOUR;p.white=COLOR_ACTIVE_SELECTION',KIT)
-        constructor=KIT.split('GrafiteKit::GrafiteKit()',1)[1].split('void configureKitPlanes(',1)[0]
+        constructor=KIT.split('GrafiteKit::GrafiteKit()',1)[1].split('KitBarState kitBarState(',1)[0]
         self.assertNotIn('configuration()',constructor)
         self.assertNotIn('readProfile()',KIT)
         self.assertNotIn('palette(const Configuration&',KIT)

@@ -3,6 +3,6 @@
 #include "cluster/hud6wb_kit.hpp"
 inline nbt::hudterm::GrafiteKit testKit() {
     nbt::sixwbkit::HudTerminalPalette p;p.graphite=0;p.gold=1;p.white=2;p.gray=3;p.black=4;
-    return nbt::hudterm::GrafiteKit(p,p,p);
+    return nbt::hudterm::GrafiteKit(p,p);
 }
 #endif

@@ -14,7 +14,6 @@ public:
     Batch queries() const {
         Batch b("6wb-size-check");
         add(b,p_.base.frame);add(b,p_.main.a);add(b,p_.main.b);
-        if(p_.flat.a){add(b,p_.flat.a);add(b,p_.flat.b);}
         add(b,p_.icons.a);add(b,p_.icons.b);add(b,p_.lanes.a);add(b,p_.lanes.b);add(b,p_.bar);
         return b;
     }
@@ -36,8 +35,7 @@ public:
     }
 private:
     bool matches(const Port& port) const {
-        return (!p_.flat.a || (check(port,p_.flat.a,p_.flat.width,p_.flat.height) && check(port,p_.flat.b,p_.flat.width,p_.flat.height))) &&
-            check(port,p_.base.frame,p_.frameWidth,p_.frameHeight) &&
+        return check(port,p_.base.frame,p_.frameWidth,p_.frameHeight) &&
             check(port,p_.main.a,p_.main.width,p_.main.height) && check(port,p_.main.b,p_.main.width,p_.main.height) &&
             check(port,p_.icons.a,p_.icons.width,p_.icons.height) && check(port,p_.icons.b,p_.icons.width,p_.icons.height) &&
             check(port,p_.lanes.a,p_.lanes.width,p_.lanes.height) && check(port,p_.lanes.b,p_.lanes.width,p_.lanes.height) &&

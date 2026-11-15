@@ -10,9 +10,9 @@ namespace nbt { namespace hudterm {
 class GrafiteKit {
 public:
     GrafiteKit();
-    GrafiteKit(const sixwbkit::HudTerminalPalette& main,const sixwbkit::HudTerminalPalette& flat,
-               const sixwbkit::HudTerminalPalette& lanes):main_(main),flat_(flat),lanes_(lanes){}
-    bool central(const kombinav::NavView& v,uint16_t handle,const Rect& useful,bool perspective,Batch& out)const;
+    GrafiteKit(const sixwbkit::HudTerminalPalette& main,const sixwbkit::HudTerminalPalette& lanes)
+        :main_(main),lanes_(lanes){}
+    bool central(const kombinav::NavView& v,uint16_t handle,const Rect& useful,Batch& out)const;
     bool lanes(const kombinav::NavView& v,uint16_t handle,unsigned width,unsigned height,Batch& out)const;
     bool swatches(uint16_t handle,const Rect& useful,unsigned columns,Batch& out)const;
     static sixwbkit::Maneuver::Value maneuver(int aaType);
@@ -21,13 +21,10 @@ public:
                        uint16_t handle,const Rect& bounds,Batch& out);
     static bool hidden(int aaType){return sixwbkit::describe(maneuver(aaType)).policy==sixwbkit::PlanePolicy::Hidden;}
 private:
-    sixwbkit::HudTerminalPalette main_,flat_,lanes_;
+    sixwbkit::HudTerminalPalette main_,lanes_;
 };
 sixwbkit::HudTerminalPalette provisionalKitPalette();
 struct KitBarState {bool visible;int value;KitBarState():visible(false),value(0){} };
 KitBarState kitBarState(const kombinav::NavView& v,unsigned rangeMetres);
-enum KitPlane {KitFlat,KitPerspective};
-KitPlane kitPlane(sixwbkit::PlanePolicy::Value policy,bool barVisible);
-void configureKitPlanes(Bmw6wbProfile& p);
 } }
 #endif

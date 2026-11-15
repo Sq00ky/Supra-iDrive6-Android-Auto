@@ -32,15 +32,17 @@ int main() {
         assert(e.lanes[0].directions[0].highlighted&&!e.lanes[0].directions[1].highlighted);
         contained(renderLanes(e.lanes,Rect(0,0,282,39)),Rect(0,0,282,39));
     }
-    for(unsigned type=0;type<=46;++type) {
-        Maneuver::Value m=hudterm::GrafiteKit::maneuver(type);assert((unsigned)m<Maneuver::Count);
-        PlanePolicy::Value policy=describe(m).policy;
-        assert(hudterm::kitPlane(policy,false)==hudterm::KitFlat);
-        assert(hudterm::kitPlane(policy,true)==(policy==PlanePolicy::DistanceBased?hudterm::KitPerspective:hudterm::KitFlat));
+    hudterm::GrafiteKit kit;hudterm::Bmw6wbProfile fixedProfile;
+    for(unsigned type=0;type<=46;++type)for(unsigned which=0;which<2;++which) {
+        kombinav::NavView view;view.aa_type=type;view.has_exit_angle=type>=30&&type<=35;
+        view.exit_angle=225;view.has_exit_number=view.has_exit_angle;view.exit_number=2;
+        hudterm::Batch central;uint16_t handle=which?0x20:0x1f;
+        assert(kit.central(view,handle,fixedProfile.base.glyph,central));
+        for(size_t i=0;i<central.calls.size();++i)assert(central.calls[i].handle()==handle);
+        hudterm::Batch rejected;assert(!kit.central(view,0x21,fixedProfile.base.glyph,rejected));assert(rejected.calls.empty());
     }
     kombinav::NavView v;hudterm::KitBarState bar=hudterm::kitBarState(v,1000);assert(!bar.visible);
     v.has_step_m=true;v.step_m=1400;bar=hudterm::kitBarState(v,1000);assert(bar.visible&&bar.value==255);
-    assert(hudterm::kitPlane(PlanePolicy::DistanceBased,bar.visible)==hudterm::KitPerspective);
     HudTerminalPalette p;uint8_t index=255;assert(hudColorIndex(p,Color::Gold,index)==HudPaint::Unmapped);
     p.gold=0;assert(hudColorIndex(p,Color::Gold,index)==HudPaint::Mapped&&index==0);
     p.gold=20;assert(hudColorIndex(p,Color::Gold,index)==HudPaint::Unmapped);

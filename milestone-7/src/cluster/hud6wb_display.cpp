@@ -154,10 +154,7 @@ bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
     log("6wb palette: cleared; resume current navigation snapshot");return false;
 }
 bool Hud6wbDisplay::mainChanged(const NavView& v) const {
-    sixwbkit::PlanePolicy::Value policy=sixwbkit::describe(GrafiteKit::maneuver(v.aa_type)).policy;
-    bool planeChanged=kitPlane(policy,kitBarState(v,p_.barRangeMetres).visible)!=
-        kitPlane(sixwbkit::describe(GrafiteKit::maneuver(shown_.aa_type)).policy,kitBarState(shown_,p_.barRangeMetres).visible);
-    return fresh_ || planeChanged || v.aa_type!=shown_.aa_type || v.has_exit_angle!=shown_.has_exit_angle ||
+    return fresh_ || v.aa_type!=shown_.aa_type || v.has_exit_angle!=shown_.has_exit_angle ||
         (v.has_exit_angle && v.exit_angle!=shown_.exit_angle) || v.has_exit_number!=shown_.has_exit_number ||
         (v.has_exit_number && v.exit_number!=shown_.exit_number);
 }
@@ -180,20 +177,17 @@ Batch Hud6wbDisplay::render(const NavView& v) const {
     const KitBarState bar=kitBarState(v,p_.barRangeMetres);
     sixwbkit::Maneuver::Value m=GrafiteKit::maneuver(v.aa_type);
     sixwbkit::PlanePolicy::Value policy=sixwbkit::describe(m).policy;
-    const bool perspective=kitPlane(policy,bar.visible)==KitPerspective;
-    const Surface& plane=perspective?p_.main:p_.flat;
-    const Rect& useful=perspective?p_.base.glyph:p_.flatGlyph;
-    uint16_t target=plane.a?other(mainVisible_,plane):0;
+    const Rect& useful=p_.base.glyph;
+    uint16_t target=other(mainVisible_,p_.main);
     uint16_t lane=other(laneVisible_,p_.lanes),icon=other(iconVisible_,p_.icons);
     if(v.aa_type<0||v.aa_type>46)return errorBatch("6wb-kit-error: unsupported AA maneuver code");
-    if(policy!=sixwbkit::PlanePolicy::Hidden&&!target)return errorBatch("6wb-kit-error: flat plane is not configured");
     // Preflight the whole picture before any buffer is cleared or hidden.
     if(mainChanged(v)) {
         if(policy==sixwbkit::PlanePolicy::Hidden) {
             b.add(kSetVisibility,setVisibility(mainVisible_,false));
         } else {
             Batch drawing;
-            if(!kit_.central(v,target,useful,perspective,drawing))return errorBatch("6wb-kit-error: central palette/geometry not representable");
+            if(!kit_.central(v,target,useful,drawing))return errorBatch("6wb-kit-error: central palette/geometry not representable");
             b.add(kRemoveAllItems,removeAllItems(target));
             b.calls.insert(b.calls.end(),drawing.calls.begin(),drawing.calls.end());
             b.add(kSwitchVisibility,switchVisibility(mainVisible_,target));
@@ -297,7 +291,6 @@ ClusterDisplay::Result Hud6wbDisplay::keepUp(const NavView& v,double now) {
 Batch Hud6wbDisplay::clearBatch() const {
     Batch b("6wb-clear",true);b.add(kSetVisibility,setVisibility(p_.base.frame,false));
     const uint16_t hs[]={p_.main.a,p_.main.b,p_.lanes.a,p_.lanes.b};
-    if(p_.flat.a){b.add(kSetVisibility,setVisibility(p_.flat.a,false));b.add(kSetVisibility,setVisibility(p_.flat.b,false));}
     for(size_t i=0;i<4;++i)b.add(kRemoveAllItems,removeAllItems(hs[i]));
     b.add(kSetVisibility,setVisibility(p_.icons.a,false));b.add(kSetVisibility,setVisibility(p_.icons.b,false));
     b.add(kSetVisibility,setVisibility(p_.bar,false));

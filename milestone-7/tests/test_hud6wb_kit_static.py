@@ -69,12 +69,14 @@ class KitStaticTests(unittest.TestCase):
         self.assertIn('-45,45,-90,90,-135,135,-180,180',SOURCE)
         self.assertIn('position still reserved',SOURCE)
 
-    def test_shared_bar_condition_and_no_distance_threshold(self):
-        body=ADAPTER.split('KitPlane kitPlane(',1)[1].split('sixwbkit::Maneuver::Value',1)[0]
-        self.assertIn('DistanceBased&&visible?KitPerspective:KitFlat',body)
-        self.assertNotIn('1000',body)
-        self.assertIn('kitPlane(policy,bar.visible)',DISPLAY)
+    def test_single_pair_and_preserved_bar(self):
+        self.assertIn('uint16_t target=other(mainVisible_,p_.main)',DISPLAY)
+        self.assertIn('const Rect& useful=p_.base.glyph',DISPLAY)
+        self.assertIn('kit_.central(v,target,useful,drawing)',DISPLAY)
         self.assertIn('setVisibility(p_.bar,bar.visible)',DISPLAY)
+        for obsolete in ('kitPlane(', 'p_.flat', 'flat plane is not configured', 'bool perspective'):
+            self.assertNotIn(obsolete,DISPLAY)
+        self.assertIn('if(h!=0x1f && h!=0x20)return false',ADAPTER)
         self.assertNotIn('bmwManeuver',DISPLAY)
         self.assertNotIn('shapeFor(',DISPLAY)
 

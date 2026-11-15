@@ -139,6 +139,26 @@ void testLayoutConfig(){
     FakePort port;p=Bmw6wbProfile();p.iconAntialias=true;Hud6wbDisplay d(port,p,true,testKit());NavView v=view();v.has_next=true;v.next_type=8;
     Batch aa=d.render(v);assert(find(aa,0xc05));valid(aa,p);
 }
+void testAllCentralManeuversWithoutSurfaceFile(){
+    Bmw6wbProfile p;assert(validProfile(p));BmwResources resources(p);assert(resources.queries().calls.size()==8);
+    // The production constructor has compiled colours and performs no file I/O.
+    for(int type=1;type<=46;++type)for(unsigned distanceKnown=0;distanceKnown<2;++distanceKnown) {
+        FakePort port;Hud6wbDisplay display(port,p,true);NavView v=view();v.aa_type=type;
+        v.has_step_m=distanceKnown!=0;v.step_m=1400;
+        if(!distanceKnown){v.dist_text.clear();v.aa_unit=0;}
+        v.has_exit_angle=type>=30&&type<=35;v.exit_angle=225;
+        v.has_exit_number=v.has_exit_angle;v.exit_number=2;
+        Batch drawing=display.render(v);assert(drawing.label=="6wb-guidance");valid(drawing,p);
+        bool switched=false,geometry=false;
+        for(size_t i=0;i<drawing.calls.size();++i) {
+            const Call& c=drawing.calls[i];assert(c.handle()!=0x21&&c.handle()!=0x22);
+            if(c.fkt==kAddPolygon){assert(c.handle()==0x1f);geometry=true;}
+            if(c.fkt==kSwitchVisibility&&c.handle()==0x20){assert(rdBe16(&c.payload[2])==0x1f);switched=true;}
+        }
+        assert(geometry&&switched);
+    }
+    p.main.a=0x21;p.main.b=0x22;p.base.bufA=p.main.a;p.base.bufB=p.main.b;assert(!validProfile(p));
+}
 void testResourcesAndSafety(){
     FakePort port;Bmw6wbProfile p;Hud6wbDisplay d(port,p,false,testKit());NavView v=view();
     d.showManeuver(v,0,true,true);assert(port.batches.size()==1&&port.batches[0].calls.size()==8);
@@ -348,7 +368,7 @@ int main(){
 const bool trace=getenv("NBT_6WB_DIAG_TEST")!=NULL;
 char tracePath[]="/tmp/6wb-diag-integration-XXXXXX";
 if(trace){int fd=mkstemp(tracePath);assert(fd>=0);close(fd);assert(latencydiag::start(true,tracePath));}
-testCodec();testGeometry();testRendering();testResourcesAndSafety();testIncremental();testLayoutConfig();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
+testCodec();testGeometry();testRendering();testAllCentralManeuversWithoutSurfaceFile();testResourcesAndSafety();testIncremental();testLayoutConfig();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
     latencydiag::stop();FILE* f=fopen(tracePath,"r");assert(f);
     char row[512];unsigned rows=0;while(fgets(row,sizeof(row),f))if(row[0]>='0'&&row[0]<='9')++rows;
     fclose(f);unlink(tracePath);assert(rows>0);

@@ -67,10 +67,11 @@ Kit Gold (edges) -> Contour; Graphite, Gray and Black -> Infill; kit White
 The geometries and painter order are unchanged. Index 3 is deliberately
 provisional: the code does not assume its actual displayed colour. Index 14 is used as requested,
 including if the car's chart reveals a different/transparent appearance.
-`GrafiteKit` no longer reads colour mappings from a file. The optional
-`6wb-kit.palette` file is still used ONLY for the preexisting plane-pair settings;
-it is not needed for the chart or colour initialization. The unresolved flat
-pair has not been invented or changed by this patch.
+`GrafiteKit` and the display no longer read `6wb-kit.palette` at all. Calibration
+and every central maneuver use only 0x1F/0x20 with the existing A/B buffering and
+verified input coordinates. No separate central pair is configured or required.
+The existing eight C04 checks remain; colours and normal rendering work without
+the file.
 
 ## Disable
 
