@@ -237,7 +237,7 @@ bool Core::merge(const Batch& b) {
 bool Core::graphicFunction(uint16_t fkt) const {
     switch(fkt) {
         case kSetVisibility: case kSwitchVisibility: case kTextareaSetText:
-        case kSetLineWidth: case kSetFillColor: case kAddPolygon:
+        case kSetLineColor: case kSetLineWidth: case kSetFillColor: case kAddPolygon:
         case kRemoveAllItems: case 0x227: case 0xC05: return true;
         default: return false;
     }

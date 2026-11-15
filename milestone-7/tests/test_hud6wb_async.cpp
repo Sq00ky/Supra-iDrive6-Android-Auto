@@ -3,6 +3,7 @@
 // Host-only. CSV timing reused; all method payloads in these tests are synthetic.
 #include "cluster/hud_terminal.hpp"
 #include "cluster/hud6wb_display.hpp"
+#include "hud6wb_kit_test_util.hpp"
 #include "cluster/hud6wb_resources.hpp"
 #include "cluster/hud6wb_codec.hpp"
 #include <assert.h>
@@ -143,7 +144,7 @@ struct CorePort : Port {
     bool imageSize(uint16_t h,uint16_t& w,uint16_t& hh)const{return c.imageSize(h,w,hh);}
 };
 void sizesThenRender() {
-    CorePort port;Bmw6wbProfile p;Hud6wbDisplay display(port,p,false);NavView v;v.aa_type=8;v.road="Synthetic Road";
+    CorePort port;Bmw6wbProfile p;Hud6wbDisplay display(port,p,false,testKit());NavView v;v.aa_type=8;v.road="Synthetic Road";v.has_step_m=true;v.step_m=250;v.dist_text="250";v.aa_unit=1;
     assert(display.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
     const uint32_t tx[]={2847549,2850919,2854295,2857643,2861003,2864374,2867773,2871128};
     const uint32_t rx[]={2850918,2854295,2857643,2861003,2864374,2867773,2871127,2874504};

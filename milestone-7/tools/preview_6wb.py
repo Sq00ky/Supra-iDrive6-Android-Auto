@@ -47,13 +47,15 @@ const char* submitResultName(SubmitResult) { throw std::logic_error("Preview has
 int main() {
     const std::string street((std::istreambuf_iterator<char>(std::cin)),
                              std::istreambuf_iterator<char>());
-    Bmw6wbProfile p;
+    Bmw6wbProfile p;p.flat.a=0x21;p.flat.b=0x22; // SYNTHETIC preview, not F31 mapping
     if (!validProfile(p)) throw std::runtime_error("Invalid 6WB profile");
     PreviewPort port;
-    Hud6wbDisplay display(port, p, true);
+    sixwbkit::HudTerminalPalette colors;colors.graphite=0;colors.gold=1;colors.white=2;colors.gray=3;colors.black=4;
+    GrafiteKit kit(colors,colors,colors);
+    Hud6wbDisplay display(port, p, true,kit);
     std::cout << "{\"handles\":[" << p.base.street << ',' << p.base.distance << ','
               << p.base.unit << ',' << p.bar << "],\"surfaces\":[";
-    size(p.main); std::cout << ','; size(p.lanes); std::cout << ','; size(p.icons);
+    size(p.main); std::cout << ','; size(p.lanes); std::cout << ','; size(p.icons); std::cout << ','; size(p.flat);
     std::cout << "],\"scenes\":[";
 
     struct Scenario { int type, angle, exit; };
@@ -181,7 +183,7 @@ const signed = n => n >= 32768 ? n - 65536 : n;
 function replay(calls) {
     const states = new Map();
     const surface = id => {
-        if (!states.has(id)) states.set(id, {visible:false, polygons:[], width:1});
+        if (!states.has(id)) states.set(id, {visible:false, polygons:[], width:1, line:2, fill:0});
         return states.get(id);
     };
     for (const [method, ...p] of calls) {
@@ -190,12 +192,14 @@ function replay(calls) {
             case 0x204: s.visible = Boolean(p[2]); break;
             case 0x20e: s.visible = false; surface(word(p, 2)).visible = true; break;
             case 0x210: s.text = latin.decode(Uint8Array.from(p.slice(3, -1))); break;
+            case 0x218: s.line = p[2]; break;
+            case 0x21b: s.fill = p[2]; break;
             case 0x219: s.width = p[2]; break;
             case 0x21d: {
                 const points = [];
                 for (let i = 6; i < p.length; i += 4)
                     points.push([signed(word(p, i)), signed(word(p, i + 2))]);
-                s.polygons.push({filled:p[4] === 3, points, width:s.width});
+                s.polygons.push({filled:p[4] === 3, points, width:s.width, line:s.line, fill:s.fill});
                 break;
             }
             case 0x220: s.polygons = []; break;
@@ -243,7 +247,8 @@ function drawSurface(state, spec, x, y) {
     for (const poly of s.polygons) {
         element(poly.filled ? 'polygon' : 'polyline', {
             points:poly.points.map(point => point.join(',')).join(' '),
-            fill:poly.filled ? 'currentColor' : 'none', stroke:'currentColor',
+            fill:poly.filled ? ['#353b43','#c4a36a','#ffffff','#858d98','#000000'][poly.fill] : 'none',
+            stroke:poly.filled ? 'none' : ['#353b43','#c4a36a','#ffffff','#858d98','#000000'][poly.line],
             'stroke-width':poly.width, 'stroke-linejoin':'round', 'stroke-linecap':'round'
         }, layer);
     }
@@ -263,6 +268,7 @@ function draw() {
     svg.replaceChildren();
     drawText(state,street,180,45,font.value);
     drawSurface(state,data.surfaces[0],180,10);
+    drawSurface(state,data.surfaces[3],180,10); // same preview location; no claim of physical placement
     drawText(state,distance,160,216,34);
     drawText(state,unit,207,216,17);
     const gauge = state.get(bar);
@@ -294,7 +300,8 @@ def main():
     root = Path(__file__).resolve().parent.parent
     cluster = root / "src" / "cluster"
     sources = [cluster / name for name in (
-        "hud6wb_display.cpp", "hud6wb_artwork.cpp", "hud6wb_codec.cpp", "hud6wa_display.cpp"
+        "hud6wb_display.cpp", "hud6wb_artwork.cpp", "hud6wb_codec.cpp", "hud6wa_display.cpp",
+        "hud6wb_kit.cpp", "grafite_oro/artwork6wb.cpp", "grafite_oro/hudterminal_palette.cpp"
     )]
     with tempfile.TemporaryDirectory(prefix="6wb-preview-") as tmp:
         capture = Path(tmp) / "capture.cpp"

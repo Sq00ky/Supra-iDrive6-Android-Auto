@@ -4,10 +4,11 @@
 #define CLUSTER_HUD6WB_DISPLAY_HPP
 #include "cluster/display.hpp"
 #include "cluster/hud6wb_resources.hpp"
+#include "cluster/hud6wb_kit.hpp"
 namespace nbt { namespace kombinav {
 class Hud6wbDisplay : public ClusterDisplay {
 public:
-    Hud6wbDisplay(hudterm::Port& port,const hudterm::Bmw6wbProfile& profile,bool shadow);
+    Hud6wbDisplay(hudterm::Port& port,const hudterm::Bmw6wbProfile& profile,bool shadow,const hudterm::GrafiteKit& kit=hudterm::GrafiteKit());
     const char* name() const { return "6wb"; }
     void setSettings(const Settings& s) { settings_=s; }
     void setLog(LogFn f,void* u) { log_=f;user_=u; }
@@ -28,6 +29,7 @@ private:
     bool canDraw();
     bool submit(const hudterm::Batch& b);
     void log(const std::string& s) const;
+    hudterm::GrafiteKit kit_;
     hudterm::Port& port_;hudterm::Bmw6wbProfile p_;hudterm::BmwResources resources_;
     void remember(const NavView& v,const hudterm::Batch& b);
     bool mainChanged(const NavView& v) const;
@@ -35,6 +37,7 @@ private:
     bool shadow_,sent_,fresh_,dirty_,shownLanes_;uint32_t epoch_;
     uint16_t mainVisible_,laneVisible_,iconVisible_;
     NavView shown_;Settings settings_;LogFn log_;void* user_;
+    hudterm::Batch queuedPicture_;NavView queuedView_;size_t queuedCall_;bool kitErrorLogged_;
 };
 } }
 #endif

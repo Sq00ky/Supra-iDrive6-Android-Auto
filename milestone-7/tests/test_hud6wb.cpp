@@ -3,6 +3,7 @@
 // Host-only: no BMW libraries, device, network or vehicle required.
 #include "cluster/nav_core.hpp"
 #include "cluster/hud6wb_display.hpp"
+#include "hud6wb_kit_test_util.hpp"
 #include "cluster/hud6wb_codec.hpp"
 #include "cluster/hud6wb_artwork.hpp"
 #include "cluster/hud6wb_config.hpp"
@@ -82,7 +83,7 @@ void testGeometry(){
 }
 void testRendering(){
     FakePort port;Bmw6wbProfile p;p.roadShields=true;
-    Hud6wbDisplay d(port,p,true);Settings settings;d.setSettings(settings);NavView v=view();
+    Hud6wbDisplay d(port,p,true,testKit());Settings settings;d.setSettings(settings);NavView v=view();
     logs.clear();d.setLog(&record,NULL);
     v.road="A 45";v.has_next=true;v.next_type=7;
     AaLane l;l.push_back(LaneDirection(1,false));l.push_back(LaneDirection(5,true));v.lanes.push_back(l);
@@ -97,7 +98,7 @@ void testRendering(){
     assert(d.updateDistance(v,1)==ClusterDisplay::kOk);assert(d.clear(NULL));assert(port.batches.empty());
 }
 void testIncremental(){
-    FakePort port;Bmw6wbProfile p;Hud6wbDisplay d(port,p,false);NavView v=view();
+    FakePort port;Bmw6wbProfile p;Hud6wbDisplay d(port,p,false,testKit());NavView v=view();
     d.showManeuver(v,0,true,true);d.showManeuver(v,1,true,true);size_t n=port.batches.size();
     d.showManeuver(v,2,true,true);assert(port.batches.size()==n && d.render(v).calls.empty());
     // Text-only changes must not clear, query, upload or flip any graphics buffer.
@@ -135,11 +136,11 @@ void testLayoutConfig(){
     Bmw6wbProfile invalid;configure6wb(invalid);assert(invalid.base.streetChars==15&&invalid.lineWidth==6);
     unsetenv("NBT_6WB_STREET_CHARS");unsetenv("NBT_6WB_LINE_WIDTH");unsetenv("NBT_6WB_ARROW_WIDTH");unsetenv("NBT_6WB_ROUNDABOUT_SEGMENTS");
     // Optional raster AA uses only existing bitmap encoding; defaults are untouched.
-    FakePort port;p=Bmw6wbProfile();p.iconAntialias=true;Hud6wbDisplay d(port,p,true);NavView v=view();v.has_next=true;v.next_type=8;
+    FakePort port;p=Bmw6wbProfile();p.iconAntialias=true;Hud6wbDisplay d(port,p,true,testKit());NavView v=view();v.has_next=true;v.next_type=8;
     Batch aa=d.render(v);assert(find(aa,0xc05));valid(aa,p);
 }
 void testResourcesAndSafety(){
-    FakePort port;Bmw6wbProfile p;Hud6wbDisplay d(port,p,false);NavView v=view();
+    FakePort port;Bmw6wbProfile p;Hud6wbDisplay d(port,p,false,testKit());NavView v=view();
     d.showManeuver(v,0,true,true);assert(port.batches.size()==1&&port.batches[0].calls.size()==8);
     for(size_t i=0;i<8;++i)assert(port.batches[0].calls[i].fkt==kGetSize&&port.batches[0].calls[i].payload.size()==3);
     d.showManeuver(v,1,true,true);assert(port.batches.size()==2);valid(port.batches.back(),p);
@@ -148,10 +149,10 @@ void testResourcesAndSafety(){
     const Call* sw=find(port.batches.back(),0x20e);assert(rdBe16(&sw->payload[0])==0x1f&&rdBe16(&sw->payload[2])==0x20);
     size_t n=port.batches.size();port.st=kFailed;assert(!d.clear(NULL));assert(port.batches.size()==n&&port.resets==0);
     port.st=kNavActive;assert(d.factoryActive()&&d.clear(NULL));assert(port.batches.size()==n);
-    FakePort bad;bad.badSize=true;Hud6wbDisplay bd(bad,p,false);
+    FakePort bad;bad.badSize=true;Hud6wbDisplay bd(bad,p,false,testKit());
     bd.showManeuver(v,0,true,true);assert(bd.showManeuver(v,1,true,true)==ClusterDisplay::kRejected);
     assert(bad.batches.size()==1&&!bd.sentAny());
-    FakePort reconnect;Hud6wbDisplay rd(reconnect,p,false);rd.showManeuver(v,0,true,true);rd.showManeuver(v,1,true,true);
+    FakePort reconnect;Hud6wbDisplay rd(reconnect,p,false,testKit());rd.showManeuver(v,0,true,true);rd.showManeuver(v,1,true,true);
     ++reconnect.ep;rd.showManeuver(v,2,true,true);
     assert(reconnect.batches.back().label!="6wb-size-check"); // OEM yield: use existing validated sizes
     reconnect.queried=false; // transport cache cleared on actual reconnect/host change

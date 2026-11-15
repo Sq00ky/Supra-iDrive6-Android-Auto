@@ -396,6 +396,7 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         shadow_=!mode || strcmp(mode,"on")!=0;
         hudterm::Bmw6wbProfile p;
         hudterm::configure6wb(p);
+        hudterm::configureKitPlanes(p);
         p.roadShields=envFlag("NBT_6WB_ROAD_SHIELDS")==1;
         hudterm::Config c;
         c.handles=hudterm::handlesOf(p); c.navFrame=p.base.frame;

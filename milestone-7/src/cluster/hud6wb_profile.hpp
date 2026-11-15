@@ -12,7 +12,8 @@ struct Surface {
 };
 struct Bmw6wbProfile {
     HudProfile base;
-    Surface main, icons, lanes;
+    Surface main, icons, lanes, flat;
+    Rect flatGlyph;
     uint16_t bar, frameWidth, frameHeight, barWidth, barHeight;
     uint8_t lineWidth, laneLineWidth, textEncoding;
     uint32_t vectorTx, headerTag, barRangeMetres;
@@ -20,11 +21,12 @@ struct Bmw6wbProfile {
     bool roadShields,iconAntialias;
     unsigned roundaboutSegments; // default preserves the hardware-tested geometry
     Rect nextGlyph;
-    Bmw6wbProfile() : main(0x1f,0x20,221,158), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40),
+    Bmw6wbProfile() : main(0x1f,0x20,221,158), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40), flat(0,0,221,158),
         bar(0x35), frameWidth(309), frameHeight(330), barWidth(28), barHeight(113),
         lineWidth(6), laneLineWidth(3), textEncoding(1), vectorTx(4), headerTag(0xffff),
         barRangeMetres(1000), maxBitmapBytes(4096), roadShields(false), iconAntialias(false), roundaboutSegments(24) {
         Rect next={90,3,126,39};nextGlyph=next;
+        Rect flatRect={0,0,220,157};flatGlyph=flatRect;
         base.name="6wb"; base.frame=0x17; base.street=0x1a; base.distance=0x1b; base.unit=0x1c;
         base.bufA=main.a; base.bufB=main.b; base.fill=2;
         Rect c={0,0,220,157}; base.canvas=c;
@@ -40,8 +42,15 @@ inline bool validProfile(const Bmw6wbProfile& p) {
         if(!h[i] || h[i]>255)return false;
         for(size_t j=0;j<i;++j)if(h[i]==h[j])return false;
     }
-    const Surface s[]={p.main,p.icons,p.lanes};
-    for(size_t i=0;i<3;++i)if(!s[i].width||!s[i].height||s[i].width>1024||s[i].height>1024)return false;
+    if((p.flat.a==0)!=(p.flat.b==0))return false;
+    if(p.flat.a) {
+        if(p.flat.a>255||p.flat.b>255||p.flat.a==p.flat.b)return false;
+        if(p.flatGlyph.x0<0||p.flatGlyph.y0<0||p.flatGlyph.x1<=p.flatGlyph.x0||p.flatGlyph.y1<=p.flatGlyph.y0||
+           p.flatGlyph.x1>=p.flat.width||p.flatGlyph.y1>=p.flat.height)return false;
+        for(size_t i=0;i<sizeof(h)/sizeof(h[0]);++i)if(p.flat.a==h[i]||p.flat.b==h[i])return false;
+    }
+    const Surface s[]={p.main,p.icons,p.lanes,p.flat};
+    for(size_t i=0;i<4;++i)if(!s[i].width||!s[i].height||s[i].width>1024||s[i].height>1024)return false;
     return p.base.bufA==p.main.a && p.base.bufB==p.main.b && p.textEncoding==1 &&
         p.base.glyph.x0>=0 && p.base.glyph.y0>=0 && p.base.glyph.x1>p.base.glyph.x0 && p.base.glyph.y1>p.base.glyph.y0 &&
         p.base.glyph.x1<p.main.width && p.base.glyph.y1<p.main.height && p.lanes.width>=80 && p.lanes.height>=16 &&
@@ -54,6 +63,7 @@ inline bool validProfile(const Bmw6wbProfile& p) {
 }
 inline HandleSet handlesOf(const Bmw6wbProfile& p) {
     HandleSet h=handlesOf(p.base);
+    if(p.flat.a){h.allow(p.flat.a);h.allow(p.flat.b);}
     h.allow(p.icons.a); h.allow(p.icons.b); h.allow(p.lanes.a); h.allow(p.lanes.b); h.allow(p.bar);
     return h;
 }
