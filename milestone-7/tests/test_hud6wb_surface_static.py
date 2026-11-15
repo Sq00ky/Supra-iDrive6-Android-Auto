@@ -30,9 +30,8 @@ class SingleSurfaceChecks(unittest.TestCase):
         self.assertIn('if(h!=0x1f && h!=0x20)return false',read('hud6wb_kit.cpp'))
         self.assertIn('p.main.a!=0x1f || p.main.b!=0x20',read('hud6wb_profile.hpp'))
 
-    def test_calibration_clock_chart_and_interceptor_are_unchanged(self):
-        for start,end in [('Batch Hud6wbDisplay::calibrationBatch()', 'bool Hud6wbDisplay::interceptNavigation('),
-                          ('bool Hud6wbDisplay::interceptNavigation(', 'bool Hud6wbDisplay::mainChanged(')]:
+    def test_calibration_clock_and_interceptor_are_unchanged(self):
+        for start,end in [('bool Hud6wbDisplay::interceptNavigation(', 'bool Hud6wbDisplay::mainChanged(')]:
             self.assertEqual(section(read('hud6wb_display.cpp'),start,end),section(original('hud6wb_display.cpp'),start,end))
         self.assertEqual(read('hud6wb_calibration.hpp'),original('hud6wb_calibration.hpp'))
         self.assertEqual(section(read('hud6wb_kit.cpp'),'KitBarState kitBarState(', 'sixwbkit::Maneuver::Value'),

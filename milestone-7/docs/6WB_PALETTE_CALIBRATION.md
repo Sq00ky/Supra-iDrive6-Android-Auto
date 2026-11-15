@@ -14,11 +14,12 @@ does not install a separate diagnostic application, service, IPC or new thread.
 2. Existing surface validation must succeed, and already accepted drawing chunks
    finish first. No chart is sent before `BmwResources::advance()` verifies the
    configured surfaces. Existing valid C04 results remain cached as before.
-3. The inactive buffer in the verified 1F/20 pair is cleared. It receives 20
-   horizontal native polylines, width 2, indices 0..19 in increasing vertical
-   order. Coordinates are x=22..198, y=75..149, below the known ~70px horizon.
-   The highest line is 0; the lowest is 19. No labels/RGB assumptions are added.
-   The complete 52-command batch is within the existing 128-call limit.
+3. The inactive buffer in the verified 1F/20 pair is cleared. It receives a
+   **4-column x 5-row grid of 20 filled rectangles**, one per index 0..19.
+   For each cell the commands are adjacent: `21B [handle:u16][index:u8]`, then
+   `21D [handle:u16][item:u16][03][04][four x/y pairs]`. There is no 218
+   (SetLineColor), polyline, or new line-width setting in this chart.
+   The complete **51-command** batch is within the existing 128-call limit.
 4. Other navigation elements are hidden, then the finished chart is exposed by
    the existing A/B visibility switch. The clock is armed only after local
    dispatch completes; asynchronous Ack latency does not start another wait.
@@ -38,6 +39,38 @@ interruption by incoming navigation instructions. No retry/reset of a failed
 terminal is introduced. A link change during an already displayed chart aborts
 that attempt; it is not resent within the same navigation. Initial discovery
 while a chart is still pending does not consume its one attempt.
+
+## Grid reference for photographs
+
+Indices below are **decimal**, increasing left to right, then top to bottom.
+The corresponding colour bytes range from 0x00 to 0x13, not 0x00 to 0x19.
+Do not renumber a cell if its fill is invisible/transparent or looks identical
+to an adjacent cell. No colour identity is inferred in advance.
+
+| Row (top to bottom) | Column 1 (left) | Column 2 | Column 3 | Column 4 (right) |
+|---|---:|---:|---:|---:|
+| 1 | 0 | 1 | 2 | 3 |
+| 2 | 4 | 5 | 6 | 7 |
+| 3 | 8 | 9 | 10 | 11 |
+| 4 | 12 | 13 | 14 | 15 |
+| 5 | 16 | 17 | 18 | 19 |
+
+Input coordinates before the terminal's perspective transform:
+
+* Column x extents: **26..62**, **70..106**, **114..150**, **158..194**.
+* Row y extents: **75..85**, **91..101**, **107..117**, **123..133**, **139..149**.
+* Each rectangle spans 36 x 10 coordinate units, with four clockwise vertices
+  (top-left, top-right, bottom-right, bottom-left). Closure is implicit in the
+  filled polygon. Eight units separate columns; six separate rows.
+* The full chart stays below the known ~70px horizon, inside the existing
+  `(20,74)..(200,151)` glyph input area of the 221x158 central surface. Physical
+  displayed dimensions and gaps are transformed by the cluster.
+
+The first real F31 trial displayed all previous 218-coloured lines as white.
+This test isolates the 21B fill selector instead. The normal maneuver renderer,
+including its current 218 contour handling and provisional 2/14/3 roles, is
+unchanged. This source change does not claim the fill colours have been observed
+on the F31 yet.
 
 ## Timing precision
 
@@ -82,12 +115,15 @@ is required. SHADOW follows the same lifecycle and logs commands without sending
 
 ## Checks
 
-Executed in Codex: six new source/data tests, eight kit source/data checks and
-two diagnostic-reader Python tests; whitespace/static review. No C++ or QNX
+Executed in Codex for this change: seven calibration source/data tests, five
+single-surface contracts and eight kit source/data checks (20 checks total),
+plus whitespace/static review. An isolation check compares all production code
+outside the chart function to `f5dea737f537371564c6034a9a7f17f13a947196`. No C++ or QNX
 compilation/execution. `test_hud6wb_calibration.cpp` is prepared for subsequent
 runtime checking of the exact boundary, duplicate ACTIVE/REROUTING, route restart,
-disabled mode, all 20 line payloads and provisional roles.
+disabled mode, both A/B buffers, all 20 fill/polygon payload pairs, four vertices
+per cell, grid indices, bounds, exact 51-call budget and provisional roles.
 
-Remaining F31 checks: actual line visibility/order, meaning of indices 2/14/3,
+Remaining F31 checks: rectangle visibility/colour/order, meaning of all 20 indices,
 visible hold duration, normal guidance resumption with updated maneuvers, and
 start/stop/reroute behavior. No binary was built or installed by this change.

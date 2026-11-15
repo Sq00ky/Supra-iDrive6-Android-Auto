@@ -91,15 +91,19 @@ Batch Hud6wbDisplay::calibrationBatch() const {
     if(p_.main.a!=0x1f||p_.main.b!=0x20)return errorBatch("6wb-kit-error: calibration requires verified 1F/20 pair");
     uint16_t target=other(mainVisible_,p_.main);
     b.add(kRemoveAllItems,removeAllItems(target));
-    b.add(kSetLineWidth,setLineWidth(target,2));
-    // Known input region below the ~70px horizon of the verified central pair.
-    // 20 separate horizontal lines, ascending indices from top to bottom.
+    // Fixed input grid below the ~70px horizon: four columns, five rows.
+    // Index = row*4 + column; cells are separated by 8px horizontally/6px vertically.
     for(unsigned index=0;index<20;++index) {
-        int y=75+(int)((index*74+9)/19); // 75..149, no coincident rows
-        std::vector<hudterm::Point> points;hudterm::Point a={22,(int16_t)y},z={198,(int16_t)y};
-        points.push_back(a);points.push_back(z);
-        b.add(kSetLineColor,setLineColor(target,(uint8_t)index));
-        b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x80+index),kPolyline,points));
+        const int left=26+(int)(index%4)*44;
+        const int top=75+(int)(index/4)*16;
+        std::vector<hudterm::Point> points;
+        hudterm::Point a={(int16_t)left,(int16_t)top};
+        hudterm::Point upperRight={(int16_t)(left+36),(int16_t)top};
+        hudterm::Point lowerRight={(int16_t)(left+36),(int16_t)(top+10)};
+        hudterm::Point lowerLeft={(int16_t)left,(int16_t)(top+10)};
+        points.push_back(a);points.push_back(upperRight);points.push_back(lowerRight);points.push_back(lowerLeft);
+        b.add(kSetFillColor,setFillColor(target,(uint8_t)index));
+        b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x80+index),kPolygon,points));
     }
     // Hide only non-calibration elements. Never show a half-built chart.
     const uint16_t hidden[]={p_.lanes.a,p_.lanes.b,p_.icons.a,p_.icons.b,p_.bar,p_.base.street,p_.base.distance,p_.base.unit};

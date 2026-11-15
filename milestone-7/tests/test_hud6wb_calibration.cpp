@@ -40,6 +40,14 @@ void lifecycleIntegration() {
     assert(foundLatest);
     display.interceptNavigation(NULL,2,21);display.navigationRouteStarted();
     assert(display.interceptNavigation(&latest,1,22));assert(port.batches.back().label=="6wb-palette-calibration");
+    // The next route uses the other A/B buffer, with the same filled chart.
+    unsigned polygons=0;
+    for(size_t i=0;i<port.batches.back().calls.size();++i) {
+        const Call& c=port.batches.back().calls[i];
+        assert(c.fkt!=kSetLineColor);
+        if(c.fkt==kAddPolygon){assert(c.handle()==0x20&&c.payload[4]==0x03&&c.payload[5]==4);++polygons;}
+    }
+    assert(polygons==20);
 }
 int main() {
     lifecycleIntegration();
@@ -56,19 +64,33 @@ int main() {
     PaletteCalibration disabled(false);disabled.observe(1);assert(!disabled.active());
     CalibrationPort port;nbt::hudterm::Bmw6wbProfile profile;
     nbt::kombinav::Hud6wbDisplay display(port,profile,true,testKit());
-    Batch chart=display.calibrationBatch();assert(chart.calls.size()<128);
-    unsigned colors=0,lines=0;int lastY=-1;
+    Batch chart=display.calibrationBatch();assert(chart.calls.size()==51&&chart.calls.size()<=128);
+    unsigned colors=0,rectangles=0;bool seen[20]={false};
     for(size_t i=0;i<chart.calls.size();++i) {
         const Call& call=chart.calls[i];assert(callOk(call,handlesOf(profile),true));
-        if(call.fkt==kSetLineColor) {assert(call.payload[2]==colors);++colors;}
+        assert(call.fkt!=kSetLineColor&&call.fkt!=kSetLineWidth);
+        if(call.fkt==kSetFillColor) {
+            assert(colors<20&&call.payload.size()==3&&call.handle()==0x1f);
+            assert(call.payload[2]==colors&&!seen[colors]);seen[colors]=true;++colors;
+            assert(i+1<chart.calls.size()&&chart.calls[i+1].fkt==kAddPolygon);
+        }
         if(call.fkt==kAddPolygon) {
-            assert(call.handle()==0x1f&&call.payload[4]==kPolyline&&call.payload[5]==2);
-            int y=rdBe16(&call.payload[8]);assert(y>lastY&&y>=75&&y<=149);
-            assert(rdBe16(&call.payload[6])==22&&rdBe16(&call.payload[10])==198);
-            assert(rdBe16(&call.payload[12])==y);lastY=y;++lines;
+            assert(rectangles<20&&call.handle()==0x1f&&call.payload.size()==22);
+            assert(call.payload[4]==0x03&&call.payload[5]==4);
+            assert(rdBe16(&call.payload[2])==0x80+rectangles);
+            assert(i>0&&chart.calls[i-1].fkt==kSetFillColor&&chart.calls[i-1].payload[2]==rectangles);
+            int left=26+(rectangles%4)*44,top=75+(rectangles/4)*16;
+            const int expected[4][2]={{left,top},{left+36,top},{left+36,top+10},{left,top+10}};
+            for(unsigned vertex=0;vertex<4;++vertex) {
+                int x=rdBe16(&call.payload[6+vertex*4]),y=rdBe16(&call.payload[8+vertex*4]);
+                assert(x==expected[vertex][0]&&y==expected[vertex][1]);
+                assert(x>=profile.base.glyph.x0&&x<=profile.base.glyph.x1);
+                assert(y>=75&&y<=149&&y>=profile.base.glyph.y0&&y<=profile.base.glyph.y1);
+            }
+            ++rectangles;
         }
     }
-    assert(colors==20&&lines==20);
+    assert(colors==20&&rectangles==20);for(unsigned i=0;i<20;++i)assert(seen[i]);
     nbt::sixwbkit::HudTerminalPalette p=provisionalKitPalette();
     assert(p.white==3&&p.graphite==14&&p.gray==14&&p.black==14&&p.gold==2);
 }

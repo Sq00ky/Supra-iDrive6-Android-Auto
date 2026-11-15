@@ -126,10 +126,10 @@ there is no unrelated-style fallback.
 
 At each navigation start, the built-in palette presentation runs before normal
 guidance. See [6WB_PALETTE_CALIBRATION.md](6WB_PALETTE_CALIBRATION.md) for the
-20-line ordering, monotonic ten-second deadline and source disable switch.
+4x5 filled-rectangle ordering, monotonic ten-second deadline and source disable switch.
 
 The kit's swatch helper remains available, and the startup presentation now
-shows 20 native lines through the existing display worker. No separate test
+shows 20 filled rectangles (21B + 21D type 03) through the existing display worker. No separate test
 program, IPC service or startup executable is installed. The provisional colour
 assignments come from the user, not RGB estimates from photographs.
 RGB remains usable for the existing RoadIcon bitmap encoding; its pixels use
@@ -137,17 +137,17 @@ kit styling and the existing ABGR/RLE32 codec and 4096-byte cap.
 
 ## Tests and remaining validation
 
-Executed without compilation (21 Python checks in total):
+Executed for the filled-chart update without compilation (20 Python checks in total):
 
 * 5 single-surface regression contracts: fixed pair, no file/flat dependencies,
-  unchanged calibration, geometry/colour/decoder/transport invariants and eight C04 checks.
-* 6 calibration lifecycle/source checks.
+  unchanged calibration lifecycle, geometry/colour/decoder/transport invariants and eight C04 checks.
+* 7 calibration source/data checks: 4x5 filled grid, adjacent 21B/21D pairs,
+  unique indices, bounds, gaps, 51-call budget and isolated production diff.
 * 8 Python source/data tests: all 6612 imported coordinates and 585 styles,
   explicit enum mapping, no exit-example selection, angular mirror convention,
   uniform fits against the supplied geometry at 180x77, 220x157 and 282x39,
   per-direction lane preservation, one central pair with unchanged bar logic, no legacy draw calls,
   build lists, C++98 lexical subset, delimiters, command limits and atomic append.
-* 2 Python navigation-log reader tests.
 * Git whitespace/diff review; no new binaries, logs or credentials in the change.
 
 These are source/data checks. The independent Python maths checks do NOT execute
