@@ -91,16 +91,43 @@ Batch Hud6wbDisplay::calibrationBatch() const {
     if(p_.main.a!=0x1f||p_.main.b!=0x20)return errorBatch("6wb-kit-error: calibration requires verified 1F/20 pair");
     uint16_t target=other(mainVisible_,p_.main);
     b.add(kRemoveAllItems,removeAllItems(target));
-    // Fixed input grid below the ~70px horizon: four columns, five rows.
-    // Index = row*4 + column; cells are separated by 8px horizontally/6px vertically.
+    // Full experimental vector canvas: x=0..232, below-horizon y=70..205.
+    // A shared WHITE grid (filled bars via 21B/21D) identifies transparent cells
+    // without relying on 218, or painting white behind the tested sample.
+    const Rect& canvas=p_.base.canvas;
+    const int horizon=Bmw6wbProfile::kPerspectiveHorizon;
+    const int columnStep=(canvas.x1-canvas.x0)/4;
+    const int rowStep=(canvas.y1-horizon)/5;
+    const int border=2,gutter=5;
+    b.add(kSetFillColor,setFillColor(target,2)); // known white reference, not a tested sample
+    for(unsigned marker=0;marker<11;++marker) {
+        int left=canvas.x0,top=horizon,right=canvas.x1,bottom=canvas.y1;
+        if(marker<5) {
+            left=marker==4?canvas.x1-border:canvas.x0+(int)marker*columnStep;
+            right=left+border;
+        } else {
+            unsigned row=marker-5;
+            top=row==5?canvas.y1-border:horizon+(int)row*rowStep;
+            bottom=top+border;
+        }
+        std::vector<hudterm::Point> points;
+        hudterm::Point a={(int16_t)left,(int16_t)top},c={(int16_t)right,(int16_t)bottom};
+        hudterm::Point upperRight={(int16_t)right,(int16_t)top},lowerLeft={(int16_t)left,(int16_t)bottom};
+        points.push_back(a);points.push_back(upperRight);points.push_back(c);points.push_back(lowerLeft);
+        b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x40+marker),kPolygon,points));
+    }
+    // Index = row*4 + column. Only the 20 inner rectangles use tested indices.
+    // Each sits inside the reference frame with a background gap on all sides.
     for(unsigned index=0;index<20;++index) {
-        const int left=26+(int)(index%4)*44;
-        const int top=75+(int)(index/4)*16;
+        const int left=canvas.x0+(int)(index%4)*columnStep+gutter;
+        const int top=horizon+(int)(index/4)*rowStep+gutter;
+        const int right=canvas.x0+(int)(index%4+1)*columnStep-gutter;
+        const int bottom=horizon+(int)(index/4+1)*rowStep-gutter;
         std::vector<hudterm::Point> points;
         hudterm::Point a={(int16_t)left,(int16_t)top};
-        hudterm::Point upperRight={(int16_t)(left+36),(int16_t)top};
-        hudterm::Point lowerRight={(int16_t)(left+36),(int16_t)(top+10)};
-        hudterm::Point lowerLeft={(int16_t)left,(int16_t)(top+10)};
+        hudterm::Point upperRight={(int16_t)right,(int16_t)top};
+        hudterm::Point lowerRight={(int16_t)right,(int16_t)bottom};
+        hudterm::Point lowerLeft={(int16_t)left,(int16_t)bottom};
         points.push_back(a);points.push_back(upperRight);points.push_back(lowerRight);points.push_back(lowerLeft);
         b.add(kSetFillColor,setFillColor(target,(uint8_t)index));
         b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x80+index),kPolygon,points));

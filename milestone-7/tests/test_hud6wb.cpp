@@ -30,6 +30,7 @@ struct FakePort : Port {
         if(!queried)return false;
         if(h==p.base.frame){w=p.frameWidth;height=p.frameHeight;}
         else if(h==p.bar){w=p.barWidth;height=p.barHeight;}
+        else if(h==p.main.a||h==p.main.b){w=p.mainImageWidth;height=p.mainImageHeight;}
         else {
             Surface ss[]={p.main,p.icons,p.lanes};bool found=false;
             for(unsigned i=0;i<3;++i)if(h==ss[i].a||h==ss[i].b){w=ss[i].width;height=ss[i].height;found=true;}
@@ -74,6 +75,9 @@ void testCodec(){
 }
 void testGeometry(){
     Bmw6wbProfile p;assert(validProfile(p));
+    assert(p.main.width==233&&p.main.height==206&&p.mainImageWidth==221&&p.mainImageHeight==158);
+    assert(p.base.canvas.x0==0&&p.base.canvas.y0==0&&p.base.canvas.x1==232&&p.base.canvas.y1==205);
+    assert(p.base.glyph.x0==0&&p.base.glyph.y0==0&&p.base.glyph.x1==232&&p.base.glyph.y1==205);
     for(int type=1;type<=46;++type)for(int angle=0;angle<=360;angle+=15){
         Shape s=bmwManeuver(shapeFor(type,true,angle),p.base.glyph);assert(!s.empty());
         for(size_t i=0;i<s.size();++i){assert(!s[i].pts.empty()&&s[i].pts.size()<=99);
@@ -129,7 +133,7 @@ void testLayoutConfig(){
     Bmw6wbProfile p;configure6wb(p);assert(p.base.streetChars==15&&p.lineWidth==6&&p.roundaboutSegments==24&&!p.iconAntialias);
     setenv("NBT_6WB_STREET_CHARS","22",1);setenv("NBT_6WB_LINE_WIDTH","4",1);
     setenv("NBT_6WB_ARROW_WIDTH","120",1);setenv("NBT_6WB_ROUNDABOUT_SEGMENTS","48",1);
-    configure6wb(p);assert(validProfile(p)&&p.base.streetChars==22&&p.lineWidth==4&&p.base.glyph.x1==139);
+    configure6wb(p);assert(validProfile(p)&&p.base.streetChars==22&&p.lineWidth==4&&p.base.glyph.x1==119);
     ShapeSpec spec=shapeFor(34,true,90);Shape a=bmwManeuver(spec,p.base.glyph,true,24),b=bmwManeuver(spec,p.base.glyph,true,48);
     assert(a[0].pts.size()==25&&b[0].pts.size()==49);
     setenv("NBT_6WB_STREET_CHARS","22garbage",1);setenv("NBT_6WB_LINE_WIDTH","999999999999999999999999",1);

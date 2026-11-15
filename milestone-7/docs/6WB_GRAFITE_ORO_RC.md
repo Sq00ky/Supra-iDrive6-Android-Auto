@@ -80,10 +80,13 @@ shape is an explicit representation error, not a partial/shifted lane row.
 
 All central indications now use **only 0x1F/0x20**, regardless of family,
 distance, bar visibility, optional angle or exit number. This includes arrows,
-roundabouts, U-turns, ferry/train ferry and destination flags. The known surface
-is 221x158; the existing input rectangle remains `(20,74)..(200,151)` by default.
-The generator and all its vector geometries are unchanged: it fits each scene
-uniformly into this same verified rectangle.
+roundabouts, U-turns, ferry/train ferry and destination flags. The experimental vector input
+is now 233x206, using `(0,0)..(232,205)` without a central fit margin; measured
+C04 dimensions remain 221x158 through separate profile fields. The generator
+and its source vector geometries are unchanged. Uniform fitting scales the
+geometry/strokes to the full input, without inventing a new perspective warp.
+See [6WB_VECTOR_COORDINATES.md](6WB_VECTOR_COORDINATES.md) for pinned JayJay
+evidence and the distinction between experimental coordinates and C04 data.
 
 The renderer always draws into the inactive central buffer, then uses the
 existing SwitchVisibility A/B operation. It never selects a separate central
@@ -137,15 +140,18 @@ kit styling and the existing ABGR/RLE32 codec and 4096-byte cap.
 
 ## Tests and remaining validation
 
-Executed for the filled-chart update without compilation (20 Python checks in total):
+Executed for the expanded-grid update without compilation (24 Python checks in total):
 
+* 4 expanded-geometry contracts (full input, unchanged C04 expectation, no 6WA
+  canvas restriction and no unrelated protocol/NAV changes).
 * 5 single-surface regression contracts: fixed pair, no file/flat dependencies,
   unchanged calibration lifecycle, geometry/colour/decoder/transport invariants and eight C04 checks.
 * 7 calibration source/data checks: 4x5 filled grid, adjacent 21B/21D pairs,
-  unique indices, bounds, gaps, 51-call budget and isolated production diff.
+  unique indices, reference frames for transparent samples, bounds, gaps,
+  63-call budget and isolated production diff.
 * 8 Python source/data tests: all 6612 imported coordinates and 585 styles,
   explicit enum mapping, no exit-example selection, angular mirror convention,
-  uniform fits against the supplied geometry at 180x77, 220x157 and 282x39,
+  uniform fits against the supplied geometry at 180x77, 220x157, 232x205 and 282x39, with zero/two-unit margins,
   per-direction lane preservation, one central pair with unchanged bar logic, no legacy draw calls,
   build lists, C++98 lexical subset, delimiters, command limits and atomic append.
 * Git whitespace/diff review; no new binaries, logs or credentials in the change.

@@ -14,12 +14,14 @@ does not install a separate diagnostic application, service, IPC or new thread.
 2. Existing surface validation must succeed, and already accepted drawing chunks
    finish first. No chart is sent before `BmwResources::advance()` verifies the
    configured surfaces. Existing valid C04 results remain cached as before.
-3. The inactive buffer in the verified 1F/20 pair is cleared. It receives a
-   **4-column x 5-row grid of 20 filled rectangles**, one per index 0..19.
-   For each cell the commands are adjacent: `21B [handle:u16][index:u8]`, then
+3. The inactive buffer in the verified 1F/20 pair is cleared. Its experimental
+   vector canvas is 233x206; C04 still verifies the measured 221x158 separately.
+   A shared white grid uses 21B index 2 and eleven filled reference bars. Inside
+   it, a **4-column x 5-row grid of 20 filled samples** uses indices 0..19.
+   For each sample the commands are adjacent: `21B [handle:u16][index:u8]`, then
    `21D [handle:u16][item:u16][03][04][four x/y pairs]`. There is no 218
    (SetLineColor), polyline, or new line-width setting in this chart.
-   The complete **51-command** batch is within the existing 128-call limit.
+   The complete **63-command** batch is within the existing 128-call limit.
 4. Other navigation elements are hidden, then the finished chart is exposed by
    the existing A/B visibility switch. The clock is armed only after local
    dispatch completes; asynchronous Ack latency does not start another wait.
@@ -57,14 +59,17 @@ to an adjacent cell. No colour identity is inferred in advance.
 
 Input coordinates before the terminal's perspective transform:
 
-* Column x extents: **26..62**, **70..106**, **114..150**, **158..194**.
-* Row y extents: **75..85**, **91..101**, **107..117**, **123..133**, **139..149**.
-* Each rectangle spans 36 x 10 coordinate units, with four clockwise vertices
-  (top-left, top-right, bottom-right, bottom-left). Closure is implicit in the
-  filled polygon. Eight units separate columns; six separate rows.
-* The full chart stays below the known ~70px horizon, inside the existing
-  `(20,74)..(200,151)` glyph input area of the 221x158 central surface. Physical
-  displayed dimensions and gaps are transformed by the cluster.
+* Full canvas: **(0,0)..(232,205)**; reference grid below the documented approximate
+  horizon: **(0,70)..(232,205)**.
+* Sample x extents by column: **5..53**, **63..111**, **121..169**, **179..227**.
+* Sample y extents by row: **75..92**, **102..119**, **129..146**, **156..173**, **183..200**.
+* Samples span 48x17 coordinate units; ten units separate adjacent fills.
+  White reference bars, not a backing behind each fill, preserve the position
+  of transparent samples. Reference marker IDs and colour selections are
+  distinct from the 20 test samples; index 2 is additionally used for the grid.
+* See [6WB_VECTOR_COORDINATES.md](6WB_VECTOR_COORDINATES.md) for all 20 exact
+  rectangles, reference bar bounds, pinned JayJay evidence and experimental
+  visibility limits. Physical sizes are transformed by the cluster.
 
 The first real F31 trial displayed all previous 218-coloured lines as white.
 This test isolates the 21B fill selector instead. The normal maneuver renderer,
@@ -115,14 +120,17 @@ is required. SHADOW follows the same lifecycle and logs commands without sending
 
 ## Checks
 
-Executed in Codex for this change: seven calibration source/data tests, five
-single-surface contracts and eight kit source/data checks (20 checks total),
-plus whitespace/static review. An isolation check compares all production code
-outside the chart function to `f5dea737f537371564c6034a9a7f17f13a947196`. No C++ or QNX
+Executed in Codex for this change: four expanded-geometry contracts, seven
+calibration source/data tests, five single-surface contracts and eight kit
+source/data checks (24 checks total),
+plus whitespace/static review. Isolation checks allow only the chart, profile,
+C04 expectation-field separation and zero central margin to differ from
+`c55ce6a2f7322f5d718bc88f8c863eb90680780b`. No C++ or QNX
 compilation/execution. `test_hud6wb_calibration.cpp` is prepared for subsequent
 runtime checking of the exact boundary, duplicate ACTIVE/REROUTING, route restart,
 disabled mode, both A/B buffers, all 20 fill/polygon payload pairs, four vertices
-per cell, grid indices, bounds, exact 51-call budget and provisional roles.
+per sample and reference bar, grid indices, full bounds, exact 63-call budget
+and unchanged provisional roles.
 
 Remaining F31 checks: rectangle visibility/colour/order, meaning of all 20 indices,
 visible hold duration, normal guidance resumption with updated maneuvers, and

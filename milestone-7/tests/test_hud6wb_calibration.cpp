@@ -14,6 +14,7 @@ struct CalibrationPort:Port {
         if(!queried)return false;
         if(handle==p.base.frame){w=p.frameWidth;h=p.frameHeight;return true;}
         if(handle==p.bar){w=p.barWidth;h=p.barHeight;return true;}
+        if(handle==p.main.a||handle==p.main.b){w=p.mainImageWidth;h=p.mainImageHeight;return true;}
         Surface surfaces[]={p.main,p.icons,p.lanes};
         for(unsigned i=0;i<3;++i)if(handle==surfaces[i].a||handle==surfaces[i].b){w=surfaces[i].width;h=surfaces[i].height;return true;}
         return false;
@@ -45,7 +46,8 @@ void lifecycleIntegration() {
     for(size_t i=0;i<port.batches.back().calls.size();++i) {
         const Call& c=port.batches.back().calls[i];
         assert(c.fkt!=kSetLineColor);
-        if(c.fkt==kAddPolygon){assert(c.handle()==0x20&&c.payload[4]==0x03&&c.payload[5]==4);++polygons;}
+        if(c.fkt==kAddPolygon){assert(c.handle()==0x20&&c.payload[4]==0x03&&c.payload[5]==4);
+            if(rdBe16(&c.payload[2])>=0x80)++polygons;}
     }
     assert(polygons==20);
 }
@@ -64,33 +66,41 @@ int main() {
     PaletteCalibration disabled(false);disabled.observe(1);assert(!disabled.active());
     CalibrationPort port;nbt::hudterm::Bmw6wbProfile profile;
     nbt::kombinav::Hud6wbDisplay display(port,profile,true,testKit());
-    Batch chart=display.calibrationBatch();assert(chart.calls.size()==51&&chart.calls.size()<=128);
-    unsigned colors=0,rectangles=0;bool seen[20]={false};
+    Batch chart=display.calibrationBatch();assert(chart.calls.size()==63&&chart.calls.size()<=128);
+    unsigned colors=0,rectangles=0,markers=0,references=0;bool seen[20]={false};
     for(size_t i=0;i<chart.calls.size();++i) {
         const Call& call=chart.calls[i];assert(callOk(call,handlesOf(profile),true));
         assert(call.fkt!=kSetLineColor&&call.fkt!=kSetLineWidth);
         if(call.fkt==kSetFillColor) {
-            assert(colors<20&&call.payload.size()==3&&call.handle()==0x1f);
-            assert(call.payload[2]==colors&&!seen[colors]);seen[colors]=true;++colors;
+            assert(call.payload.size()==3&&call.handle()==0x1f);
             assert(i+1<chart.calls.size()&&chart.calls[i+1].fkt==kAddPolygon);
+            uint16_t item=rdBe16(&chart.calls[i+1].payload[2]);
+            if(item>=0x80){assert(colors<20&&call.payload[2]==colors&&!seen[colors]);seen[colors]=true;++colors;}
+            else {assert(i==1&&item==0x40&&call.payload[2]==2);++references;}
         }
         if(call.fkt==kAddPolygon) {
-            assert(rectangles<20&&call.handle()==0x1f&&call.payload.size()==22);
-            assert(call.payload[4]==0x03&&call.payload[5]==4);
-            assert(rdBe16(&call.payload[2])==0x80+rectangles);
-            assert(i>0&&chart.calls[i-1].fkt==kSetFillColor&&chart.calls[i-1].payload[2]==rectangles);
-            int left=26+(rectangles%4)*44,top=75+(rectangles/4)*16;
-            const int expected[4][2]={{left,top},{left+36,top},{left+36,top+10},{left,top+10}};
+            assert(call.handle()==0x1f&&call.payload.size()==22&&call.payload[4]==0x03&&call.payload[5]==4);
+            uint16_t item=rdBe16(&call.payload[2]);int left,top,right,bottom;
+            if(item>=0x80) {
+                assert(rectangles<20&&item==0x80+rectangles);
+                assert(i>0&&chart.calls[i-1].fkt==kSetFillColor&&chart.calls[i-1].payload[2]==rectangles);
+                left=5+(rectangles%4)*58;right=left+48;top=75+(rectangles/4)*27;bottom=top+17;++rectangles;
+            } else {
+                assert(markers<11&&item==0x40+markers);left=0;right=232;top=70;bottom=205;
+                if(markers<5){left=markers==4?230:markers*58;right=left+2;}
+                else {unsigned row=markers-5;top=row==5?203:70+row*27;bottom=top+2;}
+                ++markers;
+            }
+            const int expected[4][2]={{left,top},{right,top},{right,bottom},{left,bottom}};
             for(unsigned vertex=0;vertex<4;++vertex) {
                 int x=rdBe16(&call.payload[6+vertex*4]),y=rdBe16(&call.payload[8+vertex*4]);
                 assert(x==expected[vertex][0]&&y==expected[vertex][1]);
-                assert(x>=profile.base.glyph.x0&&x<=profile.base.glyph.x1);
-                assert(y>=75&&y<=149&&y>=profile.base.glyph.y0&&y<=profile.base.glyph.y1);
+                assert(x>=0&&x<=232&&y>=70&&y<=205);
             }
-            ++rectangles;
         }
     }
-    assert(colors==20&&rectangles==20);for(unsigned i=0;i<20;++i)assert(seen[i]);
+    assert(colors==20&&rectangles==20&&markers==11&&references==1);
+    for(unsigned i=0;i<20;++i)assert(seen[i]);
     nbt::sixwbkit::HudTerminalPalette p=provisionalKitPalette();
     assert(p.white==3&&p.graphite==14&&p.gray==14&&p.black==14&&p.gold==2);
 }

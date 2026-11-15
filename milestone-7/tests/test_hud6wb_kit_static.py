@@ -51,14 +51,15 @@ class KitStaticTests(unittest.TestCase):
             left=min(x-r for x,y in points);right=max(x+r for x,y in points)
             top=min(y-r for x,y in points);bottom=max(y+r for x,y in points)
             if left>=right or top>=bottom:continue
-            for w,h in ((180,77),(220,157),(282,39)):
-                scale=min((w-4)/(right-left),(h-4)/(bottom-top))
-                dx=(w-(left+right)*scale)/2;dy=(h-(top+bottom)*scale)/2
-                for x,y in points:
-                    self.assertGreaterEqual(x*scale+dx-r*scale,-1e-6)
-                    self.assertLessEqual(x*scale+dx+r*scale,w+1e-6)
-                    self.assertGreaterEqual(y*scale+dy-r*scale,-1e-6)
-                    self.assertLessEqual(y*scale+dy+r*scale,h+1e-6)
+            for w,h in ((180,77),(220,157),(232,205),(282,39)):
+                for margin in (0,2):
+                    scale=min((w-2*margin)/(right-left),(h-2*margin)/(bottom-top))
+                    dx=(w-(left+right)*scale)/2;dy=(h-(top+bottom)*scale)/2
+                    for x,y in points:
+                        self.assertGreaterEqual(x*scale+dx-r*scale,-1e-6)
+                        self.assertLessEqual(x*scale+dx+r*scale,w+1e-6)
+                        self.assertGreaterEqual(y*scale+dy-r*scale,-1e-6)
+                        self.assertLessEqual(y*scale+dy+r*scale,h+1e-6)
 
     def test_lanes_keep_every_direction_and_highlight(self):
         body=ADAPTER.split('bool GrafiteKit::laneEvent(',1)[1].split('bool GrafiteKit::encode(',1)[0]

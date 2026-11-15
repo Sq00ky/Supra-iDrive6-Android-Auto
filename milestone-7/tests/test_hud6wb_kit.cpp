@@ -14,7 +14,7 @@ void contained(const Scene& scene,const Rect& r) {
     }
 }
 int main() {
-    Rect box(20,74,180,77);const double angles[]={1,15,90,127,180,225,270,359,360};
+    Rect box(0,0,232,205);const double angles[]={1,15,90,127,180,225,270,359,360};
     for(unsigned cw=0;cw<2;++cw)for(unsigned i=0;i<sizeof(angles)/sizeof(*angles);++i) {
         NavigationEvent e;e.maneuver=cw?Maneuver::RoundaboutCWAngle:Maneuver::RoundaboutCCWAngle;
         e.hasExitAngle=true;e.exitAngle=angles[i];e.hasExitNumber=true;e.exitNumber=2;
@@ -33,14 +33,23 @@ int main() {
         contained(renderLanes(e.lanes,Rect(0,0,282,39)),Rect(0,0,282,39));
     }
     hudterm::GrafiteKit kit;hudterm::Bmw6wbProfile fixedProfile;
+    bool expandedCoordinateSeen=false;
     for(unsigned type=0;type<=46;++type)for(unsigned which=0;which<2;++which) {
         kombinav::NavView view;view.aa_type=type;view.has_exit_angle=type>=30&&type<=35;
         view.exit_angle=225;view.has_exit_number=view.has_exit_angle;view.exit_number=2;
         hudterm::Batch central;uint16_t handle=which?0x20:0x1f;
         assert(kit.central(view,handle,fixedProfile.base.glyph,central));
-        for(size_t i=0;i<central.calls.size();++i)assert(central.calls[i].handle()==handle);
+        for(size_t i=0;i<central.calls.size();++i) {
+            const hudterm::Call& c=central.calls[i];assert(c.handle()==handle);
+            if(c.fkt==hudterm::kAddPolygon)for(unsigned j=0;j<c.payload[5];++j) {
+                int x=hudterm::rdBe16(&c.payload[6+j*4]),y=hudterm::rdBe16(&c.payload[8+j*4]);
+                assert(x>=0&&x<=232&&y>=0&&y<=205);
+                if(x>220||y>157)expandedCoordinateSeen=true;
+            }
+        }
         hudterm::Batch rejected;assert(!kit.central(view,0x21,fixedProfile.base.glyph,rejected));assert(rejected.calls.empty());
     }
+    assert(expandedCoordinateSeen);
     kombinav::NavView v;hudterm::KitBarState bar=hudterm::kitBarState(v,1000);assert(!bar.visible);
     v.has_step_m=true;v.step_m=1400;bar=hudterm::kitBarState(v,1000);assert(bar.visible&&bar.value==255);
     HudTerminalPalette p;uint8_t index=255;assert(hudColorIndex(p,Color::Gold,index)==HudPaint::Unmapped);
@@ -50,7 +59,7 @@ int main() {
     // Serializing the parametric ring must retain bounded method payloads.
     NavigationEvent ring;ring.maneuver=Maneuver::RoundaboutCCWAngle;ring.hasExitAngle=true;ring.exitAngle=225;
     HudTerminalPalette measuredFixture;measuredFixture.graphite=0;measuredFixture.gold=1;measuredFixture.white=2;
-    hudterm::Batch encoded;hudterm::Rect drawingBounds={20,74,200,151};
+    hudterm::Batch encoded;hudterm::Rect drawingBounds={0,0,232,205};
     assert(hudterm::GrafiteKit::encode(renderManeuver(ring,box),measuredFixture,0x1f,drawingBounds,encoded));
     hudterm::Bmw6wbProfile profile;
     for(size_t i=0;i<encoded.calls.size();++i)assert(hudterm::callOk(encoded.calls[i],hudterm::handlesOf(profile),true));

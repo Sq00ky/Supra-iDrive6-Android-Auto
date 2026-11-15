@@ -11,8 +11,12 @@ struct Surface {
     Surface(uint16_t aa, uint16_t bb, uint16_t w, uint16_t h) : a(aa), b(bb), width(w), height(h) {}
 };
 struct Bmw6wbProfile {
+    // JayJay nbt_cluster.cpp: experimental vector input ~233x206, horizon ~70.
+    // C04 still reports 221x158: do not confuse input coordinates with ImageGetSize.
+    enum { kPerspectiveHorizon = 70 };
     HudProfile base;
     Surface main, icons, lanes;
+    uint16_t mainImageWidth, mainImageHeight; // measured C04 dimensions, not vector limits
     uint16_t bar, frameWidth, frameHeight, barWidth, barHeight;
     uint8_t lineWidth, laneLineWidth, textEncoding;
     uint32_t vectorTx, headerTag, barRangeMetres;
@@ -20,16 +24,17 @@ struct Bmw6wbProfile {
     bool roadShields,iconAntialias;
     unsigned roundaboutSegments; // default preserves the hardware-tested geometry
     Rect nextGlyph;
-    Bmw6wbProfile() : main(0x1f,0x20,221,158), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40),
-        bar(0x35), frameWidth(309), frameHeight(330), barWidth(28), barHeight(113),
+    Bmw6wbProfile() : main(0x1f,0x20,233,206), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40),
+        mainImageWidth(221),mainImageHeight(158),bar(0x35), frameWidth(309), frameHeight(330), barWidth(28), barHeight(113),
         lineWidth(6), laneLineWidth(3), textEncoding(1), vectorTx(4), headerTag(0xffff),
         barRangeMetres(1000), maxBitmapBytes(4096), roadShields(false), iconAntialias(false), roundaboutSegments(24) {
         Rect next={90,3,126,39};nextGlyph=next;
         base.name="6wb"; base.frame=0x17; base.street=0x1a; base.distance=0x1b; base.unit=0x1c;
         base.bufA=main.a; base.bufB=main.b; base.fill=2;
-        Rect c={0,0,220,157}; base.canvas=c;
-        // Experimental placement below the perspective horizon; keep inside the documented image.
-        Rect g={20,74,200,151}; base.glyph=g;
+        Rect c={0,0,232,205}; base.canvas=c;
+        // Full experimental vector input. No preemptive clipping or horizon margin
+        // for maneuvers: actual visibility is to be established on the F31.
+        base.glyph=c;
         base.streetChars=15; base.distanceChars=5; base.streetPunct="-./";
     }
 };
@@ -41,7 +46,9 @@ inline bool validProfile(const Bmw6wbProfile& p) {
         for(size_t j=0;j<i;++j)if(h[i]==h[j])return false;
     }
     // All central maneuvers share the verified double-buffered surface.
-    if(p.main.a!=0x1f || p.main.b!=0x20 || p.main.width!=221 || p.main.height!=158)return false;
+    if(p.main.a!=0x1f || p.main.b!=0x20 || p.main.width!=233 || p.main.height!=206)return false;
+    if(p.mainImageWidth!=221||p.mainImageHeight!=158)return false;
+    if(p.base.canvas.x0!=0||p.base.canvas.y0!=0||p.base.canvas.x1!=232||p.base.canvas.y1!=205)return false;
     const Surface s[]={p.main,p.icons,p.lanes};
     for(size_t i=0;i<3;++i)if(!s[i].width||!s[i].height||s[i].width>1024||s[i].height>1024)return false;
     return p.base.bufA==p.main.a && p.base.bufB==p.main.b && p.textEncoding==1 &&

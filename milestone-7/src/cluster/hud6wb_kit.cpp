@@ -236,7 +236,7 @@ bool GrafiteKit::central(const kombinav::NavView& v,uint16_t h,const Rect& r,Bat
     e.hasExitAngle=v.has_exit_angle;e.exitAngle=(double)v.exit_angle;e.hasExitNumber=v.has_exit_number;e.exitNumber=(unsigned)v.exit_number;
     if(e.hasExitAngle&&(!sixwbkit::finite(e.exitAngle)||e.exitAngle<1||e.exitAngle>360))return false;
     sixwbkit::Rect area(r.x0,r.y0,r.x1-r.x0,r.y1-r.y0);
-    return encode(sixwbkit::renderManeuver(e,area),main_,h,r,out);
+    return encode(sixwbkit::renderManeuver(e,area,0.0),main_,h,r,out);
 }
 bool GrafiteKit::lanes(const kombinav::NavView& v,uint16_t h,unsigned w,unsigned height,Batch& out)const {
     sixwbkit::NavigationEvent e;if(!laneEvent(v,e))return false;

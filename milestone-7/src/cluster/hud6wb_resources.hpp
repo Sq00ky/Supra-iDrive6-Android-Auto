@@ -36,7 +36,7 @@ public:
 private:
     bool matches(const Port& port) const {
         return check(port,p_.base.frame,p_.frameWidth,p_.frameHeight) &&
-            check(port,p_.main.a,p_.main.width,p_.main.height) && check(port,p_.main.b,p_.main.width,p_.main.height) &&
+            check(port,p_.main.a,p_.mainImageWidth,p_.mainImageHeight) && check(port,p_.main.b,p_.mainImageWidth,p_.mainImageHeight) &&
             check(port,p_.icons.a,p_.icons.width,p_.icons.height) && check(port,p_.icons.b,p_.icons.width,p_.icons.height) &&
             check(port,p_.lanes.a,p_.lanes.width,p_.lanes.height) && check(port,p_.lanes.b,p_.lanes.width,p_.lanes.height) &&
             check(port,p_.bar,p_.barWidth,p_.barHeight);
