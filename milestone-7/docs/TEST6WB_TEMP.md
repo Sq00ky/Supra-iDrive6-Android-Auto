@@ -95,6 +95,8 @@ Esempi, assumendo di aver copiato il solo helper in `/dev/shmem/test6wbctl`:
 ```
 
 `start` ritorna dopo accettazione, non dopo il completamento o la fotografia.
+Può essere accettato durante l’inizializzazione: il worker aspetta il terminale
+e la coda condivisa; nessun pattern viene inviato durante questa attesa.
 `status` mostra disponibilità del backend, stato trasporto, busy, prova corrente,
 fase, ultimo esito e percorso log. I controlli di readiness sono quelli del
 trasporto e della configurazione LIVE 6WB, non controlli dello stato AA.
@@ -109,7 +111,8 @@ Attendere `busy=0` prima di un altro `start`. Se il client segnala timeout della
 risposta IPC, controllare `status` prima di ripetere il comando: potrebbe essere
 stato accettato. Nessuna attesa di INVIO nella sequenza.
 
-Opzioni: `--hold` secondi interi 0–120 (default 20), oppure `--hold-ms` 0–120000;
+Opzioni: `--ready-timeout` secondi interi 1–600 (default 90), timeout complessivo
+della fase risorse descritto sotto; `--hold` secondi interi 0–120 (default 20), oppure `--hold-ms` 0–120000;
 `--settle-ms` 0–30000 (default 2000), `--pattern identity|bands` nei comandi
 avanzati. I payload preparati sono sempre registrati; `--verbose` resta accettato
 per compatibilità. `--live`, `--dry-run` e `--log` dello standalone non si applicano:
@@ -171,8 +174,30 @@ CLI/log; gli identificativi vettoriali sono in isolated/border e modalità fotog
 
 ## Risorse, logging e interruzioni
 
-La verifica usa la cache C04 del terminale già esistente. Dimensioni mancanti
-vengono richieste una sola volta, con lo stesso selettore e lo stesso deadline;
+La verifica usa la cache C04 del terminale già esistente. Il worker attende
+prima `kReady` e poi la coda libera, anche se contiene una verifica C04 già in
+corso. Non esiste più il limite iniziale di 5 s. Un unico budget, predefinito
+a 90 s e configurabile con `--ready-timeout 120`, copre attesa del terminale,
+drenaggio della coda preesistente, query mancanti e verifica delle otto dimensioni.
+Il budget inizia entrando nella fase risorse, dopo la preparazione del log;
+non comprende pause fotografiche o cleanup. Il polling ogni 10 ms avviene
+soltanto nel worker: IPC, main e navigazione continuano normalmente.
+
+Log e `status phase` distinguono `WAIT_TERMINAL` / `waiting terminal` da
+`WAIT_C04` / `waiting C04/shared queue`; quest’ultima indica coda occupata,
+che può contenere C04 oppure grafica: l’API condivisa non espone il tipo della
+chiamata in corso. `RESOURCE_WAIT_DONE`, `RESOURCE_TIMEOUT` e
+`RESOURCE_WAIT_STOP` registrano completamento, scadenza e stop.
+`stop` interrompe entrambe le attese; se non è stato sottomesso alcun batch
+diagnostico non viene toccata la coda di produzione. Se una C04 diagnostica
+è già stata sottomessa, il cleanup può ancora attendere fino a 42 s per drenarla:
+non annulla il lavoro condiviso. Il timeout termina la preparazione, senza
+abilitare pattern; non allunga i deadline vendor/terminali delle singole C04.
+`kFailed` interrompe subito il lavoro senza reset; dopo il primo aggancio al
+terminale pronto, cambi di link/generazione interrompono il lavoro senza retry.
+Non vengono letti stati della navigazione né aggiunte esclusioni del navigatore.
+
+Dimensioni mancanti vengono richieste una sola volta, con lo stesso selettore e lo stesso deadline;
 non viene ripetuta una C04 già in cache e non si resetta il terminale dopo un errore.
 Un cambio di generazione/link interrompe il lavoro diagnostico e può impedire
 cleanup; il backend conserva la propria gestione normale, senza modifiche.

@@ -15,18 +15,22 @@ using namespace test6wb;
 const char* const LogPath="/dev/shmem/nbt-aad-test6wb.log";
 struct Job {
     std::vector<Trial> trials;std::vector<std::string> requests;
-    unsigned holdMs,settleMs;
-    Job():holdMs(20000),settleMs(2000) {}
+    unsigned holdMs,settleMs,readyTimeoutMs;
+    Job():holdMs(20000),settleMs(2000),readyTimeoutMs(90000) {}
 };
 bool parse(const std::vector<std::string>& args,Job& job,std::string& error) {
     std::string variant="identity",script;bool hasScript=false,hasHold=false;
     std::vector<std::string> words;
     for(size_t i=1;i<args.size();++i) {
         const std::string& opt=args[i];
-        if(opt=="--hold" || opt=="--hold-ms" || opt=="--settle-ms" || opt=="--pattern" || opt=="--script-data") {
+        if(opt=="--ready-timeout" || opt=="--hold" || opt=="--hold-ms" || opt=="--settle-ms" || opt=="--pattern" || opt=="--script-data") {
             if(++i==args.size()){error="missing option value";return false;}
             const std::string& value=args[i];
             if(opt=="--pattern") {variant=value;if(value!="identity" && value!="bands"){error="pattern identity|bands";return false;}}
+            else if(opt=="--ready-timeout") {
+                unsigned n=0;if(!number(value,600,n) || !n){error="ready timeout: 1..600 seconds";return false;}
+                job.readyTimeoutMs=n*1000;
+            }
             else if(opt=="--script-data") {if(hasScript){error="one script only";return false;}script=value;hasScript=true;}
             else {
                 unsigned n=0;
@@ -76,7 +80,7 @@ private:
     bool canceled();bool quitting();bool stable();void phase(const char* value,unsigned current=0,unsigned test=0,unsigned handle=0);
     bool waitDispatch(unsigned budget,bool cancelable);
     bool hold(unsigned duration);bool submit(const Batch& batch,bool cleanup=false);
-    bool resources();bool execute(const Batch& batch);bool cleanup();int run(Job& job);
+    bool waitResources(uint32_t begin,unsigned budget,bool initial);bool resources(unsigned budget);bool execute(const Batch& batch);bool cleanup();int run(Job& job);
     void prepared(const Trial& trial);
     HudTerminal* port_;most::Client& client_;Log log_;
     pthread_mutex_t mutex_;pthread_cond_t condition_;pthread_t ipcThread_,workerThread_;
@@ -173,7 +177,7 @@ std::string Engine::command(const std::vector<std::string>& args) {
     Job next;std::string error;if(!parse(args,next,error))return "ERROR "+error+"\n";
     pthread_mutex_lock(&mutex_);
     if(quit_ || busy_){pthread_mutex_unlock(&mutex_);return "ERROR diagnostic worker busy/shutting down\n";}
-    job_.trials.swap(next.trials);job_.requests.swap(next.requests);job_.holdMs=next.holdMs;job_.settleMs=next.settleMs;
+    job_.trials.swap(next.trials);job_.requests.swap(next.requests);job_.holdMs=next.holdMs;job_.settleMs=next.settleMs;job_.readyTimeoutMs=next.readyTimeoutMs;
     busy_=true;pending_=true;cancel_=false;strcpy(phase_,"queued");
     pthread_cond_signal(&condition_);pthread_mutex_unlock(&mutex_);
     return "OK accepted; use status/stop; dispatch does not prove physical display\n";
@@ -216,9 +220,37 @@ bool Engine::submit(const Batch& batch,bool cleanupMode) {
     if(result==kQueued || result==kReplaced || result==kMerged)submitted_=true;
     return result==kQueued;
 }
-bool Engine::resources() {
-    if(!port_ || port_->status()!=kReady){log_.write("ERROR","existing terminal not transport-ready");return false;}
-    epoch_=port_->epoch();if(!waitDispatch(5000,true))return false;
+bool Engine::waitResources(uint32_t begin,unsigned budget,bool initial) {
+    const char* previous=NULL;
+    for(;;) {
+        log_.drain();
+        if(canceled()){log_.write("RESOURCE_WAIT_STOP","elapsed_ms=%u",monotonicMs()-begin);return false;}
+        if(!log_.healthy())return false;
+        Status status=port_->status();
+        const char* waiting=status==kReady?"WAIT_C04":"WAIT_TERMINAL";
+        if(monotonicMs()-begin>=budget) {
+            log_.write("RESOURCE_TIMEOUT","stage=%s elapsed_ms=%u budget_ms=%u transport=%s",waiting,monotonicMs()-begin,budget,statusName(status));
+            return false;
+        }
+        // A failed mandatory transaction cannot be repaired by another query or reset here.
+        if(status==kFailed){log_.write("ERROR","resource wait: shared terminal failed; no reset/retry");return false;}
+        if(!initial && !stable()){log_.write("ERROR","resource wait: shared link/generation changed; no retry");return false;}
+        if(status==kReady && port_->waitIdle(0)) {
+            if(initial)epoch_=port_->epoch();
+            log_.write("RESOURCE_WAIT_DONE","elapsed_ms=%u; shared queue idle",monotonicMs()-begin);
+            return stable();
+        }
+        if(previous!=waiting) {
+            phase(status==kReady?"waiting C04/shared queue":"waiting terminal");
+            log_.write(waiting,"elapsed_ms=%u budget_ms=%u transport=%s; shared queue may contain C04 or drawing",monotonicMs()-begin,budget,statusName(status));
+            previous=waiting;
+        }
+        struct timespec pause={0,10*1000000};nanosleep(&pause,NULL);
+    }
+}
+bool Engine::resources(unsigned budget) {
+    const uint32_t begin=monotonicMs();
+    if(!port_ || !waitResources(begin,budget,true))return false;
     Batch missing("test6wb-temp-size-check");
     for(size_t i=0;i<surfaceCount;++i)if(surfaces[i].kind!=Text) {
         uint16_t w=0,h=0;const Surface& s=surfaces[i];
@@ -228,14 +260,21 @@ bool Engine::resources() {
     }
     if(!missing.calls.empty()) {
         log_.write("RESOURCE_QUERY","missing=%u; reuse existing registration/cache, no retry",(unsigned)missing.calls.size());
-        if(!submit(missing) || !waitDispatch(42000,true))return false;
+        if(canceled()){log_.write("RESOURCE_WAIT_STOP","before missing C04 submission");return false;}
+        if(monotonicMs()-begin>=budget) {
+            log_.write("RESOURCE_TIMEOUT","stage=before_missing_C04 elapsed_ms=%u budget_ms=%u",monotonicMs()-begin,budget);return false;
+        }
+        if(!submit(missing) || !waitResources(begin,budget,false))return false;
     }
     for(size_t i=0;i<surfaceCount;++i)if(surfaces[i].kind!=Text) {
         uint16_t w=0,h=0;const Surface& s=surfaces[i];
         if(!port_->imageSize(s.handle,w,h) || w!=s.width || h!=s.height){log_.write("ERROR","resource mismatch handle=%02X received=%ux%u",s.handle,w,h);return false;}
         log_.write("RESOURCE_VERIFIED","handle=%02X nominal=%ux%u",s.handle,w,h);
     }
-    verified_=stable();return verified_;
+    if(monotonicMs()-begin>=budget) {
+        log_.write("RESOURCE_TIMEOUT","stage=dimension_validation elapsed_ms=%u budget_ms=%u",monotonicMs()-begin,budget);return false;
+    }
+    verified_=stable() && !canceled() && log_.healthy();return verified_;
 }
 bool Engine::execute(const Batch& batch) {
     if(!verified_ || !stable() || canceled())return false;dirty_=true;
@@ -274,11 +313,11 @@ int Engine::run(Job& job) {
     if(!log_.open(LogPath)){fprintf(stderr,"[TEST6WB_TEMP] cannot open diagnostic log\n");return 2;}
     pthread_mutex_lock(&mutex_);active_=true;pthread_mutex_unlock(&mutex_);
     log_.write("MODE","TEMP integrated; existing DSI/MOST/HudTerminal only; manual navigation responsibility; physical display UNVERIFIED");
-    log_.write("JOB_OPTIONS","hold_ms=%u settle_ms=%u trials=%u",job.holdMs,job.settleMs,(unsigned)job.trials.size());
+    log_.write("JOB_OPTIONS","hold_ms=%u settle_ms=%u ready_timeout_ms=%u trials=%u",job.holdMs,job.settleMs,job.readyTimeoutMs,(unsigned)job.trials.size());
     for(size_t i=0;i<job.requests.size();++i)log_.write("REQUEST","%s",job.requests[i].c_str());
     for(size_t i=0;i<job.trials.size() && log_.healthy() && !canceled();++i)prepared(job.trials[i]);
     log_.setTrial(0);phase("resource validation");
-    TerminalStats before=port_->stats();bool ok=log_.healthy() && !canceled() && resources();
+    TerminalStats before=port_->stats();bool ok=log_.healthy() && !canceled() && resources(job.readyTimeoutMs);
     for(size_t i=0;ok && i<job.trials.size();++i) {
         const Trial& t=job.trials[i];phase("test",t.id,t.testId,t.handle);log_.setTrial(t.id,t.testId);
         log_.write("TRIAL_BEGIN","handle=%02X test=%03u description=%s params=%s",t.handle,t.testId,t.description.c_str(),t.parameters.c_str());
@@ -303,7 +342,7 @@ void Engine::work() {
         while(!pending_ && !quit_)pthread_cond_wait(&condition_,&mutex_);
         if(quit_ && !pending_){pthread_mutex_unlock(&mutex_);break;}
         Job current;current.trials.swap(job_.trials);current.requests.swap(job_.requests);
-        current.holdMs=job_.holdMs;current.settleMs=job_.settleMs;pending_=false;pthread_mutex_unlock(&mutex_);
+        current.holdMs=job_.holdMs;current.settleMs=job_.settleMs;current.readyTimeoutMs=job_.readyTimeoutMs;pending_=false;pthread_mutex_unlock(&mutex_);
         int result=3;
         try {result=run(current);} catch(...) {
             log_.beginCleanup();log_.write("FATAL","temporary diagnostic exception; stop job");

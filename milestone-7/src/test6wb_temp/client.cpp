@@ -6,7 +6,7 @@
 using namespace nbt::test6wbtemp;
 int main(int argc,char** argv) {
     if(argc<2 || (argc==2 && !strcmp(argv[1],"--help"))) {
-        puts("test6wbctl list | status | stop | start COMMAND [ARGS] [--hold SECONDS] [--settle-ms N] [--pattern identity|bands]\n"
+        puts("test6wbctl list | status | stop | start COMMAND [ARGS] [--ready-timeout SECONDS] [--hold SECONDS] [--settle-ms N] [--pattern identity|bands]\n"
              "test6wbctl start --script FILE [OPTIONS]\nLocal temporary NBT-AAD diagnostics; navigation is managed MANUALLY by the user.");
         return argc<2?2:0;
     }
