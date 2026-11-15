@@ -1,5 +1,9 @@
 # NBT-AAD: native wireless Android Auto for NBT Evo (ID6) head units
 
+**BMW Favorite Keys:** native 1–8 previews over Android Auto, a visibility toggle,
+ambient/preset/custom colours, matching volume colour and an Android Auto menu icon.
+See [features, implementation, validation and update/restore instructions](FAVOURITE-KEYS.md).
+
 Wireless Android Auto running natively on the BMW NBT Evo ID6 head unit, as fitted to the Toyota GR Supra (J29)
 and several BMWs. A daemon on the head unit (`/opt/aa/nbt-aad`) speaks the Android Auto protocol directly. A native
 iDrive app (`NbtAad`) adds an **Android Auto** entry to the Media/Radio menu. You don't need a dongle, a phone-side

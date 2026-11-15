@@ -26,6 +26,14 @@ SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/clus
 
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_aa_proto          := src/wireless_setup.cpp
+SRC_test_favourite_bitmap :=
+SRC_test_favourite_composition :=
+SRC_test_favourite_ready :=
+SRC_test_favourite_retry :=
+SRC_test_favourite_release :=
+SRC_test_favourite_press :=
+SRC_test_favourite_colour :=
+SRC_test_favourite_picker :=
 SRC_test_aa_sensor_msg     :=
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
@@ -46,6 +54,9 @@ SRC_test_car_vehicle       := src/car/vehicle.cpp src/most/client.cpp tests/fake
 SRC_test_ccs_config        :=
 SRC_test_ccs_decoder       :=
 SRC_test_ccs_input         := src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+SRC_test_tile_process      :=
+SRC_test_favourite_preview :=
+SRC_test_favourite_strip   :=
 SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
@@ -107,8 +118,13 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources tsan
 	@echo "[CHECK] all host tests passed"
+
+.PHONY: run-test_favourite_resources
+run-test_favourite_resources:
+	@python3 test_favourite_resources.py
+	@python3 test_favourites_update.py
 
 $(OUT):
 	@mkdir -p $(OUT)
