@@ -295,9 +295,9 @@ const char* KombiNav::kShownFile = "/dev/shmem/nbt-aad-kombi-nav.shown";
 unsigned KombiNav::kWatchSkip = 0;
 
 KombiNav::KombiNav()
-    : last_msg_t_(0), session_ended_(false), quit_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
+    : last_msg_t_(0), session_ended_(false), quit_(false), navigation_epoch_(0), route_active_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
       port_(30502), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
-      disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), fallback_noted_(false),
+      disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), presented_navigation_epoch_(0), fallback_noted_(false),
       watch_pid_(-1), watch_fd_(-1),
       watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), watch_fp_(NULL),
       watch_method_(-1), watch_method_logged_(-1), graph_(NULL), client_(NULL), terminal_(NULL), shadow_(false),
@@ -545,13 +545,25 @@ void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t le
     KombiNav* self = static_cast<KombiNav*>(user);
     if (!self) return;
     pthread_mutex_lock(&self->mu_);
-    if (self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0)) self->last_msg_t_ = monoS();
+    if (self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0)) {
+        self->last_msg_t_ = monoS();
+        // Presentation bookkeeping only: don't lose a quick INACTIVE/ACTIVE
+        // transition between worker snapshots. Stored NAV bodies are unchanged.
+        if(msg_id==0x8003) {
+            int64_t status=0;
+            if(pbInt(NavMessages::span(self->msgs_.status),1,status)) {
+                if(status==1&&!self->route_active_){++self->navigation_epoch_;self->route_active_=true;}
+                else if(status==2)self->route_active_=false;
+            }
+        }
+    }
     pthread_mutex_unlock(&self->mu_);
 }
 
 void KombiNav::onSessionEnded() {
     pthread_mutex_lock(&mu_);
     msgs_.clear();
+    route_active_=false;
     session_ended_ = true;
     pthread_mutex_unlock(&mu_);
 }
@@ -602,7 +614,16 @@ void KombiNav::worker() {
     }
     while (!quitting(this)) {
         tick(monoS());
-        for (double t = 0; t < kTickS && !quitting(this); t += 0.05) usleep(50000);
+        // Preserve the regular cadence, but allow the 6WB's monotonic palette
+        // deadline to wake this same worker without a blocking ten-second sleep.
+        double delay=display_->nextUpdateIn(monoS());
+        if(delay<0)delay=0;if(delay>kTickS)delay=kTickS;
+        double wake=monoS()+delay;
+        while(!quitting(this)) {
+            double left=wake-monoS();if(left<=0)break;
+            unsigned us=(unsigned)(left*1000000.0);if(!us)us=1;if(us>50000)us=50000;
+            usleep(us);
+        }
     }
     if (client_) client_->setTimeoutMs(1500);   // Force Stop sends SIGKILL 10 s after 'quit': keep the exit clear short
     if (core_->shown() || core_->sentAny()) core_->clear("nbt-aad exiting");
@@ -629,6 +650,7 @@ void KombiNav::tick(double now) {
             printf("[KombiNav] cluster/HUD arrows turned %s\n", on ? "ON" : "off");
             enabled_ = on;
             if (!on) {
+                display_->navigationPresentationCancelled();
                 if (core_->shown() || core_->sentAny()) core_->clear("turned off");
                 stopWatch();
             } else {
@@ -644,15 +666,17 @@ void KombiNav::tick(double now) {
 
     NavMessages m;
     double last_msg;
-    bool ended;
+    bool ended;uint32_t navigationEpoch;
     pthread_mutex_lock(&mu_);
     m = msgs_;
     last_msg = last_msg_t_;
     ended = session_ended_;
+    navigationEpoch=navigation_epoch_;
     session_ended_ = false;
     pthread_mutex_unlock(&mu_);
 
     if (ended) {
+        display_->navigationSessionEnded();
         if (core_->shown() || core_->sentAny()) core_->clear("Android Auto session ended");
         core_->resetStop();
         disabled_session_ = false;
@@ -692,6 +716,16 @@ void KombiNav::tick(double now) {
     if (guidance && viewFromMessages(m, v)) {
         if (now - last_msg > settings_.nav_stale_s) why = "navigation status frozen";
         else pv = &v;
+    }
+    if(navigationEpoch!=presented_navigation_epoch_) {
+        presented_navigation_epoch_=navigationEpoch;
+        display_->navigationRouteStarted();
+    }
+    int64_t navigationStatus=0;
+    if(m.has_status)pbInt(NavMessages::span(m.status),1,navigationStatus);
+    if(display_->interceptNavigation(pv,(int)navigationStatus,now)) {
+        markShown(core_->shown() || core_->sentAny());
+        return;
     }
     core_->step(pv, now, why);
     if (core_->takeFallback() && !fallback_noted_) {

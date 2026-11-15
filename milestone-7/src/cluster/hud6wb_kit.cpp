@@ -122,21 +122,22 @@ Configuration configuration() {
     if(ferror(f))ok=false;fclose(f);if(!ok)values.clear();return values;
 }
 long setting(const Configuration& c,const char* name,long fallback) {Configuration::const_iterator i=c.find(name);return i==c.end()?fallback:i->second;}
-sixwbkit::HudTerminalPalette palette(const Configuration& c,const char* prefix) {
-    sixwbkit::HudTerminalPalette p;const char* names[]={"graphite","gold","white","gray","black"};int* fields[]={&p.graphite,&p.gold,&p.white,&p.gray,&p.black};
-    for(unsigned i=0;i<5;++i){std::string key=std::string(prefix)+names[i];long v=setting(c,key.c_str(),-1);if(v>=0&&v<20)*fields[i]=(int)v;}
+}
+namespace {
+static const uint8_t COLOR_CONTOUR = 2;          // White, user-selected
+static const uint8_t COLOR_INFILL = 14;          // Gray, user-selected
+static const uint8_t COLOR_ACTIVE_SELECTION = 3; // PROVISIONAL: actual colour unknown
+}
+sixwbkit::HudTerminalPalette provisionalKitPalette() {
+    sixwbkit::HudTerminalPalette p;
+    p.graphite=COLOR_INFILL;p.gray=COLOR_INFILL;p.black=COLOR_INFILL;
+    // Kit gold describes edges; kit white describes guidance/selected infill.
+    p.gold=COLOR_CONTOUR;p.white=COLOR_ACTIVE_SELECTION;
     return p;
 }
-}
-GrafiteKit::GrafiteKit() {
-    readProfile();
-    printf("[6wb kit] profile /opt/aa/6wb-kit.palette; indices graphite/gold/white/gray/black: perspective %d/%d/%d/%d/%d, flat %d/%d/%d/%d/%d, lanes %d/%d/%d/%d/%d (-1=unmapped)\n",
-        main_.graphite,main_.gold,main_.white,main_.gray,main_.black,flat_.graphite,flat_.gold,flat_.white,flat_.gray,flat_.black,
-        lanes_.graphite,lanes_.gold,lanes_.white,lanes_.gray,lanes_.black);
-}
-void GrafiteKit::readProfile() {
-    Configuration c=configuration();main_=palette(c,"main.");flat_=palette(c,"flat.");lanes_=palette(c,"lanes.");
-    // Explicit configurable indices, never RGB-as-index or guessed defaults.
+GrafiteKit::GrafiteKit():main_(provisionalKitPalette()),flat_(main_),lanes_(main_) {
+    printf("[6wb kit] compiled colours: contour=%u, infill=%u, active=%u (active colour provisional); no palette-file colour loading\n",
+           (unsigned)COLOR_CONTOUR,(unsigned)COLOR_INFILL,(unsigned)COLOR_ACTIVE_SELECTION);
 }
 void configureKitPlanes(Bmw6wbProfile& p) {
     Configuration c=configuration();long fa=setting(c,"flat.a",0),fb=setting(c,"flat.b",0);

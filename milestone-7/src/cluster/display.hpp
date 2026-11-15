@@ -98,6 +98,12 @@ public:
     virtual bool factoryActive() { return false; }
     // The transport could take a clear now: the clear for a picture a killed daemon left waits for this.
     virtual bool ready() { return true; }
+    // Optional 6WB startup presentation. Other profiles keep their existing path.
+    virtual bool interceptNavigation(const NavView*,int,double) { return false; }
+    virtual double nextUpdateIn(double) const { return 0.25; }
+    virtual void navigationSessionEnded() {}
+    virtual void navigationRouteStarted() {}
+    virtual void navigationPresentationCancelled() {}
 };
 
 } // namespace kombinav

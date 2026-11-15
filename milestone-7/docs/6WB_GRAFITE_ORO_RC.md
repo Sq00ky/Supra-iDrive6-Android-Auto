@@ -101,31 +101,35 @@ beyond that hardware transformation is NOT implemented or verified.** It cannot
 be claimed from the supplied kit or the available F31 logs. Perspective
 compensation must not be fabricated from a photograph.
 
-## Configuration: no fabricated palette or flat handle
+## Compiled provisional colours and surface configuration
 
-The configuration file is `/opt/aa/6wb-kit.palette`, read only at startup.
-The integration never creates or changes it on the BMW. Lines are `key=value`,
-with decimal or `0x` integer values, no inline comments or duplicate keys.
-Maximum 48 lines, each fitting 127 characters. Blank lines and `#` comments
-are accepted. A malformed file discards its configuration.
+Colour roles no longer depend on `/opt/aa/6wb-kit.palette`:
 
-Supported keys:
+| Semantic role | Compiled index |
+|---|---:|
+| Kit Gold / edges / contour | 2 |
+| Graphite / infill | 14 |
+| Gray / secondary | 14 |
+| Black / checker infill | 14 |
+| Kit White / guidance / ActiveSelection | 3 (provisional, actual colour not assumed) |
 
-| Keys | Meaning / default |
-|---|---|
-| `main.graphite`, `.gold`, `.white`, `.gray`, `.black` | Perspective palette, indices 0..19; default unmapped |
-| `flat.graphite`, `.gold`, `.white`, `.gray`, `.black` | Flat palette, indices 0..19; default unmapped |
-| `lanes.graphite`, `.gold`, `.white`, `.gray`, `.black` | Lane palette, indices 0..19; default unmapped |
-| `perspective.a`, `perspective.b` | Perspective A/B pair; defaults 0x1F/0x20 |
-| `flat.a`, `flat.b` | Flat A/B pair; defaults unset |
+The three source constants are `COLOR_CONTOUR`, `COLOR_INFILL` and
+`COLOR_ACTIVE_SELECTION` in `src/cluster/hud6wb_kit.cpp`. These are the user's
+explicit provisional assignments, not new colour measurements. Main maneuvers,
+roundabouts and lanes use the same mapping. Native bitmap RGB is a separate
+codec path and does not interpret HUDTerminal indices as RGB.
 
-No RGB value is treated as an index, no unmeasured gold/graphite index is
-assigned, and index zero is valid. Only roles used by a scene need mappings.
-`-1`/absent roles remain unmapped. Missing mapping/plane or unrepresentable
-geometry produces a specific `6wb-kit-error` with AA type/angle/exit/lane count,
-and no partial styled picture is submitted. Existing Core failure handling
-stops cluster graphics for the session; Android Auto itself is not changed.
-The daemon logs the palette values, including -1, when the kit starts.
+The old file remains optional **only for surface-pair configuration**. Its
+colour entries are ignored. Supported surface keys are `perspective.a`,
+`perspective.b` (default 1F/20) and `flat.a`, `flat.b` (default unset).
+Missing/invalid colour files cannot block colour initialization. Missing flat
+surface mapping can still block a FlatOnly scene; that is a separate unresolved
+mapping issue. Invalid geometry and unknown maneuver codes are still reported,
+not silently drawn in an unrelated style.
+
+At each navigation start, the built-in palette presentation runs before normal
+guidance. See [6WB_PALETTE_CALIBRATION.md](6WB_PALETTE_CALIBRATION.md) for the
+20-line ordering, monotonic ten-second deadline and source disable switch.
 
 The published JayJay reference describes **both 1F/20 as a perspective A/B pair**,
 and groups 21/22 with perspective-sized surfaces; it does not establish a flat
@@ -141,9 +145,10 @@ an end-to-end flat/roundabout test can succeed. There is no default guessed 21/2
 assignment. This is an unresolved hardware mapping, not an assertion that the
 release candidate is already operational on the car.
 
-The kit's 20-index swatch helper is retained as an API but no separate test
-program, IPC service or manual-test startup mode is installed by this RC.
-No previously verified colour measurements were available in the supplied log.
+The kit's swatch helper remains available, and the startup presentation now
+shows 20 native lines through the existing display worker. No separate test
+program, IPC service or startup executable is installed. The provisional colour
+assignments come from the user, not RGB estimates from photographs.
 RGB remains usable for the existing RoadIcon bitmap encoding; its pixels use
 kit styling and the existing ABGR/RLE32 codec and 4096-byte cap.
 
@@ -171,7 +176,7 @@ Still required on Windows/F31:
 
 1. Compile and run appropriate C++ checks on the user's environment; verify the
    resulting ARM ELF separately. Compilation and ABI compatibility are unproven.
-2. Supply measured palette roles and a visibly identified flat A/B pair. Verify
+2. Observe the provisional colour roles and identify the flat A/B pair. Verify
    actual C04 dimensions and each pair's visibility; do not infer visibility from ACK.
 3. Validate native joins, subpixel stroke quantization, graphite/gold contrast,
    optional black checker cells and Comfort/Sport/Eco presentation.

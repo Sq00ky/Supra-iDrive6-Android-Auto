@@ -42,7 +42,7 @@ Batch errorBatch(const char* why){Batch b(why,true);return b;}
 
 }
 Hud6wbDisplay::Hud6wbDisplay(Port& port,const Bmw6wbProfile& p,bool shadow,const GrafiteKit& kit)
-    :kit_(kit),port_(port),p_(p),resources_(p),shadow_(shadow),sent_(false),fresh_(true),dirty_(false),shownLanes_(true),epoch_(port.epoch()),
+    :calibrationClearQueued_(false),kit_(kit),port_(port),p_(p),resources_(p),shadow_(shadow),sent_(false),fresh_(true),dirty_(false),shownLanes_(true),epoch_(port.epoch()),
     mainVisible_(p.main.b),laneVisible_(p.lanes.b),iconVisible_(p.icons.b),log_(NULL),user_(NULL),queuedCall_(0),kitErrorLogged_(false) {}
 void Hud6wbDisplay::log(const std::string& s) const {if(log_)log_(s.c_str(),user_);}
 ClusterDisplay::Result Hud6wbDisplay::health() {
@@ -50,7 +50,9 @@ ClusterDisplay::Result Hud6wbDisplay::health() {
     if(shadow_)return kOk;
     if(port_.status()==kFailed)return kRejected;
     if(port_.epoch()!=epoch_) {
-        epoch_=port_.epoch();resources_.forget();fresh_=true;dirty_=true;queuedPicture_=Batch();queuedCall_=0;
+        epoch_=port_.epoch();
+        if(calibration_.phase()!=hudterm::PaletteCalibration::Pending)calibration_.cancel();
+        calibrationClearQueued_=false;resources_.forget();fresh_=true;dirty_=true;queuedPicture_=Batch();queuedCall_=0;
         mainVisible_=p_.main.b;laneVisible_=p_.lanes.b;iconVisible_=p_.icons.b;
     }
     if(resources_.state()==BmwResources::kIncompatible)return kRejected;
@@ -83,6 +85,73 @@ bool Hud6wbDisplay::submit(const Batch& b) {
     if(port_.status()!=kReady)return false;
     SubmitResult r=port_.submit(b);
     return r==kQueued;
+}
+Batch Hud6wbDisplay::calibrationBatch() const {
+    Batch b("6wb-palette-calibration",false);
+    if(p_.main.a!=0x1f||p_.main.b!=0x20)return errorBatch("6wb-kit-error: calibration requires verified 1F/20 pair");
+    uint16_t target=other(mainVisible_,p_.main);
+    b.add(kRemoveAllItems,removeAllItems(target));
+    b.add(kSetLineWidth,setLineWidth(target,2));
+    // Known input region below the ~70px horizon of the verified central pair.
+    // 20 separate horizontal lines, ascending indices from top to bottom.
+    for(unsigned index=0;index<20;++index) {
+        int y=75+(int)((index*74+9)/19); // 75..149, no coincident rows
+        std::vector<hudterm::Point> points;hudterm::Point a={22,(int16_t)y},z={198,(int16_t)y};
+        points.push_back(a);points.push_back(z);
+        b.add(kSetLineColor,setLineColor(target,(uint8_t)index));
+        b.add(kAddPolygon,addPolygon(target,(uint16_t)(0x80+index),kPolyline,points));
+    }
+    // Hide only non-calibration elements. Never show a half-built chart.
+    const uint16_t hidden[]={p_.lanes.a,p_.lanes.b,p_.icons.a,p_.icons.b,p_.bar,p_.base.street,p_.base.distance,p_.base.unit};
+    for(size_t i=0;i<sizeof(hidden)/sizeof(*hidden);++i)b.add(kSetVisibility,setVisibility(hidden[i],false));
+    b.add(kSwitchVisibility,switchVisibility(mainVisible_,target));
+    b.add(kSetVisibility,setVisibility(p_.base.frame,true));return b;
+}
+bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
+    const hudterm::PaletteCalibration::Phase before=calibration_.phase();
+    calibration_.observe(status);
+    if(!calibration_.active())return false;
+    if(before!=hudterm::PaletteCalibration::Pending && calibration_.phase()==hudterm::PaletteCalibration::Pending) {
+        calibrationClearQueued_=false;dirty_=true;
+    }
+    Result r=health();
+    if(r!=kOk){calibration_.cancel();return false;} // existing Core handles failure
+    if(!calibration_.active())return false;
+    if(calibration_.phase()==hudterm::PaletteCalibration::Pending && !queuedPicture_.calls.empty()) {
+        // Finish any previously accepted multi-chunk picture before starting
+        // calibration, preserving its predicted A/B state. Never replace it.
+        Result pending=showManeuver(queuedView_,now,false,false);
+        if(pending!=kOk){calibration_.cancel();return false;}
+        return true;
+    }
+    if(!canDraw())return true; // existing C04 procedure and local dispatch gate
+    if(calibration_.phase()==hudterm::PaletteCalibration::Pending) {
+        Batch b=calibrationBatch();
+        if(b.label.find("6wb-kit-error:")==0){log(b.label);calibration_.cancel();return false;}
+        for(size_t i=0;i<b.calls.size();++i)if(!callOk(b.calls[i],handlesOf(p_),true)) {
+            log("6wb-kit-error: invalid calibration frame");calibration_.cancel();return false;
+        }
+        if(!submit(b))return true;
+        mainVisible_=other(mainVisible_,p_.main);sent_=!shadow_;calibration_.queued();
+        log("6wb palette: indices 0..19 queued; waiting for local dispatch completion");return true;
+    }
+    if(calibration_.phase()==hudterm::PaletteCalibration::Dispatching) {
+        calibration_.dispatched(now);
+        log("6wb palette: local dispatch complete; monotonic hold deadline +10000 ms");return true;
+    }
+    if(calibration_.phase()==hudterm::PaletteCalibration::Holding && !calibration_.due(now))return true;
+    if(!calibrationClearQueued_) {
+        Batch clear("6wb-palette-clear",false);
+        clear.add(kRemoveAllItems,removeAllItems(mainVisible_));
+        clear.add(kSetVisibility,setVisibility(mainVisible_,false));
+        if(!submit(clear))return true;
+        calibrationClearQueued_=true;calibration_.clearQueued();return true;
+    }
+    // The clear has been locally dispatched. Core will receive THIS tick's
+    // latest snapshot, never the maneuver captured at the beginning of the hold.
+    calibration_.finished();calibrationClearQueued_=false;fresh_=true;dirty_=true;sent_=false;
+    queuedPicture_=Batch();queuedCall_=0;
+    log("6wb palette: cleared; resume current navigation snapshot");return false;
 }
 bool Hud6wbDisplay::mainChanged(const NavView& v) const {
     sixwbkit::PlanePolicy::Value policy=sixwbkit::describe(GrafiteKit::maneuver(v.aa_type)).policy;
@@ -236,6 +305,7 @@ Batch Hud6wbDisplay::clearBatch() const {
     b.add(kTextareaSetText,latinText(p_.base.unit,"",3));return b;
 }
 bool Hud6wbDisplay::clear(std::string* detail) {
+    calibration_.cancel();calibrationClearQueued_=false;
     queuedPicture_=Batch();queuedCall_=0;
     if(shadow_)return submit(clearBatch());
     if(!sent_ || port_.status()==kNavActive)return true;

@@ -6,7 +6,7 @@
 #include "cluster/nav_msg.hpp"
 #include "cluster/hud6wb_profile.hpp"
 namespace nbt { namespace hudterm {
-// No new handle discovery or surface allocation. Calibration is loaded once.
+// No new handle discovery or surface allocation. Colour roles are compiled.
 class GrafiteKit {
 public:
     GrafiteKit();
@@ -22,8 +22,8 @@ public:
     static bool hidden(int aaType){return sixwbkit::describe(maneuver(aaType)).policy==sixwbkit::PlanePolicy::Hidden;}
 private:
     sixwbkit::HudTerminalPalette main_,flat_,lanes_;
-    void readProfile();
 };
+sixwbkit::HudTerminalPalette provisionalKitPalette();
 struct KitBarState {bool visible;int value;KitBarState():visible(false),value(0){} };
 KitBarState kitBarState(const kombinav::NavView& v,unsigned rangeMetres);
 enum KitPlane {KitFlat,KitPerspective};
