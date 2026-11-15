@@ -1,4 +1,4 @@
-#include "../../src/cluster/g30/encoded_queue.hpp"
+#include "cluster/g30/encoded_queue.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <vector>

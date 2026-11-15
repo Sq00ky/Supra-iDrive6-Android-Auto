@@ -68,9 +68,13 @@ CSRCS = src/audio/speex.c
 CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
 
 OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
-# Optional G30 map bridge built by g30-pip/build.sh.
+# Optional G30 map bridge. Installation and service supervision are supplied
+# by the deployment environment; these targets only compile source.
 # A clean rebuild is required when toggling this option; ordinary builds and
 # existing host tests retain the upstream behavior.
+ifeq ($(G30_PIP),1)
+G30_BRIDGE_OBJECT = src/cluster/g30/bridge.o
+endif
 ifneq ($(G30_BRIDGE_OBJECT),)
 CXXFLAGS += -DIDRIVER_G30_CLUSTER
 OBJS += $(G30_BRIDGE_OBJECT)
@@ -83,7 +87,13 @@ TARGET = nbt-aad
 check:
 	$(MAKE) -C tests check
 
+.PHONY: check-g30
+check-g30:
+	$(MAKE) -C tests check-g30
+
 all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
+
+src/cluster/g30/bridge.o: CXXFLAGS += -DIDRIVER_QNX_SDK
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -169,6 +179,8 @@ volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp 
 clean:
 	@echo [CLEAN] Removing object files and binaries
 	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa
+	rm -f src/cluster/g30/bridge.o src/cluster/g30/bridge.d
+	rm -rf build/g30
 
 # osdprobe: standalone check that this unit lets us own an LM surface for our own window.
 osdprobe: tools/osdprobe.cpp
@@ -186,6 +198,43 @@ lmrestore: tools/lmrestore.cpp
 kdprobe: tools/kdprobe.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/kdprobe.cpp -L./lib -lscreen -lKD -lEGL -lGLESv2 -lang-c++ -lm
 
-.PHONY: g30-pip
-g30-pip:
-	sh g30-pip/build.sh
+# Native G30 player and read-only Screen inspector. No installation side effects.
+QNX_AR ?= ntoarmv7-ar
+G30_OUT = build/g30
+G30_SRC = src/cluster/g30
+G30_HEADERS = $(wildcard $(G30_SRC)/*.hpp $(G30_SRC)/native/*.hpp $(G30_SRC)/native/*.inc)
+OPENH264 = third_party/openh264
+OPENH264_SRCS = $(filter-out $(OPENH264)/codec/common/src/Wels%, $(wildcard $(OPENH264)/codec/common/src/*.cpp)) \
+               $(filter-out $(OPENH264)/codec/decoder/core/src/wels_decoder_thread.cpp, $(wildcard $(OPENH264)/codec/decoder/core/src/*.cpp)) \
+               $(OPENH264)/codec/decoder/plus/src/welsDecoderExt.cpp
+OPENH264_OBJS = $(patsubst $(OPENH264)/%.cpp,$(G30_OUT)/decoder/%.o,$(OPENH264_SRCS)) $(G30_OUT)/decoder_port.o
+OPENH264_INCLUDES = -I$(OPENH264)/codec/api -I$(OPENH264)/codec/api/wels \
+                    -I$(OPENH264)/codec/common/inc -I$(OPENH264)/codec/decoder/core/inc \
+                    -I$(OPENH264)/codec/decoder/plus/inc
+G30_FLAGS = -O2 -Wall -D_QNX_SOURCE -DIDRIVER_QNX_SDK -Wc,-std=gnu++0x \
+            -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp
+
+.PHONY: g30-player g30-inspect
+g30-player: $(G30_OUT)/player
+g30-inspect: $(G30_OUT)/inspect
+
+$(G30_OUT)/decoder/%.o: $(OPENH264)/%.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(G30_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+
+$(G30_OUT)/decoder_port.o: $(G30_SRC)/decoder_port.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(G30_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+
+$(G30_OUT)/libopenh264-decoder.a: $(OPENH264_OBJS)
+	rm -f $@
+	$(QNX_AR) rcs $@ $(OPENH264_OBJS)
+
+$(G30_OUT)/player: $(G30_SRC)/player.cpp $(G30_HEADERS) $(G30_OUT)/libopenh264-decoder.a
+	$(CXX) $(G30_FLAGS) -fno-exceptions -fno-rtti $(OPENH264_INCLUDES) $< $(G30_OUT)/libopenh264-decoder.a -L./lib -lscreen -lsocket -lm -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
+
+$(G30_OUT)/inspect: $(G30_SRC)/inspect.cpp $(G30_HEADERS)
+	@mkdir -p $(@D)
+	$(CXX) $(G30_FLAGS) $< -L./lib -lscreen -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
+
+-include $(OPENH264_OBJS:.o=.d)

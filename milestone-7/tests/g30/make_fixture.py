@@ -2,13 +2,15 @@
 """Synthetic H.264 access units, never a recording of phone/car data."""
 from pathlib import Path
 import os
+import sys
 import re
 import shutil
 import struct
 import subprocess
-HERE=Path(__file__).resolve().parents[1]
+HERE=Path(__file__).resolve().parents[2]
 def main():
-    dest=HERE/'build';dest.mkdir(exist_ok=True)
+    dest=Path(sys.argv[1]) if len(sys.argv)>1 else HERE/'tests/build/g30'
+    dest.mkdir(parents=True,exist_ok=True)
     ffmpeg=os.environ.get('FFMPEG') or shutil.which('ffmpeg')
     if not ffmpeg:raise RuntimeError('Set FFMPEG or install ffmpeg on PATH')
     for name,source in [('fixture','testsrc2=size=800x480:rate=10'),

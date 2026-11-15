@@ -1490,4 +1490,4 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## Experimental G30 cluster map
 
-See [G30 independent Android Auto map](g30-pip/README.md) for the native PiP implementation, build instructions and tested firmware.
+See [G30 independent Android Auto map](src/cluster/g30/README.md) for the native PiP implementation, source build and runtime integration contract. Installation and supervision are managed by the deployment environment.

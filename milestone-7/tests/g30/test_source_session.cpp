@@ -1,8 +1,8 @@
 // Real AASession parsing/reassembly/ACK dispatch, scripted phone, stub TLS.
 #include "aa_session.hpp"
-#include "../../src/cluster/g30/router.hpp"
-#include "../../src/cluster/g30/bridge.hpp"
-#include "../../src/cluster/g30/credits.hpp"
+#include "cluster/g30/router.hpp"
+#include "cluster/g30/bridge.hpp"
+#include "cluster/g30/credits.hpp"
 #include <assert.h>
 #include <signal.h>
 #include <sys/socket.h>

@@ -1,5 +1,5 @@
 // Host fault-injection tests. No QNX, networking or firmware is executed.
-#include "../../src/cluster/g30/native/screen_output.hpp"
+#include "cluster/g30/native/screen_output.hpp"
 using namespace car_demo;
 static int failures, display_count, display_width, render_count, stride, display_changed;
 static int reads, destroys, creates, submitted, context_flags, props[100][2];

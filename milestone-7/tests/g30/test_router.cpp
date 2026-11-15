@@ -1,6 +1,6 @@
-#include "../../src/cluster/g30/router.hpp"
-#include "../../src/cluster/g30/manifest.hpp"
-#include "../../src/cluster/g30/credits.hpp"
+#include "cluster/g30/router.hpp"
+#include "cluster/g30/manifest.hpp"
+#include "cluster/g30/credits.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <vector>

@@ -107,8 +107,14 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema tsan check-g30
 	@echo "[CHECK] all host tests passed"
+
+# G30 tests compile the native protocol/player against deterministic peers.
+# Requires Python 3, FFmpeg with libx264, and the same OpenSSL headers as above.
+.PHONY: check-g30
+check-g30:
+	CXX="$(HOST_CXX)" python3 g30/check.py
 
 $(OUT):
 	@mkdir -p $(OUT)

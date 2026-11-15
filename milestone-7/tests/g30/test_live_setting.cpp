@@ -1,4 +1,4 @@
-#include "../../src/cluster/video_settings.hpp"
+#include "cluster/video_settings.hpp"
 #include <assert.h>
 #include <stdio.h>
 int main() {

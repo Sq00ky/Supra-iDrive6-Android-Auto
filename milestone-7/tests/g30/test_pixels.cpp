@@ -1,6 +1,6 @@
-#include "../../src/cluster/g30/decoder.hpp"
-#include "../../src/cluster/g30/protocol.hpp"
-#include "../../src/cluster/g30/native/native_screen.hpp"
+#include "cluster/g30/decoder.hpp"
+#include "cluster/g30/protocol.hpp"
+#include "cluster/g30/native/native_screen.hpp"
 #include "fake_screen.hpp"
 extern "C" { void* fopen(const char*,const char*);size_t fread(void*,size_t,size_t,void*);int fclose(void*); }
 extern "C" int usleep(unsigned) {return 0;}

@@ -12,7 +12,7 @@
 #define poll fake_poll
 #define usleep fake_usleep
 #define clock_gettime fake_clock
-#include "../../src/cluster/g30/native/control.hpp"
+#include "cluster/g30/native/control.hpp"
 
 static unsigned next_fd=10, available[16], consumed[16], calls, closed, resource_writes;
 static unsigned failure;
