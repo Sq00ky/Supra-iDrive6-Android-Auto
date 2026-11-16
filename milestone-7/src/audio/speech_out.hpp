@@ -5,9 +5,11 @@
 
 // NBT_SPEECH=1 (OFF by default): play Android Auto guidance (channel 8, the format the phone declared) on an A2I
 // playback endpoint. Without it, BT mode acks and drops every prompt (ch 8 must stay in the ServiceDiscovery).
-//   NBT_SPEECH_EP       endpoint (default /input_stereo_AirPlayAlt; /input_mono_* ones are opened mono)
-//   NBT_SPEECH_SRC      AM source of the nav prompt focus `audioconn -b <src> <sink>` (default 0 = no focus: BT mode
-//                       plays at once, browser mode keeps guidance in its mix). Audio waits in the ring for the grant.
+//   NBT_SPEECH_EP       endpoint (browser mode default /input_mono_0, the car's nav prompter; BT mode
+//                       /input_stereo_AirPlayAlt; /input_mono_* ones are opened mono)
+//   NBT_SPEECH_SRC      AM source of the nav prompt focus `audioconn -b <src> <sink>` (browser mode default 0x1a,
+//                       eSRC_NAV_AUTO; BT mode 0). 0 = no focus: BT mode plays at once, browser mode keeps guidance in
+//                       its mix. Audio waits in the ring for the grant.
 //   NBT_SPEECH_SINK     AM sink (default 0x1, speakers)
 //   NBT_SPEECH_HOLD_MS  the focus is released this long after the ring has played out (default 500)
 // Earlier A2I *write* experiments crashed the head unit; this uses only the factory prime/Start/GetBuffer/Out_Write

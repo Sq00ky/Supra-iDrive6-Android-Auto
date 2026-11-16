@@ -73,11 +73,15 @@ inline bool browserAudioEnabled() {
     return audioMode() == AUDIO_MODE_BROWSER;
 }
 
+// The car's nav prompter and its focus source (eSRC_NAV_AUTO): browser mode's NBT_SPEECH_EP / NBT_SPEECH_SRC defaults.
+const char* const kNavPromptEndpoint = "/input_mono_0";
+const uint32_t kNavPromptSrc = 0x1a;
+
 // NBT_SPEECH (both audio modes, speech_out.hpp).
 struct SpeechConfig {
     bool enabled;               // NBT_SPEECH=1
-    const char* endpoint;       // NBT_SPEECH_EP (NULL / empty = the factory alternate nav endpoint)
-    uint32_t src;               // NBT_SPEECH_SRC (0 = no audioconn request)
+    const char* endpoint;       // NBT_SPEECH_EP (browser kNavPromptEndpoint; BT NULL = the factory alternate nav endpoint)
+    uint32_t src;               // NBT_SPEECH_SRC (browser kNavPromptSrc; BT 0; 0 = no audioconn request)
     uint32_t sink;              // NBT_SPEECH_SINK (0x1)
     int hold_ms;                // NBT_SPEECH_HOLD_MS (500, 0..5000)
     SpeechConfig();
@@ -116,7 +120,8 @@ struct BrowserConfig {
     BrowserConfig();            // the defaults
 };
 BrowserConfig readBrowserConfig();
-SpeechConfig readSpeechConfig();
+// Unset, empty or unparsable NBT_SPEECH_EP / NBT_SPEECH_SRC take the given defaults.
+SpeechConfig readSpeechConfig(const char* def_endpoint, uint32_t def_src);
 
 // Bluetooth audio mode (bt_audio.hpp).
 struct BtConfig {

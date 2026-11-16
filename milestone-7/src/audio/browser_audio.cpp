@@ -211,7 +211,7 @@ bool BrowserAudio::init(const BrowserConfig& cfg) {
     if (!cfg.speech.enabled) {
         printf("[Browser] guidance: browser mix\n");
     } else if (!cfg.speech.src) {
-        printf("[Browser] guidance: browser mix (no NBT_SPEECH_SRC: NBT_SPEECH=1 needs the nav prompt focus here)\n");
+        printf("[Browser] guidance: browser mix (NBT_SPEECH_SRC=0: no nav prompt focus)\n");
         return ok;   // SpeechOut would never take a prompt: leave the endpoint closed
     } else {
         const char* ep = cfg.speech.endpoint && *cfg.speech.endpoint ? cfg.speech.endpoint : A2I_ENDPOINT_NAV_ALT;
