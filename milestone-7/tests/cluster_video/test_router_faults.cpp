@@ -66,9 +66,12 @@ static void test_decoder_disconnect_and_stale_credits(Credits &credits) {
     router.receive(0, 2, idr, sizeof(idr));
     assert(queued_frames == 1 && !router.deferred);
     assert(!router.receive(0, 6, idr, sizeof(idr)) && queued_frames == 1);
+    const uint8_t focus_release[] = {0x80, 7, 0x10, 2};
+    router.receive(0, 2, focus_release, sizeof(focus_release));
+    assert(!router.requested && router.resume_on_ready);
     decoder_available = true;
     router.tick(0);
-    assert(projected && router.waiting_idr);
+    assert(projected && router.waiting_idr && router.requested);
     assert(credits.publish(old_epoch));
     assert(credits.take(stream_epoch) == 0);
     router.receive(0, 2, predicted, sizeof(predicted));

@@ -38,8 +38,9 @@ struct Socket {
 static Socket sockets[32];
 static unsigned next_descriptor, clock_ms, subscription_count, cancellation_count, guidance_calls,
     failing_guidance_call, guidance_delay_ms;
-static unsigned methods[256], handles[256];
+static unsigned methods[1024], handles[1024];
 static bool handle_created, stall_stream, stream_hangup, failure_injected, interrupt_during_post;
+static bool initial_hud;
 static uint8_t stream[aa_cluster::MaxPayload + 1024];
 static unsigned stream_size, stream_offset;
 static int allocate(Role role) {
@@ -63,6 +64,7 @@ static void reset() {
     discovery_session = 1;
     discovery_reboot = true;
     screen_peer::reset();
+    initial_hud = false;
 }
 static void append(const uint8_t *data, unsigned n) {
     check(stream_size + n <= sizeof(stream), "bounded input fixture");
@@ -204,9 +206,9 @@ extern "C" int fake_sendto(int, const void *data, unsigned n, int, const void *,
             aa_cluster::put32(s.reply + 4, 21);
             s.reply[12] = s.reply[13] = 1;
             s.reply[14] = 2;
-            put16(s.reply + 24, 620);
-            put16(s.reply + 26, 313);
-            s.reply[28] = 1;
+            put16(s.reply + 24, peer::initial_hud ? 277 : 620);
+            put16(s.reply + 26, peer::initial_hud ? 160 : 313);
+            s.reply[28] = peer::initial_hud ? 0 : 1;
         }
     }
     return n;
@@ -219,10 +221,10 @@ extern "C" int fake_send(int fd, const void *data, unsigned n, int) {
         return n;
     }
     if (s.role == peer::Sink) {
-        check(n == 18 && p[16] == 1, "sink acknowledgement");
+        check(n == 18 && p[16] <= 1, "sink acknowledgement");
         return n;
     }
-    check(s.role == peer::Guidance && n >= 16 && peer::guidance_calls < 256, "Guidance call shape");
+    check(s.role == peer::Guidance && n >= 16 && peer::guidance_calls < 1024, "Guidance call shape");
     unsigned method = get16(p + 2), index = peer::guidance_calls++;
     peer::clock_ms += peer::guidance_delay_ms;
     peer::methods[index] = method;
@@ -352,6 +354,18 @@ static void test_partial_stream_reads() {
     check(demo_main() != 0, "stalled partial payload times out");
     peer::expect_cleaned(true, 1);
     check(peer::clock_ms < 10000, "partial read has a bounded deadline");
+
+    // The car log ended after exactly 36,832 bytes of a 42,919-byte
+    // access unit. No incomplete unit may reach the decoder on recovery.
+    prepare_one_frame();
+    header(wire_header, Video, 3, 42919, 0);
+    peer::append(wire_header, sizeof(wire_header));
+    static const uint8_t truncated[36832] = {};
+    peer::append(truncated, sizeof(truncated));
+    peer::stall_stream = true;
+    check(demo_main() != 0, "captured partial access unit fails within deadline");
+    peer::expect_cleaned(true, 1);
+    check(peer::clock_ms < 10000, "captured dropout cleanup is bounded");
 }
 
 static void test_invalid_stream_data() {
@@ -400,8 +414,79 @@ static void test_restart_after_failures() {
     peer::expect_cleaned(true, 1);
 }
 
+static void notify_sink(Player& player, bool hud) {
+    peer::Socket& socket = peer::sockets[player.control.control];
+    check(socket.role == peer::Sink && socket.open, "sink subscription retained");
+    socket.stream_size = 29;
+    socket.stream_offset = 0;
+    memset(socket.reply, 0, sizeof(socket.reply));
+    aa_cluster::put32(socket.reply, 0xb0098001);
+    aa_cluster::put32(socket.reply + 4, 21);
+    socket.reply[12] = socket.reply[13] = 1;
+    socket.reply[14] = 2;
+    put16(socket.reply + 24, hud ? 277 : 620);
+    put16(socket.reply + 26, hud ? 160 : 313);
+    socket.reply[28] = hud ? 0 : 1;
+}
+
+static void test_hud_pause_resume() {
+    prepare_one_frame();
+    service_mode = true;
+    Player* player = new Player;
+    uint8_t h[HeaderSize];
+    header(h, Reset, 3, 0, 0);
+    check(player->packet(h, 0, false), "decoder reset");
+    header(h, Video, 3, first_frame_size, 0);
+    check(player->packet(h, first_frame, false), "initial map");
+    const int sink = player->control.control;
+    for (unsigned cycle = 0; cycle < 2; ++cycle) {
+        unsigned posts = screen_peer::posts;
+        notify_sink(*player, true);
+        check(player->pump(), "valid HUD selection is not fatal");
+        check(player->active && !player->presenting && !screen_peer::windows &&
+              player->control.guidance == -1, "HUD pause releases output and Guidance");
+        check(player->control.control == sink && !peer::cancellation_count,
+              "HUD pause retains original subscription");
+        check(player->packet(h, first_frame, false) && unsigned(screen_peer::posts) == posts,
+              "HUD pause consumes video without cluster-plane posts");
+        notify_sink(*player, false);
+        check(player->pump() && player->presenting, "cluster selection resumes without setting toggle");
+        check(unsigned(screen_peer::posts) == posts + 1, "unchanged map is re-presented on resume");
+    }
+    notify_sink(*player, true);
+    check(player->pump(), "pause before map-off");
+    header(h, Stop, 4, 0, 0);
+    check(player->packet(h, 0, false), "map-off while HUD paused");
+    check(!player->active && !player->have_picture && player->control.control == -1,
+          "map-off cancels retained subscription and cached picture");
+    check(player->pump() && !player->presenting, "map-off cannot auto-resume");
+    delete player;
+    peer::expect_cleaned(true, 3);
+}
+
+static void test_start_with_hud_selected() {
+    prepare_one_frame();
+    service_mode = peer::initial_hud = true;
+    Player* player = new Player;
+    uint8_t h[HeaderSize];
+    header(h, Reset, 3, 0, 0);
+    check(player->packet(h, 0, false), "reset with HUD initially selected");
+    header(h, Video, 3, first_frame_size, 0);
+    check(player->packet(h, first_frame, false), "cache map with HUD initially selected");
+    check(player->active && !player->presenting && !peer::handle_created && !screen_peer::posts,
+          "initial HUD does not acquire a cluster output");
+    notify_sink(*player, false);
+    check(player->pump() && player->presenting && screen_peer::posts == 1,
+          "initial HUD can transition directly to cached cluster map");
+    check(player->stop(), "clean initial-HUD session");
+    delete player;
+    peer::expect_cleaned(true, 1);
+}
+
 int main() {
     load_first_frame();
+    test_hud_pause_resume();
+    test_start_with_hud_selected();
     test_service_and_trial_deadlines();
     test_reactivation_on_one_connection();
     test_end_of_stream();

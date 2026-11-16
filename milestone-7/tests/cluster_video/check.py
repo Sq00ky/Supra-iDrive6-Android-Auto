@@ -34,6 +34,8 @@ TEST_ENV = dict(
     ASAN_OPTIONS="detect_leaks=0" if sys.platform == "darwin" else "detect_leaks=1",
 )
 TEST_PROGRAMS = (
+    "recovery",
+    "player_service",
     "router",
     "manifest",
     "router_faults",

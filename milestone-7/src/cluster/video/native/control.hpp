@@ -60,6 +60,10 @@ struct Control {
     uint32_t cleanup_deadline;
     uint8_t reply_bytes[4096];
 
+    enum Sink { UnknownSink, ClusterSink, HudSink };
+    Sink selected_sink;
+    bool cluster_selected() const { return selected_sink == ClusterSink; }
+
     bool stopped() const {
         return expired();
     }
@@ -94,27 +98,31 @@ struct Control {
         printf("SINK width=%u height=%u selection=%u\n", get16(packet + 24), get16(packet + 26),
                packet[28]);
         fflush(0);
-        if (get16(packet + 24) != VideoProfile::ContentWidth ||
-            get16(packet + 26) != VideoProfile::ContentHeight ||
-            packet[28] != VideoProfile::SinkSelection) {
-            printf("REFUSE_SINK requires_cluster_%ux%u_selection_%u\n",
-                   unsigned(VideoProfile::ContentWidth), unsigned(VideoProfile::ContentHeight),
-                   unsigned(VideoProfile::SinkSelection));
+        const bool cluster = get16(packet + 24) == VideoProfile::ContentWidth &&
+                             get16(packet + 26) == VideoProfile::ContentHeight &&
+                             packet[28] == VideoProfile::SinkSelection;
+        const bool hud = get16(packet + 24) == VideoProfile::HudWidth &&
+                         get16(packet + 26) == VideoProfile::HudHeight &&
+                         packet[28] == VideoProfile::HudSelection;
+        if (!cluster && !hud) {
+            printf("REFUSE_SINK unsupported_geometry_or_selection\n");
             return false;
         }
+        selected_sink = cluster ? ClusterSink : HudSink;
         uint8_t completion[18] = {};
         put32(completion, 0xb0090001);
         put32(completion + 4, 10);
         put16(completion + 8, 1);
         completion[12] = completion[13] = completion[14] = 1;
-        completion[16] = 1;
-        // Same no-response method and body as all captured cluster handshakes.
+        completion[16] = packet[28];
+        // Acknowledge the selected destination using the captured factory shape.
+        // HUD selection pauses our cluster output; it does not enable HUD video.
         bool ok = transfer(control, completion, sizeof(completion), true);
         printf("SINK_COMPLETION sent=%u\n", unsigned(ok));
         return ok;
     }
 
-    bool start() {
+    bool connect_sink() {
         // Bind the TCP producer first, then advertise that connection's local
         // port through discovery. A valid sink handshake precedes Guidance.
         control = open_tcp(ClusterIP, DisplaySinkPort);
@@ -141,6 +149,12 @@ struct Control {
         if (!sink(true)) {
             return false;
         }
+        return true;
+    }
+
+    bool start_guidance() {
+        if (!cluster_selected()) return false;
+        if (guidance >= 0) return true;
         guidance = open_tcp(ClusterIP, GuidancePort);
         if (guidance < 0) {
             printf("GUIDANCE_CONNECT_FAILED errno=%d\n", *__get_errno_ptr());
@@ -149,12 +163,16 @@ struct Control {
                guidance_start(guidance, handle, rpc_session, nbt::cluster::native_pip::resource());
     }
 
+    bool start() {
+        return connect_sink() && (!cluster_selected() || start_guidance());
+    }
+
     bool pump() {
         if (stopped()) {
             return false;
         }
         refresh();
-        if (!guidance_heartbeat(guidance)) {
+        if (guidance >= 0 && !guidance_heartbeat(guidance)) {
             return false;
         }
         PollFD incoming = {control, PollRead, 0};
@@ -162,7 +180,7 @@ struct Control {
         return poll_result >= 0 && (poll_result == 0 || sink(false));
     }
 
-    bool close() {
+    bool close_guidance() {
         bool ok = true;
         // A stopped/expired read may have consumed only part of a reply. Finish
         // that exact transaction before sending cancellation on the same TCP
@@ -195,22 +213,28 @@ struct Control {
             }
         }
 
-        // Release every local resource even when the peer cannot acknowledge.
-        if (udp >= 0 && port) {
-            subscribe(udp, port, 0);
-        }
-        if (udp >= 0) {
-            ::close(udp);
-        }
-        if (control >= 0) {
-            ::close(control);
-        }
-        if (guidance >= 0) {
-            ::close(guidance);
-        }
-        udp = control = guidance = -1;
+        if (guidance >= 0) ::close(guidance);
+        guidance = -1;
         printf("GUIDANCE_CLEANUP acknowledged=%u handle=%u\n", unsigned(ok), handle);
         fflush(0);
+        handle = 0;
+        pending_reply = false;
+        // Preserve failed cleanup across a later full close; otherwise that
+        // second close could falsely clear the active marker and allow retry.
+        broken_stream = !ok;
+        pending_method = pending_session = reply_used = reply_size = cleanup_deadline = 0;
+        return ok;
+    }
+
+    bool close() {
+        const bool ok = close_guidance();
+        // HUD pauses retain these sockets and the subscription. Full Stop,
+        // session end and failures release all resources as before.
+        if (udp >= 0 && port) subscribe(udp, port, 0);
+        if (udp >= 0) ::close(udp);
+        if (control >= 0) ::close(control);
+        udp = control = -1;
+        selected_sink = UnknownSink;
         return ok;
     }
 };

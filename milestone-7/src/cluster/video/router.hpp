@@ -20,6 +20,7 @@ struct Router {
     Hooks hooks;
     bool enabled, allowed, opened, requested, focused, waiting_idr;
     bool recovery_pending, recovery_asked, deferred, recovery_needed;
+    bool resume_on_ready;
     unsigned epoch, config_size;
     uint32_t recovery_at;
     uint8_t config[MaxConfig];
@@ -56,6 +57,13 @@ struct Router {
             return;
         }
         const bool ready = allowed && hooks.ready();
+        if (opened && allowed && focused && !ready) resume_on_ready = true;
+        if (ready && resume_on_ready) {
+            // The phone may release its focus request after our decoder loss.
+            // Preserve the user's enabled preference across that interruption.
+            requested = true;
+            resume_on_ready = false;
+        }
         if (opened && requested && focused != ready) {
             focused = ready;
             recovery_pending = recovery_needed = false;
@@ -79,6 +87,7 @@ struct Router {
             requested = true;
         }
         if (!on) {
+            resume_on_ready = false;
             recovery_pending = recovery_needed = false;
             reset(false, false);
             if (opened && focused) {
@@ -94,6 +103,7 @@ struct Router {
             reset(false);
         }
         opened = requested = focused = recovery_pending = recovery_asked = recovery_needed = false;
+        resume_on_ready = false;
     }
 
     void recover(void* session) {

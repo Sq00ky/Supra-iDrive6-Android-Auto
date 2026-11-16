@@ -21,13 +21,16 @@ SDK directly without a custom SDK-selection flag. The player test omits the
 production entry point and filesystem ownership marker; native trials cover
 those paths. No SDK-free production build is retained in this source tree.
 
-The runner checks both build profiles, then runs twelve C++ regression programs:
+The runner checks both build profiles, then runs the C++ regression programs:
 
 - `profiles` (compiled for both J29 and G30): default Guidance selection,
   shared reference graph, and the G30 output/resource contract.
 - `router` and `router_faults`: independent channel routing, live focus,
   decoder disconnect/reconnect, 32 rapid off/on/off cycles, keyframe recovery,
   malformed input, and stale credits after stream replacement.
+- `recovery` and `player_service`: bounded retry backoff, clock wraparound,
+  progress/idle deadlines, real helper exit and restart, stopping before
+  replacement, disabling during backoff, and latched ownership/preflight errors.
 - `manifest`: exact cluster padding changes against the DHU discovery fixture,
   byte-for-byte preservation of other fields and channels, idempotence, buffer
   bounds, missing/duplicate cluster channels and malformed protobuf fields.
@@ -49,6 +52,9 @@ The runner checks both build profiles, then runs twelve C++ regression programs:
   activations in one connection, SIGTERM during Screen posting, the standalone
   65-second limit, and a successful restart. Each acquired socket,
   subscription, Guidance handle and Screen object must be released.
+  HUD selection is exercised twice in one player: Guidance/Screen release,
+  retained sink subscription, cached-picture resume, and map-off while paused.
+  The captured 36,832-of-42,919-byte access-unit stall is also reproduced.
 - `source-session`: actual AASession parsing, fragmented packets and deferred
   acknowledgements, with a scripted phone and plaintext test TLS. A stalled
   cluster consumer must leave the main dashboard stream responsive.

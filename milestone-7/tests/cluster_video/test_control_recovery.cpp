@@ -16,7 +16,7 @@
 
 static unsigned clock_ms, incoming_size, incoming_offset, rpc_calls, closed_descriptors,
     reply_ready_at_ms, fragment_boundary;
-static unsigned methods[16];
+static unsigned methods[16], request_handles[16];
 static uint8_t incoming[1024];
 static bool missing_reply, wrong_transaction, error_reply, fail_partial_request,
     interrupt_partial_reply;
@@ -86,6 +86,7 @@ extern "C" int fake_send(int, const void *data, unsigned size, int) {
     check(rpc_calls < 16 && size >= 16, "bounded complete request");
     const uint8_t *request = (const uint8_t *)data;
     unsigned method = get16(request + 2);
+    request_handles[rpc_calls] = size >= 20 ? get32(request + 16) : 0;
     methods[rpc_calls++] = method;
     unsigned reply_size = method == 1 ? 24 : 16;
     check(incoming_size + reply_size <= sizeof(incoming), "bounded replies");
@@ -158,7 +159,7 @@ static void test_delayed_header_and_handle() {
     check(!guidance_request(control, 1) && control.reply_used == 19,
           "timeout retains partial create-handle body");
     expect_cancelled(control);
-    check(control.handle == 200, "late-created handle recovered and cancelled");
+    check(control.handle == 0 && request_handles[1] == 200, "late-created handle recovered, cancelled and cleared");
 }
 
 static void test_signal_during_reply() {
@@ -172,6 +173,7 @@ static void test_missing_and_mismatched_replies() {
     Control control = reset_peer();
     missing_reply = true;
     check(!guidance_request(control) && !control.close(), "missing reply remains failure");
+    check(!control.close(), "failed cleanup stays failed on repeated close");
     check(clock_ms <= 3000 && rpc_calls == 1 && closed_descriptors == 3,
           "missing peer cannot hang cleanup or receive another request");
     control = reset_peer();

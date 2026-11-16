@@ -13,6 +13,8 @@
 #include <signal.h>
 #include "service_spawn.hpp"
 #include "service_log.hpp"
+#include "player_service.hpp"
+#include "recovery.hpp"
 #include "../video_settings.hpp"
 
 using namespace aa_cluster;
@@ -64,104 +66,6 @@ static bool enqueue(unsigned epoch, const uint8_t* config, unsigned config_size,
     return queue.push(epoch, config, config_size, frame, frame_size, pts);
 }
 
-// Only the socket worker owns the helper PID. The helper owns its temporary
-// alias/lock and watches this daemon independently, including after SIGKILL.
-struct Service {
-    pid_t pid;
-    ServiceLog logs;
-    // A failed launch waits for the setting to cycle; do not respawn in a loop.
-    bool attempted, external;
-    Service() : pid(-1), attempted(false), external(false) {
-        const char* external_setting =
-            video_environment("NBT_CLUSTER_EXTERNAL_PLAYER", "NBT_G30_CLUSTER_EXTERNAL_PLAYER");
-        external = external_setting && !strcmp(external_setting, "1");
-    }
-
-    void stop() {
-        if (pid <= 0) {
-            logs.finish();
-            return;
-        }
-        if (waitpid(pid, 0, WNOHANG) == 0) {
-            kill(pid, SIGTERM);
-            // The helper escalates only its own player, then removes the alias.
-            for (unsigned i = 0; i < 120; ++i) {
-                if (waitpid(pid, 0, WNOHANG) == pid) {
-                    pid = -1;
-                    logs.finish();
-                    return;
-                }
-                usleep(100000);
-            }
-            printf("[AA cluster] service cleanup still pending pid=%ld\n", (long)pid);
-            return; // Never kill the cleanup owner or launch a competing helper.
-        }
-        pid = -1;
-        logs.finish();
-    }
-
-    bool tick() {
-        if (external) {
-            return true;
-        }
-        int status = 0;
-        if (pid > 0 && waitpid(pid, &status, WNOHANG) == pid) {
-            logs.finish();
-            printf("[AA cluster] service ended pid=%ld exit=%d signal=%d; toggle map off/on to "
-                   "retry\n",
-                   (long)pid, WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-                   WIFSIGNALED(status) ? WTERMSIG(status) : 0);
-            pid = -1;
-        }
-        if (!load(&session_live)) {
-            stop();
-            attempted = false;
-            return false;
-        }
-        if (!load(&wanted)) {
-            if (pid <= 0) {
-                attempted = false;
-            }
-            return pid > 0;
-        }
-        if (pid > 0) {
-            return true;
-        }
-        if (attempted) {
-            return false;
-        }
-        attempted = true;
-        // Retain an explicit legacy supervisor override for existing benches.
-        // Normal installations launch the player's compiled supervisor directly.
-        const char* path = video_environment("NBT_CLUSTER_SERVICE", "NBT_G30_CLUSTER_SERVICE");
-        bool legacy = path && *path;
-        if (!legacy) {
-            path = video_environment("NBT_CLUSTER_PLAYER", "NBT_G30_CLUSTER_PLAYER");
-            if (!path || !*path) {
-                path = "/opt/aa/kombi-player";
-            }
-        }
-        if (access(path, legacy ? R_OK : X_OK)) {
-            printf("[AA cluster] player/supervisor missing: %s\n", path);
-            return false;
-        }
-        int log_fd = -1;
-        pid = spawn_service(path, legacy, &log_fd);
-        if (pid < 0) {
-            int error = errno;
-            printf("[AA cluster] service spawn failed errno=%d: %s\n", error, strerror(error));
-            return false;
-        }
-        if (!logs.start(log_fd)) {
-            printf("[AA cluster] kombi-player log relay failed; stopping helper\n");
-            stop();
-            return false;
-        }
-        printf("[AA cluster] service start pid=%ld method=qnx_spawn\n", (long)pid);
-        return pid > 0;
-    }
-};
-
 // The worker alone touches the loopback socket. At most 4 MiB are queued and
 // every I/O operation has a deadline; the AA receive/ACK thread cannot block.
 static bool transfer(int fd, const void* data, unsigned size, bool sending) {
@@ -170,8 +74,9 @@ static bool transfer(int fd, const void* data, unsigned size, bool sending) {
     // three-second assembly interval as the player rather than dropping a
     // partially sent access unit after only 500 ms.
     unsigned done = 0;
-    uint32_t began = millis(), deadline = began + io_timeout_ms;
-    while (done < size && int32_t(deadline - millis()) > 0) {
+    uint32_t began = millis();
+    IoDeadline deadline(began, io_timeout_ms);
+    while (done < size && !deadline.expired(millis())) {
         PollFD pending = {fd, short(sending ? 2 : 1), 0};
         int result = poll(&pending, 1, 25);
         if (result < 0 && *__get_errno_ptr() == 4) {
@@ -192,6 +97,7 @@ static bool transfer(int fd, const void* data, unsigned size, bool sending) {
             break;
         }
         done += unsigned(result);
+        deadline.progress(millis());
     }
     unsigned elapsed = millis() - began;
     if (done != size || elapsed >= 500) {
@@ -255,9 +161,16 @@ static void* worker(void*) {
     int fd = -1;
     unsigned sent_state = ~0u;
     uint32_t retry = 0;
-    Service service;
+    const char* path = video_environment("NBT_CLUSTER_SERVICE", "NBT_G30_CLUSTER_SERVICE");
+    bool legacy = path && *path;
+    if (!legacy) {
+        path = video_environment("NBT_CLUSTER_PLAYER", "NBT_G30_CLUSTER_PLAYER");
+        if (!path || !*path) path = "/opt/aa/kombi-player";
+    }
+    const char* external = video_environment("NBT_CLUSTER_EXTERNAL_PLAYER", "NBT_G30_CLUSTER_EXTERNAL_PLAYER");
+    PlayerService service(path, legacy, external && !strcmp(external, "1"));
     for (;;) {
-        if (!service.tick()) {
+        if (!service.tick(load(&session_live), load(&wanted), millis())) {
             if (fd >= 0) {
                 store(&connected, 0);
                 close(fd);
@@ -317,6 +230,9 @@ static void* worker(void*) {
             close(fd);
             fd = -1;
             printf("[AA cluster] decoder disconnected; main video unaffected\n");
+            // Stop the old cleanup owner before another helper can acquire its
+            // lease. Retrying the socket alone cannot revive an exited player.
+            service.disconnected();
         }
     }
     return 0;

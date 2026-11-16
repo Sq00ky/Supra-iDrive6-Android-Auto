@@ -22,6 +22,11 @@ struct G30Video {
         CompactWidth = 310,
         CompactHeight = 157,
         SinkSelection = 1,
+        // Valid alternate sink captured from the factory HUD. We pause on it;
+        // this profile still produces only cluster video.
+        HudWidth = 277,
+        HudHeight = 160,
+        HudSelection = 0,
         // 93 identical factory method-3 writes in 20261114T143330Z-4cdd29
         // configured this backing with color-depth 0 and packaging 1.
         ColorDepth = 0,

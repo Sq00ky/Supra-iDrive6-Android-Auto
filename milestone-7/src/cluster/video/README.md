@@ -26,6 +26,7 @@ from the native BMW services used to acquire the cluster display.
 | `encoded_queue.hpp`, `protocol.hpp` | Bound queued H.264 data and define the local daemon-to-player framing. |
 | `decoder.hpp`, `decoder_port.cpp` | Decode with OpenH264, convert frames and avoid posting unchanged images; provide the QNX decoder portability functions. |
 | `supervisor.cpp`, `supervisor.hpp` | Own the player process, temporary producer address and exclusive lease. Reap the player before releasing the address. |
+| `player_service.hpp`, `recovery.hpp` | Restart a failed helper after its supervisor exits; bound retry backoff and socket progress deadlines. |
 | `process.hpp`, `service_spawn.hpp`, `service_log.hpp` | Spawn with mapped descriptors and relay both child output streams to the daemon's current log. |
 | `../video_settings.hpp` | Read and atomically replace the persistent two-byte map preference. |
 | `native/control.hpp`, `native/native_methods.inc`, `native/wire.hpp` | Exchange control messages and Guidance transactions, including partial replies and bounded cancellation. |
@@ -102,6 +103,34 @@ The iDrive setting **Show map in instrument cluster** applies live. Off releases
 PiP and restores the dial; on requests a fresh map stream. The helper can remain
 available for the same Android Auto session. Video stays in RAM; only the
 two-byte preference at `/var/opt/aa/kombi-video` persists.
+
+### HUD selection and automatic recovery
+
+The captured G30 DisplaySink service selects either cluster `620×313 / 1`
+or HUD `277×160 / 0`. HUD selection suspends cluster presentation: the player
+acknowledges the selection, releases Guidance and its Screen window, and keeps
+the DisplaySink subscription. It continues decoding references in RAM. When
+the service selects the cluster again, the player reacquires the unchanged
+factory resource and presents its latest picture, even if the phone has stopped
+encoding an unchanged map. This does not implement HUD video or simultaneous
+cluster/HUD output. Turning the map setting off cancels the retained session.
+
+The existing process supervisor and keyframe recovery handle local transport
+failures together. The daemon asks its supervisor to stop the old player, waits
+for cleanup and process exit, then retries after 1, 2, 4, 8, 16 and at most 30
+seconds. Thirty seconds of helper uptime resets the backoff. The map preference
+survives the phone's focus-release response, so a replacement decoder can request
+a fresh stream and IDR without an off/on toggle. Ending AA or disabling the
+setting prevents automatic restart. Missing binaries, incompatible layout,
+ownership conflicts and failed cleanup remain blocked until intervention;
+the daemon never starts a competing owner to bypass them.
+
+There is no frame-cadence watchdog: a stationary AA map can legitimately remain
+silent. Socket transfers instead have a three-second idle deadline, reset by
+byte progress, and a fifteen-second total bound per transfer. An incomplete
+access unit is discarded with its connection, never spliced into a new stream.
+Slow decode, presentation and control operations are logged with
+`AA_CLUSTER_SLOW stage=...` in the shared log to help diagnose future stalls.
 
 Service lifetime follows the owning AA connection, with a separate two-second
 deadline for each Guidance transaction. Slow startup does not consume a shared
