@@ -126,17 +126,13 @@ inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet
 // first and connects over Wi-Fi instead of the cable, which is the one thing USB mode is meant to avoid.
 inline bool wirelessEnabledForTransport() { return wirelessEnabled() && !usbEnabled(); }
 
-// "Prompts on car radio (BT, beta)" (iDrive Settings checkbox; flag file kSpeechBtFlagFile; a hand-made
-// kSpeechBtManualFile also counts; NBT_SPEECH_BT=1 / 0 wins either way, same words as NBT_USB). Only meaningful in
-// Bluetooth audio mode, where it turns the speech path on with the nav prompter defaults and keeps the ServiceDiscovery
-// guidance sink on channel 8, so the car ducks the radio for a prompt instead of the phone mixing it into A2DP.
-// Off by default: the BT path is not car-verified by its author. Read once at daemon start.
-static const char* const kSpeechBtFlagFile = "/var/opt/aa/speech-bt";
-static const char* const kSpeechBtManualFile = "/opt/aa/speech-bt";
-inline bool speechBtFlagFileSet() {
-    return access(kSpeechBtFlagFile, F_OK) == 0 || access(kSpeechBtManualFile, F_OK) == 0;
-}
-inline bool speechBtEnabled() { return usbSettingOn(getenv("NBT_SPEECH_BT"), speechBtFlagFileSet()); }
+// "Prompts on car radio (BT, beta)" (iDrive Settings checkbox; the "speech-bt" flag, resolved by nbt_paths.hpp so a
+// package install keeps it in its own data dir; NBT_SPEECH_BT=1 / 0 wins either way, same words as NBT_USB). Only
+// meaningful in Bluetooth audio mode, where it turns the speech path on with the nav prompter defaults and keeps the
+// ServiceDiscovery guidance sink on channel 8, so the car ducks the radio for a prompt instead of the phone mixing it
+// into A2DP. Off by default: the BT path is not car-verified by its author. Read once at daemon start.
+static const char* const kSpeechBtFlagName = "speech-bt";
+inline bool speechBtEnabled() { return usbSettingOn(getenv("NBT_SPEECH_BT"), nbt::flagSet(kSpeechBtFlagName)); }
 
 // "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag kPhoneGpsFlagName, a hand-made one also counts;
 // NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna, which have
