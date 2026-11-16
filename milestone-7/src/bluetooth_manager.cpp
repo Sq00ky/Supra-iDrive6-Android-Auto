@@ -4,6 +4,7 @@
 #include "dsi_client.hpp"
 #include "gap_parse.hpp"
 #include "spp_direction.hpp"
+#include "spp_rereg.hpp"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -117,6 +118,9 @@ bool g_listAsked = false;
 // Refused phone-opened links in a row (ServiceRequestError, reset by ServiceRequestComplete), and whether the phone's
 // service list was already fetched once for such a run (DSI callback thread only).
 unsigned g_reqErrRun = 0;
+// Last phone request of any kind (ServiceRequest / ...Complete / ...Error), under g_dirMx.
+bool g_askSeen = false;
+uint32_t g_askAt = 0;
 bool g_reqErrListAsked = false;
 bool g_reqErrListPending = false;
 
@@ -166,7 +170,8 @@ void updateDevices(DsiClient* c, const std::vector<GapDevice>& d, const char* fr
 }
 
 void onGapAttached(DsiClient* c, void*) {
-    if (sppDirMode() != 0) {   // read-only: who opens each Bluetooth serial link (Android Auto = the phone)
+    {   // read-only, always: the phone's link requests (direction learning when NBT_SPP_DIRECTION is not 0, and
+        // holding the periodic re-registration while the phone is already asking)
         const uint32_t req[] = { kInfServiceRequest, kInfServiceRequestComplete, kInfServiceRequestError };
         for (size_t i = 0; i < sizeof(req) / sizeof(req[0]); ++i) c->setNotification(req[i]);
         printf("[BluetoothManager] watching the phone's incoming link requests (ServiceRequest): an Android Auto "
@@ -195,23 +200,23 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
         printf("[BluetoothManager] [%9.3f] %s from the phone: %s%s%s service '%s'%s\n", upSecBt(), what,
                name.empty() ? "" : "'", name.c_str(), name.empty() ? addr.c_str() : ("' " + addr).c_str(), svc.c_str(),
                r.ok() ? "" : " (payload not fully parsed)");
-        if (id != kInfServiceRequestError) {
-            pthread_mutex_lock(&g_dirMx);
-            g_dir.onPhoneRequest(svc, monoSec());
-            pthread_mutex_unlock(&g_dirMx);
-        }
+        pthread_mutex_lock(&g_dirMx);
+        g_askSeen = true;
+        g_askAt = monoSec();
+        if (id != kInfServiceRequestError && g_dirMode != 0) g_dir.onPhoneRequest(svc, g_askAt);
+        pthread_mutex_unlock(&g_dirMx);
         if (id == kInfServiceRequestComplete) g_reqErrRun = 0;
         if (id == kInfServiceRequestError && ++g_reqErrRun % 60 == 5) {
             // The car's Bluetooth manager (Connectivity) refused the phone's link. One or two right after the phone
             // connects are normal: it asks before its Bluetooth audio is up, and the next request completes (seen on
-            // three cars). Connectivity's PFEvent_ServiceRequest handler (static RE 2026-11-05, not car-verified) accepts a
-            // phone-opened SPP link only while that same phone has Bluetooth audio (A2DP) connected to the car and SPP is
-            // enabled in the car's Bluetooth set-up; it also refuses it with the ignition (terminal R) off, in the pairing
-            // menu and during an NFC session.
+            // three cars). A run of them is not about Bluetooth audio: a Z Fold8 on a Toyota (bugreport 2026-11-14) had
+            // A2DP and AVRCP connected, found the service (SDP, channel 2) and passed the security check, and the car
+            // still answered every channel open with DM within ~30 ms. That is Connectivity's own decision for this
+            // phone: its per-device functions / pairing, or ignition (terminal R) off, the pairing menu or an NFC session.
             printf("[BluetoothManager] the car has refused the phone's Android Auto Bluetooth link %u times in a row. "
-                   "The car accepts it only while this phone's Bluetooth audio is connected: check Bluetooth audio for "
-                   "the phone in iDrive (Mobile devices) and Media audio for the car on the phone, with the ignition on "
-                   "and the pairing menu closed\n", g_reqErrRun);
+                   "The phone sees the service and the car turns the link down for this phone: check the phone's "
+                   "functions in iDrive (Mobile devices, the phone's settings), delete the phone in iDrive and on the "
+                   "phone and pair it again, with the ignition on and the pairing menu closed\n", g_reqErrRun);
             if (!g_reqErrListAsked && !addr.empty()) {   // which of its services the car has connected (once per run)
                 g_reqErrListAsked = true;
                 g_reqErrListPending = true;
@@ -288,6 +293,19 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
     } else if (g_spp == SPP_DEREG_SENT && type == 0x200 && id != kRspDeviceListGet && id != kRspServiceListGet) {
         // Deregister response (0x80000044 on the car); take the first plain response after the request.
         uint32_t err = readErr(pl, len);
+        if (err == 5 && g_periodic) {
+            // Seen on P18362I and Y24073J (18 of 39 rounds on one car): the deregister answers DEFAULT and the register
+            // after it always answers DEFAULT ("already registered") too, so the car kept the registration and
+            // registering again changes nothing. Leave it registered, no "use Restart" warning.
+            static unsigned kept = 0;
+            if ((kept++ % 20) == 0)
+                printf("[BluetoothManager] SppUuidDeregister response (id=0x%x): GapErrorCode=5: the car kept the "
+                       "registration, the Android Auto Bluetooth service stays registered (not registering again; %u "
+                       "time(s) so far)\n", id, kept);
+            setState(SPP_DONE);
+            fflush(stdout);
+            return;
+        }
         printf("[BluetoothManager] SppUuidDeregister response (id=0x%x): GapErrorCode=%u (%s); registering again\n",
                id, err, gapErrorName(err));
         setState(SPP_REREG_SENT);
@@ -353,6 +371,16 @@ unsigned sppDirRequests() {
     unsigned r = g_dir.requestsSeen();
     pthread_mutex_unlock(&g_dirMx);
     return r;
+}
+
+bool sppPhoneAsking(unsigned* agoSec) {
+    pthread_mutex_lock(&g_dirMx);
+    bool seen = g_askSeen;
+    uint32_t at = g_askAt;
+    pthread_mutex_unlock(&g_dirMx);
+    uint32_t now = monoSec();
+    if (agoSec) *agoSec = seen ? (unsigned)(now - at) : 0;
+    return sppReregHeld(seen, at, now);
 }
 
 BluetoothManager::BluetoothManager() : is_registered_(false) {}

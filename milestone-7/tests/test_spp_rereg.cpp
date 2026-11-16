@@ -1,0 +1,34 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+// Host test for src/spp_rereg.hpp: the re-registration schedule and the hold while the phone is asking.
+#include "spp_rereg.hpp"
+#include <assert.h>
+#include <stdio.h>
+using namespace nbt;
+
+int main() {
+    // Schedule: base interval for the first 2 minutes, then every 30 s; 0 = off; a long base stays as is.
+    assert(sppReregIntervalSec(0, 5) == 5);
+    assert(sppReregIntervalSec(23, 5) == 5);
+    assert(sppReregIntervalSec(24, 5) == kSppReregSlowSec);
+    assert(sppReregIntervalSec(3, 0) == 0);
+    assert(sppReregIntervalSec(0, 60) == 60 && sppReregIntervalSec(9, 60) == 60);
+    {
+        SppReregTimer t;
+        t.configure(5);
+        t.reset(1000);
+        assert(!t.due(1004));
+        assert(t.due(1005) && t.attempts() == 1);
+        assert(!t.due(1009) && t.due(1010));
+    }
+    // Hold: only after a request, for kSppReregHoldSec after the last one, wrap-safe.
+    assert(!sppReregHeld(false, 0, 100));
+    assert(sppReregHeld(true, 100, 100));
+    assert(sppReregHeld(true, 100, 100 + kSppReregHoldSec - 1));
+    assert(!sppReregHeld(true, 100, 100 + kSppReregHoldSec));
+    assert(!sppReregHeld(true, 100, 5000));
+    assert(sppReregHeld(true, 0xFFFFFFF0u, 5));          // monotonic seconds wrapped
+    assert(!sppReregHeld(true, 100, 105, 0));            // hold 0 = never held
+    printf("test_spp_rereg OK\n");
+    return 0;
+}

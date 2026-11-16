@@ -923,6 +923,15 @@ static void* wirelessThread(void*) {
             uint32_t now = monoSecs();
             if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); }
             else if (g_btMgr && rereg.due(now)) {
+                unsigned ago = 0;
+                if (nbt::sppPhoneAsking(&ago)) {
+                    static unsigned held = 0;
+                    if ((held++ % 12) == 0)
+                        printf("[Wireless] [%9.3f] the phone asked for the Android Auto Bluetooth link %u s ago: not "
+                               "re-registering the service under it (it retries by itself)\n", upSec(), ago);
+                    usleep(500000);
+                    continue;
+                }
                 char why[96];
                 snprintf(why, sizeof(why), "no Android Auto Bluetooth link for %u s (try %d)",
                          (unsigned)(now - idleStart), rereg.attempts());
@@ -1740,7 +1749,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.84-about"
+#define NBT_AAD_BUILD "v1.9.87-sppreq"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.

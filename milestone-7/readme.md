@@ -20,6 +20,15 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > wins over the checkbox. The `--pf-*` / `--license` one-shot commands keep their output. The printf call sites still
 > run - this removes the I/O, not the formatting - so it answers "does writing the log cost anything", not "are the
 > printf calls free".
+>
+> **v1.9.87-sppreq: no Bluetooth re-registration while the phone is asking for the link.** The periodic re-registration no longer runs then.
+> A phone that sent a ServiceRequest in the last 30 s is connected and already sees the service, and Android Auto
+> retries every ~5 s by itself; re-registering only removed the service under it. The request informs are now
+> watched on every car (Toyota too, also with `NBT_SPP_DIRECTION=0`), read-only. A deregister answered with
+> GapErrorCode 5 means the car kept the registration: the daemon leaves it registered instead of registering again
+> and warning "use Restart". The hint after refused links no longer blames Bluetooth audio (a Z Fold8 was refused
+> with A2DP connected and the security check passed): it points at the phone's functions in iDrive and re-pairing.
+> Log: `[Wireless] ... not re-registering the service under it`, `the car kept the registration`.
 
 > **v1.8.73-wfd: `NBT_ALT_WIFI` (experiment, off): the Wi-Fi Direct group instead of the CarPlay hotspot.**
 > Cars without the CarPlay licence have no usable `iap2.cfg`, so they were told "no Wi-Fi hotspot config" and wireless
@@ -1162,6 +1171,7 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    Bluetooth service (`BSS_GAP.SGBluetoothGap` 35.0). If registration fails, it deregisters and registers once more.
    While no phone opens the link, it deregisters and registers again every 5 s for 2 minutes, then every 30 s
    (`spp_rereg.hpp`, `NBT_SPP_REREG_S`), because a phone that is already connected only opens it after that.
+   Held for 30 s after any phone ServiceRequest: a phone that asks already sees the service.
 2. **Wireless setup (`wireless_setup`).** When the phone opens the link, Connectivity creates `/dev/btsppN`. The
    daemon scans `btspp0..7`. Links that turn out to be BMW BCL/Etch (the BCL startup magic `12 34 56 78`, `0xDEADBEEF`, `0x13371337`,
    or self-consistent BCL frames) are skipped. A link that closes without a single Android Auto reply (a working

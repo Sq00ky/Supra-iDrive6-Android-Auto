@@ -19,6 +19,10 @@ namespace nbt {
 
 static const int kSppReregFastPhaseSec = 120;   // retry at the short interval for this long after a link went away
 static const int kSppReregSlowSec = 30;         // then this often
+// A phone that asked for the link (ServiceRequest / ...Complete / ...Error) this recently is connected and already sees
+// the service: re-registering would only take the service away under it while it retries (Z Fold8 bugreport
+// 2026-11-14: Android Auto retries every ~5 s by itself). Hold re-registration for this long after its last request.
+static const int kSppReregHoldSec = 30;
 
 // Seconds to wait before re-registration number `attempt` (0-based) of one idle period.
 inline int sppReregIntervalSec(int attempt, int base) {
@@ -35,6 +39,11 @@ inline int sppReregBaseSec() {
     int v = atoi(e);
     if (v <= 0) return 0;
     return v > 3600 ? 3600 : v;
+}
+
+// True while re-registration is held: a phone request was seen and the last one is less than holdSec old.
+inline bool sppReregHeld(bool asked, uint32_t lastAskSec, uint32_t nowSec, int holdSec = kSppReregHoldSec) {
+    return asked && holdSec > 0 && (uint32_t)(nowSec - lastAskSec) < (uint32_t)holdSec;
 }
 
 // Idle-period timer: reset() when waiting for a link starts (start-up, end of a link/session, access point back),
