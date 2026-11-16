@@ -72,7 +72,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-65-paths (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-66-speechbt (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -380,6 +380,10 @@ const unsigned    kAnyDistTextModel = 168;   // textIdModel (checkbox label)
 const char* const kAnyDistFlag      = "kombi-nav-anydist";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
 const unsigned    kNoLogModel       = 175;   // raBoolModel
+const unsigned    kActSpeechBt      = 174;   // "Prompts on car radio (BT, beta)" checkbox
+const unsigned    kSpeechBtModel    = 177;   // raBoolModel
+const char* const kSpeechBtFlag     = "/var/opt/aa/speech-bt";
+const char* const kSpeechBtManual   = "/opt/aa/speech-bt";
 const char* const kNoLogFlag        = "no-log";
 const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
 const unsigned    kPfRowLabel[3]   = { 29, 30, 31 };      // Install / Check / Uninstall PF Rules
@@ -2221,6 +2225,15 @@ bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+bool speechBtOn() { return fileExists(kSpeechBtFlag) || fileExists(kSpeechBtManual); }
+void showSpeechBt(bmw::PluginApp* app) { app->updateModel(kSpeechBtModel, speechBtOn()); }
+bool onSpeechBtToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kSpeechBtFlag, kSpeechBtManual,
+                   "Prompts on car radio (Bluetooth beta: nav prompter + eSRC_NAV_AUTO; NBT_SPEECH_BT in nbt-aad.env wins)");
+    if (g_runApp) showSpeechBt(g_runApp);
+    return true;
+}
+
 bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kAnyDistFlag,
                    "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
@@ -2484,7 +2497,8 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showNativeAudio(g_app);
         showLciMedia(g_app);
         showCpCompat(g_app);
-        alog("settings: twelve checkbox models refreshed");
+        showSpeechBt(g_app);
+        alog("settings: thirteen checkbox models refreshed");
     }
     return true;
 }
@@ -2527,6 +2541,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActCpCompat, &onCpCompatToggle);
     addAction(self, kActAnyDist, &onAnyDistToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
+    addAction(self, kActSpeechBt, &onSpeechBtToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);

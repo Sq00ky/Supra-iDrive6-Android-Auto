@@ -606,6 +606,9 @@ int main() {
         setenv("NBT_WIRELESS", "0", 1);
         assert(nbt::wirelessEnabledForTransport() == false);     // NBT_WIRELESS=0 still wins
         // every switch in nbt-aad.env parses the same way
+        assert(nbt::usbSettingOn("1", false) == true);            // NBT_SPEECH_BT=1 / 0 / unset + flag file
+        assert(nbt::usbSettingOn("0", true) == false);
+        assert(nbt::usbSettingOn(NULL, false) == false);
         assert(nbt::usbSettingOn("1", false) == true);
         assert(nbt::usbSettingOn("0", true) == false);           // env forces it off
         assert(nbt::usbSettingOn(NULL, true) == true);           // flag file, no env

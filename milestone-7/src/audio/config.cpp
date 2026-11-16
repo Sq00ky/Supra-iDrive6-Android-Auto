@@ -127,7 +127,12 @@ BtConfig readBtConfig() {
     c.refocus = envFlag("NBT_BT_REFOCUS") != 0;   // unset stays on
     c.release = getenv("NBT_BT_RELEASE") && strcmp(getenv("NBT_BT_RELEASE"), "1") == 0;
     c.sdr_drop = getenv("NBT_SDR_DROP") ? getenv("NBT_SDR_DROP") : "9";
-    c.speech = readSpeechConfig(false, NULL, 0);
+    // "Prompts on car radio (BT, beta)" (nbt_env.hpp speechBtEnabled): the BT path otherwise leaves speech off and lets
+    // the phone mix prompts into A2DP. With the flag the browser defaults apply (nav prompter, eSRC_NAV_AUTO, speakers)
+    // and retypeGuidanceSink() leaves channel 8 as GUIDANCE, so the prompt audio actually arrives. Explicit NBT_SPEECH*
+    // values still win over the defaults.
+    c.speech = nbt::speechBtEnabled() ? readSpeechConfig(true, kNavPromptEndpoint, kNavPromptSrc)
+                                      : readSpeechConfig(false, NULL, 0);
     return c;
 }
 

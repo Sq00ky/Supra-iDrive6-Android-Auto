@@ -19,6 +19,7 @@
       <raAction id="30"/>
       <raAction id="167"/>
       <raAction id="173"/>
+      <raAction id="174"/>
       <hmiAction id="25" target="12"/>
       <hmiAction id="81" target="15"/>
       <hmiAction id="80" target="14"/>
@@ -82,6 +83,10 @@
         <synonyms/>
       </textIdModel>
       <raBoolModel id="175"/>
+      <raBoolModel id="177"/>
+      <textIdModel id="178" textId="48">
+        <synonyms/>
+      </textIdModel>
       <textIdModel id="176" textId="47">
         <synonyms/>
       </textIdModel>
@@ -243,6 +248,7 @@
           <checkbox action="29" id="72" model="46" text="Show navigation in HUD/gauge cluster" textModel="47"/>
           <checkbox action="167" id="169" model="170" text="Show directions at any distance" textModel="168"/>
           <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
+          <checkbox action="174" id="180" model="177" text="Prompts on car radio (BT, beta)" textModel="178"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
           <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
           <checkbox action="87" id="90" model="88" text="Use Phone GPS" textModel="89"/>
