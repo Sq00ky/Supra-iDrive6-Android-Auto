@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "id": "com.github.sq00ky.android-auto",
+  "name": "Android Auto",
+  "version": "@VERSION@",
+  "install": {
+    "files": [
+      {"src": "payload/nbt-aad", "dest": "${app}/nbt-aad", "mode": "0755"},
+      {"src": "payload/plugin/", "dest": "${plugins}/NbtAad/", "mode": "0644"}
+    ],
+    "serialServices": [{"name": "AndroidAuto", "program": "nbt-aad"}],
+    "reboot": "hmi-restart"
+  }
+}
