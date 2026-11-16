@@ -944,9 +944,9 @@ The defaults are the nav prompter of the F30 (NBTevo_S19322I): `NBT_SPEECH_EP=/i
 
 - Prompts play on the endpoint, the car's nav prompter. For each prompt the daemon asks for the nav focus
   (`audioconn -b 0x1a 0x1`), which ducks the radio like the car's own navigation. Audio waits for the grant.
-- Car-tested on the F30 with a test build (v1.9.77-pr209): prompts and Assistant replies duck DAB and FM. That
-  test found the endpoint opened stereo, the car's own prompts blocked and AA media muted; the fixes below are not
-  car-tested yet.
+- Car-tested on the F30 (test builds v1.9.77-pr209 and v1.9.79-pr209, including a 30-minute drive): prompts and
+  Assistant replies duck DAB and FM, AA media is ducked, not muted, and the car's own navigation speaks between AA
+  prompts.
 - The endpoint is opened at each prompt start and closed once the focus is given back, so the car's own navigation
   can speak between AA prompts. When the car's prompter takes the endpoint during an AA prompt (both navigations at
   once, or the sample in the iDrive volume menu), ours stops taking audio: after 1 s (3 s while it is still opening)
@@ -1448,8 +1448,8 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 - Cluster/HUD arrows (`kombi_nav`): confirm on the car that the head unit reaches the KOMBI directly, run a drive,
   and check the direction values other than LEFT / RIGHT / destination (parked).
 - `NBT_SPEECH=1`: when the car's navigation speaks during an AA prompt, the AA prompt is cut (the car's prompter takes
-  the shared endpoint). Between AA prompts the car's navigation should speak again (endpoint opened per prompt): not
-  car-verified yet. After nbt-aad stops the focus is given back (the daemon waits up to 2 s at shutdown).
+  the shared endpoint). Between AA prompts the car's navigation speaks (endpoint opened per prompt, car-verified).
+  After nbt-aad stops the focus is given back (the daemon waits up to 2 s at shutdown).
 - Android Auto over USB (`NBT_USB=1`) needs a first car test. Check with the phone plugged in: does `ls /dev/android*`
   show a node (the car's medialauncher must still have its OAP probing on), does `/dev/oap*` appear after the
   `switch to accessory mode sent` line, and does `pidin fds | grep oap` show only nbt-aad on it? If BMW's
