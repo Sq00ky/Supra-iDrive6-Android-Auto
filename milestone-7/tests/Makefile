@@ -102,6 +102,7 @@ SRC_test_volume_level      :=
 SRC_test_volume            := src/audio/mixer.cpp src/audio/playout.cpp src/audio/drift.cpp src/audio/stream_rate.cpp
 SRC_test_wpp               := src/wireless_setup.cpp
 SRC_test_settings_watch    :=
+SRC_test_wfd_own           := src/wireless_setup.cpp src/gcf_client.cpp
 
 # Arguments some tests take (paths relative to milestone-7).
 ARGS_test_ccs_decoder := tests/fixtures/controls_2026-10-22_e5.txt
