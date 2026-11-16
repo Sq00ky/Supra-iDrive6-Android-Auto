@@ -938,6 +938,16 @@ mutes the radio. Nothing to set: `NBT_SPEECH` is on by default there. `NBT_SPEEC
 The defaults are the nav prompter of the F30 (NBTevo_S19322I): `NBT_SPEECH_EP=/input_mono_0`, `NBT_SPEECH_SRC=0x1a`,
 `NBT_SPEECH_SINK=0x1`. Set them only for a car that differs. `NBT_SPEECH_SRC=0` keeps the prompts in the browser mix.
 
+Finding the values on another car, over SSH:
+
+- Endpoint: `grep -i announcement /opt/speech/bin/natp.cfg`, the line with NAVI. On the F30
+  `input_mono_0 … Prompter Announcement NAVI`, set with a leading slash: `/input_mono_0`.
+- Source and sink: `audioconn -l | grep NAV_AUTO`. On the F30
+  `ConnId=0x58:  [0x1a] eSRC_NAV_AUTO - [0x1] eSNK_SPEAKERS`: the source is `0x1a`, the sink `0x1` (not the
+  `ConnId`, the car refuses that one).
+- Check by ear with the radio on: `audioconn -b <src> <sink>` should lower the radio, `audioconn -r <src> <sink>`
+  bring it back. If it doesn't come back, a head unit restart does.
+
 - Prompts play on the endpoint, the car's nav prompter. For each prompt the daemon asks for the nav focus
   (`audioconn -b 0x1a 0x1`), which ducks the radio like the car's own navigation. Audio waits for the grant.
 - Car-tested on the F30 (test builds v1.9.77-pr209 and v1.9.79-pr209, including a 30-minute drive): prompts and
