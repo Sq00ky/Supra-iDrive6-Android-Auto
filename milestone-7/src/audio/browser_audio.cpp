@@ -209,7 +209,7 @@ bool BrowserAudio::init(const BrowserConfig& cfg) {
     bool ok = dev_.load();
     if (conn_ && !route_.configure()) printf("[Browser] audioconn not found: connection 0x%x cannot be built\n", conn_);
     if (!cfg.speech.enabled) {
-        printf("[Browser] guidance: browser mix\n");
+        printf("[Browser] guidance: browser mix (NBT_SPEECH=0)\n");
     } else if (!cfg.speech.src) {
         printf("[Browser] guidance: browser mix (NBT_SPEECH_SRC=0: no nav prompt focus)\n");
         return ok;   // SpeechOut would never take a prompt: leave the endpoint closed

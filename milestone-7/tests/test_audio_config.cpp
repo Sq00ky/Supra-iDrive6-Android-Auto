@@ -60,8 +60,8 @@ int main() {
         CHECK(c.media_gain_db == 0 && c.guidance_gain_db == 0 && c.system_gain_db == 0);
         CHECK(c.defer_acks && d.defer_acks);
         CHECK(c.underflow_reports && d.underflow_reports);
-        CHECK(!c.speech.enabled && same(c.speech.endpoint, "/input_mono_0") && c.speech.src == 0x1a);
-        CHECK(!d.speech.enabled && same(d.speech.endpoint, "/input_mono_0") && d.speech.src == 0x1a);
+        CHECK(c.speech.enabled && same(c.speech.endpoint, "/input_mono_0") && c.speech.src == 0x1a);
+        CHECK(d.speech.enabled && same(d.speech.endpoint, "/input_mono_0") && d.speech.src == 0x1a);
         CHECK(c.speech.sink == 0x1 && d.speech.sink == 0x1);
     }
 
@@ -237,11 +237,18 @@ int main() {
         CHECK(strcmp(audioModeName(AUDIO_MODE_A2I), "a2i") == 0);
     }
 
-    // 5. Speech settings: browser mode defaults to the nav prompter, BT to no focus; set values win in both modes;
-    // NBT_SPEECH_HOLD_MS clamped to 0..5000.
+    // 5. Speech settings: browser mode is on by default on the nav prompter, BT off and without a focus; set values win
+    // in both modes; NBT_SPEECH_HOLD_MS clamped to 0..5000.
     {
         const BrowserConfig b = readBrowserConfig();
-        CHECK(!b.speech.enabled && b.speech.sink == 0x1 && b.speech.hold_ms == 500);
+        CHECK(b.speech.enabled && b.speech.sink == 0x1 && b.speech.hold_ms == 500);
+        CHECK(!readBtConfig().speech.enabled);
+        setenv("NBT_SPEECH", "0", 1);
+        CHECK(!readBrowserConfig().speech.enabled && !readBtConfig().speech.enabled);
+        setenv("NBT_SPEECH", "off", 1);
+        CHECK(!readBrowserConfig().speech.enabled);
+        setenv("NBT_SPEECH", "maybe", 1);
+        CHECK(readBrowserConfig().speech.enabled && !readBtConfig().speech.enabled);
         setenv("NBT_SPEECH", "1", 1);
         const BrowserConfig b1 = readBrowserConfig();
         const BtConfig t1 = readBtConfig();

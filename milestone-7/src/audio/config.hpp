@@ -79,7 +79,7 @@ const uint32_t kNavPromptSrc = 0x1a;
 
 // NBT_SPEECH (both audio modes, speech_out.hpp).
 struct SpeechConfig {
-    bool enabled;               // NBT_SPEECH=1
+    bool enabled;               // NBT_SPEECH (browser: on unless 0/off/no/false; BT: only "1" turns it on)
     const char* endpoint;       // NBT_SPEECH_EP (browser kNavPromptEndpoint; BT NULL = the factory alternate nav endpoint)
     uint32_t src;               // NBT_SPEECH_SRC (browser kNavPromptSrc; BT 0; 0 = no audioconn request)
     uint32_t sink;              // NBT_SPEECH_SINK (0x1)
@@ -120,8 +120,8 @@ struct BrowserConfig {
     BrowserConfig();            // the defaults
 };
 BrowserConfig readBrowserConfig();
-// Unset, empty or unparsable NBT_SPEECH_EP / NBT_SPEECH_SRC take the given defaults.
-SpeechConfig readSpeechConfig(const char* def_endpoint, uint32_t def_src);
+// Unset, empty or unparsable NBT_SPEECH / NBT_SPEECH_EP / NBT_SPEECH_SRC take the given defaults.
+SpeechConfig readSpeechConfig(bool def_enabled, const char* def_endpoint, uint32_t def_src);
 
 // Bluetooth audio mode (bt_audio.hpp).
 struct BtConfig {

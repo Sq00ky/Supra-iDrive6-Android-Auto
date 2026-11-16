@@ -46,7 +46,8 @@
 //   NBT_DUCK_DB          media level while ducked, dB (default -12)
 //   NBT_DUCK_ATTACK_MS / NBT_DUCK_RELEASE_MS / NBT_DUCK_HOLD_MS   ramp down / up / hold (default 80 / 500 / 600)
 //   NBT_MEDIA_GAIN_DB / NBT_GUIDANCE_GAIN_DB / NBT_SYSTEM_GAIN_DB fixed per-stream gains (default 0)
-//   NBT_SPEECH=1         guidance plays on the nav prompt channel (speech_out.hpp) over the radio, unless NBT_SPEECH_SRC=0;
+//   NBT_SPEECH           default on (0 = off): guidance plays on the nav prompt channel (speech_out.hpp) over the radio,
+//                        unless NBT_SPEECH_SRC=0;
 //                        a guidance stream goes into the mix (AA media ducked) when the browser source carries AA
 //                        media (the car mutes it under that focus) or SpeechOut cannot take it at its start
 

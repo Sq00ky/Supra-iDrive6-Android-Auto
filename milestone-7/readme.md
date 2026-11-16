@@ -843,7 +843,7 @@ Leave these unset unless you are testing.
 | `NBT_AA_UNDERFLOW_REPORT` | Browser mode: `0` stops telling the phone when a stream ran dry. On by default: when a playing stream that has already sent audio leaves a mixer block short (padded with silence), the phone gets an AudioUnderflowNotification (`0x800b`), once per dry spell, as Google's head unit does. What the phone does with it isn't known yet. Log: `[Browser] media ran dry ..`, `[AASession] media ran dry: AudioUnderflowNotification (0x800b) #N ..`, 5 s later `[Browser] 5 s after media underflow #N: the phone sent X ms of audio in 5000 ms, queue now Y ms` (X above 5000 = it sent extra), and the session summary `[Feature] underflow_reports=on ..` |
 | `NBT_BROWSER_RESAMPLER`, `NBT_BROWSER_SPEEX_Q`, `NBT_BROWSER_RESAMPLER_FILE` | Browser mode: how the AA streams are converted to the device rate. Default `speex`: the speexdsp resampler (see [Third-party code](#third-party-code)), quality `5` (0..10; 80-tap filter, ~100 dB stopband), flat to ~19.5 kHz with no aliasing and no treble wobble under the drift trim. `linear` = the old linear interpolation (about -2.9 dB at 15 kHz, 22-24 kHz folding back as an audible alias). To compare by ear while music plays: `echo linear > /tmp/nbt_resampler` (or `speex`), `rm /tmp/nbt_resampler` to go back; the file is read once a second (`NBT_BROWSER_RESAMPLER_FILE` moves it, empty = off). The 10 s stats show `[Browser] resampler speexdsp: X ms CPU per s (Y %), output/input vs rates media/guidance/system ..`; speex that takes over 25 % CPU or produces the wrong number of frames (over 2 % off) falls back to linear for the session, with a warning |
 | `NBT_BROWSER_FORCE_RATE` | Browser mode experiment, off by default: ask the browser device for this rate (e.g. `48000`) even though it reports 22050..44100, so the 48 kHz AA streams play without resampling. The log says whether the device took it; if the car refuses, the device doesn't open and there is no AA audio that session (reason in `sloginfo`) |
-| `NBT_SPEECH=1` | Play AA guidance (ch 8) on an A2I endpoint. In browser mode each prompt gets its own audio focus on the car's nav prompter, so the radio is ducked, not muted. While AA media plays, prompts stay in the browser mix (media ducked). Off by default, opt-in. See [Navigation prompts over the radio](#navigation-prompts-over-the-radio) |
+| `NBT_SPEECH` | Play AA guidance (ch 8) on an A2I endpoint. In browser mode each prompt gets its own audio focus on the car's nav prompter, so the radio is ducked, not muted. While AA media plays, prompts stay in the browser mix (media ducked). On by default in browser mode (`0` = off, guidance in the browser mix), off in Bluetooth mode (`1` = on). See [Navigation prompts over the radio](#navigation-prompts-over-the-radio) |
 | `NBT_SPEECH_EP` | Endpoint for the prompts. Default in browser mode `/input_mono_0`, the car's nav prompter; in Bluetooth mode `/input_stereo_AirPlayAlt`. `/input_mono_*` endpoints are opened mono, all others stereo |
 | `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Focus requested for each prompt, `audioconn -b <src> <sink>`. `SRC` default in browser mode `0x1a` (`eSRC_NAV_AUTO`), in Bluetooth mode `0`. `0` = no focus request (Bluetooth mode: audio plays at once; browser mode: guidance stays in the browser mix). `SINK` default `0x1` (speakers) |
 | `NBT_SPEECH_HOLD_MS` | The focus is released this long after the queued audio has played, then the endpoint is closed (default `500`, `0`..`5000`) |
@@ -932,12 +932,8 @@ Handy checks from the shell: `audioconn -l` (is `0xb8` listed as `BrowserFront`?
 
 #### Navigation prompts over the radio
 
-With `NBT_SPEECH=1` in browser mode the guidance channel (nav prompts, Assistant replies) no longer goes through the
-browser mix, which mutes the radio. `nbt-aad.env`:
-
-```
-NBT_SPEECH=1
-```
+In browser mode the guidance channel (nav prompts, Assistant replies) no longer goes through the browser mix, which
+mutes the radio. Nothing to set: `NBT_SPEECH` is on by default there. `NBT_SPEECH=0` goes back to the browser mix.
 
 The defaults are the nav prompter of the F30 (NBTevo_S19322I): `NBT_SPEECH_EP=/input_mono_0`, `NBT_SPEECH_SRC=0x1a`,
 `NBT_SPEECH_SINK=0x1`. Set them only for a car that differs. `NBT_SPEECH_SRC=0` keeps the prompts in the browser mix.
@@ -972,9 +968,9 @@ The defaults are the nav prompter of the F30 (NBTevo_S19322I): `NBT_SPEECH_EP=/i
   `/input_stereo_AirPlayAlt` unless `NBT_SPEECH_EP` is set. Without `NBT_SPEECH_SRC` (default `0` there) prompts play at
   once, without a focus. During a backoff prompts are dropped (no mix to fall back to). The car's Bluetooth source is
   requested again when the mic closes (`NBT_BT_REFOCUS`), which switches away from the radio.
-- Opt-in for now. Testers with other cars (Supra, MINI, G-series) are welcome: endpoint names and source ids come from
-  `/opt/speech/bin/natp.cfg` and `audioconn -l` on the F30 and may differ; then set `NBT_SPEECH_EP` / `NBT_SPEECH_SRC`.
-  Without the endpoint the start-up open fails (`[Speech] could not open ..`) and prompts stay in the browser mix.
+- Only car-tested on the F30. Testers with other cars (Supra, MINI, G-series) are welcome: the endpoint name and the
+  source id may differ there (see above). Without the endpoint the start-up open fails (`[Speech] could not open ..`)
+  and prompts stay in the browser mix.
 
 ## Logs
 

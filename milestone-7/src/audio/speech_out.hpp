@@ -3,8 +3,9 @@
 #ifndef AUDIO_SPEECH_OUT_HPP
 #define AUDIO_SPEECH_OUT_HPP
 
-// NBT_SPEECH=1 (OFF by default): play Android Auto guidance (channel 8, the format the phone declared) on an A2I
-// playback endpoint. Without it, BT mode acks and drops every prompt (ch 8 must stay in the ServiceDiscovery).
+// NBT_SPEECH (on by default in browser mode, NBT_SPEECH=0 turns it off; off in BT mode, NBT_SPEECH=1 turns it on): play
+// Android Auto guidance (channel 8, the format the phone declared) on an A2I playback endpoint. Without it, BT mode acks
+// and drops every prompt (ch 8 must stay in the ServiceDiscovery) and browser mode keeps guidance in its mix.
 //   NBT_SPEECH_EP       endpoint (browser mode default /input_mono_0, the car's nav prompter; BT mode
 //                       /input_stereo_AirPlayAlt; /input_mono_* ones are opened mono)
 //   NBT_SPEECH_SRC      AM source of the nav prompt focus `audioconn -b <src> <sink>` (browser mode default 0x1a,

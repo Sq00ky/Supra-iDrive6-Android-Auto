@@ -142,7 +142,7 @@ void SpeechOut::endpointThread() {
 
 void SpeechOut::init(const SpeechConfig& cfg) {
     if (!cfg.enabled) {
-        printf("[Speech] spoken nav prompts: off (NBT_SPEECH=1 enables)\n");
+        printf("[Speech] spoken nav prompts: off (NBT_SPEECH: on by default in browser mode, =1 in Bluetooth mode)\n");
         return;
     }
     src_ = cfg.src;
