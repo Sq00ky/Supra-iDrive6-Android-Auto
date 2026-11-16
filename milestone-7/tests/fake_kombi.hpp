@@ -5,7 +5,7 @@
 #ifndef FAKE_KOMBI_HPP
 #define FAKE_KOMBI_HPP
 
-#include "cluster/j29_graph.hpp"
+#include "cluster/guidance/graph.hpp"
 #include <assert.h>
 #include <pthread.h>
 #include <string.h>

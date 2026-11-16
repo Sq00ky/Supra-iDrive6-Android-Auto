@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Host test: kombi_nav state machine + SOME/IP client against a fake KOMBI on 127.0.0.1, the iDrive-route watch,
-// and the daemon runtime end to end (src/cluster/nav_core.cpp, src/cluster/j29_client.cpp).
-// Build: g++ -std=gnu++98 -Iinclude -Isrc -Itests tests/test_kombi_nav.cpp src/cluster/nav_core.cpp src/cluster/j29_client.cpp -lpthread
+// and the daemon runtime end to end (src/cluster/nav_core.cpp, src/cluster/guidance/client.cpp).
+// Build: g++ -std=gnu++98 -Iinclude -Isrc -Itests tests/test_kombi_nav.cpp src/cluster/nav_core.cpp src/cluster/guidance/client.cpp -lpthread
 #include "cluster/nav_core.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <assert.h>
@@ -84,7 +84,7 @@ struct Rig {
     Graph g;
     KombiClient c;
     TestLink l;
-    J29Display d;
+    GuidanceDisplay d;
     Core core;
     explicit Rig(const Settings& s = noApproach())
         : g(0xC8, 255), c("127.0.0.1", k.port()), l(c, g), d(g, l.link), core(d, s, &logFn, NULL) {
@@ -777,7 +777,7 @@ int main() {
         KombiClient c("127.0.0.1", 9, 500);
         TestLink l(c, g);
         g_log.clear();
-        J29Display d(g, l.link);
+        GuidanceDisplay d(g, l.link);
         Core core(d, noApproach(), &logFn, NULL);
         std::vector<Tick> drive = demoDrive(demoRoute());
         NavView v;

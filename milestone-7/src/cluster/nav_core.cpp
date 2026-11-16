@@ -2,7 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/nav_core.hpp"
 #include "nbt_env.hpp"
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
 #include "cluster/video_settings.hpp"
 #endif
 
@@ -296,8 +296,8 @@ const char* KombiNav::kShownFile = "/dev/shmem/nbt-aad-kombi-nav.shown";
 unsigned KombiNav::kWatchSkip = 0;
 
 KombiNav::KombiNav()
-    : last_msg_t_(0), session_ended_(false), quit_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
-      port_(30502), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
+    : last_msg_t_(0), session_ended_(false), quit_(false), started_(false), handle_(nbt::cluster::buildGuidanceProfile().handle),
+      host_(nbt::cluster::buildGuidanceProfile().host), port_(nbt::cluster::buildGuidanceProfile().port), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
       disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), fallback_noted_(false),
       watch_pid_(-1), watch_fd_(-1),
       watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), watch_fp_(NULL),
@@ -317,7 +317,7 @@ KombiNav::~KombiNav() {
 }
 
 bool KombiNav::settingOn() {
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
     if(aa_cluster::setting_enabled()||access(aa_cluster::ActiveMarker,F_OK)==0)return false;
 #endif
     int f = envFlag("NBT_KOMBI_NAV");
@@ -345,7 +345,7 @@ bool KombiNav::linkCancel(void* self, std::string* detail) {
 }
 
 bool KombiNav::enabledNow() const {
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
     // Both renderers use Guidance handle 200. Resume arrows only after PiP's
     // cancellation has completed, including when the checkbox just turned off.
     if(aa_cluster::setting_enabled()||access(aa_cluster::ActiveMarker,F_OK)==0)return false;
@@ -360,7 +360,8 @@ void KombiNav::logLine(const char* line, void* /*user*/) {
 
 // The place to add a cluster: its driver, what it needs, and how the log names it.
 bool KombiNav::createDisplay(const char* id, most::Client* most) {
-    if (!strcmp(id, "j29")) {
+    const nbt::cluster::GuidanceProfile* profile = nbt::cluster::guidanceProfile(id);
+    if (profile) {
         graph_ = new Graph(handle_, settings_.hide_bar ? 255 : -1);
         client_ = new KombiClient(host_, port_);
         client_->prepareEmergency(*graph_);
@@ -368,11 +369,11 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         link.send = &KombiNav::linkSend;
         link.cancel = &KombiNav::linkCancel;
         link.user = this;
-        display_ = new J29Display(*graph_, link);
+        display_ = new GuidanceDisplay(*graph_, link, *profile);
         char t[64];
         snprintf(t, sizeof(t), "KOMBI at %s:%u", host_.c_str(), (unsigned)port_);
         target_ = t;
-        stopHint_ = "not a J29, or a changed instance handle: NBT_KOMBI_NAV_HANDLE";
+        stopHint_ = "unsupported Guidance endpoint, or a changed instance handle: NBT_KOMBI_NAV_HANDLE";
         return true;
     }
     if (!strcmp(id, "6wa")) {
@@ -399,7 +400,7 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         stopHint_ = "a call failed, or this cluster is not laid out like the 6wa profile: see the [HudTerm] lines";
         return true;
     }
-    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa): cluster arrows disabled\n", id);
+    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, g30, 6wa): cluster arrows disabled\n", id);
     return false;
 }
 
@@ -483,6 +484,14 @@ std::string KombiNav::approachText() const {
 
 void KombiNav::start(most::Client* most) {
     if (started_) return;
+    const char* selected = getenv("NBT_CLUSTER");
+    const char* profile_name = selected && *selected ? selected : nbt::cluster::buildGuidanceProfile().name;
+    const nbt::cluster::GuidanceProfile* profile = nbt::cluster::guidanceProfile(profile_name);
+    if (profile) {
+        handle_ = profile->handle;
+        host_ = profile->host;
+        port_ = profile->port;
+    }
     forced_ = envFlag("NBT_KOMBI_NAV");
     const char* e = getenv("NBT_KOMBI_NAV_HANDLE");
     if (e && *e) handle_ = (uint32_t)strtoul(e, NULL, 0);
@@ -496,8 +505,7 @@ void KombiNav::start(most::Client* most) {
     if (envFlag("NBT_KOMBI_NAV_LANES") == 0) settings_.lanes = false;
     e = getenv("NBT_KOMBI_NAV_INPLACE");
     if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
-    e = getenv("NBT_CLUSTER");
-    if (!createDisplay(e && *e ? e : "j29", most)) return;
+    if (!createDisplay(profile_name, most)) return;
     core_ = new Core(*display_, settings_, &KombiNav::logLine, this);
     if (client_)
         printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %s, bar %s, iDrive-route "

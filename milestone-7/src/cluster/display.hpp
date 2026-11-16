@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // The swap point between the guidance state machine (cluster/nav_core.hpp) and a cluster: ClusterDisplay draws what
-// the state machine decides, in that cluster's own protocol. One driver per protocol: J29Display (SOME/IP KOMBI graph,
-// cluster/j29_display.hpp) and Hud6waDisplay (MOST HUDTerminal, cluster/hud6wa_display.hpp). A cluster on the same
+// the state machine decides, in that cluster's own protocol. One driver per protocol: GuidanceDisplay (SOME/IP KOMBI graph,
+// cluster/guidance/display.hpp) and Hud6waDisplay (MOST HUDTerminal, cluster/hud6wa_display.hpp). A cluster on the same
 // protocol with another layout is a new profile for its driver, not a new driver. KombiNav (cluster/nav_core.hpp)
 // picks one per daemon run: createDisplay() is the place to add a cluster.
 //
 // What stays in the state machine, for every cluster: when guidance counts as gone (grace time), the approach hold,
 // a maneuver with no distance yet, the distance text clean-up, the distance update rate, and what is a new maneuver.
-// What a driver decides: how a maneuver, a distance and a clear are drawn, what else it shows of a maneuver (the J29's
+// What a driver decides: how a maneuver, a distance and a clear are drawn, what else it shows of a maneuver (the Guidance
 // lane row), and its own fallbacks. A driver logs what it draws through the log function it is given.
 #ifndef CLUSTER_DISPLAY_HPP
 #define CLUSTER_DISPLAY_HPP

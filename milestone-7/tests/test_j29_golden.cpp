@@ -51,7 +51,7 @@ struct Golden {
     Graph g;
     KombiClient c;
     Link link;
-    J29Display d;
+    GuidanceDisplay d;
     Core core;
     size_t seen;
     bool lastShown;

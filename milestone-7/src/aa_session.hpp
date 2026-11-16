@@ -117,10 +117,10 @@ public:
     void postAudioUnderflow(uint8_t channel);
 
 private:
-#ifdef IDRIVER_G30_CLUSTER
-    static void g30Setup(void*, unsigned);
-    static void g30Focus(void*, unsigned, bool, bool);
-    static void g30Ack(void*, unsigned);
+#ifdef NBT_CLUSTER_VIDEO
+    static void clusterSetup(void*, unsigned);
+    static void clusterFocus(void*, unsigned, bool, bool);
+    static void clusterAck(void*, unsigned);
 #endif
     static void* sessionThreadStub(void* arg);
     void sessionLoop();

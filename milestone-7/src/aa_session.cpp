@@ -9,8 +9,8 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
-#ifdef IDRIVER_G30_CLUSTER
-#include "cluster/g30/bridge.hpp"
+#ifdef NBT_CLUSTER_VIDEO
+#include "cluster/video/bridge.hpp"
 #endif
 #include "aa_manifest.hpp"
 #include "aa_control_msgs.hpp"
@@ -350,7 +350,7 @@ bool AASession::sendAckThunk(uint8_t channel, uint64_t rx_wall_ns, void* self) {
 
 void AASession::drainAcks() {
     acks_.drain(&sendAckThunk, this);
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
     idriver_cluster_tick(this);
     idriver_cluster_drain_acks(this);
 #endif
@@ -945,7 +945,7 @@ bool AASession::sendAvSetupResponse(uint8_t channel) {
     // (default 10, 4..64; at most 64 keeps it a one-byte varint): with deferred acks it is how far the phone may run
     // ahead.
     uint8_t window = isAaAudioSinkChannel(channel) ? (uint8_t)acks_.maxUnacked() : 10;
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
     if(channel==2 && idriver_cluster_ack_window())window=idriver_cluster_ack_window();
 #endif
     uint8_t plain[8] = { 0x80, 0x03, 0x08, 0x02, 0x10, window, 0x18, 0x00 };
@@ -1170,7 +1170,7 @@ static uint32_t msLeft(uint32_t last_ms, uint32_t every_ms, uint32_t now) {
 // phone would stretch a compass repeat to 2 s. A 0 here cannot spin, because sendSensorEvent stamps the time before it sends.
 uint32_t AASession::periodicTickMs() {
     uint32_t tick = acks_.hasPending() ? 250u : 1000u;
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
     if(idriver_cluster_ack_window())tick=20; // drain video credits even when all phone windows are full
 #endif
     const uint32_t now = monoMs();
@@ -1189,17 +1189,17 @@ uint32_t AASession::periodicTickMs() {
     return tick;
 }
 
-#ifdef IDRIVER_G30_CLUSTER
-void AASession::g30Setup(void* s,unsigned ch) { static_cast<AASession*>(s)->sendAvSetupResponse(ch); }
-void AASession::g30Focus(void* s,unsigned ch,bool projected,bool unsolicited) {
+#ifdef NBT_CLUSTER_VIDEO
+void AASession::clusterSetup(void* s,unsigned ch) { static_cast<AASession*>(s)->sendAvSetupResponse(ch); }
+void AASession::clusterFocus(void* s,unsigned ch,bool projected,bool unsolicited) {
     static_cast<AASession*>(s)->sendVideoFocusIndication(ch,projected,unsolicited);
 }
-void AASession::g30Ack(void* s,unsigned ch) { static_cast<AASession*>(s)->sendAvMediaAck(ch); }
+void AASession::clusterAck(void* s,unsigned ch) { static_cast<AASession*>(s)->sendAvMediaAck(ch); }
 #endif
 void AASession::sessionLoop() {
-#ifdef IDRIVER_G30_CLUSTER
-    idriver_cluster_configure_acks(&g30Ack);
-    idriver_cluster_init(&g30Setup,&g30Focus);
+#ifdef NBT_CLUSTER_VIDEO
+    idriver_cluster_configure_acks(&clusterAck);
+    idriver_cluster_init(&clusterSetup,&clusterFocus);
 #endif
     printf("[AASession] Protocol thread active on fd %d.\n", client_fd_);
     last_rx_ms_ = monoMs();     // the phone's silence counts from here
@@ -1382,7 +1382,7 @@ void AASession::sessionLoop() {
             }
 
             // Universal Message Dispatcher based on protocol wire captures
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
             // Complete/decrypted messages only; stock START bookkeeping and
             // media ACKs still run. Only answered cluster setup/focus is consumed.
             const int cluster_result=idriver_cluster_receive(this,channel,frame_data.empty()?NULL:&frame_data[0],frame_data.size());
@@ -1569,7 +1569,7 @@ void AASession::sessionLoop() {
                            media_frames_, channel, static_cast<unsigned int>(frame_data.size()));
                 }
                 bool deferred = false;   // ack once the consumer has taken it (drainAcks), not now
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
                 deferred=cluster_result==2;
 #endif
                 if (isAaAudioSinkChannel(channel) && msg_id == 0x0000) {
@@ -1760,7 +1760,7 @@ void AASession::sessionLoop() {
 }
 
 void AASession::finishSession() {
-#ifdef IDRIVER_G30_CLUSTER
+#ifdef NBT_CLUSTER_VIDEO
     idriver_cluster_end();
 #endif
     // Only this thread closes the socket. Whether the session ended on its own or stop()

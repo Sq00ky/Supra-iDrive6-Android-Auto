@@ -9,9 +9,28 @@ TARGET_ARCH ?= -Vgcc_ntoarmv7le_cpp
 CXX = $(QCC) $(TARGET_ARCH)
 CC  = $(QCC) -Vgcc_ntoarmv7le
 
+# Select hardware capabilities at build time. G30_PIP=1 remains a legacy alias.
+CLUSTER_PROFILE ?= $(if $(filter 1,$(G30_PIP)),g30,j29)
+ifeq ($(CLUSTER_PROFILE),g30)
+CLUSTER_DEFINES = -DNBT_CLUSTER_VIDEO -DNBT_CLUSTER_PROFILE_G30
+else ifeq ($(CLUSTER_PROFILE),j29)
+CLUSTER_DEFINES =
+else
+$(error Unsupported CLUSTER_PROFILE '$(CLUSTER_PROFILE)'; choose j29 or g30)
+endif
+ifeq ($(G30_PIP),1)
+ifneq ($(CLUSTER_PROFILE),g30)
+$(error G30_PIP=1 requires CLUSTER_PROFILE=g30)
+endif
+endif
+
+CLUSTER_OUT = build/cluster/$(CLUSTER_PROFILE)
+CLUSTER_OBJECTS = $(CLUSTER_OUT)/daemon
+CLUSTER_PROFILE_HEADERS = $(wildcard src/cluster/profiles/*.hpp)
+
 INCLUDES = -I./include -I./src
 # Remove -fPIC and -Bdynamic to produce a true QNX executable (ET_EXEC), not a shared lib (ET_DYN)
-CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
+CXXFLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES) $(CLUSTER_DEFINES)
 # Set RPATH so QNX's dynamic linker automatically finds liba2i_client.so in /opt/mm/lib without copying
 LDFLAGS  = -L./lib -la2i_client -lsocket -lssl -lcrypto -lscreen -lusbdi -lang-c++ -lm -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
@@ -56,8 +75,8 @@ SRCS = src/main.cpp \
        src/car/vehicle.cpp \
        src/sdr_builder.cpp \
        src/crash_handler.cpp \
-       src/cluster/j29_client.cpp \
-       src/cluster/j29_display.cpp \
+       src/cluster/guidance/client.cpp \
+       src/cluster/guidance/display.cpp \
        src/cluster/nav_core.cpp \
        src/cluster/hud_terminal.cpp \
        src/cluster/hud6wa_display.cpp \
@@ -65,38 +84,39 @@ SRCS = src/main.cpp \
 
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
 CSRCS = src/audio/speex.c
-CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES)
+CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $(INCLUDES) $(CLUSTER_DEFINES)
 
-OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
-# Optional G30 map bridge. The player includes process/address supervision;
-# these targets compile source and do not install anything.
-# A clean rebuild is required when toggling this option; ordinary builds and
-# existing host tests retain the upstream behavior.
-ifeq ($(G30_PIP),1)
-G30_BRIDGE_OBJECT = src/cluster/g30/bridge.o
+ifeq ($(CLUSTER_PROFILE),g30)
+SRCS += src/cluster/video/bridge.cpp
 endif
-ifneq ($(G30_BRIDGE_OBJECT),)
-CXXFLAGS += -DIDRIVER_G30_CLUSTER
-OBJS += $(G30_BRIDGE_OBJECT)
-endif
+
+# Each profile owns its objects and linked daemon. Switching profiles can reuse
+# matching objects without ever linking objects built with the other flags.
+OBJS = $(patsubst %.cpp,$(CLUSTER_OBJECTS)/%.o,$(SRCS)) \
+       $(patsubst %.c,$(CLUSTER_OBJECTS)/%.o,$(CSRCS))
 TARGET = nbt-aad
 
-.PHONY: all clean check
+.PHONY: all clean check $(TARGET)
 
 # Host tests with the Linux g++ (tests/Makefile), not qcc.
 check:
 	$(MAKE) -C tests check
 
-.PHONY: check-g30
-check-g30:
-	$(MAKE) -C tests check-g30
+.PHONY: check-cluster-video check-g30
+check-cluster-video:
+	$(MAKE) -C tests check-cluster-video
+check-g30: check-cluster-video
 
 all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
 
-$(TARGET): $(OBJS)
+$(TARGET): $(CLUSTER_OUT)/$(TARGET)
+	@cmp -s $< $@ || cp $< $@
+	@echo [DONE] Selected $(CLUSTER_PROFILE) $(TARGET) for QNX armv7le
+
+$(CLUSTER_OUT)/$(TARGET): $(OBJS)
+	@mkdir -p $(@D)
 	@echo [LINK] $@
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS) $(LDFLAGS)
-	@echo [DONE] Built $(TARGET) for QNX armv7le
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS)
 
 test_display: test_display.cpp
 	@echo [CXX] test_display.cpp
@@ -143,13 +163,15 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 
 # -Wp,-MMD: a .d file per object lists the headers it includes, so changing a header rebuilds every object that
 # uses it (a class that grew in aa_session.hpp once left main.o allocating the old, smaller AASession).
-%.o: %.cpp
+$(CLUSTER_OBJECTS)/%.o: %.cpp $(CLUSTER_PROFILE_HEADERS)
+	@mkdir -p $(@D)
 	@echo [CXX] $<
-	$(CXX) $(CXXFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+	$(CXX) $(CXXFLAGS) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
 
-%.o: %.c
+$(CLUSTER_OBJECTS)/%.o: %.c $(CLUSTER_PROFILE_HEADERS)
+	@mkdir -p $(@D)
 	@echo [CC] $<
-	$(CC) $(CFLAGS) -Wp,-MMD,$*.d -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+	$(CC) $(CFLAGS) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
 
 -include $(OBJS:.o=.d)
 
@@ -177,8 +199,8 @@ volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp 
 clean:
 	@echo [CLEAN] Removing object files and binaries
 	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa
-	rm -f src/cluster/g30/bridge.o src/cluster/g30/bridge.d
-	rm -rf build/g30
+	rm -f $(SRCS:.cpp=.o) $(SRCS:.cpp=.d) $(CSRCS:.c=.o) $(CSRCS:.c=.d)
+	rm -rf build/cluster build/g30
 
 # osdprobe: standalone check that this unit lets us own an LM surface for our own window.
 osdprobe: tools/osdprobe.cpp
@@ -196,43 +218,59 @@ lmrestore: tools/lmrestore.cpp
 kdprobe: tools/kdprobe.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/kdprobe.cpp -L./lib -lscreen -lKD -lEGL -lGLESv2 -lang-c++ -lm
 
-# Native G30 player and read-only Screen inspector. No installation side effects.
+# Native player and read-only Screen inspector. No installation side effects.
+# Only profiles with the tested video hardware capability expose these targets.
 QNX_AR ?= ntoarmv7-ar
-G30_OUT = build/g30
-G30_SRC = src/cluster/g30
-G30_HEADERS = $(wildcard $(G30_SRC)/*.hpp $(G30_SRC)/native/*.hpp $(G30_SRC)/native/*.inc)
+CLUSTER_VIDEO_SRC = src/cluster/video
+CLUSTER_VIDEO_HEADERS = $(wildcard $(CLUSTER_VIDEO_SRC)/*.hpp \
+                       $(CLUSTER_VIDEO_SRC)/native/*.hpp $(CLUSTER_VIDEO_SRC)/native/*.inc \
+                       src/cluster/guidance/*.hpp) $(CLUSTER_PROFILE_HEADERS) \
+                       src/cluster/video_settings.hpp
 OPENH264 = third_party/openh264
 OPENH264_SRCS = $(filter-out $(OPENH264)/codec/common/src/Wels%, $(wildcard $(OPENH264)/codec/common/src/*.cpp)) \
                $(filter-out $(OPENH264)/codec/decoder/core/src/wels_decoder_thread.cpp, $(wildcard $(OPENH264)/codec/decoder/core/src/*.cpp)) \
                $(OPENH264)/codec/decoder/plus/src/welsDecoderExt.cpp
-OPENH264_OBJS = $(patsubst $(OPENH264)/%.cpp,$(G30_OUT)/decoder/%.o,$(OPENH264_SRCS)) $(G30_OUT)/decoder_port.o
+OPENH264_OBJS = $(patsubst $(OPENH264)/%.cpp,$(CLUSTER_OUT)/decoder/%.o,$(OPENH264_SRCS)) $(CLUSTER_OUT)/decoder_port.o
 OPENH264_INCLUDES = -I$(OPENH264)/codec/api -I$(OPENH264)/codec/api/wels \
                     -I$(OPENH264)/codec/common/inc -I$(OPENH264)/codec/decoder/core/inc \
                     -I$(OPENH264)/codec/decoder/plus/inc
-G30_FLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x \
-            -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp
+CLUSTER_VIDEO_FLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x \
+                      -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp \
+                      -I./src $(CLUSTER_DEFINES)
 
-.PHONY: g30-player g30-inspect
-g30-player: $(G30_OUT)/kombi-player
-g30-inspect: $(G30_OUT)/inspect
+.PHONY: kombi-player cluster-inspect g30-player g30-inspect
+ifeq ($(CLUSTER_PROFILE),g30)
+kombi-player: $(CLUSTER_OUT)/kombi-player
+cluster-inspect: $(CLUSTER_OUT)/inspect
+else
+kombi-player cluster-inspect:
+	@echo "CLUSTER_PROFILE=$(CLUSTER_PROFILE) has no video hardware profile; select CLUSTER_PROFILE=g30" >&2
+	@exit 2
+endif
 
-$(G30_OUT)/decoder/%.o: $(OPENH264)/%.cpp
+# Compatibility entry points for existing local packaging and bench commands.
+g30-player:
+	$(MAKE) CLUSTER_PROFILE=g30 kombi-player
+g30-inspect:
+	$(MAKE) CLUSTER_PROFILE=g30 cluster-inspect
+
+$(CLUSTER_OUT)/decoder/%.o: $(OPENH264)/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(G30_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+	$(CXX) $(CLUSTER_VIDEO_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
 
-$(G30_OUT)/decoder_port.o: $(G30_SRC)/decoder_port.cpp
+$(CLUSTER_OUT)/decoder_port.o: $(CLUSTER_VIDEO_SRC)/decoder_port.cpp $(CLUSTER_VIDEO_HEADERS)
 	@mkdir -p $(@D)
-	$(CXX) $(G30_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+	$(CXX) $(CLUSTER_VIDEO_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
 
-$(G30_OUT)/libopenh264-decoder.a: $(OPENH264_OBJS)
+$(CLUSTER_OUT)/libopenh264-decoder.a: $(OPENH264_OBJS)
 	rm -f $@
 	$(QNX_AR) rcs $@ $(OPENH264_OBJS)
 
-$(G30_OUT)/kombi-player: $(G30_SRC)/player.cpp $(G30_SRC)/supervisor.cpp $(G30_HEADERS) $(G30_OUT)/libopenh264-decoder.a
-	$(CXX) $(G30_FLAGS) -fno-rtti $(OPENH264_INCLUDES) $(G30_SRC)/player.cpp $(G30_SRC)/supervisor.cpp $(G30_OUT)/libopenh264-decoder.a -L./lib -lscreen -lsocket -lm -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
+$(CLUSTER_OUT)/kombi-player: $(CLUSTER_VIDEO_SRC)/player.cpp $(CLUSTER_VIDEO_SRC)/supervisor.cpp $(CLUSTER_VIDEO_HEADERS) $(CLUSTER_OUT)/libopenh264-decoder.a
+	$(CXX) $(CLUSTER_VIDEO_FLAGS) -fno-rtti $(OPENH264_INCLUDES) $(CLUSTER_VIDEO_SRC)/player.cpp $(CLUSTER_VIDEO_SRC)/supervisor.cpp $(CLUSTER_OUT)/libopenh264-decoder.a -L./lib -lscreen -lsocket -lm -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
 
-$(G30_OUT)/inspect: $(G30_SRC)/inspect.cpp $(G30_HEADERS)
+$(CLUSTER_OUT)/inspect: $(CLUSTER_VIDEO_SRC)/inspect.cpp $(CLUSTER_VIDEO_HEADERS)
 	@mkdir -p $(@D)
-	$(CXX) $(G30_FLAGS) $< -L./lib -lscreen -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
+	$(CXX) $(CLUSTER_VIDEO_FLAGS) $< -L./lib -lscreen -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
 
 -include $(OPENH264_OBJS:.o=.d)
