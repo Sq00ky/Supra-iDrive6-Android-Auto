@@ -33,12 +33,11 @@ namespace nbt {
 //   a2i      the old staged A2I pipeline (a2i_audio.cpp, NBT_AUDIO_STAGE); not audible on the car
 enum AudioMode { AUDIO_MODE_BT = 0, AUDIO_MODE_BROWSER = 1, AUDIO_MODE_A2I = 2 };
 
-// "Use Native Audio instead of Bluetooth" (iDrive Settings checkbox, rhmiapp-45; flag file kNativeAudioFlagFile, a
-// hand-made kNativeAudioManualFile also counts): browser mode, i.e. Android Auto sound over the Android Auto connection
+// "Use Native Audio instead of Bluetooth" (iDrive Settings checkbox, rhmiapp-45; flag kNativeAudioFlagName, a
+// hand-made one also counts, nbt_paths.hpp): browser mode, i.e. Android Auto sound over the Android Auto connection
 // through the car's own audio instead of Bluetooth A2DP. Only when neither NBT_AUDIO_MODE nor NBT_AUDIO_BT is set in
 // nbt-aad.env (those win). Read once per daemon run, so a change applies at the next Start / Restart.
-static const char* const kNativeAudioFlagFile = "/var/opt/aa/native-audio";
-static const char* const kNativeAudioManualFile = "/opt/aa/native-audio";
+static const char* const kNativeAudioFlagName = "native-audio";
 
 // Pure part (host-tested): NBT_AUDIO_MODE's value (NULL = unset), envFlag("NBT_AUDIO_BT") (-1 = unset) and the flag file.
 inline AudioMode audioModeSetting(const char* mode, int bt, bool nativeFlag) {
@@ -54,7 +53,7 @@ inline AudioMode audioModeSetting(const char* mode, int bt, bool nativeFlag) {
 // The checkbox is read once: every audioMode() caller in a run must see the same mode, even if the box is flipped.
 inline bool nativeAudioFlagSet() {
     static int s = -1;
-    if (s < 0) s = (access(kNativeAudioFlagFile, F_OK) == 0 || access(kNativeAudioManualFile, F_OK) == 0) ? 1 : 0;
+    if (s < 0) s = flagSet(kNativeAudioFlagName) ? 1 : 0;
     return s == 1;
 }
 

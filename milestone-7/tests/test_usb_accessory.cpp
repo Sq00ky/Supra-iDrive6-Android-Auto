@@ -401,7 +401,9 @@ static void testUsbSetting() {
     for (size_t i = 0; i < sizeof(on) / sizeof(on[0]); ++i) assert(usbSettingOn(on[i], false) && usbSettingOn(on[i], true));
     const char* off[] = { "0", "off", "no", "false", "2", "ON" };
     for (size_t i = 0; i < sizeof(off) / sizeof(off[0]); ++i) assert(!usbSettingOn(off[i], true) && !usbSettingOn(off[i], false));
-    assert(strcmp(kUsbFlagFile, "/var/opt/aa/usb-aa") == 0 && strcmp(kUsbManualFile, "/opt/aa/usb-aa") == 0);
+    assert(strcmp(kUsbFlagName, "usb-aa") == 0);   // hand install: /var/opt/aa/usb-aa, a hand-made /opt/aa/usb-aa
+    assert(strcmp(dataFile(kUsbFlagName).c_str(), "/var/opt/aa/usb-aa") == 0 &&
+           strcmp(appFile(kUsbFlagName).c_str(), "/opt/aa/usb-aa") == 0);
     printf("usb setting OK\n");
 }
 

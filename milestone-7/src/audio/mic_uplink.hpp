@@ -7,8 +7,9 @@
 // The phone opens the mic with AVInputOpenRequest; the main loop then starts the factory echo-cancelled uplink
 // (A2I /output_mono_AirPlayUL, 16 kHz mono, the CarPlay Siri path) and the session streams it back. In
 // Bluetooth and browser audio modes the A2I playback pipeline stays closed, so the capture runs standalone
-// (MicUplink); A2I mode captures through its own pipeline (A2iAudio). NBT_MIC=0 or /opt/aa/mic.disable keeps the
-// mic closed (the open request is still answered).
+// (MicUplink); A2I mode captures through its own pipeline (A2iAudio). NBT_MIC=0 or a hand-made mic.disable in the
+// app dir (/opt/aa/mic.disable on a hand install, nbt_paths.hpp) keeps the mic closed (the open request is still
+// answered).
 
 #include "audio/a2i_stream.hpp"
 #include <stddef.h>
@@ -19,7 +20,8 @@ namespace nbt {
 // C++03/GCC 4.4 compatible callback
 typedef void (*MicDataCallback)(const uint8_t* pcm_data, size_t size, void* user_data);
 
-// NBT_MIC (default on) and no /opt/aa/mic.disable.
+// NBT_MIC (default on) and no <app dir>/mic.disable.
+static const char* const kMicDisableName = "mic.disable";
 bool micEnabled();
 
 // The standalone echo-cancelled uplink.
