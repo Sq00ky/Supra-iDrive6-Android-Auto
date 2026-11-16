@@ -383,7 +383,6 @@ const unsigned    kNoLogModel       = 175;   // raBoolModel
 const unsigned    kActSpeechBt      = 174;   // "Prompts on car radio (BT, beta)" checkbox
 const unsigned    kSpeechBtModel    = 177;   // raBoolModel
 const char* const kSpeechBtFlag     = "/var/opt/aa/speech-bt";
-const char* const kSpeechBtManual   = "/opt/aa/speech-bt";
 const char* const kNoLogFlag        = "no-log";
 const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
 const unsigned    kPfRowLabel[3]   = { 29, 30, 31 };      // Install / Check / Uninstall PF Rules
@@ -2225,10 +2224,10 @@ bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-bool speechBtOn() { return fileExists(kSpeechBtFlag) || fileExists(kSpeechBtManual); }
+bool speechBtOn() { return nbt::flagSet(kSpeechBtFlag); }
 void showSpeechBt(bmw::PluginApp* app) { app->updateModel(kSpeechBtModel, speechBtOn()); }
 bool onSpeechBtToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kSpeechBtFlag, kSpeechBtManual,
+    toggleFlagFile(kSpeechBtFlag,
                    "Prompts on car radio (Bluetooth beta: nav prompter + eSRC_NAV_AUTO; NBT_SPEECH_BT in nbt-aad.env wins)");
     if (g_runApp) showSpeechBt(g_runApp);
     return true;
