@@ -182,6 +182,29 @@ int main() {
     CHECK(strcmp(RoutePolicy::stateName(RoutePolicy::ROUTED), "granted") == 0);
     CHECK(strcmp(RoutePolicy::stateName(RoutePolicy::RELEASING), "releasing") == 0);
 
+    // 14. carriesMedia (a nav prompt then stays in the mix): built or being built, with the media stream open or
+    // media played within idle_s.
+    {
+        RoutePolicy p;
+        CHECK(!p.carriesMedia(5000, true, 4000));   // idle: the radio is on, not our source
+        CHECK(p.tryBuild(1000));
+        CHECK(p.carriesMedia(1100, true, 0));       // being built for a media start
+        CHECK(!p.carriesMedia(1100, false, 0));     // being built for a prompt / sound alone
+        p.granted(1200);
+        const uint64_t media = 20000;
+        CHECK(p.carriesMedia(media + 9999, false, media));    // paused: the source stays for idle_s
+        CHECK(!p.carriesMedia(media + 10000, false, media));  // as long as decide() counts it recent
+        CHECK(p.carriesMedia(media + 60000, true, media));
+        CHECK(p.startRelease(media + 60000));
+        CHECK(!p.carriesMedia(media + 60001, true, media + 60000));   // releasing: the radio comes back
+
+        RoutePolicy::Config c;
+        c.idle_s = 0;   // kept until the session ends after any media
+        RoutePolicy q = routedAt(1000, c);
+        CHECK(q.carriesMedia(10000000, false, 2000));
+        CHECK(!q.carriesMedia(10000000, false, 0));
+    }
+
     if (fails) { printf("test_route_policy: %d failure(s)\n", fails); return 1; }
     printf("test_route_policy OK\n");
     return 0;

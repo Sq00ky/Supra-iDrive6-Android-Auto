@@ -96,15 +96,28 @@ public:
         if (state_ == BUILDING && now - since_ms_ > cfg_.grant_timeout_ms) return GRANT_TIMEOUT;
         if (state_ == RELEASING && now - since_ms_ > cfg_.release_timeout_ms) return RELEASE_TIMEOUT;
         if (state_ != ROUTED || active) return NONE;
-        const uint64_t media_hold = cfg_.idle_s > 0 ? (uint64_t)cfg_.idle_s * 1000u : 0;
-        const bool media_recent = last_media_ms && (media_hold == 0 || now - last_media_ms < media_hold);
+        const uint64_t media_hold = mediaHoldMs();
         const uint64_t quiet = now - last_sound_ms;
-        if (media_recent) return (media_hold > 0 && quiet > media_hold) ? RELEASE_IDLE : NONE;
+        if (mediaRecent(now, last_media_ms)) return (media_hold > 0 && quiet > media_hold) ? RELEASE_IDLE : NONE;
         if (cfg_.prompt_idle_ms > 0) return quiet > (uint64_t)cfg_.prompt_idle_ms ? RELEASE_PROMPT : NONE;
         return (media_hold > 0 && quiet > media_hold) ? RELEASE_IDLE : NONE;
     }
 
+    // AA media played within idle_s (idle_s 0: at all this session): decide() keeps the source for it.
+    bool mediaRecent(uint64_t now, uint64_t last_media_ms) const {
+        const uint64_t media_hold = mediaHoldMs();
+        return last_media_ms && (media_hold == 0 || now - last_media_ms < media_hold);
+    }
+
+    // The source is built or being built for AA media (media_open: the media stream is started). A nav prompt then
+    // stays in the mix: under the nav prompt focus the car mutes this source with the media on it.
+    bool carriesMedia(uint64_t now, bool media_open, uint64_t last_media_ms) const {
+        return (state_ == BUILDING || state_ == ROUTED) && (media_open || mediaRecent(now, last_media_ms));
+    }
+
 private:
+    uint64_t mediaHoldMs() const { return cfg_.idle_s > 0 ? (uint64_t)cfg_.idle_s * 1000u : 0; }
+
     Config cfg_;
     State state_;
     uint64_t since_ms_;

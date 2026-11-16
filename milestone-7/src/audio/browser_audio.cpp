@@ -60,7 +60,8 @@ void* mixerThunk(void* self) {
 
 BrowserAudio::BrowserAudio()
     : conn_(0xb8), refocus_(true), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
-      last_sound_ms_(0), last_media_ms_(0), blocks_(0), last_stats_ms_(0), was_ducking_(false) {
+      last_sound_ms_(0), last_media_ms_(0), speech_(speech_route_), guidance_to_speech_(false), blocks_(0),
+      last_stats_ms_(0), was_ducking_(false) {
     consumed_fn_ = NULL;
     consumed_user_ = NULL;
     ack_window_ = 0;
@@ -207,6 +208,18 @@ bool BrowserAudio::init(const BrowserConfig& cfg) {
            cfg.duck_db, duck_cfg_.attack_ms, duck_cfg_.hold_ms, duck_cfg_.release_ms);
     bool ok = dev_.load();
     if (conn_ && !route_.configure()) printf("[Browser] audioconn not found: connection 0x%x cannot be built\n", conn_);
+    if (!cfg.speech.enabled) {
+        printf("[Browser] guidance: browser mix (NBT_SPEECH=0)\n");
+    } else if (!cfg.speech.src) {
+        printf("[Browser] guidance: browser mix (NBT_SPEECH_SRC=0: no nav prompt focus)\n");
+        return ok;   // SpeechOut would never take a prompt: leave the endpoint closed
+    } else {
+        const char* ep = cfg.speech.endpoint && *cfg.speech.endpoint ? cfg.speech.endpoint : A2I_ENDPOINT_NAV_ALT;
+        printf("[Browser] guidance: nav prompt channel %s focus 0x%x -> 0x%x (NBT_SPEECH=1)\n", ep, cfg.speech.src,
+               cfg.speech.sink);
+        speech_route_.configure();
+    }
+    speech_.init(cfg.speech);
     return ok;
 }
 
@@ -236,6 +249,11 @@ bool BrowserAudio::openPcm() {
 void BrowserAudio::onFrame(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts) {
     int s = audioStreamForChannel(channel);
     if (s < 0 || !stream_[s].in.ring || !pcm || len == 0) return;
+    if (s == GUIDANCE && guidance_to_speech_) {   // acked on arrival: SpeechOut's ring holds the prompt
+        speech_.frame(pcm, len);
+        consumed(s, len);
+        return;
+    }
     ++stream_[s].in.frames_in;
     ++stream_[s].in.frames_since_start;
     if (s == MEDIA) {   // frame length, for the drift loop's target cap under deferred acks
@@ -262,6 +280,23 @@ void BrowserAudio::onFrame(uint8_t channel, const uint8_t* pcm, size_t len, uint
 void BrowserAudio::onStreamState(uint8_t channel, bool started, uint32_t rate, uint32_t channels) {
     int s = audioStreamForChannel(channel);
     if (s < 0 || !stream_[s].in.ring) return;
+    if (s == GUIDANCE) {   // each start with a declared rate goes to the nav prompt channel if SpeechOut takes it
+        if (started) {
+            if (guidance_to_speech_) speech_.state(false, 0, 0);   // START without STOP
+            const uint64_t now = nowMs();
+            guidance_to_speech_ = rate && speech_.takesPrompt(now);   // no rate: the mix measures it
+            if (guidance_to_speech_ && mediaOnSource(now)) {
+                guidance_to_speech_ = false;
+                printf("[Browser] AA media is on the browser source: nav prompt stays in the mix (media ducked)\n");
+            }
+            if (guidance_to_speech_) stream_[s].in.started = false;
+        }
+        if (guidance_to_speech_) {
+            speech_.state(started, rate, channels);
+            if (!started) guidance_to_speech_ = false;
+            return;
+        }
+    }
     if (started && rate) {
         // The phone declared this start's format (START_INDICATION configuration_index): use it from the first frame.
         printf("[Browser] AA %s stream started: %u Hz %s (declared by the phone)\n", audioStreamName(s), rate,
@@ -431,6 +466,14 @@ bool BrowserAudio::routedForPlayback() {
     bool r = route_policy_.routed();
     pthread_mutex_unlock(&lock_);
     return r;
+}
+
+bool BrowserAudio::mediaOnSource(uint64_t now) {   // session thread (it writes the media stream's started flag)
+    const bool open = stream_[MEDIA].in.started;
+    pthread_mutex_lock(&lock_);
+    const bool on = route_policy_.carriesMedia(now, open, last_media_ms_);
+    pthread_mutex_unlock(&lock_);
+    return on;
 }
 
 void BrowserAudio::setMediaGain(float g) {
@@ -761,10 +804,15 @@ void BrowserAudio::mixerLoop() {
             if (ppm != drift_applied_) { stream_[MEDIA].mix.rs.setTrimPpm(ppm); drift_applied_ = ppm; }
         }
         const bool duck = loud[GUIDANCE] || loud[SYSTEM];
+        // A prompt on the nav prompt channel ducks media too, but must not hold the browser source.
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
-                   have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck, &out[0]);
+                   have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck || speech_.active(), &out[0]);
         if (loud[MEDIA] || duck) last_sound_ms_ = now;
-        if (loud[MEDIA] || stream_[MEDIA].in.started) last_media_ms_ = now;
+        if (loud[MEDIA] || stream_[MEDIA].in.started) {   // under lock_: the session thread reads it (mediaOnSource)
+            pthread_mutex_lock(&lock_);
+            last_media_ms_ = now;
+            pthread_mutex_unlock(&lock_);
+        }
         const bool ducking = mixer_.ducking();
         if (ducking != was_ducking_) {
             printf("[Browser] media %s\n", ducking ? "ducked under a prompt / system sound" : "back to full level");
@@ -821,6 +869,9 @@ void BrowserAudio::mixerLoop() {
 void BrowserAudio::onSessionEnded() {
     stopMixer();
     releaseRoute("session ended");
+    speech_route_.cancelPending();   // before onSessionEnded(), which queues the focus remove
+    speech_.onSessionEnded();
+    guidance_to_speech_ = false;
     for (int s = 0; s < NSTREAMS; ++s) {
         stream_[s].in.started = false;
         if (stream_[s].in.ring) stream_[s].in.ring->clear();
@@ -849,8 +900,8 @@ void BrowserAudio::onSessionEnded() {
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);
     route_policy_.clearBackoff();
-    pthread_mutex_unlock(&lock_);
     last_media_ms_ = 0;
+    pthread_mutex_unlock(&lock_);
     waited_ms_ = waited_blocks_ = 0;
     waited_blocks_total_ = 0;
     dev_.resetWaitRoom();
@@ -861,9 +912,14 @@ void BrowserAudio::onSessionEnded() {
     drift_applied_ = 0;
 }
 
+void BrowserAudio::cancelPending() {
+    speech_route_.cancelPending();
+}
+
 void BrowserAudio::stop() {
     stopMixer();
     releaseRoute("shutdown");
+    speech_.stop();   // speech_route_ has no other jobs to queue again
     dev_.unload();
 }
 
