@@ -72,7 +72,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-66-speechbt (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-67-about (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 

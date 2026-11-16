@@ -7,7 +7,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LANGS = {"de": "Deutsch", "en-UK": "English (UK)", "en-US": "English (US)", "es-ES": "Espanol", "es-US": "Espanol (US)",
          "fr-FR": "Francais", "fr-CA": "Francais (CA)", "it": "Italiano", "pt": "Portugues", "ru": "Russian"}
 ABOUT = ("NBT-AAD: native wireless Android Auto\\nDeveloped by nanaisu\\n"
-         "With contributions from @houssems, Tom Pryor (@tom-pryor) and @dn00\\n"
+         "Contributors: @houssems, @tom-pryor, @dn00, @sabifa,\\n"
+         "@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft\\n"
          "github.com/Sq00ky/Supra-iDrive6-Android-Auto\\n"
          "Free of charge. If you paid for it, you were scammed.")
 TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text while nbt-aad is connecting
