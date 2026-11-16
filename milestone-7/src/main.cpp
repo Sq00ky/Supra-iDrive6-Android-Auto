@@ -767,13 +767,31 @@ static std::string g_wfdOwnPath;
 static const int kWfdOwnRetrySec = 30;
 
 static bool wfdOwnMode() {
-    return nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT && nbt::wfdOwnPassWanted();
+    return nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT && nbt::wfdOwnPassMode() != nbt::WFD_OWN_NEVER;
 }
 
-// True when the group runs with our passphrase (g_wfdOwnAp). Tries at most every kWfdOwnRetrySec.
+// True when the group runs with our passphrase (g_wfdOwnAp). Once set it is used for the rest of the run (the car's
+// group then runs on it). Before that, NBT_WFD_OWN_PASS=auto leaves a car with a usable WFDPass.conf alone. Tries at
+// most every kWfdOwnRetrySec.
 static bool ensureWfdOwn() {
     if (!wfdOwnMode()) return false;
     if (g_wfdOwnApplied) return true;
+    {
+        nbt::ApInfo carAp;
+        std::string carPath;
+        const bool carUsable = nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), carAp, carPath, true);
+        const nbt::WfdOwnPassMode om = nbt::wfdOwnPassMode();
+        static int s_logged = -1;   // once per decision, not on every 10 s check
+        const int decision = nbt::wfdOwnPassDecide(om, carUsable) ? 1 : 0;
+        if (s_logged != decision) {
+            s_logged = decision;
+            printf("[WfdOwn] NBT_WFD_OWN_PASS=%s, car's WFDPass.conf %s: %s\n", nbt::wfdOwnPassModeName(om),
+                   carUsable ? ("usable (" + carPath + ")").c_str() : "missing or unusable",
+                   decision ? "setting nbt-aad's own passphrase on the group"
+                            : "using the car's passphrase, the group is left alone");
+        }
+        if (!decision) return false;
+    }
     uint32_t now = monoSecs();
     if (g_wfdOwnTried && now - g_wfdOwnTried < (uint32_t)kWfdOwnRetrySec) return false;
     g_wfdOwnTried = now ? now : 1;
@@ -790,7 +808,7 @@ static bool ensureWfdOwn() {
     } else {
         ++g_wfdOwnFails;
         printf("[WfdOwn] could not set nbt-aad's passphrase (try %d): %s, trying again in %d s "
-               "(NBT_WFD_OWN_PASS=0 = the car's WFDPass.conf only, as before)\n", g_wfdOwnFails,
+               "(NBT_WFD_OWN_PASS=0 = never)\n", g_wfdOwnFails,
                nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), ap, path, true)
                    ? "using the car's WFDPass.conf meanwhile" : "no usable WFDPass.conf either",
                kWfdOwnRetrySec);

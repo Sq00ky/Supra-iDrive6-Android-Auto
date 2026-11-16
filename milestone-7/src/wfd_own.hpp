@@ -28,13 +28,27 @@
 
 namespace nbt {
 
-// NBT_WFD_OWN_PASS: unset/1 = on (DIRECT mode sets nbt-aad's own passphrase), 0/off/no = off (WFDPass.conf as before).
-inline bool wfdOwnPassSetting(const char* env) {
-    if (!env || !*env) return true;
-    return !(strcmp(env, "0") == 0 || strcasecmp(env, "off") == 0 || strcasecmp(env, "no") == 0 ||
-             strcasecmp(env, "false") == 0);
+// NBT_WFD_OWN_PASS:
+//   unset / auto  (default) only when the car has no usable WFDPass.conf; a usable file is used as before and the
+//                 car's group is never touched
+//   1 / on / yes  always (to test it on a car that does have the file)
+//   0 / off / no  never: WFDPass.conf only, as before v1.9.85
+enum WfdOwnPassMode { WFD_OWN_NEVER = 0, WFD_OWN_ALWAYS = 1, WFD_OWN_AUTO = 2 };
+inline WfdOwnPassMode wfdOwnPassSetting(const char* env) {
+    if (!env || !*env || strcasecmp(env, "auto") == 0) return WFD_OWN_AUTO;
+    if (strcmp(env, "0") == 0 || strcasecmp(env, "off") == 0 || strcasecmp(env, "no") == 0 ||
+        strcasecmp(env, "false") == 0)
+        return WFD_OWN_NEVER;
+    return WFD_OWN_ALWAYS;
 }
-inline bool wfdOwnPassWanted() { return wfdOwnPassSetting(getenv("NBT_WFD_OWN_PASS")); }
+inline WfdOwnPassMode wfdOwnPassMode() { return wfdOwnPassSetting(getenv("NBT_WFD_OWN_PASS")); }
+inline const char* wfdOwnPassModeName(WfdOwnPassMode m) {
+    return m == WFD_OWN_NEVER ? "never" : m == WFD_OWN_ALWAYS ? "always" : "auto (only without a usable WFDPass.conf)";
+}
+// Pure decision (host-tested): set our own passphrase now? `carFileUsable` = WFDPass.conf decodes to a passphrase.
+inline bool wfdOwnPassDecide(WfdOwnPassMode m, bool carFileUsable) {
+    return m == WFD_OWN_ALWAYS || (m == WFD_OWN_AUTO && !carFileUsable);
+}
 
 // Characters a generated passphrase uses: no 0/O/1/l/I, so it can be typed on a phone by hand.
 inline const char* wfdOwnPassAlphabet() { return "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; }

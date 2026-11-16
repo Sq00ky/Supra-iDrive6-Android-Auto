@@ -18,13 +18,19 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > **v1.9.85-wfdpass (test build): Use WiFi Direct Network sets nbt-aad's own passphrase.** Not every car has a
 > usable `/var/opt/conn/WFDPass.conf`, and the group's passphrase cannot be read anywhere else. With **Use WiFi Direct
 > Network** ticked (or `NBT_ALT_WIFI=DIRECT`), nbt-aad now sets the passphrase itself through the car's own connection
+>
+> **v1.9.86-wfdpass2 (test build): Use WiFi Direct Network sets nbt-aad's own passphrase when the car has none.** Not
+> every car has a usable `/var/opt/conn/WFDPass.conf`, and the group's passphrase cannot be read anywhere else. With
+> **Use WiFi Direct Network** ticked (or `NBT_ALT_WIFI=DIRECT`) and no usable `WFDPass.conf` (missing, empty or not
+> decodable), nbt-aad now sets the passphrase itself through the car's own connection
 > manager (`Wlan_ConnMngr_WFD_disable`, then `Wlan_ConnMngr_WFD_enable` with the car's own group name and our
 > passphrase) and offers the phone exactly that. The group name stays the car's (`DIRECT-03-<brand><last5>`, read from
 > the connection manager; the car refuses any other name). The passphrase is generated once and kept in
 > `/var/opt/aa/wfd-own-pass` (`NBT_WFD_PASS` pins one; 8..63 characters, no quotes, `;`, `\` or braces). The car's
 > `WFDPass.conf` is left alone, and a reboot gives the car its own group back until nbt-aad starts again.
-> `NBT_WFD_OWN_PASS=0` = the old behaviour (the car's `WFDPass.conf` only). If setting it fails, the car's
-> `WFDPass.conf` is used when it is usable. Log: `[WfdOwn] ...` lines from the one-shot `nbt-aad --wfd-own` child.
+> Once set, it is used for the rest of the run. A car with a usable `WFDPass.conf` is left alone and offered that
+> passphrase as before. `NBT_WFD_OWN_PASS`: unset/`auto` = only without a usable file, `1` = always (to test it on a
+> car that has the file), `0` = never. Log: `[WfdOwn] ...` lines from the one-shot `nbt-aad --wfd-own` child.
 > Car-proven by hand on the J29 (phone joined with our passphrase); the daemon path itself needs a car test.
 
 > **v1.9.64-navset: navigation settings on the Settings page.** The cluster/HUD checkbox is now **Show navigation in

@@ -12,15 +12,23 @@ static int fails = 0;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
 
 int main() {
-    // ---- setting ---------------------------------------------------------------------
-    CHECK(nbt::wfdOwnPassSetting(NULL));
-    CHECK(nbt::wfdOwnPassSetting(""));
-    CHECK(nbt::wfdOwnPassSetting("1"));
-    CHECK(nbt::wfdOwnPassSetting("yes"));
-    CHECK(!nbt::wfdOwnPassSetting("0"));
-    CHECK(!nbt::wfdOwnPassSetting("off"));
-    CHECK(!nbt::wfdOwnPassSetting("NO"));
-    CHECK(!nbt::wfdOwnPassSetting("false"));
+    // ---- setting + decision ------------------------------------------------------------
+    CHECK(nbt::wfdOwnPassSetting(NULL) == nbt::WFD_OWN_AUTO);
+    CHECK(nbt::wfdOwnPassSetting("") == nbt::WFD_OWN_AUTO);
+    CHECK(nbt::wfdOwnPassSetting("AUTO") == nbt::WFD_OWN_AUTO);
+    CHECK(nbt::wfdOwnPassSetting("1") == nbt::WFD_OWN_ALWAYS);
+    CHECK(nbt::wfdOwnPassSetting("yes") == nbt::WFD_OWN_ALWAYS);
+    CHECK(nbt::wfdOwnPassSetting("0") == nbt::WFD_OWN_NEVER);
+    CHECK(nbt::wfdOwnPassSetting("off") == nbt::WFD_OWN_NEVER);
+    CHECK(nbt::wfdOwnPassSetting("NO") == nbt::WFD_OWN_NEVER);
+    CHECK(nbt::wfdOwnPassSetting("false") == nbt::WFD_OWN_NEVER);
+    // auto: only a car without a usable WFDPass.conf gets ours
+    CHECK(!nbt::wfdOwnPassDecide(nbt::WFD_OWN_AUTO, true));
+    CHECK(nbt::wfdOwnPassDecide(nbt::WFD_OWN_AUTO, false));
+    CHECK(nbt::wfdOwnPassDecide(nbt::WFD_OWN_ALWAYS, true));
+    CHECK(nbt::wfdOwnPassDecide(nbt::WFD_OWN_ALWAYS, false));
+    CHECK(!nbt::wfdOwnPassDecide(nbt::WFD_OWN_NEVER, true));
+    CHECK(!nbt::wfdOwnPassDecide(nbt::WFD_OWN_NEVER, false));
 
     // ---- generated passphrase: 16 chars from the typeable alphabet, usable --------------
     unsigned char raw[16];
