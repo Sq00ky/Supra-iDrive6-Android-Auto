@@ -66,13 +66,14 @@
 #include "boot_guard.hpp"
 #include "overlay_watch.hpp"
 #include "entry_key.hpp"
+#include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-67-about (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-68-autors (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -2444,6 +2445,58 @@ bool onRestartRow(void*, const bmw::Parcel&) {
     return true;
 }
 
+// ---- restart after a Settings change (rhmiapp-68, settings_watch.hpp) ----------------------------------------------
+// Snapshot of every checkbox when the Settings page is entered; compared when iDrive comes back to the Android Auto
+// main page. Anything different and nbt-aad running = Restart (the same path as the Restart row), so a change applies
+// at once instead of "at the next Start / Restart". The snapshot stays pending if Settings is left another way (a hard
+// key), and is compared the next time the main page shows. NBT_SETTINGS_RESTART=0 in nbt-aad.env turns it off.
+const char* const kSettingsFlags[] = {
+    kAutostartFlag, nbt::usblog::kFlagName, kMenuIdriveFlag, kDriveModeFlag, kKombiNavFlag, kAnyDistFlag, kNoLogFlag,
+    kSpeechBtFlag, kWarnFlag, kUsbAaFlag, kPhoneGpsFlag, kWfdOnlyFlag, kNativeAudioFlag, kLciMediaFlag, kCpCompatFlag,
+};
+const size_t kSettingsFlagCount = sizeof(kSettingsFlags) / sizeof(kSettingsFlags[0]);
+bool settingFlagSet(const char* name) { return nbt::flagSet(name); }
+std::string g_setSnap;
+bool g_setSnapPending = false;
+time_t g_setSnapTime = 0;
+
+void settingsPageEntered() {
+    if (g_setSnapPending) return;                        // keep the snapshot of the first visit since the last check
+    g_setSnap = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
+    g_setSnapPending = true;
+    g_setSnapTime = time(NULL);
+}
+
+void settingsBackOnMainPage() {
+    if (!g_setSnapPending) return;
+    g_setSnapPending = false;
+    const std::string now = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
+    const std::string diff = nbt::settingsDiff(kSettingsFlags, kSettingsFlagCount, g_setSnap, now);
+    DaemonState d = readDaemonState();
+    nbt::SettingsRestart r = nbt::settingsRestartDecide(
+        !diff.empty(), envFlagOn("NBT_SETTINGS_RESTART", true), d.pid != 0,
+        g_lastLaunch != 0 && g_lastLaunch >= g_setSnapTime, g_stopPid != 0);
+    switch (r) {
+    case nbt::SR_NONE: return;
+    case nbt::SR_OFF:
+        alog("settings changed (%s): NBT_SETTINGS_RESTART=0, they apply at the next Start / Restart", diff.c_str());
+        return;
+    case nbt::SR_NOT_RUNNING:
+        alog("settings changed (%s): nbt-aad is not running, the next Start reads them", diff.c_str());
+        return;
+    case nbt::SR_STARTED_SINCE:
+        alog("settings changed (%s): nbt-aad was started after the change and already has them", diff.c_str());
+        return;
+    case nbt::SR_BUSY:
+        alog("settings changed (%s): a stop/restart is already under way", diff.c_str());
+        return;
+    case nbt::SR_RESTART:
+        alog("settings changed (%s) -> restarting nbt-aad (pid %d, %s)", diff.c_str(), d.pid, d.state);
+        beginStop(true);
+        return;
+    }
+}
+
 bool onMenuFocus(void*, const bmw::Parcel& p) {
     bool f = false;
     p.readBool(f);
@@ -2452,6 +2505,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
     if (f) g_settingsFocused = false;   // the menu itself is on top: the Settings page is not (see onSettingsFocus)
     alog("menu state %u focus -> %d", kMenuState, (int)f);
     if (f) g_ow.onOwnState(nbt::OverlayWatch::kMenuState, nowMs());   // iDrive is on our menu (CDS: 50000)
+    if (f) settingsBackOnMainPage();                     // back from Settings: restart if a checkbox changed
     // BACK and tilt-left also reach iDrive and pop it from the blank state 13 to its parent, our menu. Until the 1 s
     // status poll put it back, knob turns / pushes drove our menu rows under the Android Auto picture (car
     // 2026-10-28, nbt-aad-app-11: ten pops in 10 s). Put iDrive back on state 13 right here instead.
@@ -2483,6 +2537,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
     alog("settings state %u focus -> %d", kSettingsState, (int)f);
     if (!f) return true;
     g_ow.onOwnState(nbt::OverlayWatch::kSettingsState, nowMs());   // iDrive is in our menu, not on a car screen
+    settingsPageEntered();                               // checkbox snapshot for the restart on leaving
     if (g_app) {
         showAutostart(g_app);
         showUsbLog(g_app);
