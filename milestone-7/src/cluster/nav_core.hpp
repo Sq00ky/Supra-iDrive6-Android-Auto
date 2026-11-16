@@ -5,7 +5,7 @@
 // follows describes the J29 path.
 //
 // The phone's navigation status (ch 10, via AASession's nav-status callback) is turned into the KOMBI's own
-// route-guidance graph, sent from the OMAP straight to the KOMBI (cluster/j29_client.hpp):
+// route-guidance graph, sent from the OMAP straight to the KOMBI (cluster/guidance/client.hpp):
 //   guidance starts         -> full template graph with maneuver 0 patched (direction, distance + unit, road)
 //   distance text changes   -> one in-place distance frame
 //   next maneuver           -> in-place maneuver-0 update (the factory's update block, no route rebuild); the full
@@ -32,10 +32,10 @@
 #include "cluster/display.hpp"
 #include "cluster/hud6wa_display.hpp"
 #include "cluster/hud_terminal.hpp"
-#include "cluster/j29_display.hpp"
+#include "cluster/guidance/display.hpp"
 #include "cluster/nav_msg.hpp"
-#include "cluster/j29_graph.hpp"
-#include "cluster/j29_client.hpp"
+#include "cluster/guidance/graph.hpp"
+#include "cluster/guidance/client.hpp"
 
 namespace nbt {
 namespace kombinav {
@@ -139,7 +139,7 @@ private:
 // The daemon-side runtime: worker thread, setting, system-log watch, session hooks. One instance (g_kombiNav).
 //
 // The cluster driver (cluster/display.hpp) is chosen once at start() by NBT_CLUSTER:
-//   j29 (default)  the J29's SOME/IP KOMBI graph
+//   j29 / g30      the shared SOME/IP Guidance driver; default selected by CLUSTER_PROFILE
 //   6wa            an F-series 6WA's MOST HUDTerminal (cluster/hud6wa_display.hpp), through the MOST client passed to
 //                  start(); NBT_HUDTERM=log runs it in shadow mode: worked out and logged, nothing sent
 // The 6WA's own transport also sees the factory navigation drawing, and the worker yields to that as it does to an
@@ -235,8 +235,8 @@ private:
     std::string approachText() const;                         // for the start-up line
     std::string junctionText() const;                         // and the 6WA's junction view, for it too
 
-    Graph* graph_;                   // j29
-    KombiClient* client_;            // j29
+    Graph* graph_;                   // shared Guidance
+    KombiClient* client_;            // shared Guidance
     hudterm::HudTerminal* terminal_; // 6wa
     bool shadow_;                    // 6wa: NBT_HUDTERM=log
     std::string target_;             // for the log: what the driver talks to

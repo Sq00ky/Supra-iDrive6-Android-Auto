@@ -9,6 +9,9 @@
 #include <sys/time.h>
 #include <stdlib.h>
 #include "aa_session.hpp"
+#ifdef NBT_CLUSTER_VIDEO
+#include "cluster/video/bridge.hpp"
+#endif
 #include "aa_manifest.hpp"
 #include "aa_control_msgs.hpp"
 #include "aa_proto.hpp"
@@ -348,6 +351,10 @@ bool AASession::sendAckThunk(uint8_t channel, uint64_t rx_wall_ns, void* self) {
 
 void AASession::drainAcks() {
     acks_.drain(&sendAckThunk, this);
+#ifdef NBT_CLUSTER_VIDEO
+    idriver_cluster_tick(this);
+    idriver_cluster_drain_acks(this);
+#endif
 }
 
 void AASession::setUnderflowReports(bool on) { acks_.setUnderflowReports(on); }
@@ -935,7 +942,10 @@ bool AASession::sendAvSetupResponse(uint8_t channel) {
     // AVChannelSetupResponse: media_status=OK(2), max_unacked=10, configs[0]=0. Audio sinks get NBT_AA_MAX_UNACKED
     // (default 10, 4..64; at most 64 keeps it a one-byte varint): with deferred acks it is how far the phone may run
     // ahead.
-    const uint8_t window = isAaAudioSinkChannel(channel) ? (uint8_t)acks_.maxUnacked() : 10;
+    uint8_t window = isAaAudioSinkChannel(channel) ? (uint8_t)acks_.maxUnacked() : 10;
+#ifdef NBT_CLUSTER_VIDEO
+    if(channel==2 && idriver_cluster_ack_window())window=idriver_cluster_ack_window();
+#endif
     uint8_t plain[8] = { 0x80, 0x03, 0x08, 0x02, 0x10, window, 0x18, 0x00 };
     std::vector<uint8_t> enc;
     if (cryptor_.encrypt(plain, sizeof(plain), enc)) {
@@ -1158,6 +1168,9 @@ static uint32_t msLeft(uint32_t last_ms, uint32_t every_ms, uint32_t now) {
 // phone would stretch a compass repeat to 2 s. A 0 here cannot spin, because sendSensorEvent stamps the time before it sends.
 uint32_t AASession::periodicTickMs() {
     uint32_t tick = acks_.hasPending() ? 250u : 1000u;
+#ifdef NBT_CLUSTER_VIDEO
+    if(idriver_cluster_ack_window())tick=20; // drain video credits even when all phone windows are full
+#endif
     const uint32_t now = monoMs();
     if (satellites_started_) {
         const uint32_t left = msLeft(satellites_last_ms_, kSatelliteSendEveryMs, now);
@@ -1174,7 +1187,18 @@ uint32_t AASession::periodicTickMs() {
     return tick;
 }
 
+#ifdef NBT_CLUSTER_VIDEO
+void AASession::clusterSetup(void* s,unsigned ch) { static_cast<AASession*>(s)->sendAvSetupResponse(ch); }
+void AASession::clusterFocus(void* s,unsigned ch,bool projected,bool unsolicited) {
+    static_cast<AASession*>(s)->sendVideoFocusIndication(ch,projected,unsolicited);
+}
+void AASession::clusterAck(void* s,unsigned ch) { static_cast<AASession*>(s)->sendAvMediaAck(ch); }
+#endif
 void AASession::sessionLoop() {
+#ifdef NBT_CLUSTER_VIDEO
+    idriver_cluster_configure_acks(&clusterAck);
+    idriver_cluster_init(&clusterSetup,&clusterFocus);
+#endif
     printf("[AASession] Protocol thread active on fd %d.\n", client_fd_);
     last_rx_ms_ = monoMs();     // the phone's silence counts from here
 
@@ -1370,6 +1394,12 @@ void AASession::sessionLoop() {
             }
 
             // Universal Message Dispatcher based on protocol wire captures
+#ifdef NBT_CLUSTER_VIDEO
+            // Complete/decrypted messages only; stock START bookkeeping and
+            // media ACKs still run. Only answered cluster setup/focus is consumed.
+            const int cluster_result=idriver_cluster_receive(this,channel,frame_data.empty()?NULL:&frame_data[0],frame_data.size());
+            if (cluster_result==1) continue;
+#endif
             uint16_t msg_id = frame_data.size() >= 2 ? ((static_cast<uint16_t>(frame_data[0]) << 8) | frame_data[1]) : 0;
             noteRxMsg(msg_id);
             g_crumb_stage = 3;
@@ -1551,6 +1581,9 @@ void AASession::sessionLoop() {
                            media_frames_, channel, static_cast<unsigned int>(frame_data.size()));
                 }
                 bool deferred = false;   // ack once the consumer has taken it (drainAcks), not now
+#ifdef NBT_CLUSTER_VIDEO
+                deferred=cluster_result==2;
+#endif
                 if (isAaAudioSinkChannel(channel) && msg_id == 0x0000) {
                     // Audio PCM: 2-byte ID + 8-byte PTS + interleaved s16le (ch 9 48 kHz stereo, ch 8 guidance and
                     // ch 16 system audio 16 kHz mono).
@@ -1739,6 +1772,9 @@ void AASession::sessionLoop() {
 }
 
 void AASession::finishSession() {
+#ifdef NBT_CLUSTER_VIDEO
+    idriver_cluster_end();
+#endif
     // Only this thread closes the socket. Whether the session ended on its own or stop()
     // asked it to, release the fd here, then tell the owner if nobody requested the stop.
     bool ended_on_its_own = exchangeRunningOff();

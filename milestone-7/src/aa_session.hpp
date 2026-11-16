@@ -118,6 +118,11 @@ public:
     void postAudioUnderflow(uint8_t channel);
 
 private:
+#ifdef NBT_CLUSTER_VIDEO
+    static void clusterSetup(void*, unsigned);
+    static void clusterFocus(void*, unsigned, bool, bool);
+    static void clusterAck(void*, unsigned);
+#endif
     static void* sessionThreadStub(void* arg);
     void sessionLoop();
 

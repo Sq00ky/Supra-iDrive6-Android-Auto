@@ -21,7 +21,7 @@ LDLIBS   := -lpthread -lssl -lcrypto -lm
 SPEEX := $(ROOT)/src/audio/speex.c
 
 # The guidance runtime with both cluster drivers (KombiNav creates either).
-SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/cluster/nav_core.cpp \
+SRC_KOMBI_NAV := src/cluster/guidance/client.cpp src/cluster/guidance/display.cpp src/cluster/nav_core.cpp \
                  src/cluster/hud6wa_display.cpp src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 
 # Each test and the daemon sources it links (beyond its own .cpp).
@@ -108,8 +108,15 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema tsan check-cluster-video
 	@echo "[CHECK] all host tests passed"
+
+# G30 tests compile the native protocol/player against deterministic peers.
+# Requires Python 3, FFmpeg with libx264, and the same OpenSSL headers as above.
+.PHONY: check-cluster-video check-g30
+check-g30: check-cluster-video
+check-cluster-video:
+	CXX="$(HOST_CXX)" python3 cluster_video/check.py
 
 $(OUT):
 	@mkdir -p $(OUT)

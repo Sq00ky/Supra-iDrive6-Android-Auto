@@ -61,13 +61,14 @@
 #include "boot_guard.hpp"
 #include "overlay_watch.hpp"
 #include "entry_key.hpp"
+#include "../src/cluster/video_settings.hpp"
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-64-navsettings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-65-g30-map (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -388,6 +389,8 @@ const unsigned    kAnyDistTextModel = 168;   // textIdModel (checkbox label)
 const char* const kAnyDistFlag      = "/var/opt/aa/kombi-nav-anydist";
 const char* const kAnyDistManual    = "/opt/aa/kombi-nav-anydist";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
+const unsigned    kActKombiVideo    = 177;
+const unsigned    kKombiVideoModel  = 179;
 const unsigned    kNoLogModel       = 175;   // raBoolModel
 const char* const kNoLogFlag        = "/var/opt/aa/no-log";
 const char* const kNoLogManual      = "/opt/aa/no-log";
@@ -2270,6 +2273,19 @@ bool serviceAutostartHandoff(bmw::PluginApp* app, const DaemonState& d, bool con
 
 // ---- Version page + "Show directions at any distance" (rhmiapp-55-navset) -------------------------------------
 bool g_anyDistShown = false;
+bool g_kombiVideoShown = false;
+void showKombiVideo(bmw::PluginApp* app) {
+    app->updateModel(kKombiVideoModel,aa_cluster::setting_enabled());
+    g_kombiVideoShown=true;
+}
+bool onKombiVideoToggle(void*,const bmw::Parcel&) {
+    bool on=aa_cluster::setting_enabled();
+    bool ok=aa_cluster::setting_write(!on);
+    alog("menu: instrument cluster map %s -> %s (live)%s",on?"on":"off",
+         aa_cluster::setting_enabled()?"on":"off",ok?"":"; preference write failed");
+    if(g_runApp)showKombiVideo(g_runApp);
+    return true;
+}
 bool anyDistOn() { return fileExists(kAnyDistFlag) || fileExists(kAnyDistManual); }
 void showAnyDist(bmw::PluginApp* app) { app->updateModel(kAnyDistModel, anyDistOn()); g_anyDistShown = true; }
 bool g_noLogShown = false;
@@ -2342,6 +2358,7 @@ void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
+    if (!g_kombiVideoShown) showKombiVideo(app);
     if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
@@ -2535,6 +2552,9 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showMenuIdrive(g_app);
         showDriveMode(g_app);
         showKombiNav(g_app);
+        showKombiVideo(g_app);
+        showAnyDist(g_app);
+        showNoLog(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
         showPhoneGps(g_app);
@@ -2585,6 +2605,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActCpCompat, &onCpCompatToggle);
     addAction(self, kActAnyDist, &onAnyDistToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
+    addAction(self, kActKombiVideo, &onKombiVideoToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
