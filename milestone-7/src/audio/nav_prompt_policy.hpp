@@ -29,9 +29,10 @@ public:
         uint32_t release_timeout_ms;
         uint32_t stall_ms;   // a prompt is dropped when the endpoint has not taken a buffer for this long
         uint32_t open_ms;    // added to stall_ms until a fresh open has taken its first buffer (its open timeout)
+        uint32_t max_refusals;   // grant timeouts in a row until the session end gives the focus up (0 = never)
         Config()
             : grant_timeout_ms(2000), hold_ms(500), backoff_ms(30000), release_timeout_ms(5000), stall_ms(1000),
-              open_ms(2000) {}
+              open_ms(2000), max_refusals(2) {}
     };
 
     NavPromptPolicy() : state_(IDLE), since_ms_(0), backoff_until_ms_(0) {}

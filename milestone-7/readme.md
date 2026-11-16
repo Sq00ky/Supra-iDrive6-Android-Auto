@@ -954,7 +954,7 @@ The defaults are the nav prompter of the F30 (NBTevo_S19322I): `NBT_SPEECH_EP=/i
   mix until the session ends.
 - The focus is released after the queued audio plus `NBT_SPEECH_HOLD_MS`. The focus request is one `audioconn` run,
   not retried (`NBT_AUDIOCONN_RETRIES` does not apply). No grant within 2 s: the prompt is dropped and the next prompts
-  use the browser mix for 30 s. The rate the phone declared is used.
+  use the browser mix for 30 s; after two in a row, until the session ends. The rate the phone declared is used.
 - While AA media plays (Tidal, Spotify, ..: the browser source is built for it, or media played within
   `NBT_BROWSER_IDLE_S`), prompts stay in the browser mix with the media ducked by the daemon's mixer (`NBT_DUCK_DB`):
   under the nav focus the car would mute the browser source, media included.
@@ -965,7 +965,8 @@ The defaults are the nav prompter of the F30 (NBTevo_S19322I): `NBT_SPEECH_EP=/i
 - Log: `[Browser] guidance: nav prompt channel /input_mono_0 focus 0x1a -> 0x1 (NBT_SPEECH=1)` (else `guidance: browser mix ..`),
   `[Speech] ready: .. opened for each prompt, route audioconn 0x1a -> 0x1`, per prompt `[Speech] prompt #N started: ..`
   and `focus granted after .. ms, released .. ms after the last audio`, then `[Speech] endpoint closed`; on a refused
-  focus `focus not granted after .. ms: dropped, no focus requests for .. s`; on a taken endpoint `the endpoint took
+  focus `focus not granted after .. ms: dropped, no focus requests for .. s` (the second in a row adds `browser mode
+  keeps prompts in its mix until the session ends`); on a taken endpoint `the endpoint took
   no buffer for .. ms`; with AA media `[Browser] AA media is on the browser source: nav prompt stays in the mix`.
 - Bluetooth mode: `NBT_SPEECH` works there too, with the declared rate (16 kHz mono if none given), on
   `/input_stereo_AirPlayAlt` unless `NBT_SPEECH_EP` is set. Without `NBT_SPEECH_SRC` (default `0` there) prompts play at

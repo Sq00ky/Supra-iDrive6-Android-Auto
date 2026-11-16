@@ -247,6 +247,7 @@ int main() {
         CHECK_CALLS(p, "busy@3000");
         t = f.tick(3001);
         CHECK(t.action == NavPromptPolicy::GRANT_TIMEOUT);
+        CHECK(!t.gave_up);
         CHECK(t.waited_ms == 2001);
         CHECK_CALLS(p, "flush feed- remove busy@3001");
         CHECK(f.state() == NavPromptPolicy::RELEASING);
@@ -873,6 +874,61 @@ int main() {
         f.promptStopped();
         CHECK_TEXT(f.promptStarted(6000), NULL);
         CHECK(f.playsFrames());
+    }
+
+    // 18. Grant timeouts in a row: after max_refusals no browser prompt is taken until the session ends.
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        timedOut(f, p);
+        CHECK(f.takesPrompt(33001));
+        CHECK_TEXT(f.promptStarted(33001), kRequesting);
+        SpeechFocus::Tick t = f.tick(35002);
+        CHECK(t.action == NavPromptPolicy::GRANT_TIMEOUT);
+        CHECK(t.gave_up);
+        f.removeDone(35500, true);
+        f.promptStopped();
+        CHECK(!f.takesPrompt(65002));   // past the backoff
+        CHECK(!f.takesPrompt(1000000));
+        f.sessionEnded(1000000);
+        CHECK(f.takesPrompt(1000000));
+    }
+
+    // 18b. A grant in between starts the count again.
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        f.configure(defaults, true);
+        timedOut(f, p);
+        CHECK_TEXT(f.promptStarted(33001), kRequesting);
+        CHECK(f.granted(33300) == NavPromptPolicy::BUILDING);
+        f.promptStopped();
+        p.queued = 0;
+        CHECK(f.tick(33801).action == NavPromptPolicy::RELEASE);
+        f.removeDone(33900, true);
+        CHECK_TEXT(f.promptStarted(40000), kRequesting);
+        SpeechFocus::Tick t = f.tick(42001);
+        CHECK(t.action == NavPromptPolicy::GRANT_TIMEOUT);
+        CHECK(!t.gave_up);
+        f.removeDone(42500, true);
+        f.promptStopped();
+        CHECK(f.takesPrompt(72001));
+    }
+
+    // 18c. max_refusals 0: never gives up.
+    {
+        FakePort p;
+        SpeechFocus f(p);
+        NavPromptPolicy::Config c;
+        c.max_refusals = 0;
+        f.configure(c, true);
+        timedOut(f, p);
+        CHECK_TEXT(f.promptStarted(33001), kRequesting);
+        CHECK(!f.tick(35002).gave_up);
+        f.removeDone(35500, true);
+        f.promptStopped();
+        CHECK(f.takesPrompt(65002));
     }
 
     if (fails) { printf("test_speech_focus: %d failure(s)\n", fails); return 1; }

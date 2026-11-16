@@ -6,7 +6,7 @@ namespace nbt {
 
 SpeechFocus::SpeechFocus(SpeechFocusPort& port)
     : port_(port), uses_focus_(false), prompt_started_(false), waiting_(false), held_(false), build_pending_(false),
-      removes_(0), last_busy_ms_(0), build_ms_(0), grant_after_ms_(0), stop_sent_(false), endpoint_(false),
+      removes_(0), refusals_(0), last_busy_ms_(0), build_ms_(0), grant_after_ms_(0), stop_sent_(false), endpoint_(false),
       live_(false), stalled_(false), writes_seen_(0), progress_ms_(0) {}
 
 void SpeechFocus::configure(const NavPromptPolicy::Config& cfg, bool uses_focus) {
@@ -15,7 +15,8 @@ void SpeechFocus::configure(const NavPromptPolicy::Config& cfg, bool uses_focus)
 }
 
 bool SpeechFocus::takesPrompt(uint64_t now) const {
-    return uses_focus_ && policy_.available(now);
+    const uint32_t max = policy_.config().max_refusals;
+    return uses_focus_ && policy_.available(now) && (max == 0 || refusals_ < max);
 }
 
 const char* SpeechFocus::promptStarted(uint64_t now) {
@@ -78,6 +79,7 @@ NavPromptPolicy::State SpeechFocus::granted(uint64_t now) {
     held_ = true;
     build_pending_ = false;
     if (st == NavPromptPolicy::BUILDING) {
+        refusals_ = 0;
         grant_after_ms_ = now - build_ms_;
         last_busy_ms_ = now;
         resetProgress(now);   // the feed starts now
@@ -153,10 +155,12 @@ SpeechFocus::Tick SpeechFocus::tick(uint64_t now) {
     t.stall_ms = 0;
     t.dropped = 0;
     t.closed = false;
+    t.gave_up = false;
     if (t.action == NavPromptPolicy::GRANT_TIMEOUT) {
         port_.flush();
         release(now);
         policy_.backoff(now);
+        t.gave_up = ++refusals_ == policy_.config().max_refusals;
     } else if (t.action == NavPromptPolicy::RELEASE) {
         release(now);
     } else if (t.action == NavPromptPolicy::RELEASE_TIMEOUT) {
@@ -196,6 +200,7 @@ bool SpeechFocus::sessionEnded(uint64_t now) {
     port_.flush();
     closeEndpoint();
     policy_.clearBackoff();
+    refusals_ = 0;
     syncBusy(now);
     return releasing;
 }

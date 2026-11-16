@@ -294,8 +294,9 @@ void SpeechOut::tickThread() {
         const unsigned long long after = focus_.grantAfterMs();
         pthread_mutex_unlock(&lock_);
         if (t.action == NavPromptPolicy::GRANT_TIMEOUT)
-            printf("[Speech] prompt #%u: focus not granted after %llu ms: dropped, no focus requests for %u s\n", n,
-                   (unsigned long long)t.waited_ms, backoff_s);
+            printf("[Speech] prompt #%u: focus not granted after %llu ms: dropped, no focus requests for %u s%s\n", n,
+                   (unsigned long long)t.waited_ms, backoff_s,
+                   t.gave_up ? "; refused again: browser mode keeps prompts in its mix until the session ends" : "");
         else if (t.action == NavPromptPolicy::RELEASE)
             printf("[Speech] prompt #%u: %u Hz x%u, focus granted after %llu ms, released %llu ms after the last "
                    "audio\n", n, rate, ch, after, (unsigned long long)t.idle_ms);

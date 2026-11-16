@@ -19,6 +19,7 @@ int main() {
         CHECK(c.hold_ms == 500);
         CHECK(c.backoff_ms == 30000);
         CHECK(c.release_timeout_ms == 5000);
+        CHECK(c.max_refusals == 2);
         NavPromptPolicy p;
         CHECK(p.state() == NavPromptPolicy::IDLE);
         CHECK(!p.mayPlay());

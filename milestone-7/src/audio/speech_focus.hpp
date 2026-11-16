@@ -53,6 +53,7 @@ public:
         uint64_t stall_ms;     // stalled: since the endpoint last took a buffer
         size_t dropped;        // stalled: bytes flushed from the ring
         bool closed;           // the endpoint was closed after the prompt
+        bool gave_up;          // GRANT_TIMEOUT: the max_refusals-th in a row, takesPrompt() is false until the session end
     };
     struct Stop {
         bool sent;   // a release was started or a remove queued during the shutdown
@@ -67,7 +68,7 @@ public:
     uint64_t grantAfterMs() const { return grant_after_ms_; }
     bool endpointWanted() const { return endpoint_; }
 
-    // The focus is in use and not backing off.
+    // The focus is in use, not backing off and not given up (max_refusals grant timeouts in a row this session).
     bool takesPrompt(uint64_t now) const;
     // ch 8 START; returns the log text, NULL = no focus in use.
     const char* promptStarted(uint64_t now);
@@ -115,6 +116,7 @@ private:
     bool held_;            // the car may hold our focus: granted, and no remove has run since
     bool build_pending_;   // a build was queued and not granted: its one attempt may still run
     uint32_t removes_;     // focus removes queued and not done yet
+    uint32_t refusals_;    // grant timeouts since the last grant or session end
     uint64_t last_busy_ms_;
     uint64_t build_ms_;
     uint64_t grant_after_ms_;
