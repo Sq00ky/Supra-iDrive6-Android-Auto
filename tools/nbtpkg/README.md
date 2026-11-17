@@ -89,6 +89,27 @@ manifest. So the manifest sets `requires.agent` to `>1.4.1`, which every later a
 Publish such a package only after an NBTApps release (agent and app) that has it. The workflow checks the package
 with an NBTApps commit whose `nbtpkg.py` takes these paths (6865e8a or later), or `fetch` refuses the manifest.
 
+## Settings
+
+`manifest.json`'s `settings` lists the settings of `nbt-aad.env` that match a checkbox on the iDrive Settings page,
+so the NBTApps phone app can show and change them: `NBT_KOMBI_NAV`, `NBT_KOMBI_NAV_APPROACH`, `NBT_NO_LOG`,
+`NBT_SPEECH_BT`, `NBT_USB`, `NBT_PHONE_GPS`, `NBT_ALT_WIFI`, `NBT_AUDIO_MODE`, `NBT_LCI_MEDIA` and
+`NBT_CP_COMPAT`. A package install keeps the file in its data folder,
+`/var/opt/nbtapp/data/com.github.sq00ky.android-auto/nbt-aad.env`, the one the iDrive app reads there.
+
+Each one left unset shows on the phone as "As ticked on iDrive": the checkbox decides. Set from the phone, the line
+wins over the checkbox either way, as it does when written by hand, and the checkbox then does nothing until the
+setting is reset on the phone. The phone writes one `NAME=value` line per setting it changes and takes the line
+out on a reset. It leaves every other line as it is: comments, `NBT_KEEP_PF`, and any setting not listed. A change
+takes effect at the next **Start** or **Restart**, as the phone says. The checkboxes with no setting in the file
+(Start automatically, Save logs to USB, MENU key opens iDrive, Show driving mode changes, Show iDrive warnings) are
+not on the phone.
+
+Each listed setting's longest line fits the iDrive app's 159 characters, and `test_settings` checks it. The iDrive
+app uses only the first 15 settings in the file, and the phone adds a new line at the end, so a file that already
+has 15 settings by hand does not see the new one. Settings in the manifest need an NBTApps agent with settings
+(the one after 1.4.1, as for the logs), and the workflow checks the package with NBTApps 7d92a06 or later.
+
 ## Running it again
 
 If the files were attached after the release was published, the first run fails because they were not there yet.

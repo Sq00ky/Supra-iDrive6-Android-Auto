@@ -16,5 +16,44 @@
     {"path": "/dev/shmem/nbt-aad.log"},
     {"path": "/dev/shmem/nbt-aad-app.log"},
     {"path": "/dev/shmem/nbt-aad-pf_aa.out"}
-  ]
+  ],
+  "settings": {
+    "file": "${data}/nbt-aad.env",
+    "options": [
+      {"key": "NBT_KOMBI_NAV", "label": "Show navigation in HUD/gauge cluster", "type": "bool",
+       "description": "The next turn, its distance and the road name in the instrument cluster and the HUD. Set here, it wins over the checkbox on iDrive.",
+       "unset": "As ticked on iDrive", "applies": "app-start"},
+      {"key": "NBT_KOMBI_NAV_APPROACH", "label": "Show directions", "type": "select",
+       "description": "When the next turn shows in the cluster and the HUD. At any distance is the iDrive checkbox Show directions at any distance. Set here, it wins over that checkbox.",
+       "values": [{"value": "off", "label": "At any distance"}, {"value": "time", "label": "In the last few seconds"},
+                  {"value": "distance", "label": "In the last mile"}],
+       "unset": "As ticked on iDrive", "applies": "app-start"},
+      {"key": "NBT_NO_LOG", "label": "Disable logging (performance test)", "type": "bool",
+       "description": "Silences every log, so a run leaves no log to read. For a performance test only. Set here, it wins over the checkbox on iDrive.",
+       "unset": "As ticked on iDrive", "applies": "app-start", "advanced": true},
+      {"key": "NBT_SPEECH_BT", "label": "Prompts on car radio (BT, beta)", "type": "bool",
+       "description": "Bluetooth audio only: navigation prompts play on the car's own prompter, so the radio ducks. Set here, it wins over the checkbox on iDrive.",
+       "unset": "As ticked on iDrive", "applies": "app-start"},
+      {"key": "NBT_USB", "label": "Android Auto over USB (beta)", "type": "bool",
+       "description": "Android Auto over the car's USB port. While it is on, wireless Android Auto is not offered at all. Set here, it wins over the checkbox on iDrive.",
+       "unset": "As ticked on iDrive", "applies": "app-start", "advanced": true},
+      {"key": "NBT_PHONE_GPS", "label": "Use Phone GPS", "type": "bool",
+       "description": "For cars without the navigation antenna: the phone uses its own GPS, compass and motion sensors. Set here, it wins over the checkbox on iDrive.",
+       "unset": "As ticked on iDrive", "applies": "app-start"},
+      {"key": "NBT_ALT_WIFI", "label": "Use WiFi Direct Network", "type": "select",
+       "description": "The Wi-Fi network the phone is offered. Set here, it wins over the checkbox on iDrive.",
+       "values": [{"value": "DIRECT", "label": "WiFi Direct only"}, {"value": "CARPLAY", "label": "The CarPlay hotspot"}],
+       "unset": "As ticked on iDrive", "applies": "app-start"},
+      {"key": "NBT_AUDIO_MODE", "label": "Use Native Audio instead of Bluetooth", "type": "select",
+       "description": "How Android Auto's sound reaches the car. Set here, it wins over the checkbox on iDrive.",
+       "values": [{"value": "browser", "label": "Native audio"}, {"value": "bt", "label": "Bluetooth"}],
+       "unset": "As ticked on iDrive", "applies": "app-start"},
+      {"key": "NBT_LCI_MEDIA", "label": "Media Controls for LCI Steering Wheels", "type": "bool",
+       "description": "The steering wheel's previous and next keys work Android Auto's media, in native audio. Set here, it wins over the checkbox on iDrive.",
+       "unset": "As ticked on iDrive", "applies": "app-start"},
+      {"key": "NBT_CP_COMPAT", "label": "CarPlay compatibility", "type": "bool",
+       "description": "For cars that use the factory CarPlay as well as Android Auto. Set here, it wins over the checkbox on iDrive.",
+       "unset": "As ticked on iDrive", "applies": "app-start"}
+    ]
+  }
 }
