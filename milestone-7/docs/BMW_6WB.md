@@ -441,7 +441,7 @@ HMI environment. Nothing edits the vehicle's env automatically.
 
 | Variable | Default | Accepted range / meaning |
 |---|---|---|
-| NBT_6WB_STREET_CHARS | 15 | 1–40 encoded characters |
+| NBT_6WB_STREET_CHARS | 255 | Optional explicit limit, 1–255 ISO-8859-15 bytes |
 | NBT_6WB_DISTANCE_CHARS | 5 | 1–8 encoded characters |
 | NBT_6WB_LINE_WIDTH | 6 | 1–22, main vector outline |
 | NBT_6WB_LANE_LINE_WIDTH | 3 | 1–10 |

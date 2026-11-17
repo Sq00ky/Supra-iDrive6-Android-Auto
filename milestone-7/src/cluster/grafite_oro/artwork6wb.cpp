@@ -225,28 +225,16 @@ void fit(Scene& scene,Rect area,double margin) {
     double scale=std::min((area.width-2*margin)/(r-l),(area.height-2*margin)/(b-t));
     for(size_t i=0;i<scene.size();++i)transform(scene[i],scale,area.x+(area.width-(l+r)*scale)/2,area.y+(area.height-(t+b)*scale)/2);
 }
-Shape laneArrow(int shape,bool highlighted) {
-    // Same stroke/fill vocabulary as the supplied lane shapes; each direction
-    // keeps its exact AA category and its own recommendation.
-    static const double angle[]={0,0,-45,45,-90,90,-135,135,-180,180};
-    std::vector<Point> path;path.push_back(xy(0,65));path.push_back(xy(0,0));
-    double a=angle[shape]*3.141592653589793/180;
-    if(shape>=8) {double side=shape==8?-1:1;path.push_back(xy(side*36,-35));path.push_back(xy(side*65,-10));path.push_back(xy(side*65,25));}
-    else if(shape!=1)path.push_back(xy(sin(a)*55,-cos(a)*55));
-    else path.back()=xy(0,-65);
-    Point end=path.back(),prev=path[path.size()-2];double dx=end.x-prev.x,dy=end.y-prev.y,n=sqrt(dx*dx+dy*dy);dx/=n;dy/=n;
-    // Offset centre line, with bounded miters. Side-specific points give a
-    // single closed silhouette, instead of substituting an unrelated icon.
-    std::vector<Point> left,right;
-    for(size_t i=0;i<path.size();++i) {
-        Point d=i+1<path.size()?xy(path[i+1].x-path[i].x,path[i+1].y-path[i].y):xy(dx,dy);
-        double len=sqrt(d.x*d.x+d.y*d.y);d.x/=len;d.y/=len;
-        left.push_back(xy(path[i].x-d.y*11,path[i].y+d.x*11));right.push_back(xy(path[i].x+d.y*11,path[i].y-d.x*11));
-    }
-    std::vector<Point> outline=left;
-    outline.push_back(xy(end.x-dy*23,end.y+dx*23));outline.push_back(xy(end.x+dx*30,end.y+dy*30));outline.push_back(xy(end.x+dy*23,end.y-dx*23));
-    for(size_t i=right.size();i>0;--i)outline.push_back(right[i-1]);
-    return contour(outline,true,highlighted?Color::White:Color::Graphite,highlighted?Color::Red:Color::Gray,3.5);
+Shape laneTip(int shape,bool highlighted) {
+    static const double degrees[]={0,0,-45,45,-90,90,-135,135,180,180};
+    const double angle=degrees[shape]*3.141592653589793/180;
+    const double dx=sin(angle),dy=-cos(angle);
+    std::vector<Point> points;
+    points.push_back(xy(dx*20,dy*20));
+    points.push_back(xy(-dy*12,dx*12));
+    if(shape>=8)points.push_back(xy(shape==8?-5:5,6));
+    points.push_back(xy(dy*12,-dx*12));
+    return contour(points,true,highlighted?Color::White:Color::Gray,Color::None,0);
 }
 }
 Scene renderManeuver(const NavigationEvent& e,Rect area,double margin) {
@@ -257,51 +245,45 @@ Scene renderManeuver(const NavigationEvent& e,Rect area,double margin) {
     if(round)scene=roundabout(e);
     else if((e.maneuver>=Maneuver::Start&&e.maneuver<=Maneuver::Merge)||e.maneuver==Maneuver::Straight)scene=flatRoad(e.maneuver);
     else {for(unsigned i=0;i<a.count;++i)scene.push_back(load(a.offset+i));symbolStyle(scene);}
-    fit(scene,area,margin);return scene;
+    fit(scene,area,margin);
+    if(round) {
+        const double scale=0.85;
+        const double cx=area.x+area.width/2,cy=area.y+area.height/2;
+        for(size_t i=0;i<scene.size();++i)
+            transform(scene[i],scale,cx*(1-scale),cy*(1-scale));
+    }
+    return scene;
 }
 Scene renderLanes(const std::vector<Lane>& lanes,Rect area) {
     Scene scene;if(!valid(area)||lanes.empty()||lanes.size()>8)return scene;
-    double cell=area.width/lanes.size(),width=std::min(1.4,std::min(cell,area.height)/8);
-    Shape bg;bg.fill=Color::Graphite;std::vector<Point> bgPoints;
-    bgPoints.push_back(xy(area.x,area.y));bgPoints.push_back(xy(area.x+area.width,area.y));
-    bgPoints.push_back(xy(area.x+area.width,area.y+area.height));bgPoints.push_back(xy(area.x,area.y+area.height));
-    scene.push_back(contour(bgPoints,true,Color::Graphite,Color::None,0));
-    scene.push_back(line(area.x+width/2,area.y+width,area.y+area.height-width,Color::Gold,width));
-    scene.push_back(line(area.x+area.width-width/2,area.y+width,area.y+area.height-width,Color::Gold,width));
+    const double cell=area.width/lanes.size();
     for(size_t i=0;i<lanes.size();++i) {
-        if(i)for(int dash=0;dash<4;++dash) {double y=area.y+(dash+.24)*area.height/4;
-            scene.push_back(line(area.x+i*cell,y,y+area.height/8,Color::Gray,width));}
-        // The kit's approved composite silhouettes remain exact for the cases
-        // they describe. Rich per-branch data selects the parametric path below,
-        // never a different renderer or a lossy three-bit conversion.
-        unsigned mask=0;bool uniform=true,have=false,highlighted=false;
-        for(size_t j=0;j<lanes[i].directions.size();++j) {
-            const Direction& d=lanes[i].directions[j];
-            if(d.shape==0){uniform=false;continue;}
-            if(d.shape!=1&&d.shape!=4&&d.shape!=5){uniform=false;continue;}
-            if(have&&highlighted!=d.highlighted)uniform=false;
-            have=true;highlighted=d.highlighted;mask|=d.shape==1?LaneStraight:d.shape==4?LaneLeft:LaneRight;
+        const std::vector<Direction>& directions=lanes[i].directions;
+        unsigned count=0;
+        for(size_t j=0;j<directions.size();++j)
+            if(directions[j].shape>=1&&directions[j].shape<=9)++count;
+        if(!count)continue;
+        const double slot=(cell-2)/count;
+        if(slot<2)continue;
+        const double scale=std::min((slot-1)/44,area.height/44);
+        unsigned index=0;
+        for(size_t j=0;j<directions.size();++j) {
+            const Direction& d=directions[j];
+            if(d.shape<1||d.shape>9)continue;
+            Shape tip=laneTip(d.shape,d.highlighted);
+            const std::vector<Point>& points=tip.contours[0].points;
+            double top=points[0].y,left=points[0].x,right=left;
+            for(size_t k=1;k<points.size();++k) {
+                top=std::min(top,points[k].y);
+                left=std::min(left,points[k].x);
+                right=std::max(right,points[k].x);
+            }
+            const double x=area.x+i*cell+1+(index+.5)*slot;
+            transform(tip,scale,x-(left+right)*scale/2,area.y-top*scale);
+            scene.push_back(tip);
+            ++index;
         }
-        if(uniform&&mask) {
-            Shape arrow=load(laneOffsets[mask-1]);arrow.fill=highlighted?Color::White:Color::None;
-            arrow.stroke=highlighted?Color::Red:Color::Gray;arrow.strokeWidth=3.5;
-            double l=std::numeric_limits<double>::max(),t=l,r=-l,b=-l;
-            for(size_t j=0;j<arrow.contours[0].points.size();++j){const Point& p=arrow.contours[0].points[j];
-                l=std::min(l,p.x);r=std::max(r,p.x);t=std::min(t,p.y);b=std::max(b,p.y);}
-            double scale=std::min((cell-4*width)/187.5,(area.height-4*width)/142.5);
-            transform(arrow,scale,area.x+(i+.5)*cell-(l+r)*scale/2,area.y+(area.height-(t+b)*scale)/2);
-            scene.push_back(arrow);continue;
-        }
-        for(unsigned pass=0;pass<2;++pass)for(size_t j=0;j<lanes[i].directions.size();++j) {
-            const Direction& d=lanes[i].directions[j];if((d.highlighted?1u:0u)!=pass||d.shape<1||d.shape>9)continue; // position still reserved
-            Shape arrow=laneArrow(d.shape,d.highlighted);Scene one;one.push_back(arrow);
-            Rect box(area.x+i*cell+2*width,area.y+2*width,cell-4*width,area.height-4*width);
-            // Constant design envelope across recommendation and direction: no
-            // resizing individual branches as their highlighting changes.
-            double scale=std::min(box.width/210.0,box.height/210.0);
-            transform(one[0],scale,box.x+box.width/2,box.y+box.height/2);
-            scene.push_back(one[0]);
-        }
-    }return scene;
+    }
+    return scene;
 }
 } }

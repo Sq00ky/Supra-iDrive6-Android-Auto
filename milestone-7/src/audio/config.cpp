@@ -22,7 +22,11 @@ BrowserConfig::BrowserConfig()
       drift(true), drift_pi(true), prio(15), resampler_linear(false), speex_q(5), resampler_file("/tmp/nbt_resampler"),
       refocus(true), shim_path("/opt/mm/lib/libasound/libasound.so"), pcm(NULL), frag(4096), frags(5), duck_db(-12),
       duck_attack_ms(80), duck_release_ms(500), duck_hold_ms(600), media_gain_db(0), guidance_gain_db(0),
-      system_gain_db(0), defer_acks(true), underflow_reports(true) {}
+      system_gain_db(0), defer_acks(true), underflow_reports(true) {
+    speech.enabled = true;
+    speech.endpoint = kNavPromptEndpoint;
+    speech.src = kNavPromptSrc;
+}
 
 BrowserConfig readBrowserConfig() {
     BrowserConfig c;
@@ -79,10 +83,23 @@ BrowserConfig readBrowserConfig() {
     // ran dry (0x800b).
     c.defer_acks = envFlag("NBT_AA_DEFER_ACKS") != 0;
     c.underflow_reports = envFlag("NBT_AA_UNDERFLOW_REPORT") != 0;
+    c.speech = readSpeechConfig(true, kNavPromptEndpoint, kNavPromptSrc);
     return c;
 }
 
-SpeechConfig::SpeechConfig() : enabled(false), endpoint(NULL), src(0), sink(0x1) {}
+SpeechConfig::SpeechConfig() : enabled(false), endpoint(NULL), src(0), sink(0x1), hold_ms(500) {}
+
+SpeechConfig readSpeechConfig(bool def_enabled, const char* def_endpoint, uint32_t def_src) {
+    SpeechConfig c;
+    const char* e = getenv("NBT_SPEECH");
+    c.enabled = def_enabled ? envFlag("NBT_SPEECH") != 0 : (e && strcmp(e, "1") == 0);
+    e = getenv("NBT_SPEECH_EP");
+    c.endpoint = e && *e ? e : def_endpoint;
+    c.src = (uint32_t)envHex("NBT_SPEECH_SRC", def_src);
+    c.sink = (uint32_t)envHex("NBT_SPEECH_SINK", 0x1);
+    c.hold_ms = (int)envRange("NBT_SPEECH_HOLD_MS", 500, 0, 5000);
+    return c;
+}
 
 BtConfig::BtConfig()
     : src(0x3a), sink(0x1), conn(0xc7), route_delay_ms(1500), refocus(true), release(false), sdr_drop("9") {}
@@ -110,13 +127,12 @@ BtConfig readBtConfig() {
     c.refocus = envFlag("NBT_BT_REFOCUS") != 0;   // unset stays on
     c.release = getenv("NBT_BT_RELEASE") && strcmp(getenv("NBT_BT_RELEASE"), "1") == 0;
     c.sdr_drop = getenv("NBT_SDR_DROP") ? getenv("NBT_SDR_DROP") : "9";
-    {
-        const char* e = getenv("NBT_SPEECH");
-        c.speech.enabled = e && strcmp(e, "1") == 0;
-    }
-    c.speech.endpoint = getenv("NBT_SPEECH_EP");
-    c.speech.src = (uint32_t)envHex("NBT_SPEECH_SRC", 0);
-    c.speech.sink = (uint32_t)envHex("NBT_SPEECH_SINK", 0x1);
+    // "Prompts on car radio (BT, beta)" (nbt_env.hpp speechBtEnabled): the BT path otherwise leaves speech off and lets
+    // the phone mix prompts into A2DP. With the flag the browser defaults apply (nav prompter, eSRC_NAV_AUTO, speakers)
+    // and retypeGuidanceSink() leaves channel 8 as GUIDANCE, so the prompt audio actually arrives. Explicit NBT_SPEECH*
+    // values still win over the defaults.
+    c.speech = nbt::speechBtEnabled() ? readSpeechConfig(true, kNavPromptEndpoint, kNavPromptSrc)
+                                      : readSpeechConfig(false, NULL, 0);
     return c;
 }
 

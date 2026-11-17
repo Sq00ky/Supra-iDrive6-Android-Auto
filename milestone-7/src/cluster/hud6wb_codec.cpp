@@ -34,7 +34,7 @@ std::string toLatin15(const std::string& s, size_t maxChars) {
     return o;
 }
 std::vector<uint8_t> latinText(uint16_t h,const std::string& s,size_t maxChars) {
-    std::string t=toLatin15(s,maxChars>255?255:maxChars);
+    std::string t=toLatin15(s,maxChars>kMaxLatinTextBytes?kMaxLatinTextBytes:maxChars);
     std::vector<uint8_t> p;putBe16(p,h);p.push_back(1);
     p.insert(p.end(),t.begin(),t.end());p.push_back(0);return p;
 }
@@ -71,7 +71,19 @@ std::vector<uint8_t> bitmap(uint16_t h,uint8_t id,const std::vector<uint32_t>& p
     p.insert(p.end(),r.begin(),r.end());return p;
 }
 std::vector<uint32_t> calibrationPicture(unsigned test) {
-    if(test>1)return std::vector<uint32_t>();
+    if(test==2) {
+        static const uint32_t colors[]={
+            0xffffffff,0xffff0000,0xff00ff00,0xff0000ff,0xffffff00,
+            0xffff00ff,0xff00ffff,0xff000000,0xff808080,0xffffa500
+        };
+        const unsigned width=305,height=44;
+        std::vector<uint32_t> pixels(width*height,0xffffffff);
+        for(unsigned y=1;y<height-1;++y)
+            for(unsigned x=1;x<width-1;++x)
+                pixels[y*width+x]=colors[(x-1)*10/(width-2)];
+        return pixels;
+    }
+    if(test>2)return std::vector<uint32_t>();
     const unsigned w=305,h=44,scale=2;
     const uint32_t background=test?0xffff0000:0xffffff00;
     const uint32_t ink=test?0xff00ffff:0xff00ff00;

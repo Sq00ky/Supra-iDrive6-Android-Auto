@@ -13,6 +13,7 @@
 #include "cluster/nav_core.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
+#include <algorithm>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,7 +52,7 @@ struct FakePort : public Port {
     }
     Status status() const { return st; }
     uint32_t epoch() const { return ep; }
-    bool waiting() const { return wait; }
+    bool waiting(int) const { return wait; }
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
 };
@@ -76,6 +77,13 @@ static NavView view(int type, const char* road, const char* dist, int unit, int6
     v.has_step_m = m >= 0;
     v.step_m = m;
     return v;
+}
+
+// The arrow alone, as before junction views: the tests of the arrow's batches use it.
+static Settings arrows() {
+    Settings s;
+    s.junction = false;
+    return s;
 }
 
 static std::string text(const Call& c) { return decodeText(&c.payload[0], c.payload.size()); }
@@ -236,6 +244,7 @@ static void testShowBatches() {
     g_log.clear();
     FakePort port;
     Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
     d.setLog(&logFn, NULL);
     assert(strcmp(d.name(), "6wa") == 0 && !d.sentAny() && d.visibleBuffer() == 6);
 
@@ -309,6 +318,7 @@ static void testShowBatches() {
 static void testClearBatch() {
     FakePort port;
     Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
     d.setLog(&logFn, NULL);
     assert(d.showManeuver(view(36, "Testroad", "100", 1, 100), 0, true, true) == ClusterDisplay::kOk);
     assert(d.visibleBuffer() == 5);
@@ -336,6 +346,7 @@ static void testClearBatch() {
     assert(c2.calls.size() == 8);
     for (size_t k = 0; k < 8; ++k) assert(c2.calls[k].fkt == c.calls[k].fkt && c2.calls[k].payload == c.calls[k].payload);
     Hud6waDisplay fresh(port, k6wa, false);                     // just started, nothing drawn yet: the same clear
+    fresh.setSettings(arrows());
     assert(fresh.clear(&detail));
     assert(port.batches.back().calls.size() == 8 && port.batches.back().calls[3].payload == c.calls[3].payload);
 
@@ -349,6 +360,7 @@ static void testHold() {
     g_log.clear();
     FakePort port;
     Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
     d.setLog(&logFn, NULL);
     assert(d.showManeuver(view(8, "Testroad Alpha", "300", 1, 300), 0, true, true) == ClusterDisplay::kOk);
     assert(port.batches.size() == 1 && d.visibleBuffer() == 5);
@@ -373,7 +385,8 @@ static void testHold() {
     // The state machine: the held maneuver goes out on the next step once nothing waits.
     FakePort p2;
     Hud6waDisplay d2(p2, k6wa, false);
-    Settings s;
+    d2.setSettings(arrows());
+    Settings s = arrows();
     kombinav::Core core(d2, s, &logFn, NULL);
     NavView a = view(8, "Testroad Alpha", "300", 1, 300);
     core.step(&a, 0);
@@ -399,6 +412,7 @@ static void testRemind() {
     g_log.clear();
     FakePort port;
     Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
     d.setLog(&logFn, NULL);
     NavView v = view(8, "Testroad Alpha", "300", 1, 300);
     assert(d.remind(v, 0) == ClusterDisplay::kOk && port.batches.empty());   // nothing of ours is up
@@ -417,13 +431,15 @@ static void testRemind() {
 
     FakePort ps;
     Hud6waDisplay ds(ps, k6wa, true);
+    ds.setSettings(arrows());
     ds.setLog(&logFn, NULL);
     assert(ds.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
     assert(ds.remind(v, 1) == ClusterDisplay::kOk && ps.batches.empty() && logged("[shadow] 204 SetVisibility h1 on"));
 
     FakePort p2;
     Hud6waDisplay d2(p2, k6wa, false);
-    kombinav::Core core(d2, Settings(), &logFn, NULL);
+    d2.setSettings(arrows());
+    kombinav::Core core(d2, arrows(), &logFn, NULL);
     NavView a = view(8, "Testroad Alpha", "0.4", 5, 640);
     a.has_step_s = true;
     a.step_s = 60;
@@ -444,12 +460,392 @@ static void testRemind() {
     assert(p2.batches.size() == 3);
 }
 
+// ---- junction views -------------------------------------------------------------------------------------------------
+
+static void checkPicture(const Picture& pic, const char* what) {
+    for (size_t i = 0; i < pic.size(); ++i) {
+        const Poly& q = pic[i].poly;
+        if (q.pts.size() < 3 || q.pts.size() > (size_t)kMaxPoints || area2(q.pts) == 0) {
+            printf("%s: item %u has %u points, area2 %ld\n", what, (unsigned)i, (unsigned)q.pts.size(), area2(q.pts));
+            assert(false);
+        }
+        for (size_t k = 0; k < q.pts.size(); ++k) {
+            const Point& p = q.pts[k];
+            if (p.x < -120 || p.x > 320 || p.y < -120 || p.y > 260) {
+                printf("%s: item %u point %u at %d,%d far off the canvas\n", what, (unsigned)i, (unsigned)k, p.x, p.y);
+                assert(false);
+            }
+        }
+        assert(payloadShapeOk(kAddPolygon, addPolygon(5, (uint16_t)i, q.type, q.pts)));
+    }
+}
+
+static bool onCanvas(const Point& p) {
+    return p.x >= k6wa.canvas.x0 && p.x <= k6wa.canvas.x1 && p.y >= k6wa.canvas.y0 && p.y <= k6wa.canvas.y1;
+}
+
+static std::vector<std::pair<int, int> > allPoints(const Picture& pic, bool mirror) {
+    std::vector<std::pair<int, int> > out;
+    int bx = (k6wa.glyph.x0 + k6wa.glyph.x1) / 2;
+    for (size_t i = 0; i < pic.size(); ++i)
+        for (size_t k = 0; k < pic[i].poly.pts.size(); ++k)
+            out.push_back(std::make_pair(mirror ? 2 * bx - pic[i].poly.pts[k].x : (int)pic[i].poly.pts[k].x,
+                                         (int)pic[i].poly.pts[k].y));
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+// Every maneuver type, exit angle and exit number: items of 3..99 points with an area, near the canvas, the route's
+// arrowhead on it, edges before roads, the stages' tails growing, and each batch within the transport's limit.
+static void testJunctionGeometry() {
+    const JunctionColours c = { 7, 3, 4 };
+    const int angles[] = { -1, 1, 45, 90, 135, 180, 225, 270, 315, 360 };
+    const int numbers[] = { 0, 1, 3, 12 };
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    int views = 0;
+    for (int t = 0; t <= 60; ++t)
+        for (size_t a = 0; a < sizeof(angles) / sizeof(angles[0]); ++a)
+            for (size_t n = 0; n < sizeof(numbers) / sizeof(numbers[0]); ++n) {
+                char what[64];
+                snprintf(what, sizeof(what), "type %d angle %d exit %d", t, angles[a], numbers[n]);
+                Layout L;
+                bool has = junctionLayout(t, angles[a] >= 0, angles[a], numbers[n] > 0, numbers[n], k6wa.glyph,
+                                          k6wa.canvas.y1, L);
+                if (kombinav::kombiDirection(t) == 10) {
+                    assert(!has);                                // the destination keeps its flag
+                    continue;
+                }
+                assert(has && L.maxTail >= 8 && !L.roads.empty());
+                ++views;
+                Picture roads;
+                drawRoads(L, c, kJunctionStyle, roads);
+                checkPicture(roads, what);
+                int changes = 0;
+                for (size_t i = 0; i < roads.size(); ++i)
+                    if (!i || roads[i].colour != roads[i - 1].colour) ++changes;
+                assert(roads[0].colour == 7 && changes <= 3);
+                assert(L.exitNumber == (L.ring ? numbers[n] : 0));
+                Batch mb = d.pictureBatch("t", roads, HudTexts(), true);
+                assert(mb.calls.size() <= Config().maxBatch);
+                for (int st = 1; st <= Hud6waDisplay::kStages; ++st) {
+                    if (st > 1)
+                        assert(tailFor(L, st, Hud6waDisplay::kStages) > tailFor(L, st - 1, Hud6waDisplay::kStages));
+                    Picture r;
+                    drawRoute(L, tailFor(L, st, Hud6waDisplay::kStages), c, kJunctionStyle, r);
+                    checkPicture(r, what);
+                    assert(r.size() == 2 && r[0].colour == 7 && r[1].colour == 4);
+                    size_t tip = (r[1].poly.pts.size() - 3) / 2 + 1;   // left edge, wing, tip, wing, right edge
+                    if (!onCanvas(r[1].poly.pts[tip])) {
+                        printf("%s: route tip at %d,%d off the canvas\n", what, r[1].poly.pts[tip].x,
+                               r[1].poly.pts[tip].y);
+                        assert(false);
+                    }
+                    assert(d.routeBatch(r).calls.size() <= Config().maxBatch);
+                    Picture both = roads;                        // a profile without an overlay: one picture
+                    both.insert(both.end(), r.begin(), r.end());
+                    assert(d.pictureBatch("t", both, HudTexts(), true).calls.size() <= Config().maxBatch);
+                }
+            }
+    assert(views > 1000);
+
+    // Left and right turns, forks, exits, U-turns and the two ways round a roundabout mirror each other exactly.
+    const int pairs[][2] = { {5, 6}, {7, 8}, {9, 10}, {11, 12}, {13, 14}, {21, 22}, {25, 26}, {27, 28}, {32, 30} };
+    for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); ++i) {
+        Layout l, r;
+        assert(junctionLayout(pairs[i][0], true, 90, false, 0, k6wa.glyph, k6wa.canvas.y1, l));
+        assert(junctionLayout(pairs[i][1], true, 90, false, 0, k6wa.glyph, k6wa.canvas.y1, r));
+        Picture pl, pr;
+        drawRoads(l, c, kJunctionStyle, pl);
+        drawRoute(l, l.maxTail, c, kJunctionStyle, pl);
+        drawRoads(r, c, kJunctionStyle, pr);
+        drawRoute(r, r.maxTail, c, kJunctionStyle, pr);
+        if (allPoints(pl, false) != allPoints(pr, true)) {
+            fprintf(stderr, "types %d and %d don't mirror\n", pairs[i][0], pairs[i][1]);
+            assert(false);
+        }
+    }
+}
+
+static void testDigits() {
+    for (int n = 0; n <= 9; ++n) {
+        Shape s;
+        digits::drawNumber(n, 50, 10, 18, s);
+        assert(s.size() == (n == 0 || n == 6 || n == 8 || n == 9 ? 2u : 1u));
+        for (size_t i = 0; i < s.size(); ++i) {
+            assert(s[i].pts.size() >= 3 && area2(s[i].pts) > 0);
+            for (size_t k = 0; k < s[i].pts.size(); ++k)
+                assert(s[i].pts[k].x >= 45 && s[i].pts[k].x <= 55 && s[i].pts[k].y >= 10 && s[i].pts[k].y <= 28);
+        }
+    }
+    Shape s;
+    digits::drawNumber(808, 100, 0, 20, s);                      // 8 fills its cell, so its ink shows the centring
+    int x0 = 999, x1 = -999;
+    for (size_t i = 0; i < s.size(); ++i)
+        for (size_t k = 0; k < s[i].pts.size(); ++k) {
+            if (s[i].pts[k].x < x0) x0 = s[i].pts[k].x;
+            if (s[i].pts[k].x > x1) x1 = s[i].pts[k].x;
+        }
+    assert(s.size() == 6 && x0 + x1 >= 198 && x0 + x1 <= 202);
+}
+
+static kombinav::AaLane oneLane(int shape, bool take) {
+    return kombinav::AaLane(1, kombinav::LaneDirection(shape, take));
+}
+
+static void testLanes() {
+    std::vector<kombinav::AaLane> lanes;
+    lanes.push_back(oneLane(1, false));
+    lanes.push_back(oneLane(1, false));
+    lanes.push_back(oneLane(5, true));
+    Picture p;
+    assert(drawLanes(lanes, k6wa.lanes, 3, 4, p));
+    assert(p.size() == 3 && p[0].colour == 3 && p[1].colour == 3 && p[2].colour == 4);
+    checkPicture(p, "lanes");
+    std::vector<kombinav::AaLane> none;
+    assert(!drawLanes(none, k6wa.lanes, 3, 4, p) && p.size() == 3);
+    std::vector<kombinav::AaLane> many(5, kombinav::AaLane(5, kombinav::LaneDirection(1, false)));
+    assert(!drawLanes(many, k6wa.lanes, 3, 4, p));               // 25 arrows: no lane picture rather than a mess
+    for (int n = 1; n <= 8; ++n)                                 // every shape, up to 8 lanes: on the canvas
+        for (int shape = 0; shape <= 9; ++shape) {
+            std::vector<kombinav::AaLane> l(n, oneLane(shape, false));
+            l[0][0].highlighted = true;
+            Picture q;
+            assert(drawLanes(l, k6wa.lanes, 3, 4, q) && q.size() == (size_t)n && q[n - 1].colour == 4);
+            checkPicture(q, "lanes");
+            for (size_t i = 0; i < q.size(); ++i)
+                for (size_t k = 0; k < q[i].poly.pts.size(); ++k) assert(onCanvas(q[i].poly.pts[k]));
+        }
+}
+
+static NavView timed(int type, const char* road, const char* dist, int unit, int64_t m, int64_t s) {
+    NavView v = view(type, road, dist, unit, m);
+    v.has_step_s = s >= 0;
+    v.step_s = s;
+    return v;
+}
+
+static size_t callsOn(const Batch& b, uint16_t h) {
+    size_t n = 0;
+    for (size_t i = 0; i < b.calls.size(); ++i)
+        if (b.calls[i].handle() == h) ++n;
+    return n;
+}
+
+static size_t fills(const Batch& b) {
+    size_t n = 0;
+    for (size_t i = 0; i < b.calls.size(); ++i)
+        if (b.calls[i].fkt == kSetFillColor) ++n;
+    return n;
+}
+
+// The near stage through the driver: the arrow first, the junction view (roads in 5/6, route in 7/8) at the main
+// prompt, the route's stages on the way in, held while a route waits, all drawn again after lost work, the route
+// emptied for the next maneuver's arrow, and the clear putting 7/8 back.
+static void testJunctionDriver() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    NavView v = timed(8, "Testroad", "0.5", 5, 800, 60);
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 1 && !d.nearShown() && d.routeStage() == 0);
+    assert(callsOn(port.batches[0], 7) == 0 && callsOn(port.batches[0], 8) == 0);
+    v = timed(8, "Testroad", "0.3", 5, 450, 30);
+    assert(!d.sameManeuver(v, 1));
+    v = timed(8, "Testroad", "300", 7, 280, 19);                  // the main prompt
+    assert(d.sameManeuver(v, 2) && logged("NEAR type 8: 19 s, 280 m: junction view"));
+    assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 3 && d.nearShown() && d.routeStage() == 4 && d.visibleRoute() == 7);
+    const Batch& j = port.batches[1];
+    assert(j.label == "redraw" && j.slot == kSlotMain && j.calls.size() == 11);
+    expectCall(j.calls[0], kRemoveAllItems, 6);
+    expectCall(j.calls[1], kSetFillColor, 6);
+    assert(j.calls[1].payload[2] == 7);
+    expectCall(j.calls[2], kAddPolygon, 6);
+    expectCall(j.calls[3], kSetFillColor, 6);
+    assert(j.calls[3].payload[2] == 3);
+    expectCall(j.calls[4], kAddPolygon, 6);
+    expectCall(j.calls[5], kSwitchVisibility, 5);
+    assert(rdBe16(&j.calls[5].payload[2]) == 6);
+    assert(logged("REDRAW type 8 -> junction view, arrow +90"));
+    const Batch& r = port.batches[2];
+    assert(r.label == "route" && r.slot == kSlotRoute && r.full && r.calls.size() == 7);
+    expectCall(r.calls[0], kRemoveAllItems, 7);
+    expectCall(r.calls[1], kSetFillColor, 7);
+    assert(r.calls[1].payload[2] == 7);
+    expectCall(r.calls[2], kAddPolygon, 7);
+    expectCall(r.calls[3], kSetFillColor, 7);
+    assert(r.calls[3].payload[2] == 4);
+    expectCall(r.calls[4], kAddPolygon, 7);
+    expectCall(r.calls[5], kSwitchVisibility, 8);                 // 8 -> 7, as the factory navigation swaps it
+    assert(rdBe16(&r.calls[5].payload[2]) == 7);
+    expectCall(r.calls[6], kRemoveAllItems, 8);
+    assert(logged("ROUTE stage 4/4"));
+
+    // The stages: down only, held while a route waits.
+    v.step_m = 200;                                               // 4 * 200 / 280 = 2.9: stage 3
+    assert(!d.sameManeuver(v, 3) && d.keepUp(v, 3) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 4 && d.routeStage() == 3 && d.visibleRoute() == 8);
+    expectCall(port.batches[3].calls[0], kRemoveAllItems, 8);
+    v.step_m = 250;                                               // back up a little: stays at 3
+    assert(d.keepUp(v, 4) == ClusterDisplay::kOk && port.batches.size() == 4);
+    v.step_m = 100;
+    port.wait = true;
+    assert(d.keepUp(v, 5) == ClusterDisplay::kOk && port.batches.size() == 4 && d.routeStage() == 3);
+    port.wait = false;
+    assert(d.keepUp(v, 6) == ClusterDisplay::kOk && port.batches.size() == 5 && d.routeStage() == 2);
+
+    // Lost work: the junction view and its route again.
+    port.ep = 1;
+    assert(d.sameManeuver(v, 7));
+    assert(d.showManeuver(v, 7, false, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 7 && port.batches[5].label == "redraw" && port.batches[6].label == "route");
+    assert(d.routeStage() == 2);
+
+    // The next maneuver, far off: its arrow, and both route buffers emptied in the same batch.
+    NavView v2 = timed(7, "Sample Way", "0.6", 5, 1000, 70);
+    assert(d.showManeuver(v2, 8, true, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 8 && !d.nearShown() && d.routeStage() == 0);
+    const Batch& a = port.batches[7];
+    Shape s;
+    drawShape(shapeFor(7, false, 0), s);
+    assert(a.label == "maneuver" && a.calls.size() == 2 + s.size() + 2 + 2 + 3 + 1);
+    expectCall(a.calls[4 + s.size()], kRemoveAllItems, 7);
+    expectCall(a.calls[5 + s.size()], kRemoveAllItems, 8);
+    assert(d.keepUp(v2, 9) == ClusterDisplay::kOk && port.batches.size() == 8);
+    NavView v3 = timed(7, "Other Way", "0.5", 5, 900, 60);        // another arrow: the route is already empty
+    assert(d.showManeuver(v3, 10, true, false) == ClusterDisplay::kOk);
+    assert(callsOn(port.batches[8], 7) == 0 && callsOn(port.batches[8], 8) == 0);
+
+    // A roundabout already near: its junction view at once, with the exit number in the route's colour.
+    NavView ra = timed(32, "Ring Road", "150", 1, 150, 12);
+    ra.has_exit_angle = true;
+    ra.exit_angle = 270;
+    ra.has_exit_number = true;
+    ra.exit_number = 3;
+    assert(d.showManeuver(ra, 11, true, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 11 && d.nearShown() && logged("junction view at once"));
+    assert(logged("exit 3 |"));
+    const Batch& rb = port.batches[9];
+    assert(rb.label == "maneuver" && fills(rb) == 3 && rb.calls[rb.calls.size() - 1].fkt == kSetVisibility);
+    assert(port.batches[10].label == "route" && d.routeStage() == 4);
+
+    // The destination keeps its flag, near or not.
+    NavView dest = timed(39, "Example Close", "50", 1, 50, 5);
+    assert(d.showManeuver(dest, 12, true, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 12 && !d.nearShown() && !d.sameManeuver(dest, 13));
+    assert(callsOn(port.batches[11], 7) == 1 && callsOn(port.batches[11], 8) == 1);   // the roundabout's route emptied
+
+    // The clear puts the route overlay back as the factory navigation leaves it: both empty, 8 on show.
+    std::string detail;
+    assert(d.clear(&detail));
+    const Batch c = port.batches.back();
+    assert(c.slot == kSlotAll && c.calls.size() == 11 && d.visibleRoute() == 8);
+    expectCall(c.calls[4], kRemoveAllItems, 7);
+    expectCall(c.calls[5], kRemoveAllItems, 8);
+    expectCall(c.calls[6], kSwitchVisibility, 7);
+    assert(rdBe16(&c.calls[6].payload[2]) == 8);
+
+    // Off: never a junction view, and the clear leaves 7/8 alone.
+    FakePort po;
+    Hud6waDisplay off(po, k6wa, false);
+    off.setSettings(arrows());
+    NavView close = timed(8, "Testroad", "50", 1, 50, 5);
+    assert(off.showManeuver(close, 0, true, true) == ClusterDisplay::kOk && po.batches.size() == 1);
+    assert(!off.nearShown() && !off.sameManeuver(close, 1) && off.clearBatch().calls.size() == 8);
+
+    // Shadow mode: worked out and logged, nothing sent.
+    g_log.clear();
+    FakePort ps;
+    Hud6waDisplay sh(ps, k6wa, true);
+    sh.setLog(&logFn, NULL);
+    assert(sh.showManeuver(close, 0, true, true) == ClusterDisplay::kOk && ps.batches.empty());
+    assert(logged("ROUTE stage 4/4") && logged("[shadow] 21D ImageAddPolygon h7"));
+}
+
+// A profile without a route overlay: the route goes into the picture with its roads, and each stage redraws them.
+static void testJunctionNoOverlay() {
+    HudProfile p = k6wa;
+    p.routeA = p.routeB = 0;
+    FakePort port;
+    Hud6waDisplay d(port, p, false);
+    NavView v = timed(8, "Testroad", "200", 1, 280, 15);
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 1 && d.nearShown() && d.routeStage() == 4);
+    assert(fills(port.batches[0]) == 4 && callsOn(port.batches[0], 7) == 0);   // edge, road, edge, route
+    v.step_m = 120;
+    assert(d.keepUp(v, 1) == ClusterDisplay::kOk && port.batches.size() == 1);
+    assert(d.sameManeuver(v, 2));
+    assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk && port.batches.size() == 2);
+    assert(d.routeStage() == 2 && !d.sameManeuver(v, 3));
+    assert(d.clearBatch().calls.size() == 8);
+}
+
+// Lanes in 9/10 when on: drawn when the phone sends them, once per change, emptied when they go.
+static void testJunctionLanes() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    Settings s;
+    s.hud_lanes = true;
+    d.setSettings(s);
+    NavView v = timed(8, "Testroad", "0.5", 5, 800, 60);
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && port.batches.size() == 1);
+    v.lanes.push_back(oneLane(1, false));
+    v.lanes.push_back(oneLane(1, false));
+    v.lanes.push_back(oneLane(5, true));
+    assert(d.keepUp(v, 1) == ClusterDisplay::kOk && port.batches.size() == 2);
+    const Batch& l = port.batches[1];
+    assert(l.label == "lanes" && l.slot == kSlotLanes && l.calls.size() == 8);
+    expectCall(l.calls[0], kRemoveAllItems, 9);
+    expectCall(l.calls[6], kSwitchVisibility, 10);
+    assert(rdBe16(&l.calls[6].payload[2]) == 9);
+    assert(logged("LANES 3 | 8 calls"));
+    assert(d.keepUp(v, 2) == ClusterDisplay::kOk && port.batches.size() == 2);   // the same lanes
+    v.lanes[0][0].highlighted = true;
+    assert(d.keepUp(v, 3) == ClusterDisplay::kOk && port.batches.size() == 3);
+    expectCall(port.batches[2].calls[0], kRemoveAllItems, 10);                  // the other buffer
+    v.lanes.clear();
+    assert(d.keepUp(v, 4) == ClusterDisplay::kOk && port.batches.size() == 4);
+    assert(port.batches[3].label == "lanes off" && port.batches[3].calls.size() == 2);
+    assert(d.keepUp(v, 5) == ClusterDisplay::kOk && port.batches.size() == 4);
+    std::string detail;
+    assert(d.clear(&detail) && port.batches.back().calls.size() == 14);
+}
+
+// Through the state machine: the arrow at the warning, the junction view at the main prompt (in place of the reminder:
+// a picture switches the panel on anyway), then the route's stages.
+static void testJunctionCore() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    kombinav::Core core(d, Settings(), &logFn, NULL);
+    NavView a = timed(8, "Testroad Alpha", "0.4", 5, 640, 60);
+    core.step(&a, 0);
+    assert(!core.shown() && port.batches.empty());
+    a.step_s = 45;
+    core.step(&a, 1);
+    assert(core.shown() && port.batches.size() == 1 && !d.nearShown());
+    a.step_s = 18;
+    a.step_m = 330;
+    core.step(&a, 2);
+    assert(port.batches.size() == 3 && d.nearShown() && port.batches[2].label == "route");
+    assert(!logged("REMIND"));
+    a.step_s = 6;
+    a.step_m = 100;
+    core.step(&a, 3);
+    assert(port.batches.back().label == "route" && d.routeStage() == 2);
+}
+
 // ---- the transport's states ----------------------------------------------------------------------------------------
 
 static void testStates() {
     g_log.clear();
     FakePort port;
     Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
     d.setLog(&logFn, NULL);
     NavView v = view(8, "Testroad", "200", 1, 200);
     std::string detail;
@@ -497,6 +893,7 @@ static void testShadow() {
     g_log.clear();
     FakePort port;
     Hud6waDisplay d(port, k6wa, true);
+    d.setSettings(arrows());
     d.setLog(&logFn, NULL);
     NavView v = view(8, "Testroad Alpha", "300", 1, 300);
     assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
@@ -520,7 +917,8 @@ static void testCore() {
     g_log.clear();
     FakePort port;
     Hud6waDisplay d(port, k6wa, false);
-    Settings s;
+    d.setSettings(arrows());
+    Settings s = arrows();
     kombinav::Core core(d, s, &logFn, NULL);
     NavView a = view(8, "Testroad Alpha", "300", 1, 300);
     core.step(&a, 0);
@@ -644,6 +1042,13 @@ int main() {
     testClearBatch();
     testHold();
     testRemind();
+    testJunctionGeometry();
+    testDigits();
+    testLanes();
+    testJunctionDriver();
+    testJunctionNoOverlay();
+    testJunctionLanes();
+    testJunctionCore();
     testStates();
     testShadow();
     testCore();

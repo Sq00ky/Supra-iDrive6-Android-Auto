@@ -36,6 +36,8 @@ the USB log, and the "start with the car" boot-loop guard.
 
 11. **One tap on the screen reaches the phone as one tap.** The touch forwarder keeps the record sequence of each message. A duplicated message is skipped. A repeated "down" with no message lost in between is sent on as a move. A finger the forwarder has already released (it went quiet for `NBT_TOUCH_IDLE_MS`, or it was missing from a message) is ignored while the head unit still reports it, until the hardware sends "up" or a new "down". A move after a message was actually lost can still start a tap, because that touch's "down" may have been in the lost message.
 
+12. **Video frames pass through fixed queue slots without copying their H.264 bytes.** The recent `FrameQueue` change stopped vector deep copies, but a `std::list` still allocated a node per frame. `src/frame_queue.hpp` now preallocates ring slots, swaps frame buffers through those slot. Capacity defaults to 15 frames and is tunable with `NBT_VIDEO_QUEUE` (1-60).
+
 ## Checked here
 
 On a Mac, these host tests passed: companion-app detection (`test_bcl_detect`), both iDrive controller replays (`test_ccs_decoder`, `test_ccs_push`), the car-config / guidance-sink test (`test_car_config`), and the touch parser and forwarder (`test_touch_frame`, `test_touch`, including messages split across datagrams). The changed daemon sources also pass a host syntax check. They have not been built with the QNX compiler and have not been run in a car.

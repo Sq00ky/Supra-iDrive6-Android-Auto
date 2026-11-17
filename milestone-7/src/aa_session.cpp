@@ -310,7 +310,8 @@ bool AASession::sendMicFrame(const std::vector<uint8_t>& pcm) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t us = (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)(ts.tv_nsec / 1000);
-    std::vector<uint8_t> msg;
+    std::vector<uint8_t>& msg = mic_message_scratch_;
+    msg.clear();
     msg.reserve(pcm.size() + 10);
     msg.push_back(0x00);
     msg.push_back(0x00);
@@ -867,17 +868,14 @@ bool AASession::sendAll(const uint8_t* data, size_t length) {
 }
 
 bool AASession::sendFrame(uint8_t channel, uint8_t flags, const uint8_t* payload, size_t length) {
-    if (length > 0xFFFFU) return false;
-    std::vector<uint8_t> frame;
-    frame.reserve(length + 4);
-    frame.push_back(channel);
-    frame.push_back(flags);
-    frame.push_back(static_cast<uint8_t>((length >> 8) & 0xFF));
-    frame.push_back(static_cast<uint8_t>(length & 0xFF));
-    if (length > 0) {
-        if (!payload) return false;
-        frame.insert(frame.end(), payload, payload + length);
-    }
+    if (length > 0xFFFFU || (length > 0 && !payload)) return false;
+    std::vector<uint8_t>& frame = send_frame_scratch_;
+    frame.resize(length + 4);
+    frame[0] = channel;
+    frame[1] = flags;
+    frame[2] = static_cast<uint8_t>((length >> 8) & 0xFF);
+    frame[3] = static_cast<uint8_t>(length & 0xFF);
+    if (length) memcpy(&frame[4], payload, length);
     return sendAll(&frame[0], frame.size());
 }
 
@@ -1220,6 +1218,14 @@ void AASession::sessionLoop() {
         return;
     }
 
+    // Reuse the input buffer across frames. Encrypted frames leave this vector untouched after decrypting,
+    // which avoids one allocation/free per incoming fragment. unencrypted frames may transfer its storage below.
+    std::vector<uint8_t> payload;
+    // These buffers form a small reusable pool for decrypted, unfragmented messages. Video hands its buffer to the
+    // decoder queue and receives a recycled buffer back through the callback.
+    std::vector<uint8_t> decrypted_chunk;
+    std::vector<uint8_t> frame_data;
+
     // Step 2: Read incoming frames from the phone
     while (isRunning()) {
         // Forced acks are due on time even while video keeps select() from ever timing out.
@@ -1274,7 +1280,7 @@ void AASession::sessionLoop() {
         }
 
         if (length > 0) {
-            std::vector<uint8_t> payload(length);
+            payload.resize(length);
             if (!readExact(&payload[0], length)) {
                 printf("[AASession] Failed to read payload bytes (%u bytes).\n", length);
                 break;
@@ -1282,7 +1288,8 @@ void AASession::sessionLoop() {
 
             // Decrypt payload if frame has encryption flag (0x08)
             g_crumb_stage = 2;
-            std::vector<uint8_t> decrypted_chunk;
+            decrypted_chunk.clear();
+            frame_data.clear();
             if (flags & 0x08) {
                 checkRxRecord(channel, flags, payload);
                 if (!cryptor_.decrypt(&payload[0], payload.size(), decrypted_chunk)) {
@@ -1311,12 +1318,11 @@ void AASession::sessionLoop() {
                 decrypted_any_ = true;
                 undecrypted_ = 0;
             } else {
-                decrypted_chunk = payload;
+                decrypted_chunk.swap(payload);  // this input buffer is no longer needed separately
             }
 
             // Reassemble fragmented frames per channel
             uint8_t frame_type = flags & 0x03; // 0=MIDDLE, 1=FIRST, 2=LAST, 3=BULK
-            std::vector<uint8_t> frame_data;
 
             // Bound reassembly memory: a lost LAST fragment or garbage must not grow it forever.
             if (reassembly_[channel].size() + decrypted_chunk.size() > (8u * 1024u * 1024u)) {
@@ -1335,19 +1341,22 @@ void AASession::sessionLoop() {
                 reassembly_wire_[channel] = length;
                 continue; // Wait for remaining fragments
             } else if (frame_type == 0x00) { // MIDDLE
+                if (reassembly_total_.find(channel) == reassembly_total_.end()) {
+                    printf("[AASession] MIDDLE fragment on channel %u with no FIRST: dropping\n", channel);
+                    continue;
+                }
                 reassembly_[channel].insert(reassembly_[channel].end(),
                                              decrypted_chunk.begin(), decrypted_chunk.end());
                 reassembly_wire_[channel] += length;
                 continue; // Wait for remaining fragments
             } else if (frame_type == 0x02) { // LAST
-                bool had_first = reassembly_total_.find(channel) != reassembly_total_.end() ||
-                                 !reassembly_[channel].empty();
+                bool had_first = reassembly_total_.find(channel) != reassembly_total_.end();
                 reassembly_[channel].insert(reassembly_[channel].end(),
                                              decrypted_chunk.begin(), decrypted_chunk.end());
                 reassembly_wire_[channel] += length;
                 uint32_t expect = reassembly_total_[channel];
                 uint32_t wire = reassembly_wire_[channel];
-                frame_data = reassembly_[channel];
+                frame_data.swap(reassembly_[channel]);
                 reassembly_[channel].clear();
                 reassembly_total_.erase(channel);
                 reassembly_wire_.erase(channel);
@@ -1363,7 +1372,10 @@ void AASession::sessionLoop() {
                     continue;
                 }
             } else { // 0x03 = BULK (Single unfragmented message)
-                frame_data = decrypted_chunk;
+                reassembly_[channel].clear();
+                reassembly_total_.erase(channel);
+                reassembly_wire_.erase(channel);
+                frame_data.swap(decrypted_chunk);
             }
 
             // Dump first bytes in hex
@@ -1380,7 +1392,7 @@ void AASession::sessionLoop() {
             uint16_t msg_id = frame_data.size() >= 2 ? ((static_cast<uint16_t>(frame_data[0]) << 8) | frame_data[1]) : 0;
             // Observe ONLY channel 10 after decrypt/reassembly, including IDs
             // not understood by NavMessages. No parsing or file I/O on RX.
-            if(channel==10 && nav_diag_)
+            if(channel==AA_CH_NAV_STATUS && nav_diag_)
                 nav_diag_->capture(msg_id,frame_data.size()>2?&frame_data[2]:NULL,
                                    frame_data.size()>2?frame_data.size()-2:0);
             noteRxMsg(msg_id);
@@ -1447,7 +1459,7 @@ void AASession::sessionLoop() {
                 if (cryptor_.encrypt(open_resp, sizeof(open_resp), enc_resp)) {
                     sendFrame(channel, 0x0F, &enc_resp[0], enc_resp.size()); // Specific channel flag 0x0F
                 }
-            } else if (channel == 10 && msg_id >= 0x8000) {
+            } else if (channel == AA_CH_NAV_STATUS && msg_id >= 0x8000) {
                 // Navigation status channel: guidance state (0x8003), next turn (0x8006), turn distance (0x8007), ...
                 // Nothing is answered; the messages go to the nav-status callback (kombi_nav). Before v1.6.3 the
                 // generic handlers below caught 0x8007 as a VideoFocusRequest and answered with a video message on
@@ -1621,12 +1633,12 @@ void AASession::sessionLoop() {
                                    static_cast<uint64_t>(p[9]);
                         }
 
-                        // VideoManager owns the hardware decoder feed and performs any
-                        // in-band SPS/PPS prepend next to the mdev Message 3 send. Keep
-                        // AASession limited to protocol parsing and fixed-offset slicing.
+                        // VideoManager owns the hardware decoder feed and sends cached SPS/PPS beside the H.264 bytes
+                        // in the mdev Message 3 iov. Transfer the decrypted message buffer so the access unit is not
+                        // copied just to move it across the callback boundary.
                         if (video_cb_) {
                             g_crumb_stage = 4;
-                            video_cb_(media_frames_, nal_ptr, nal_len, pts, video_user_data_);
+                            video_cb_(media_frames_, frame_data, offset, nal_len, pts, video_user_data_);
                             g_crumb_stage = 3;
                         }
                     }

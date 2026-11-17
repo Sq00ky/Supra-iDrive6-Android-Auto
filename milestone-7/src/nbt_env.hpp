@@ -8,6 +8,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "nbt_paths.hpp"
+
 namespace nbt {
 
 // Shared reading for the on/off settings.
@@ -22,6 +24,15 @@ inline int envFlag(const char* name) {
     if (strcmp(e, "1") == 0 || strcmp(e, "on") == 0 || strcmp(e, "yes") == 0 ||
         strcmp(e, "true") == 0) return 1;
     return -1;
+}
+
+// Child processes (audioconn, LayerManagerControl, pfctl, arp, ifconfig) inherit our environment, which comes from
+// the HMI. Each of them was loading a graphics stack it never uses (`ldd:FATAL: Could not preload library
+// libEGL_X.gpp.so` from audioconn, `unknown symbol: kdMain` on every LayerManagerControl run). Stripping LD_PRELOAD
+// for children is the default since v1.9.69: unset means strip. NBT_CHILD_NO_PRELOAD=0 / off / no keeps it, which is
+// only useful when a child is being debugged and needs the HMI's preloads.
+inline bool childNoPreload() {
+    return envFlag("NBT_CHILD_NO_PRELOAD") != 0;   // unset stays on
 }
 
 // HU-hosted wireless (Bluetooth RFCOMM -> Wi-Fi credentials -> TCP accept) is the default since
@@ -83,53 +94,71 @@ inline unsigned videoRequestedFps() { return videoFpsSetting() ? videoFpsSetting
 // What the decoder (mdev format packet, MM-Renderer input) is declared with: NBT_VID_FPS, else 60 (unchanged).
 inline unsigned videoDecoderFps() { return videoFpsSetting() ? videoFpsSetting() : 60u; }
 
+// Maximum queued video frames. Default is a 15-frame cap
+inline size_t videoQueueCapacity() {
+    const char* e = getenv("NBT_VIDEO_QUEUE");
+    if (!e || !*e) return 15;
+    char* end = NULL;
+    const unsigned long value = strtoul(e, &end, 10);
+    return end != e && *end == 0 && value >= 1 && value <= 60 ? static_cast<size_t>(value) : 15;
+}
+
 // The audio mode (NBT_AUDIO_MODE, AudioMode, audioMode()) and the audio settings are in audio/config.hpp.
 
 // Android Auto over USB through the head unit's AOA drivers (usb_accessory.cpp). Experimental, not car-verified, so
 // off by default: it switches any Android phone plugged in while the daemon runs into accessory mode, which takes it
 // away from iDrive's USB media (MTP) until it is replugged. On with the iDrive Settings checkbox "Android Auto over
-// USB" (flag file kUsbFlagFile; a hand-made kUsbManualFile also counts) or NBT_USB=1 / on / yes / true; any other
-// NBT_USB value (0, off) forces it off whatever the checkbox says. Read once at daemon start: a change applies at the
-// next Start / Restart.
-static const char* const kUsbFlagFile = "/var/opt/aa/usb-aa";
-static const char* const kUsbManualFile = "/opt/aa/usb-aa";
+// USB" (flag kUsbFlagName in the data dir; a hand-made one in the app dir also counts, nbt_paths.hpp) or NBT_USB=1 /
+// on / yes / true; any other NBT_USB value (0, off) forces it off whatever the checkbox says. Read once at daemon
+// start: a change applies at the next Start / Restart.
+static const char* const kUsbFlagName = "usb-aa";
 // Pure part (host-tested): NBT_USB's value (NULL = unset) and whether a flag file exists.
 inline bool usbSettingOn(const char* env, bool flagFile) {
     if (env && *env)
         return strcmp(env, "1") == 0 || strcmp(env, "on") == 0 || strcmp(env, "yes") == 0 || strcmp(env, "true") == 0;
     return flagFile;
 }
-inline bool usbFlagFileSet() { return access(kUsbFlagFile, F_OK) == 0 || access(kUsbManualFile, F_OK) == 0; }
+inline bool usbFlagFileSet() { return flagSet(kUsbFlagName); }
 inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet()); }
 
-// "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag file kPhoneGpsFlagFile, a hand-made kPhoneGpsManualFile
-// also counts; NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna,
-// which have no MOST GPS fix or heading: the car's GPS is not read, and the ServiceDiscovery leaves out the location,
+// With "Android Auto over USB" selected the wireless path is not offered at all: no Bluetooth SDP advert, no Wi-Fi
+// credentials and the session starter refuses a TCP connection. Without this the phone is offered wireless Android Auto
+// first and connects over Wi-Fi instead of the cable, which is the one thing USB mode is meant to avoid.
+inline bool wirelessEnabledForTransport() { return wirelessEnabled() && !usbEnabled(); }
+
+// "Prompts on car radio (BT, beta)" (iDrive Settings checkbox; the "speech-bt" flag, resolved by nbt_paths.hpp so a
+// package install keeps it in its own data dir; NBT_SPEECH_BT=1 / 0 wins either way, same words as NBT_USB). Only
+// meaningful in Bluetooth audio mode, where it turns the speech path on with the nav prompter defaults and keeps the
+// ServiceDiscovery guidance sink on channel 8, so the car ducks the radio for a prompt instead of the phone mixing it
+// into A2DP. Off by default: the BT path is not car-verified by its author. Read once at daemon start.
+static const char* const kSpeechBtFlagName = "speech-bt";
+inline bool speechBtEnabled() { return usbSettingOn(getenv("NBT_SPEECH_BT"), nbt::flagSet(kSpeechBtFlagName)); }
+
+// "Use Phone GPS" (iDrive Settings checkbox, rhmiapp-44; flag kPhoneGpsFlagName, a hand-made one also counts;
+// NBT_PHONE_GPS=1 / 0 wins either way, same words as NBT_USB). For cars without the navigation antenna, which have
+// no MOST GPS fix or heading: the car's GPS is not read, and the ServiceDiscovery leaves out the location,
 // compass, GPS satellite and accelerometer sensors, so the phone uses its own GPS, compass and motion sensors for
 // everything built on them. Off = the car's GPS and heading go to the phone as before. Read at the start of the daemon
 // (car GPS) and of each session (ServiceDiscovery): a change applies at the next Start / Restart.
-static const char* const kPhoneGpsFlagFile = "/var/opt/aa/phone-gps";
-static const char* const kPhoneGpsManualFile = "/opt/aa/phone-gps";
-inline bool phoneGpsFlagFileSet() { return access(kPhoneGpsFlagFile, F_OK) == 0 || access(kPhoneGpsManualFile, F_OK) == 0; }
+static const char* const kPhoneGpsFlagName = "phone-gps";
+inline bool phoneGpsFlagFileSet() { return flagSet(kPhoneGpsFlagName); }
 inline bool phoneGpsEnabled() { return usbSettingOn(getenv("NBT_PHONE_GPS"), phoneGpsFlagFileSet()); }
-// "Media Controls for LCI Steering Wheels" (iDrive Settings checkbox, rhmiapp-45; flag file kLciMediaFlagFile, a
-// hand-made kLciMediaManualFile also counts; NBT_LCI_MEDIA=1 / 0 wins either way, same words as NBT_USB). Off by
-// default: the steering wheel's previous / next / play-pause (MOST 15/02, car/mfl.hpp, NBT_MFL_*) become Android media
-// keys only with it on, and still only in a non-Bluetooth audio mode. Read at the start of the daemon.
-static const char* const kLciMediaFlagFile = "/var/opt/aa/lci-media";
-static const char* const kLciMediaManualFile = "/opt/aa/lci-media";
-inline bool lciMediaFlagFileSet() { return access(kLciMediaFlagFile, F_OK) == 0 || access(kLciMediaManualFile, F_OK) == 0; }
+// "Media Controls for LCI Steering Wheels" (iDrive Settings checkbox, rhmiapp-45; flag kLciMediaFlagName, a hand-made
+// one also counts; NBT_LCI_MEDIA=1 / 0 wins either way, same words as NBT_USB). Off by default: the steering wheel's
+// previous / next / play-pause (MOST 15/02, car/mfl.hpp, NBT_MFL_*) become Android media keys only with it on, and
+// still only in a non-Bluetooth audio mode. Read at the start of the daemon.
+static const char* const kLciMediaFlagName = "lci-media";
+inline bool lciMediaFlagFileSet() { return flagSet(kLciMediaFlagName); }
 inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"), lciMediaFlagFileSet()); }
-// "CarPlay compatibility" (iDrive Settings checkbox, rhmiapp-54-cpcompat; flag file kCpCompatFlagFile, a hand-made
-// kCpCompatManualFile also counts; NBT_CP_COMPAT=1 / 0 wins either way, same words as NBT_USB). Off by default: for cars
-// that use the factory CarPlay as well as Android Auto (issue #156). On = the three CarPlay fixes: Android Auto yields
+// "CarPlay compatibility" (iDrive Settings checkbox, rhmiapp-54-cpcompat; flag kCpCompatFlagName, a hand-made one
+// also counts; NBT_CP_COMPAT=1 / 0 wins either way, same words as NBT_USB). Off by default: for cars that use the
+// factory CarPlay as well as Android Auto (issue #156). On = the three CarPlay fixes: Android Auto yields
 // completely when CarPlay takes the screen (NBT_CP_YIELD), the factory CarPlay decoder context is detached instead of
 // destroyed and re-attached afterwards (NBT_CP_PURGE), and CarPlay's window is top-level after a hand-over
 // (NBT_CP_WINGRP). Each of those env settings, when present, still wins over the checkbox for its own fix. Read once at
 // the start of the daemon: a change applies at the next Start / Restart.
-static const char* const kCpCompatFlagFile = "/var/opt/aa/carplay-compat";
-static const char* const kCpCompatManualFile = "/opt/aa/carplay-compat";
-inline bool cpCompatFlagFileSet() { return access(kCpCompatFlagFile, F_OK) == 0 || access(kCpCompatManualFile, F_OK) == 0; }
+static const char* const kCpCompatFlagName = "carplay-compat";
+inline bool cpCompatFlagFileSet() { return flagSet(kCpCompatFlagName); }
 inline bool cpCompatEnabled() {
     static int s = -1;   // read once: every caller in this run gets the same answer
     if (s < 0) s = usbSettingOn(getenv("NBT_CP_COMPAT"), cpCompatFlagFileSet()) ? 1 : 0;
@@ -183,6 +212,24 @@ inline long envRange(const char* name, long def, long lo, long hi) {
         if (end && end != e) v = x;
     }
     return v < lo ? lo : (v > hi ? hi : v);
+}
+
+// "Show directions at any distance" (Settings checkbox -> flag file): show the next maneuver at once instead of
+// inside the last mile or the last few seconds. Either env var decides on its own and beats the checkbox. Pure so
+// tests/test_kombi_nav.cpp covers the precedence.
+static const char* const kNavAnyDistFlagName = "kombi-nav-anydist";
+inline bool navAnyDistanceWanted(const char* envApproach, const char* envMi, bool flag) {
+    if (envApproach && *envApproach) return false;    // NBT_KOMBI_NAV_APPROACH=... decides
+    if (envMi && *envMi) return false;                // NBT_KOMBI_NAV_APPROACH_MI=... decides
+    return flag;
+}
+
+// "Disable logging (performance test)": silence both sides. NBT_NO_LOG wins over the checkbox, as with every
+// other setting. Pure so the host tests cover the precedence.
+static const char* const kNoLogFlagName = "no-log";
+inline bool noLogWanted(const char* envValue, bool flag) {
+    if (envValue && *envValue) return envValue[0] != '0';
+    return flag;
 }
 
 } // namespace nbt

@@ -105,11 +105,11 @@ class DualChecks(unittest.TestCase):
         self.assertIn('queuedCall_+128',DISPLAY)
         self.assertIn('Call c(0xC05,payload);c.txType=0',DISPLAY)
 
-    def test_two_ten_second_holds_and_no_nav_interleaving(self):
+    def test_three_ten_second_holds_and_no_nav_interleaving(self):
         self.assertIn('deadline_=now+PALETTE_CALIBRATION_SECONDS',CLOCK)
         self.assertIn('PALETTE_CALIBRATION_SECONDS = 10.0',CLOCK)
-        self.assertIn('test_=1;phase_=Pending;deadline_=0',CLOCK)
-        self.assertLess(DISPLAY.index('if(calibration_.due(now) && calibration_.test()==0)'),DISPLAY.index('Batch b=calibration_.test()==0?'))
+        self.assertIn('++test_;phase_=Pending;deadline_=0',CLOCK)
+        self.assertLess(DISPLAY.index('if(calibration_.due(now) && calibration_.test()<2)'),DISPLAY.index('case 0: b=calibrationBatch();'))
         self.assertIn('Holding && !calibration_.due(now))return true',DISPLAY)
         self.assertIn('calibration_.dispatched(now)',DISPLAY)
         self.assertIn('handles[]={p_.main.a,p_.main.b,p_.icons.a,p_.icons.b}',DISPLAY)
@@ -125,6 +125,17 @@ class DualChecks(unittest.TestCase):
             for at in (0,304,305*43,305*44-1):self.assertEqual(px[at],px[0])
             self.assertNotEqual(px[306],px[0])
         self.assertNotEqual(picture(0),picture(1))
+
+    def test_rgb_probe_payload(self):
+        rgb=CODEC.split('if(test==2)',1)[1].split('if(test>2)',1)[0]
+        colors=[int(value,16) for value in re.findall(r'0x[0-9a-f]{8}',rgb)[:10]]
+        self.assertEqual(colors,[0xffffffff,0xffff0000,0xff00ff00,0xff0000ff,0xffffff00,
+                                 0xffff00ff,0xff00ffff,0xff000000,0xff808080,0xffffa500])
+        pixels=[0xffffffff if y in (0,43) or x in (0,304) else colors[(x-1)*10//303]
+                for y in range(44) for x in range(305)]
+        encoded=rle(pixels)
+        self.assertLessEqual(len(encoded)+10,4096)
+        self.assertEqual(unrle(encoded,len(pixels)),pixels)
 
     def test_bitmap_rle_roundtrip_padding_and_cap(self):
         for test in range(2):

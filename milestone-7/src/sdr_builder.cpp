@@ -614,7 +614,9 @@ int retypeGuidanceSink(ServiceDiscovery& m) {
             printf("[SDR] NBT_GUIDANCE_BT=1 ignored in browser audio mode: channel 8 stays GUIDANCE\n");
         return 0;
     }
-    bool on = (g < 0) ? nbt::btAudioEnabled() : (g == 1);
+    // Unset follows Bluetooth audio mode, except under "Prompts on car radio (BT, beta)": that checkbox needs channel 8
+    // to stay GUIDANCE, which is exactly what NBT_GUIDANCE_BT=0 does. An explicit value still wins.
+    bool on = (g < 0) ? (nbt::btAudioEnabled() && !nbt::speechBtEnabled()) : (g == 1);
     if (!on) return 0;
     AaChannel* c = findChannel(m, AA_CH_GUIDANCE_AUDIO);
     if (!c || c->service != AaChannel::AUDIO_SINK || c->audioSink.audioType != AUDIO_TYPE_GUIDANCE) return 0;

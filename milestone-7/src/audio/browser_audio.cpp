@@ -32,6 +32,10 @@ const uint32_t kLeadMs = 150;        // never run more than this ahead of real t
 const uint32_t kWaitStepMs = 2;             // waiting for late input is checked this often
 const size_t kFadeFrames = 32;              // ~0.7 ms fade at a real gap (padding, end of a prompt)
 
+static size_t pendingSamples(const StreamInput::Mix& mix) {
+    return mix.pending.size() - mix.pending_offset;
+}
+
 uint64_t nowMs() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -56,7 +60,8 @@ void* mixerThunk(void* self) {
 
 BrowserAudio::BrowserAudio()
     : conn_(0xb8), refocus_(true), thread_(), thread_valid_(false), stop_(false), pcm_failed_(false),
-      last_sound_ms_(0), last_media_ms_(0), blocks_(0), last_stats_ms_(0), was_ducking_(false) {
+      last_sound_ms_(0), last_media_ms_(0), speech_(speech_route_), guidance_to_speech_(false), blocks_(0),
+      last_stats_ms_(0), was_ducking_(false) {
     consumed_fn_ = NULL;
     consumed_user_ = NULL;
     ack_window_ = 0;
@@ -203,6 +208,18 @@ bool BrowserAudio::init(const BrowserConfig& cfg) {
            cfg.duck_db, duck_cfg_.attack_ms, duck_cfg_.hold_ms, duck_cfg_.release_ms);
     bool ok = dev_.load();
     if (conn_ && !route_.configure()) printf("[Browser] audioconn not found: connection 0x%x cannot be built\n", conn_);
+    if (!cfg.speech.enabled) {
+        printf("[Browser] guidance: browser mix (NBT_SPEECH=0)\n");
+    } else if (!cfg.speech.src) {
+        printf("[Browser] guidance: browser mix (NBT_SPEECH_SRC=0: no nav prompt focus)\n");
+        return ok;   // SpeechOut would never take a prompt: leave the endpoint closed
+    } else {
+        const char* ep = cfg.speech.endpoint && *cfg.speech.endpoint ? cfg.speech.endpoint : A2I_ENDPOINT_NAV_ALT;
+        printf("[Browser] guidance: nav prompt channel %s focus 0x%x -> 0x%x (NBT_SPEECH=1)\n", ep, cfg.speech.src,
+               cfg.speech.sink);
+        speech_route_.configure();
+    }
+    speech_.init(cfg.speech);
     return ok;
 }
 
@@ -219,6 +236,7 @@ bool BrowserAudio::openPcm() {
         stream_[s].mix.rs.configure(stream_[s].mix.rs_rate, audioSourceChannels(s), dev_.rate(), kOutCh);
         stream_[s].mix.rs.resetCounters();
         stream_[s].mix.pending.clear();
+        stream_[s].mix.pending_offset = 0;
     }
     mixer_.configure(dev_.rate(), kOutCh, duck_cfg_);
     return true;
@@ -231,6 +249,11 @@ bool BrowserAudio::openPcm() {
 void BrowserAudio::onFrame(uint8_t channel, const uint8_t* pcm, size_t len, uint64_t pts) {
     int s = audioStreamForChannel(channel);
     if (s < 0 || !stream_[s].in.ring || !pcm || len == 0) return;
+    if (s == GUIDANCE && guidance_to_speech_) {   // acked on arrival: SpeechOut's ring holds the prompt
+        speech_.frame(pcm, len);
+        consumed(s, len);
+        return;
+    }
     ++stream_[s].in.frames_in;
     ++stream_[s].in.frames_since_start;
     if (s == MEDIA) {   // frame length, for the drift loop's target cap under deferred acks
@@ -257,6 +280,23 @@ void BrowserAudio::onFrame(uint8_t channel, const uint8_t* pcm, size_t len, uint
 void BrowserAudio::onStreamState(uint8_t channel, bool started, uint32_t rate, uint32_t channels) {
     int s = audioStreamForChannel(channel);
     if (s < 0 || !stream_[s].in.ring) return;
+    if (s == GUIDANCE) {   // each start with a declared rate goes to the nav prompt channel if SpeechOut takes it
+        if (started) {
+            if (guidance_to_speech_) speech_.state(false, 0, 0);   // START without STOP
+            const uint64_t now = nowMs();
+            guidance_to_speech_ = rate && speech_.takesPrompt(now);   // no rate: the mix measures it
+            if (guidance_to_speech_ && mediaOnSource(now)) {
+                guidance_to_speech_ = false;
+                printf("[Browser] AA media is on the browser source: nav prompt stays in the mix (media ducked)\n");
+            }
+            if (guidance_to_speech_) stream_[s].in.started = false;
+        }
+        if (guidance_to_speech_) {
+            speech_.state(started, rate, channels);
+            if (!started) guidance_to_speech_ = false;
+            return;
+        }
+    }
     if (started && rate) {
         // The phone declared this start's format (START_INDICATION configuration_index): use it from the first frame.
         printf("[Browser] AA %s stream started: %u Hz %s (declared by the phone)\n", audioStreamName(s), rate,
@@ -303,27 +343,29 @@ void BrowserAudio::stopMixer() {
 // Takes `frames` converted frames of stream s into out (zero-padded). Mixer thread only.
 bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_t* got_out) {
     if (got_out) *got_out = 0;
-    std::vector<int16_t>& q = stream_[s].mix.pending;
-    if (stream_[s].in.flush) { stream_[s].in.flush = false; q.clear(); stream_[s].mix.rs.reset(); }
+    StreamInput::Mix& mix = stream_[s].mix;
+    std::vector<int16_t>& q = mix.pending;
+    if (stream_[s].in.flush) { stream_[s].in.flush = false; q.clear(); mix.pending_offset = 0; mix.rs.reset(); }
     const uint32_t src = stream_[s].in.src_rate;
     if (src != stream_[s].mix.rs_rate) {   // the session thread measured a different rate for this stream
         stream_[s].mix.rs_rate = src;
         stream_[s].mix.rs.configure(src, audioSourceChannels(s), dev_.rate(), kOutCh);
         stream_[s].mix.rs.resetCounters();   // the ratio check must not mix two rates
         q.clear();
+        mix.pending_offset = 0;
     }
     const size_t need = frames * kOutCh;
     // 10 ms of AA PCM per read, but never more than this buffer (sized for 48 kHz stereo): a stream that declares a
     // higher rate is read in more, smaller steps instead of overflowing it.
     uint8_t raw[48000 / 100 * 2 * 2];
     const size_t raw_block = pcmChunkBytes(src, audioSourceChannels(s), 10u, sizeof(raw));
-    while (q.size() < need) {
+    while (q.size() - mix.pending_offset < need) {
         size_t got = stream_[s].in.ring->read(raw, raw_block);
         if (got == 0) break;
         consumed(s, got);
-        std::vector<uint8_t> conv;
+        mix.converted.clear();
         const uint64_t t0 = nowUs();
-        stream_[s].mix.rs.processBytes(raw, got, conv);
+        mix.rs.processBytes(raw, got, mix.converted);
         rs_us_ += nowUs() - t0;
         if (rs_engine_ == PcmResampler::SPEEX && stream_[s].mix.rs.engine() != PcmResampler::SPEEX && !rs_failed_) {
             // PcmResampler couldn't set speexdsp up and carried on with linear interpolation: make that visible and
@@ -334,13 +376,14 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
             setResampler(PcmResampler::LINEAR, "speexdsp could not start");
         }
         size_t old = q.size();
-        q.resize(old + conv.size() / 2);
-        if (!conv.empty()) memcpy(&q[old], &conv[0], conv.size());
+        q.resize(old + mix.converted.size() / 2);
+        if (!mix.converted.empty()) memcpy(&q[old], &mix.converted[0], mix.converted.size());
     }
-    size_t take = q.size() < need ? q.size() : need;
+    const size_t available = q.size() - mix.pending_offset;
+    size_t take = available < need ? available : need;
     if (got_out) *got_out = take;
     if (take == 0) { stream_[s].mix.gap = true; return false; }
-    memcpy(out, &q[0], take * 2);
+    memcpy(out, &q[mix.pending_offset], take * 2);
     const size_t take_frames = take / kOutCh;
     // A real gap (padding that waiting could not avoid, or a prompt's end) fades instead of clicking: the audio
     // before the padding ramps down, the first block after it ramps up.
@@ -350,7 +393,16 @@ bool BrowserAudio::pull(int s, size_t frames, int16_t* out, bool* audible, size_
         memset(out + take, 0, (need - take) * 2);
         stream_[s].mix.gap = true;
     }
-    q.erase(q.begin(), q.begin() + take);
+    mix.pending_offset += take;
+    if (mix.pending_offset == q.size()) {
+        q.clear();
+        mix.pending_offset = 0;
+    } else if (mix.pending_offset >= q.capacity() / 2) {
+        const size_t remaining = q.size() - mix.pending_offset;
+        memmove(&q[0], &q[mix.pending_offset], remaining * sizeof(q[0]));
+        q.resize(remaining);
+        mix.pending_offset = 0;
+    }
     bool loud = false;
     for (size_t i = 0; i < take && !loud; ++i) loud = (out[i] > kAudibleLevel || out[i] < -kAudibleLevel);
     if (audible) *audible = loud;
@@ -414,6 +466,14 @@ bool BrowserAudio::routedForPlayback() {
     bool r = route_policy_.routed();
     pthread_mutex_unlock(&lock_);
     return r;
+}
+
+bool BrowserAudio::mediaOnSource(uint64_t now) {   // session thread (it writes the media stream's started flag)
+    const bool open = stream_[MEDIA].in.started;
+    pthread_mutex_lock(&lock_);
+    const bool on = route_policy_.carriesMedia(now, open, last_media_ms_);
+    pthread_mutex_unlock(&lock_);
+    return on;
 }
 
 void BrowserAudio::setMediaGain(float g) {
@@ -637,7 +697,7 @@ void BrowserAudio::mixerLoop() {
         bool queued = false, any_started = false;
         for (int s = 0; s < NSTREAMS; ++s) {
             if (stream_[s].in.started) any_started = true;
-            if (stream_[s].in.ring->size() > 0 || !stream_[s].mix.pending.empty()) queued = true;
+            if (stream_[s].in.ring->size() > 0 || pendingSamples(stream_[s].mix) > 0) queued = true;
         }
         if (any_started || queued) requestRoute(any_started ? "AA stream started" : "AA audio queued");
 
@@ -675,7 +735,7 @@ void BrowserAudio::mixerLoop() {
                 const uint32_t seq = stream_[s].in.start_seq;
                 if (seq != stream_[s].mix.seen_seq) { stream_[s].mix.seen_seq = seq; stream_[s].mix.gate.restart(); }
                 const bool started = stream_[s].in.started;
-                const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), stream_[s].mix.pending.size(), stream_[s].in.src_rate, audioSourceChannels(s),
+                const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), pendingSamples(stream_[s].mix), stream_[s].in.src_rate, audioSourceChannels(s),
                                                        dev_.rate(), kOutCh);
                 mix[s] = stream_[s].mix.gate.ready(started, avail, now);
                 live[s] = started && mix[s];
@@ -695,7 +755,7 @@ void BrowserAudio::mixerLoop() {
             for (;;) {
                 bool wait = false;
                 for (int s = 0; s < NSTREAMS; ++s) {
-                    const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), stream_[s].mix.pending.size(), stream_[s].in.src_rate,
+                    const size_t avail = estimateOutFrames(stream_[s].in.ring->size(), pendingSamples(stream_[s].mix), stream_[s].in.src_rate,
                                                            audioSourceChannels(s), dev_.rate(), kOutCh);
                     if (stream_[s].mix.guard.shouldWait(live[s], avail, block, waited, can_wait)) wait = true;
                 }
@@ -727,7 +787,7 @@ void BrowserAudio::mixerLoop() {
         if (drift_on_ && play && stream_[MEDIA].in.started) {
             const uint64_t in_bps = (uint64_t)stream_[MEDIA].in.src_rate * audioSourceChannels(MEDIA) * 2u;
             const double fill_ms = (in_bps ? (double)stream_[MEDIA].in.ring->size() * 1000.0 / (double)in_bps : 0.0) +
-                                   (double)(stream_[MEDIA].mix.pending.size() / kOutCh) * 1000.0 / (double)dev_.rate();
+                                   (double)(pendingSamples(stream_[MEDIA].mix) / kOutCh) * 1000.0 / (double)dev_.rate();
             // Deferred acks: a phone held to the window keeps ~window x frame length queued, and no trim lowers that.
             // The target cap must cover it (plus a block and some jitter), or the loop pins the trim at +500 ppm.
             const uint32_t frame_us = media_frame_us_;
@@ -744,10 +804,15 @@ void BrowserAudio::mixerLoop() {
             if (ppm != drift_applied_) { stream_[MEDIA].mix.rs.setTrimPpm(ppm); drift_applied_ = ppm; }
         }
         const bool duck = loud[GUIDANCE] || loud[SYSTEM];
+        // A prompt on the nav prompt channel ducks media too, but must not hold the browser source.
         mixer_.mix(have[MEDIA] ? &in[MEDIA][0] : NULL, have[GUIDANCE] ? &in[GUIDANCE][0] : NULL,
-                   have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck, &out[0]);
+                   have[SYSTEM] ? &in[SYSTEM][0] : NULL, block, duck || speech_.active(), &out[0]);
         if (loud[MEDIA] || duck) last_sound_ms_ = now;
-        if (loud[MEDIA] || stream_[MEDIA].in.started) last_media_ms_ = now;
+        if (loud[MEDIA] || stream_[MEDIA].in.started) {   // under lock_: the session thread reads it (mediaOnSource)
+            pthread_mutex_lock(&lock_);
+            last_media_ms_ = now;
+            pthread_mutex_unlock(&lock_);
+        }
         const bool ducking = mixer_.ducking();
         if (ducking != was_ducking_) {
             printf("[Browser] media %s\n", ducking ? "ducked under a prompt / system sound" : "back to full level");
@@ -804,10 +869,14 @@ void BrowserAudio::mixerLoop() {
 void BrowserAudio::onSessionEnded() {
     stopMixer();
     releaseRoute("session ended");
+    speech_route_.cancelPending();   // before onSessionEnded(), which queues the focus remove
+    speech_.onSessionEnded();
+    guidance_to_speech_ = false;
     for (int s = 0; s < NSTREAMS; ++s) {
         stream_[s].in.started = false;
         if (stream_[s].in.ring) stream_[s].in.ring->clear();
         stream_[s].mix.pending.clear();
+        stream_[s].mix.pending_offset = 0;
         stream_[s].mix.rs.reset();
         stream_[s].in.flush = false;
         stream_[s].in.frames_in = 0;
@@ -831,8 +900,8 @@ void BrowserAudio::onSessionEnded() {
     pcm_failed_ = false;   // try the device again next session
     pthread_mutex_lock(&lock_);
     route_policy_.clearBackoff();
-    pthread_mutex_unlock(&lock_);
     last_media_ms_ = 0;
+    pthread_mutex_unlock(&lock_);
     waited_ms_ = waited_blocks_ = 0;
     waited_blocks_total_ = 0;
     dev_.resetWaitRoom();
@@ -843,9 +912,14 @@ void BrowserAudio::onSessionEnded() {
     drift_applied_ = 0;
 }
 
+void BrowserAudio::cancelPending() {
+    speech_route_.cancelPending();
+}
+
 void BrowserAudio::stop() {
     stopMixer();
     releaseRoute("shutdown");
+    speech_.stop();   // speech_route_ has no other jobs to queue again
     dev_.unload();
 }
 

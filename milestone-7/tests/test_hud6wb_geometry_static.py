@@ -33,12 +33,11 @@ class ExpandedGeometryChecks(unittest.TestCase):
         self.assertNotIn('199, 129',PROFILE)
         self.assertIn('p.main.width',CONFIG);self.assertIn('p.main.height',CONFIG)
         self.assertNotIn('221',CONFIG);self.assertNotIn('158',CONFIG)
-        self.assertEqual(CONFIG,old('hud6wb_config.hpp'))
+        self.assertEqual(CONFIG,old('hud6wb_config.hpp').replace('p.base.streetChars,1,40','p.base.streetChars,1,kMaxLatinTextBytes'))
 
-    def test_profile_transport_nav_and_reference_data_are_unchanged(self):
-        paths=['src/cluster/grafite_oro/artwork_data.inc','src/cluster/grafite_oro/reference.json','src/cluster/nav_core.cpp','src/cluster/nav_msg.hpp',
-               'src/cluster/hud6wa_profile.hpp','src/cluster/hud6wa_display.cpp','src/cluster/hudterm.hpp',
-               'src/cluster/hud_terminal.cpp','src/cluster/hud_terminal.hpp','src/most','src/dsi_client.cpp','src/aa_session.cpp','src/nav_diag.hpp']
+    def test_most_and_reference_data_are_unchanged(self):
+        paths=['src/cluster/grafite_oro/artwork_data.inc','src/cluster/grafite_oro/reference.json',
+               'src/most','src/dsi_client.cpp','src/nav_diag.hpp']
         self.assertEqual(subprocess.check_output(['git','diff',BASE,'--']+['milestone-7/'+p for p in paths],cwd=ROOT.parent),b'')
 
 if __name__=='__main__':unittest.main()

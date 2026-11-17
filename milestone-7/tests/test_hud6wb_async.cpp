@@ -139,7 +139,7 @@ void updatesAndBarriers() {
 struct CorePort : Port {
     Core c;CorePort():c(config()){up(c);}
     SubmitResult submit(const Batch& b){return c.submit(b,0);}Status status()const{return c.status();}
-    uint32_t epoch()const{return c.epoch();}bool waiting()const{return c.waiting();}
+    uint32_t epoch()const{return c.epoch();}bool waiting(int)const{return c.waiting(kSlotMain);}
     void reset(){c.reset(0);}bool waitIdle(uint32_t){return !c.busy()&&c.status()==kReady;}
     bool imageSize(uint16_t h,uint16_t& w,uint16_t& hh)const{return c.imageSize(h,w,hh);}
 };

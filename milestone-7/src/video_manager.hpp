@@ -6,6 +6,7 @@
 #include "screen_video.h"
 #include "mmr_launch.hpp"
 #include "mmr_pps.hpp"
+#include "frame_queue.hpp"
 #include <stdint.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -99,21 +100,13 @@ public:
     screen_context_t screenContext() const { return sink_.ctx; }
     screen_window_t  screenWindow()  const { return sink_.win; }
 
-    // Push raw H.264 NAL units from aasdk
-    bool postVideoFrame(const uint8_t* data, size_t length, uint64_t pts = 0);
+    // Queue the H.264 payload within an AA frame. Takes ownership of frame_data on a successful enqueue
+    bool postVideoFrame(std::vector<uint8_t>& frame_data, size_t offset, size_t length, uint64_t pts = 0);
     bool postCodecConfig(const uint8_t* data, size_t length);
     void onVideoFrameReceived(uint32_t frame_index, size_t byte_len);
 
 private:
-    struct VideoQueueItem {
-        std::vector<uint8_t> data;
-        uint64_t pts;
-        bool is_config;
-        bool is_idr;
-        bool has_inline_config;
-        size_t raw_size;
-        size_t inline_config_size;
-    };
+    // VideoQueueItem and the queue itself: frame_queue.hpp.
 
     static void* workerThreadStub(void* arg);
     void workerLoop();
@@ -178,7 +171,7 @@ private:
     std::string cp_name_;           // decoder_mutex_: its name
     MmrCtxSnapshot cp_snap_;        // decoder_mutex_: what it had attached (PPS) before we detached it
     void verifyOverlayOrder();
-    std::vector<VideoQueueItem> frame_queue_;
+    FrameQueue frame_queue_;            // guarded by queue_mutex_
     std::vector<uint8_t> cached_codec_config_;
 };
 

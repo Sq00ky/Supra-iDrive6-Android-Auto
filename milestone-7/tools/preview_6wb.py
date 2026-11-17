@@ -28,7 +28,7 @@ public:
     SubmitResult submit(const Batch&) override { return kNotReady; }
     Status status() const override { return kOffline; }
     uint32_t epoch() const override { return 0; }
-    bool waiting() const override { return false; }
+    bool waiting(int) const override { return false; }
     void reset() override {}
     bool waitIdle(uint32_t) override { return false; }
 };

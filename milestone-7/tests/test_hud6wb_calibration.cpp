@@ -10,7 +10,7 @@ struct CalibrationPort:Port {
     CalibrationPort():busy(false),queried(false){}
     SubmitResult submit(const Batch& b){batches.push_back(b);busy=true;if(b.label=="6wb-size-check")queried=true;return kQueued;}
     Status status()const{return kReady;}uint32_t epoch()const{return 0;}
-    bool waiting()const{return busy;}void reset(){}bool waitIdle(uint32_t){return !busy;}
+    bool waiting(int)const{return busy;}void reset(){}bool waitIdle(uint32_t){return !busy;}
     bool imageSize(uint16_t handle,uint16_t& w,uint16_t& h)const{
         if(!queried)return false;
         if(handle==p.base.frame){w=p.frameWidth;h=p.frameHeight;return true;}
@@ -37,15 +37,23 @@ void lifecycleIntegration() {
     port.busy=false;assert(display.interceptNavigation(&latest,1,12.01)); // B deadline 22.01
     assert(display.interceptNavigation(&latest,1,22.009999));assert(port.batches.size()==3);
     assert(display.interceptNavigation(NULL,3,22.01));
-    assert(port.batches.size()==4&&port.batches.back().label=="6wb-palette-clear");
-    port.busy=false;assert(!display.interceptNavigation(&latest,1,22.02));
-    assert(!display.interceptNavigation(&latest,1,30));assert(port.batches.size()==4);
+    assert(port.batches.size()==4&&port.batches.back().label=="6wb-rgb-calibration");
+    const Batch& rgb=port.batches.back();
+    assert(rgb.calls[0].fkt==kSetVisibility&&rgb.calls[0].payload[2]==0);
+    assert(rgb.calls[2].fkt==0xC05&&rgb.calls[2].txType==0);
+    assert(callOk(rgb.calls[2],handlesOf(profile),true));
+    port.busy=false;assert(display.interceptNavigation(&latest,1,23));
+    assert(display.interceptNavigation(&latest,1,32.999));
+    assert(display.interceptNavigation(&latest,1,33));
+    assert(port.batches.size()==5&&port.batches.back().label=="6wb-palette-clear");
+    port.busy=false;assert(!display.interceptNavigation(&latest,1,34));
+    assert(!display.interceptNavigation(&latest,1,35));assert(port.batches.size()==5);
     Batch current=display.render(latest);bool foundLatest=false;
     for(size_t i=0;i<current.calls.size();++i)if(current.calls[i].fkt==kTextareaSetText&&current.calls[i].handle()==profile.base.street)
         foundLatest=std::string(current.calls[i].payload.begin()+3,current.calls[i].payload.end()-1)=="Latest";
     assert(foundLatest);
-    display.interceptNavigation(NULL,2,31);display.navigationRouteStarted();
-    assert(display.interceptNavigation(&latest,1,32));assert(port.batches.back().label=="6wb-palette-calibration");
+    display.interceptNavigation(NULL,2,36);display.navigationRouteStarted();
+    assert(display.interceptNavigation(&latest,1,37));assert(port.batches.back().label=="6wb-palette-calibration");
     // The next route uses the other A/B buffer, with the same filled chart.
     unsigned polygons=0;
     for(size_t i=0;i<port.batches.back().calls.size();++i) {

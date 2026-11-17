@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#
+# Packages a published release for NBTApps with tools/nbtpkg/make_nbtpkg.py: it takes the release's nbt-aad and
+# Releases.zip, checks them, builds a .nbtpkg signed with the author key, and attaches the archive and its record
+# (nbtpkg-record.json) to the same release. Nothing is built or run here: the two programs are read as data only.
+# Run it again by hand with the release's tag when the files were attached after publishing, or when a
+# pre-release has been changed to a full release (that is not published again, so nothing starts this by itself).
+#
+# Two cases end the run well with nothing packaged, with a notice and a line in the summary:
+#   - there is no tools/nbtpkg/author.pub yet: the set-up is not finished. The fetch step decides this before any
+#     network call, and the sign step then does nothing. With author.pub there, a missing or wrong key fails.
+#   - the release is marked pre-release (read from the API, for a run by tag too): pre-releases are not packaged
+#     for now (PACKAGE_PRERELEASES in make_nbtpkg.py), so they do not use up a version.
+#
+# It is safe because: it runs on a published release or by hand, never on a pull request, so only someone who can
+# publish a release or run a workflow can start it. The token has contents: write only, which attaching a file to
+# a release needs, and neither checkout keeps it. The author key is a secret of the `nbtpkg` environment, and only
+# the sign step gets it; it is never written to disk or printed. The tag reaches the scripts through env:, never
+# written into a run: line, and the title is read from the API as data. An asset that is on a release already is
+# never replaced, so a published version never changes.
+#
+# tools/nbtpkg.py and spec/ come from the NBTApps repo at the commit below (they are not under this repo's licence,
+# so they are not copied here).
+name: nbtpkg
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag of the release to package"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nbtpkg-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: nbtpkg
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out nbtpkg.py and spec/ of the NBTApps repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: tom-pryor/nbtapps
+          ref: 099bcc78c8faf8014b76997233338064ccec41d2
+          path: .nbtapps
+          sparse-checkout: |
+            headunit/tools
+            headunit/spec
+          persist-credentials: false
+
+      - name: Install cryptography
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet --disable-pip-version-check cryptography==50.0.2
+
+      - name: Test the packaging script
+        env:
+          NBTAPPS_HEADUNIT: .nbtapps/headunit
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s tools/nbtpkg -p 'test_*.py'
+
+      - name: Fetch, check and stage the release's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" tools/nbtpkg/make_nbtpkg.py --nbtapps .nbtapps/headunit \
+            fetch --tag "$TAG" --work "$RUNNER_TEMP/nbtpkg"
+
+      - name: Sign, attach and record
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NBTPKG_AUTHOR_KEY: ${{ secrets.NBTPKG_AUTHOR_KEY }}
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" tools/nbtpkg/make_nbtpkg.py --nbtapps .nbtapps/headunit \
+            sign --work "$RUNNER_TEMP/nbtpkg"

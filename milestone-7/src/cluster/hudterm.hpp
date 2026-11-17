@@ -49,7 +49,7 @@ enum Fkt {
     kAddCircle = 0x21E, kRemoveAllItems = 0x220, kGetSize = 0xC04, kAddCircleDiameter = 0xC09
 };
 enum PolyType { kPolyline = 2, kPolygon = 3 };
-enum { kMaxPoints = 99, kMaxTextChars = 32, kMaxHandle = 255 };
+enum { kMaxPoints = 99, kMaxTextChars = 32, kMaxLatinTextBytes = 255, kMaxHandle = 255 };
 const int32_t kMaxAngle = 7200;   // tenths of a degree; the cluster wraps modulo 3600
 
 inline bool isRingNode(uint16_t a) { return a >= 0x0100 && a <= 0x0FFF; }
@@ -246,7 +246,7 @@ inline bool payloadShapeOk(uint16_t fkt, const std::vector<uint8_t>& p, bool ext
             return a0 >= -kMaxAngle && a0 <= kMaxAngle && a1 >= -kMaxAngle && a1 <= kMaxAngle;
         }
         case kTextareaSetText:
-            if (extended && n >= 4 && n <= 259 && p[2] == 1 && p[n-1] == 0) return true;
+            if (extended && n >= 4 && n <= 4 + kMaxLatinTextBytes && p[2] == 1 && p[n-1] == 0) return true;
             return n >= 5 && (n - 3) % 2 == 0 && n <= 3 + 2 * (kMaxTextChars + 1) && p[2] == 0x00 && p[n - 1] == 0 &&
                    p[n - 2] == 0;
         case kAddPolygon:

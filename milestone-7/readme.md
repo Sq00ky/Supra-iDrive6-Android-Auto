@@ -7,6 +7,40 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.88-autors / rhmiapp-68-autors: Settings changes apply at once.** The app notes every Settings
+> checkbox when the Settings page opens and compares when you go back to the Android Auto main page (Start / Force Stop
+> / Restart / Settings / About). If any checkbox changed and nbt-aad is running, it restarts nbt-aad, the same as the
+> Restart row, so no manual Restart is needed. A box ticked and unticked again counts as no change. Left another way (a
+> hard key), the check happens the next time the main page shows. A running phone session drops and reconnects.
+> `nbt-aad.env` edits are not watched. `NBT_SETTINGS_RESTART=0` turns it off. App log: `settings changed (...) ->
+> restarting nbt-aad`. Confirmed on the J29: three restarts, phone back on wireless Android Auto in 4.5-6 s each.
+
+> **v1.9.64-navset: navigation settings on the Settings page.** The cluster/HUD checkbox is now **Show navigation in
+> HUD/gauge cluster** (same flag file, `/var/opt/aa/kombi-nav`). A new **Show directions at any distance** checkbox
+> (`/var/opt/aa/kombi-nav-anydist`) shows the next maneuver as soon as the phone reports it, instead of only inside
+> the last mile / the last seconds - `NBT_KOMBI_NAV_APPROACH` and `NBT_KOMBI_NAV_APPROACH_MI` still win. A new
+> **Version** row opens a page with the daemon build (the `NBT-AAD-VERSION=` tag scanned out of `/opt/aa/nbt-aad`, so
+> it is right even while the daemon is stopped) and the iDrive app's own version.
+>
+> **v1.9.65-nolog: "Disable logging (performance test)" checkbox** (`/var/opt/aa/no-log`). Silences both sides for
+> the measurement: the daemon sends stdout/stderr to `/dev/null` and stops the RAM and USB logs, and the iDrive app
+> returns from `alog()` before formatting, so nothing reaches the app log or slog. `NBT_NO_LOG=1` in `nbt-aad.env`
+> wins over the checkbox. The `--pf-*` / `--license` one-shot commands keep their output. The printf call sites still
+> run - this removes the I/O, not the formatting - so it answers "does writing the log cost anything", not "are the
+> printf calls free".
+>
+> **v1.9.91-sppreq3 (v1.9.89-sppreq car-tested on the J29; v1.9.90 counts only the phone's SPP requests, keeps the schedule's short steps through a hold, and a handshake-failure bounce always registers again; v1.9.91 adds the hold setting and cap and always registers after a deregister): no Bluetooth re-registration while the phone is asking for the link.** The periodic re-registration no longer runs then.
+> A phone that sent a ServiceRequest in the last 30 s is connected and already sees the service, and Android Auto
+> retries every ~5 s by itself; re-registering only removed the service under it. The request informs are now
+> watched on every car (Toyota too, also with `NBT_SPP_DIRECTION=0`), read-only. A deregister answered with
+> GapErrorCode 5 is followed by the register as before; when that answers 5 too (250 of 250 logged rounds), both
+> codes are logged and no "use Restart" warning is printed (what 5 means there is not known). `NBT_SPP_REREG_HOLD_S`
+> sets the hold (default 30 s, 0 = none); during a continuous hold one re-registration still runs every 60 s, so a
+> phone that keeps being refused does not switch the recovery off. The hint after refused links no longer blames Bluetooth audio (a Z Fold8 was refused
+> with A2DP connected and the security check passed): it points at the phone's functions in iDrive and re-pairing.
+> Log: `[Wireless] ... not re-registering the service under it`, `held for 60 s while the phone keeps asking: one
+> re-registration anyway`, `deregister answered 5 and register answered 5`.
+
 > **v1.8.73-wfd: `NBT_ALT_WIFI` (experiment, off): the Wi-Fi Direct group instead of the CarPlay hotspot.**
 > Cars without the CarPlay licence have no usable `iap2.cfg`, so they were told "no Wi-Fi hotspot config" and wireless
 > Android Auto never started. They do run the Marvell Wi-Fi Direct group `wfd0` whenever Miracast is coded
@@ -173,7 +207,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 >
 > **rhmiapp-39-settings (not car-verified): the six checkboxes moved to a Settings submenu.** The Android Auto menu is
 > now Start Android Auto / Force Stop / Restart, a separator, **Settings** and **About**. The six checkboxes (Start
-> automatically, Save logs to USB, MENU key opens iDrive, Show driving mode changes, Turn arrows in cluster/HUD, Show
+> automatically, Save logs to USB, MENU key opens iDrive, Show driving mode changes, Show navigation in HUD/gauge cluster, Show
 > iDrive warnings) sit on the **Settings** page (`hmiState 14`, `hmiAction` 80, `parentId` 10 so BACK returns to the
 > menu), in the same order as before. Nothing else changed: same raActions, same models, same flag files in
 > `/var/opt/aa`. Checkboxes on a child page are the normal iDrive pattern (BMW's own `SecurityMenu.xml` has four in
@@ -533,7 +567,7 @@ Off by default (opt-in):
 
 | Feature | Status |
 |---|---|
-| Android Auto turn-by-turn in the **instrument cluster and windscreen HUD** (J29 Supra), with no iDrive route: menu checkbox **Turn arrows in cluster/HUD** ([details](#turn-arrows-in-the-cluster-and-hud-j29)), with the **lane row** | Car-verified from the daemon on a J29 (cluster + HUD, 2026-11-01): arrows, distance, reroutes, the clears, the iDrive-route step-aside and the menu checkbox; the lane row car-verified from a test client with the same frames (2026-11-01) |
+| Android Auto turn-by-turn in the **instrument cluster and windscreen HUD** (J29 Supra), with no iDrive route: menu checkbox **Show navigation in HUD/gauge cluster** ([details](#turn-arrows-in-the-cluster-and-hud-j29)), with the **lane row** | Car-verified from the daemon on a J29 (cluster + HUD, 2026-11-01): arrows, distance, reroutes, the clears, the iDrive-route step-aside and the menu checkbox; the lane row car-verified from a test client with the same frames (2026-11-01) |
 
 Not done yet:
 - iDrive still reacts to touches while Android Auto is on screen.
@@ -650,8 +684,12 @@ Bluetooth reconnect.
 | Save logs to USB (checkbox) | Off by default: no log files, nothing kept in RAM. When ticked, the daemon and the iDrive app append to `nbt-aad.log` / `nbt-aad-app.log` on the first writable USB stick (`/mnt/umass*`). A stick plugged in later is picked up within 5 s; a file over 64 MB is renamed to `*.old.log`. Stored as `/var/opt/aa/usblog` (a hand-made `/opt/aa/usblog` also counts). `NBT_LOG_FILE` still forces a daemon log file |
 | MENU key opens iDrive (checkbox) | Off by default: MENU opens Android Auto's menu (phone home screen) and iDrive stays on the blank state. When ticked, MENU minimizes Android Auto and opens the iDrive main menu, like native CarPlay, and is not sent to the phone. Stored as `/var/opt/aa/menu-idrive` (a hand-made `/opt/aa/menu-idrive` also counts); read on every MENU press |
 | Show driving mode changes (checkbox) | Off by default. When ticked, changing the driving mode (Sport, Comfort, ECO PRO, ...) makes Android Auto step aside like in reverse so iDrive's own driving-mode display is visible, then Android Auto comes back by itself after `NBT_DRIVEMODE_SHOW_MS` (default 3500 ms). The iDrive app reads CDS `driving.mode` / `driving.mode35up` and logs every value (`CDS driving.mode = '{"mode":n}'`). Stored as `/var/opt/aa/show-drivemode`, read on every change. Car-tested on a Supra (`driving.mode35up` 3 / 4). v1.8.45 / rhmiapp-22 (car-verified, Supra): the app also sends the previous mode, so the first change after the daemon starts is no longer taken as its baseline; the daemon reacts at once instead of on its next 250 ms tick; the LayerManager switch runs in one shell. iDrive is visible 0.3-0.5 s after the CDS value (`... HIDDEN (Z-Order: -1000, N ms)`: 262-468 ms). That was quick enough to show iDrive's blank Android Auto page before its popup, so v1.8.46 waits `NBT_DRIVEMODE_DELAY_MS` (default 400 ms; `0` = at once) after the change; a further change while iDrive has the screen only extends it |
-| Turn arrows in cluster/HUD (checkbox) | Off by default. When ticked, Google Maps' (or another Android Auto nav app's) next turn, its distance and the road name show in the J29's instrument cluster and windscreen HUD, as with an iDrive route. See [Turn arrows in the cluster and HUD](#turn-arrows-in-the-cluster-and-hud-j29). Stored as `/var/opt/aa/kombi-nav` (a hand-made `/opt/aa/kombi-nav` also counts); the daemon checks it once a second, so unticking clears the arrow at once |
-| Android Auto over USB (beta) (checkbox) | Off by default. When ticked, an Android phone plugged into the car's USB port gets Android Auto over the cable, next to wireless. Experimental, not car-verified: see `NBT_USB` (the same switch; a set `NBT_USB` in `nbt-aad.env` wins either way). The phone stays in accessory mode, so iDrive's own USB media doesn't see it until it is replugged. Stored as `/var/opt/aa/usb-aa` (a hand-made `/opt/aa/usb-aa` also counts); the daemon reads it when it starts, so use **Restart** after changing it |
+| Show navigation in HUD/gauge cluster (checkbox) | Off by default. When ticked, Google Maps' (or another Android Auto nav app's) next turn, its distance and the road name show in the J29's instrument cluster and windscreen HUD, as with an iDrive route. See [Turn arrows in the cluster and HUD](#turn-arrows-in-the-cluster-and-hud-j29). Stored as `/var/opt/aa/kombi-nav` (a hand-made `/opt/aa/kombi-nav` also counts); the daemon checks it once a second, so unticking clears the arrow at once |
+| Show directions at any distance (checkbox) | Off by default. When ticked the next maneuver appears as soon as the phone reports it, instead of only inside the last mile (or the last few seconds) - the same as `NBT_KOMBI_NAV_APPROACH=off`. Stored as `/var/opt/aa/kombi-nav-anydist` (a hand-made `/opt/aa/kombi-nav-anydist` also counts); `NBT_KOMBI_NAV_APPROACH` or `NBT_KOMBI_NAV_APPROACH_MI` in `nbt-aad.env` win over the checkbox. Applies at the next Start / Restart |
+| Disable logging (performance test) (checkbox) | Off by default. Silences every log sink while it is ticked: the daemon stops writing its RAM log and the USB log and sends stdout/stderr to `/dev/null`, the iDrive app returns from `alog()` before formatting, so nothing reaches `/dev/shmem/nbt-aad-app.log` or slog. Stored as `/var/opt/aa/no-log` (a hand-made `/opt/aa/no-log` also counts); `NBT_NO_LOG=1` in `nbt-aad.env` wins over the checkbox. Applies at the next Start / Restart. For a performance A/B only - a run with it on leaves no log to read |
+| Version (row, on the Android Auto page) | Opens a page with two labels: the daemon build, read from the `NBT-AAD-VERSION=` tag inside `/opt/aa/nbt-aad` (no daemon needed), and the iDrive app's compile-time version. Both are filled when the page opens |
+| Android Auto over USB (beta) (checkbox) | Off by default. When ticked, an Android phone plugged into the car's USB port gets Android Auto over the cable, next to wireless. Experimental, not car-verified: see `NBT_USB` (the same switch; a set `NBT_USB` in `nbt-aad.env` wins either way). The phone stays in accessory mode, so iDrive's own USB media doesn't see it until it is replugged. Stored as `/var/opt/aa/usb-aa` (a hand-made `/opt/aa/usb-aa` also counts); the daemon reads it when it starts, so use **Restart** after changing it | While it is ticked the wireless path is **not offered at all** - no Bluetooth Android Auto advert, no Wi-Fi credentials, and the session starter refuses a TCP connection (`refusing the wireless connection ... Android Auto over USB is selected`) - so a phone that was paired for wireless cannot take the session instead of the cable.
+| Prompts on car radio (BT, beta) (checkbox) | Bluetooth audio mode only. Plays AA nav prompts on the car's own nav prompter (`/input_mono_0`) under the navigation focus (`eSRC_NAV_AUTO`, `0x1a`), so the radio **ducks** instead of the phone mixing the prompt into A2DP. It also keeps the guidance sink on channel 8 (what `NBT_GUIDANCE_BT=0` does) - without that the phone plays prompts itself over Bluetooth and the daemon never sees them. Off by default: the author's BT row is not car-tested. Browser / native audio needs no checkbox. Stored as `/var/opt/aa/speech-bt`; `NBT_SPEECH_BT=0` wins either way. Applies at the next Start / Restart. |
 | Use Phone GPS (checkbox) | Off by default. For cars without the navigation antenna (no GPS fix or heading from the car). When ticked, the daemon does not read the car's GPS and Android Auto is not offered the location, compass, GPS satellite or accelerometer sensors, so the phone uses its own GPS, compass and motion sensors. Stored as `/var/opt/aa/phone-gps` (a hand-made `/opt/aa/phone-gps` also counts); `NBT_PHONE_GPS=1` / `0` in `nbt-aad.env` wins either way. Read when the daemon starts, so use **Restart** after changing it |
 | Use WiFi Direct Network (checkbox) | Off by default. When ticked, the phone is offered only the car's Wi-Fi Direct group, never the CarPlay hotspot (the same as `NBT_ALT_WIFI=DIRECT`). Stored as `/var/opt/aa/wifi-direct` (a hand-made `/opt/aa/wifi-direct` also counts); a set `NBT_ALT_WIFI` in `nbt-aad.env` wins either way. Read when the daemon starts, so use **Restart** after changing it |
 | Show iDrive warnings (checkbox) | Off by default. When ticked, any iDrive screen that comes up on its own over Android Auto (Check Control, a collision warning, the 360 camera, a safety menu, ...) makes Android Auto step aside until it closes. Stored as `/var/opt/aa/show-warnings`; the contexts are logged either way. See the rhmiapp-36 entry above |
@@ -705,7 +743,7 @@ underneath the overlay, so this stops a stray press from killing the session.
 
 ### Turn arrows in the cluster and HUD (J29)
 
-With **Turn arrows in cluster/HUD** ticked, the daemon turns Android Auto's navigation status (channel 10: next
+With **Show navigation in HUD/gauge cluster** ticked, the daemon turns Android Auto's navigation status (channel 10: next
 maneuver, distance, road) into the KOMBI's own route-guidance graph and sends it from the head unit straight to the
 cluster, so the arrow, distance and street show in the cluster and the windscreen HUD without an iDrive route.
 
@@ -748,6 +786,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_LOG_FILE` | (none) | Append the daemon log to this file; it survives a head-unit reset. Same name = appended |
 | `NBT_MENU_RETURN` | home | Where iDrive goes once connected: `media` = Media/Radio list, `off` = stay in our menu |
 | `NBT_RX_TIMEOUT_S` | 5 | Seconds without data from the phone before iDrive gets the screen back; `0` = off (2 before v1.9.32) |
+| `NBT_VIDEO_QUEUE` | 15 | Maximum queued video frames (`1`-`60`). Lower it to reduce memory use and backlog on slower head units |
 | `NBT_VID_FPS` | (unset) | `30` or `60`: the frame rate asked of the phone and the decoder's rate. Unset: the phone is asked for 30 fps (what it delivers over Wi-Fi anyway) and the decoder is declared at 60, as before. `30` declares the decoder at 30 too (smoother on a slower head unit, car-verified on an F22); `60` asks the phone for 60 |
 | `NBT_BACK_HOLD_MS` | 2500 | BACK hold time to minimize; `0` = off (BACK forwarded at once) |
 | `NBT_KNOB_INVERT` | off | `1` reverses the rotary direction |
@@ -803,7 +842,7 @@ Leave these unset unless you are testing.
 | `NBT_BT_SRC`, `NBT_BT_SINK`, `NBT_BT_RELEASE=1` | Audio source/sink for Bluetooth mode (default `0x3a` / `0x1`); release the source when the phone leaves |
 | `NBT_AUDIOCONN`, `NBT_AUDIOCONN_SUFFIX`, `NBT_AUDIOCONN_RETRIES` | `audioconn` path (default `/fs/sda0/opt/mm/bin/audioconn`), extra args, retries while the car refuses the source (default 6, max 20), pauses `NBT_AUDIOCONN_RETRY_S` (default 5) s growing by 2 s up to 12 s |
 | `NBT_BT_ROUTE_DELAY_MS` | wait before the Bluetooth-source `audioconn` after a session starts (default 1500 ms, 0 = at once). Since v1.8.41 the request is single-flight, at most one `audioconn` runs at a time, and a session that ends cancels its pending request and retries (a phone reconnecting every few seconds used to stack `audioconn` processes until the head unit ran out of memory and rebooted) |
-| `NBT_CHILD_NO_PRELOAD` | `1` removes `LD_PRELOAD` (inherited from the HMI) for every child process the daemon starts (`audioconn`, `LayerManagerControl`, `pfctl`, `arp`, `ifconfig`), so they stop loading the graphics libraries (`ldd:FATAL: Could not preload library libEGL_X.gpp.so`, `unknown symbol: kdMain`). Experiment, not car-verified; the start-up line `[Main] LD_PRELOAD=...` shows what is inherited |
+| `NBT_CHILD_NO_PRELOAD` | **On by default since v1.9.69.** `LD_PRELOAD` is removed for every child process the daemon starts (`audioconn`, `LayerManagerControl`, `pfctl`, `arp`, `ifconfig`), so they stop loading the graphics libraries they never use (`ldd:FATAL: Could not preload library libEGL_X.gpp.so`, `unknown symbol: kdMain`). `NBT_CHILD_NO_PRELOAD=0` keeps it, which is only useful when debugging a child. The start-up line `[Main] LD_PRELOAD=...` says which way it went |
 | `NBT_TOUCH_CONNECT`, `NBT_TOUCH_PEER` | On by default since v1.8.47 (`NBT_TOUCH_CONNECT=0` turns it off; car-verified on a G11: gestures work under Android Auto): while Android Auto is on screen the touch socket is connected to the touch controller (the first touch PDU's sender, or `NBT_TOUCH_PEER=ip:port`), so BMW Gesture Control PDUs on the same UDP 30567 port go to iDrive instead of being swallowed: circle clockwise / anticlockwise = volume up / down, two fingers = next track or mute (as set in iDrive). Swipe right and point only close / confirm iDrive popups, so over Android Auto they normally do nothing (iDrive does not even enable them in the camera unless a popup is up); swipe left is ignored by iDrive. The learned address is kept in `/var/opt/aa/touch-peer`, so after the first touch every later start connects at once. Car-confirmed (G11, v1.8.43): the camera sends from `160.48.199.16:30501`, ~30 PDUs/s of `0xB5308006` hand coordinates plus `0xB5308005` gestures. Gestures that still reach the daemon are logged decoded (`[TouchFwd] gesture camera: rotate clockwise (volume up) (id 3)`). If Android Auto touch stops working, set `NBT_TOUCH_CONNECT=0` and delete `/var/opt/aa/touch-peer` |
 | `NBT_BT_PLAY` | **Experiment, off.** `1` = once the car grants the Bluetooth source, wait `NBT_BT_PLAY_DELAY` ms (1500) and send SourceActivity PLAY to it (`AuxInBTAudio.DMMAudioSource` request 2), like picking Bluetooth audio in iDrive; `2` = also AVRCP START (`BlueMedia.SGMedia`). Log: `[BtPlay] ...`. Not car-verified |
 | `NBT_BT_CONN` | ConnId of the car's Bluetooth source, requested through the ConnectionMaster (`audioconn -b <id>`, the iDrive HMI's call). Default `0xc7` (`audioconn -l`: `eSRC_A2DP ... AuxInBTAudio srcNr: 0x1`), car-verified on a MINI F60 since v1.8.38; `0` = the old focus form `-b 0x3a 0x1` (`NBT_BT_SRC` / `NBT_BT_SINK`) |
@@ -825,7 +864,11 @@ Leave these unset unless you are testing.
 | `NBT_AA_UNDERFLOW_REPORT` | Browser mode: `0` stops telling the phone when a stream ran dry. On by default: when a playing stream that has already sent audio leaves a mixer block short (padded with silence), the phone gets an AudioUnderflowNotification (`0x800b`), once per dry spell, as Google's head unit does. What the phone does with it isn't known yet. Log: `[Browser] media ran dry ..`, `[AASession] media ran dry: AudioUnderflowNotification (0x800b) #N ..`, 5 s later `[Browser] 5 s after media underflow #N: the phone sent X ms of audio in 5000 ms, queue now Y ms` (X above 5000 = it sent extra), and the session summary `[Feature] underflow_reports=on ..` |
 | `NBT_BROWSER_RESAMPLER`, `NBT_BROWSER_SPEEX_Q`, `NBT_BROWSER_RESAMPLER_FILE` | Browser mode: how the AA streams are converted to the device rate. Default `speex`: the speexdsp resampler (see [Third-party code](#third-party-code)), quality `5` (0..10; 80-tap filter, ~100 dB stopband), flat to ~19.5 kHz with no aliasing and no treble wobble under the drift trim. `linear` = the old linear interpolation (about -2.9 dB at 15 kHz, 22-24 kHz folding back as an audible alias). To compare by ear while music plays: `echo linear > /tmp/nbt_resampler` (or `speex`), `rm /tmp/nbt_resampler` to go back; the file is read once a second (`NBT_BROWSER_RESAMPLER_FILE` moves it, empty = off). The 10 s stats show `[Browser] resampler speexdsp: X ms CPU per s (Y %), output/input vs rates media/guidance/system ..`; speex that takes over 25 % CPU or produces the wrong number of frames (over 2 % off) falls back to linear for the session, with a warning |
 | `NBT_BROWSER_FORCE_RATE` | Browser mode experiment, off by default: ask the browser device for this rate (e.g. `48000`) even though it reports 22050..44100, so the 48 kHz AA streams play without resampling. The log says whether the device took it; if the car refuses, the device doesn't open and there is no AA audio that session (reason in `sloginfo`) |
-| `NBT_SPEECH=1`, `NBT_SPEECH_EP`, `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Play AA speech (ch 8) on an A2I endpoint. Off, test parked only |
+| `NBT_SPEECH` | Play AA guidance (ch 8) on an A2I endpoint. In browser mode each prompt gets its own audio focus on the car's nav prompter, so the radio is ducked, not muted. While AA media plays, prompts stay in the browser mix (media ducked). On by default in browser mode (`0` = off, guidance in the browser mix), off in Bluetooth mode (`1` = on). See [Navigation prompts over the radio](#navigation-prompts-over-the-radio) |
+| `NBT_SPEECH_EP` | Endpoint for the prompts. Default in browser mode `/input_mono_0`, the car's nav prompter; in Bluetooth mode `/input_stereo_AirPlayAlt`. `/input_mono_*` endpoints are opened mono, all others stereo |
+| `NBT_SPEECH_SRC`, `NBT_SPEECH_SINK` | Focus requested for each prompt, `audioconn -b <src> <sink>`. `SRC` default in browser mode `0x1a` (`eSRC_NAV_AUTO`), in Bluetooth mode `0`. `0` = no focus request (Bluetooth mode: audio plays at once; browser mode: guidance stays in the browser mix). `SINK` default `0x1` (speakers) |
+| `NBT_SPEECH_BT` | `1` = the **Prompts on car radio (BT, beta)** checkbox (`/var/opt/aa/speech-bt`; a set `NBT_SPEECH_BT` wins either way). Bluetooth audio mode only: turns the speech path on with the browser defaults (`/input_mono_0`, `0x1a`, sink `0x1`) and keeps channel 8 as GUIDANCE. Unset = off, the BT default (prompts over A2DP as before). |
+| `NBT_SPEECH_HOLD_MS` | The focus is released this long after the queued audio has played, then the endpoint is closed (default `500`, `0`..`5000`) |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
 | `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets, calculated from the video canvas and panel size: on 1280x480 `0,240,0,0` at 720p and `0,180,0,0` at 480p. MINI round display (`1180_480` coding) side insets: 40 px at 720p (car-verified on a MINI F60), 25 px at 480p. `off` keeps the manifest's insets |
@@ -866,10 +909,14 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_NAV_APPROACH` | When a maneuver shows: `time` (default; by the phone's seconds to it), `distance` (within `NBT_KOMBI_NAV_APPROACH_MI`, hidden again a little further out) or `off` (at once) |
 | `NBT_KOMBI_NAV_WARN_S`, `NBT_KOMBI_NAV_MAIN_S` | `time`: seconds before the maneuver it shows (default `50`, `10`..`120`) and is shown again (default `20`, `0`..`60`, below the first; `0` = never again). Shown again turns the 6WA's nav panel back on, if it was dismissed with the stalk button |
 | `NBT_KOMBI_NAV_MWAY_WARN_M`, `NBT_KOMBI_NAV_MWAY_MAIN_M` | `time`: off-ramps and forks also show this many metres before them (default `2000`) and again at (default `1000`), `200`..`5000` |
-| `NBT_KOMBI_NAV_APPROACH_MI` | `distance`, and `time` when the phone sends no seconds: show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once, and on its own it turns the approach `off`) |
+| `NBT_KOMBI_NAV_APPROACH_MI` | `distance`, and `time` when the phone sends no seconds: show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once, and on its own it turns the approach `off`). Set, it wins over the **Show directions at any distance** checkbox |
+| `NBT_NO_LOG` | `1` turns every log sink off (daemon RAM + USB log, stdout/stderr, app log and slog), the same as ticking **Disable logging (performance test)**; it wins over the checkbox. Useful to measure whether logging costs anything; the one-shot `--pf-*` / `--license` commands keep their output |
 | `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
 | `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
 | `NBT_KOMBI_NAV_LANES=0` | No lane row in the cluster / HUD (the arrows stay) |
+| `NBT_HUD_JUNCTION=0` | 6WA cluster (`NBT_CLUSTER=6wa`): keep the arrow all the way to the turn. By default the arrow gives way to a junction view at the main prompt (see `NBT_KOMBI_NAV_MAIN_S`) or within `NBT_HUD_NEAR_M`, like the factory navigation's near view: the maneuver's roads (in and out, both branches of a fork or an exit, a roundabout's ring and exit number) with the route drawn over them, its tail shorter in four steps on the way in. Android Auto sends no map, so other side roads are not drawn |
+| `NBT_HUD_NEAR_M` | 6WA: the junction view comes in this close to the maneuver whatever the time (default `300`, `50`..`2000`) |
+| `NBT_HUD_LANES=1` | 6WA: the phone's lanes in the cluster's lane layer, left of the picture. Off by default: where the cluster shows that layer is not known yet |
 | `NBT_KOMBI_NAV_INPLACE` | How the next maneuver (or a lane change) is sent on a route already shown: `1` (default) = an in-place update of the shown maneuver, the cluster's own update block, so it doesn't rebuild the route; `2` = the same without the guiding model; `0` = the whole route graph again. A guidance gap (rerouting) always sends the whole graph |
 | `NBT_KOMBI_NAV_HANDLE`, `NBT_KOMBI_NAV_HOST`, `NBT_KOMBI_NAV_PORT` | KOMBI guidance instance handle (default `0xC8`, the same on every boot seen), address (`160.48.199.96`) and port (`30502`) |
 | `NBT_DIAG=1`, `NBT_VERBOSE` | Window/LayerManager dump 8 s into a session; verbose protocol log |
@@ -906,6 +953,58 @@ offers: ..`, `[AASession] ch N audio start: config K = .. Hz`, `[Browser] PCM op
 `[Browser] gaps ..` line: mixer blocks of a playing stream that got only part of their audio (short) or none (empty)
 and were padded with silence, the lowest buffer fill in the interval, and the session's total gaps.
 Handy checks from the shell: `audioconn -l` (is `0xb8` listed as `BrowserFront`?) and `sloginfo | grep -i preAllocate`.
+
+#### Navigation prompts over the radio
+
+In browser mode the guidance channel (nav prompts, Assistant replies) no longer goes through the browser mix, which
+mutes the radio. Nothing to set: `NBT_SPEECH` is on by default there. `NBT_SPEECH=0` goes back to the browser mix.
+
+The defaults are the nav prompter of the F30 (NBTevo_S19322I): `NBT_SPEECH_EP=/input_mono_0`, `NBT_SPEECH_SRC=0x1a`,
+`NBT_SPEECH_SINK=0x1`. Set them only for a car that differs. `NBT_SPEECH_SRC=0` keeps the prompts in the browser mix.
+
+Finding the values on another car, over SSH:
+
+- Endpoint: `grep -i announcement /opt/speech/bin/natp.cfg`, the line with NAVI. On the F30
+  `input_mono_0 … Prompter Announcement NAVI`, set with a leading slash: `/input_mono_0`.
+- Source and sink: `audioconn -l | grep NAV_AUTO`. On the F30
+  `ConnId=0x58:  [0x1a] eSRC_NAV_AUTO - [0x1] eSNK_SPEAKERS`: the source is `0x1a`, the sink `0x1` (not the
+  `ConnId`, the car refuses that one).
+- Check by ear with the radio on: `audioconn -b <src> <sink>` should lower the radio, `audioconn -r <src> <sink>`
+  bring it back. If it doesn't come back, a head unit restart does.
+
+- Prompts play on the endpoint, the car's nav prompter. For each prompt the daemon asks for the nav focus
+  (`audioconn -b 0x1a 0x1`), which ducks the radio like the car's own navigation. Audio waits for the grant.
+- Car-tested on the F30 (test builds v1.9.77-pr209 and v1.9.79-pr209, including a 30-minute drive): prompts and
+  Assistant replies duck DAB and FM, AA media is ducked, not muted, and the car's own navigation speaks between AA
+  prompts.
+- The endpoint is opened at each prompt start and closed once the focus is given back, so the car's own navigation
+  can speak between AA prompts. When the car's prompter takes the endpoint during an AA prompt (both navigations at
+  once, or the sample in the iDrive volume menu), ours stops taking audio: after 1 s (3 s while it is still opening)
+  the rest of the prompt is dropped and the focus given back. After 3 failed opens in a row prompts use the browser
+  mix until the session ends.
+- The focus is released after the queued audio plus `NBT_SPEECH_HOLD_MS`. The focus request is one `audioconn` run,
+  not retried (`NBT_AUDIOCONN_RETRIES` does not apply). No grant within 2 s: the prompt is dropped and the next prompts
+  use the browser mix for 30 s; after two in a row, until the session ends. The rate the phone declared is used.
+- While AA media plays (Tidal, Spotify, ..: the browser source is built for it, or media played within
+  `NBT_BROWSER_IDLE_S`), prompts stay in the browser mix with the media ducked by the daemon's mixer (`NBT_DUCK_DB`):
+  under the nav focus the car would mute the browser source, media included.
+- If the speech path can't take a prompt (`NBT_SPEECH_SRC=0`, endpoint missing or not open, no `audioconn`, no
+  declared rate, backing off) the prompt plays through the browser mix (`0xb8`) as before, radio muted for it. AA
+  media and system sounds always stay on `0xb8`. The volume pill is not shown for volume changes while the nav focus
+  is being taken or released and for 1.5 s after.
+- Log: `[Browser] guidance: nav prompt channel /input_mono_0 focus 0x1a -> 0x1 (NBT_SPEECH=1)` (else `guidance: browser mix ..`),
+  `[Speech] ready: .. opened for each prompt, route audioconn 0x1a -> 0x1`, per prompt `[Speech] prompt #N started: ..`
+  and `focus granted after .. ms, released .. ms after the last audio`, then `[Speech] endpoint closed`; on a refused
+  focus `focus not granted after .. ms: dropped, no focus requests for .. s` (the second in a row adds `browser mode
+  keeps prompts in its mix until the session ends`); on a taken endpoint `the endpoint took
+  no buffer for .. ms`; with AA media `[Browser] AA media is on the browser source: nav prompt stays in the mix`.
+- Bluetooth mode: `NBT_SPEECH` works there too, with the declared rate (16 kHz mono if none given), on
+  `/input_stereo_AirPlayAlt` unless `NBT_SPEECH_EP` is set. Without `NBT_SPEECH_SRC` (default `0` there) prompts play at
+  once, without a focus. During a backoff prompts are dropped (no mix to fall back to). The car's Bluetooth source is
+  requested again when the mic closes (`NBT_BT_REFOCUS`), which switches away from the radio.
+- Only car-tested on the F30. Testers with other cars (Supra, MINI, G-series) are welcome: the endpoint name and the
+  source id may differ there (see above). Without the endpoint the start-up open fails (`[Speech] could not open ..`)
+  and prompts stay in the browser mix.
 
 ## Logs
 
@@ -1085,6 +1184,7 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    Bluetooth service (`BSS_GAP.SGBluetoothGap` 35.0). If registration fails, it deregisters and registers once more.
    While no phone opens the link, it deregisters and registers again every 5 s for 2 minutes, then every 30 s
    (`spp_rereg.hpp`, `NBT_SPP_REREG_S`), because a phone that is already connected only opens it after that.
+   Held for 30 s after any phone ServiceRequest: a phone that asks already sees the service.
 2. **Wireless setup (`wireless_setup`).** When the phone opens the link, Connectivity creates `/dev/btsppN`. The
    daemon scans `btspp0..7`. Links that turn out to be BMW BCL/Etch (the BCL startup magic `12 34 56 78`, `0xDEADBEEF`, `0x13371337`,
    or self-consistent BCL frames) are skipped. A link that closes without a single Android Auto reply (a working
@@ -1379,6 +1479,9 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 - Media through the head unit's own audio path (A2I) is experimental and not audible yet.
 - Cluster/HUD arrows (`kombi_nav`): confirm on the car that the head unit reaches the KOMBI directly, run a drive,
   and check the direction values other than LEFT / RIGHT / destination (parked).
+- `NBT_SPEECH=1`: when the car's navigation speaks during an AA prompt, the AA prompt is cut (the car's prompter takes
+  the shared endpoint). Between AA prompts the car's navigation speaks (endpoint opened per prompt, car-verified).
+  After nbt-aad stops the focus is given back (the daemon waits up to 2 s at shutdown).
 - Android Auto over USB (`NBT_USB=1`) needs a first car test. Check with the phone plugged in: does `ls /dev/android*`
   show a node (the car's medialauncher must still have its OAP probing on), does `/dev/oap*` appear after the
   `switch to accessory mode sent` line, and does `pidin fds | grep oap` show only nbt-aad on it? If BMW's

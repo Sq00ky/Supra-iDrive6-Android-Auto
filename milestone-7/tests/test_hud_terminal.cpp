@@ -249,6 +249,66 @@ static void testMerge() {
     assert(k.submit(d3, 7) == kQueued);
 }
 
+// One waiting batch per slot, sent in the order they came. A full batch takes its slot's place at the back (what it
+// is drawn on goes first); a partial one merges into its own slot's batch; a clear (every slot) replaces them all.
+static Batch slotBatch(const char* label, uint8_t slot, uint16_t h, int n, bool full = true) {
+    Batch b(label, full, slot);
+    for (int i = 0; i < n; ++i) b.add(kSetFillColor, setFillColor(h, (uint8_t)i));
+    return b;
+}
+
+static std::vector<uint16_t> drainHandles(Core& k, uint32_t now) {
+    std::vector<uint16_t> hs;
+    most::Msg m;
+    while (k.next(now, m)) {
+        hs.push_back((uint16_t)(m.data[0] << 8 | m.data[1]));
+        Wire a = answer(m);
+        k.onMessage(a.v, now);
+    }
+    return hs;
+}
+
+static void testSlots() {
+    Core k = readyCore();
+    assert(k.submit(slotBatch("m1", kSlotMain, 5, 1), 0) == kQueued);        // in progress
+    assert(!k.waiting(kSlotMain) && !k.waiting(kSlotRoute));
+    assert(k.submit(slotBatch("m2", kSlotMain, 6, 1), 0) == kQueued);
+    assert(k.submit(slotBatch("r1", kSlotRoute, 7, 2), 0) == kQueued);
+    assert(k.submit(slotBatch("l1", kSlotLanes, 9, 1), 0) == kQueued);
+    assert(k.waiting(kSlotMain) && k.waiting(kSlotRoute) && k.waiting(kSlotLanes));
+    assert(k.submit(slotBatch("r2", kSlotRoute, 8, 1), 1) == kReplaced);     // r1 never goes out; r2 after l1
+    Batch d("distance");
+    d.add(kTextareaSetText, setText(3, "120"));
+    assert(k.submit(d, 2) == kMerged);                                       // into m2, not into a route
+    std::vector<uint16_t> hs = drainHandles(k, 3);
+    assert(hs.size() == 5);
+    assert(hs[0] == 5 && hs[1] == 6 && hs[2] == 3 && hs[3] == 9 && hs[4] == 8);
+    assert(!k.busy());
+
+    // A partial batch of a slot with nothing waiting waits on its own, after the others.
+    assert(k.submit(slotBatch("m3", kSlotMain, 5, 1), 4) == kQueued);        // in progress
+    assert(k.submit(slotBatch("r3", kSlotRoute, 7, 1, false), 4) == kQueued);
+    assert(k.submit(slotBatch("m4", kSlotMain, 6, 1, false), 4) == kQueued);
+    assert(k.submit(slotBatch("r4", kSlotRoute, 8, 1, false), 4) == kMerged);
+    // A clear replaces everything waiting, whatever its slot.
+    Batch clr = slotBatch("clear", kSlotAll, 5, 2);
+    assert(k.submit(clr, 5) == kReplaced);
+    assert(k.waiting(kSlotMain) && k.waiting(kSlotRoute) && k.waiting(kSlotLanes));
+    hs = drainHandles(k, 6);
+    assert(hs.size() == 3 && hs[0] == 5 && hs[1] == 5 && hs[2] == 5);        // m3, then the clear's two
+    assert(!k.waiting(kSlotMain) && !k.busy());
+    // With nothing waiting, a clear is queued behind the batch in progress, not counted as a replacement.
+    assert(k.submit(slotBatch("m5", kSlotMain, 5, 1), 7) == kQueued);
+    assert(k.submit(clr, 7) == kQueued);
+    // Dropped work counts every batch waiting.
+    assert(k.submit(slotBatch("r5", kSlotRoute, 7, 1), 7) == kQueued);
+    uint32_t dropped = k.stats().batchesDropped, e = k.epoch();
+    Wire nav = navCall(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(nav.v, 8);
+    assert(k.status() == kNavActive && k.epoch() != e);
+    assert(k.stats().batchesDropped == dropped + 3 && !k.busy() && !k.waiting(kSlotRoute));
+}
+
 // The epoch moves whenever submitted work may be lost: dropped work, or the status leaving ready.
 static void testEpoch() {
     Core k = readyCore();
@@ -758,6 +818,7 @@ int main() {
     testBackToBackAndWindow();
     testAnswersAndQueue();
     testMerge();
+    testSlots();
     testEpoch();
     testCopiesIgnored();
     testOwnAndForeignIgnored();

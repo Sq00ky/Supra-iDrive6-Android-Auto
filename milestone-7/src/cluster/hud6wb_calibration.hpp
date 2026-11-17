@@ -13,9 +13,9 @@ public:
     void observe(int status) {
         if(!enabled_)return;
         if(status==1 && !route_) {route_=true;phase_=Pending;deadline_=0;test_=0;}
-        else if(status==2) {
+        else if(status==0 || status==2) {
             route_=false;
-            if(phase_==Dispatching||phase_==Holding||(phase_==Pending&&test_==1))phase_=Clearing;
+            if(phase_==Dispatching||phase_==Holding||(phase_==Pending&&test_>0))phase_=Clearing;
             else if(phase_==Pending)phase_=Dormant;
         }
         // REROUTING (3) and duplicate ACTIVE do not start a new calibration.
@@ -26,7 +26,7 @@ public:
     void dispatched(double now){if(phase_==Dispatching){deadline_=now+PALETTE_CALIBRATION_SECONDS;phase_=Holding;}}
     bool due(double now)const{return phase_==Holding && now>=deadline_;}
     unsigned test()const{return test_;}
-    void nextTest(){if(phase_==Holding && test_==0){test_=1;phase_=Pending;deadline_=0;}}
+    void nextTest(){if(phase_==Holding && test_<2){++test_;phase_=Pending;deadline_=0;}}
     void clearQueued(){phase_=Clearing;}
     void finished(){phase_=route_?Done:Dormant;deadline_=0;}
     void cancel(){phase_=route_?Done:Dormant;deadline_=0;}

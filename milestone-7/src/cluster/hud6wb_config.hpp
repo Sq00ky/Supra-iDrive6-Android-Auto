@@ -13,7 +13,7 @@ inline int sixwbNumber(const char* name,int fallback,int low,int high) {
     return (int)n;
 }
 inline void configure6wb(Bmw6wbProfile& p) {
-    p.base.streetChars=sixwbNumber("NBT_6WB_STREET_CHARS",p.base.streetChars,1,40);
+    p.base.streetChars=sixwbNumber("NBT_6WB_STREET_CHARS",p.base.streetChars,1,kMaxLatinTextBytes);
     p.base.distanceChars=sixwbNumber("NBT_6WB_DISTANCE_CHARS",p.base.distanceChars,1,8);
     p.lineWidth=sixwbNumber("NBT_6WB_LINE_WIDTH",p.lineWidth,1,22);
     p.laneLineWidth=sixwbNumber("NBT_6WB_LANE_LINE_WIDTH",p.laneLineWidth,1,10);

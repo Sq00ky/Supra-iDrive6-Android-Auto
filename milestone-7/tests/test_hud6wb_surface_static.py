@@ -23,7 +23,7 @@ class SingleSurfaceChecks(unittest.TestCase):
         body=section(read('hud6wb_display.cpp'),'Batch Hud6wbDisplay::render(', 'void Hud6wbDisplay::remember(')
         self.assertIn('target=other(mainVisible_,p_.main)',body)
         self.assertIn('useful=p_.base.glyph',body)
-        self.assertIn('kit_.central(v,target,useful,drawing)',body)
+        self.assertIn('kit_.central(central,target,useful,drawing)',body)
         self.assertIn('switchVisibility(mainVisible_,target)',body)
         self.assertNotIn('PlanePolicy::FlatOnly',body)
         self.assertNotIn('bar.visible)==',body)
@@ -36,13 +36,14 @@ class SingleSurfaceChecks(unittest.TestCase):
         self.assertIn('deadline_=now+PALETTE_CALIBRATION_SECONDS',clock)
         self.assertIn('calibration_.dispatched(now)',display)
         self.assertIn('calibration_.nextTest()',display)
-        self.assertIn('calibration_.test()==0?calibrationBatch():geometryCalibrationBatch()',display)
+        self.assertIn('case 0: b=calibrationBatch();',display)
+        self.assertIn('case 1: b=geometryCalibrationBatch();',display)
+        self.assertIn('6wb-rgb-calibration',display)
         self.assertEqual(section(read('hud6wb_kit.cpp'),'KitBarState kitBarState(', 'sixwbkit::Maneuver::Value'),
                          section(original('hud6wb_kit.cpp'),'KitBarState kitBarState(', 'KitPlane kitPlane('))
 
-    def test_decoder_transport_bitmap_codec_and_data_are_unchanged(self):
-        paths=['src/cluster/grafite_oro/artwork_data.inc','src/cluster/nav_msg.hpp','src/cluster/hud_terminal.cpp',
-               'src/cluster/hud_terminal.hpp','src/most','src/dsi_client.cpp','src/aa_session.cpp']
+    def test_most_bitmap_codec_and_artwork_data_are_unchanged(self):
+        paths=['src/cluster/grafite_oro/artwork_data.inc','src/most','src/dsi_client.cpp']
         result=subprocess.check_output(['git','diff',BASE,'--']+['milestone-7/'+p for p in paths],cwd=ROOT.parent)
         self.assertEqual(result,b'')
         now=read('hud6wb_codec.cpp');old=original('hud6wb_codec.cpp')

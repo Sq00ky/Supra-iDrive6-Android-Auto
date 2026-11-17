@@ -37,7 +37,7 @@ public:
     // SppUuidDeregister + SppUuidRegister in place (what a daemon Restart does on the Bluetooth side), for a phone
     // that is connected over Bluetooth but never opens the Android Auto link. Call from the wireless thread while
     // no link or session is up; skipped (false) while a registration is still in flight. `why` is only logged.
-    bool reregister(const char* why);
+    bool reregister(const char* why, bool bounce = false);   // bounce: from requestSppBounce(), always registers again
     // After a handshake that already had /dev/btspp open and the phone closed without accepting
     // the Wi-Fi start. Uses the same deregister-then-register path as reregister(), on the caller
     // (the wireless thread), and is skipped while a registration is already in flight.
@@ -58,6 +58,9 @@ int sppDirLinkResult(bool phoneOpened, bool spoke);  // new model (SppDirection:
 bool sppDirGate();                                   // leave car-opened links alone now?
 int sppDirModel();
 unsigned sppDirRequests();
+// A phone asked for the Android Auto serial link (a ServiceRequest inform for 'SPP') within NBT_SPP_REREG_HOLD_S: periodic
+// re-registration is held. agoSec (optional) gets the age of the last request. Thread-safe.
+bool sppPhoneAsking(unsigned* agoSec);
 
 } // namespace nbt
 

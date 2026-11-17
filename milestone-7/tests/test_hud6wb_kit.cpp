@@ -3,6 +3,7 @@
 #include "cluster/hud6wb_kit.hpp"
 #include "hud6wb_kit_test_util.hpp"
 #include <assert.h>
+#include <algorithm>
 #include <math.h>
 using namespace nbt;
 using namespace nbt::sixwbkit;
@@ -18,7 +19,17 @@ int main() {
     for(unsigned cw=0;cw<2;++cw)for(unsigned i=0;i<sizeof(angles)/sizeof(*angles);++i) {
         NavigationEvent e;e.maneuver=cw?Maneuver::RoundaboutCWAngle:Maneuver::RoundaboutCCWAngle;
         e.hasExitAngle=true;e.exitAngle=angles[i];e.hasExitNumber=true;e.exitNumber=2;
-        Scene s=renderManeuver(e,box);contained(s,box);
+        Scene s=renderManeuver(e,box,0);contained(s,box);
+        double x0=232,y0=205,x1=0,y1=0;
+        for(size_t j=0;j<s.size();++j)for(size_t c=0;c<s[j].contours.size();++c)
+            for(size_t k=0;k<s[j].contours[c].points.size();++k) {
+                const Point& p=s[j].contours[c].points[k];
+                const double half=s[j].strokeWidth/2;
+                x0=std::min(x0,p.x-half);y0=std::min(y0,p.y-half);
+                x1=std::max(x1,p.x+half);y1=std::max(y1,p.y+half);
+            }
+        assert(fabs(std::max((x1-x0)/232,(y1-y0)/205)-0.85)<1e-6);
+        assert(fabs(x0+x1-232)<1e-6&&fabs(y0+y1-205)<1e-6);
         assert(s[0].contours.size()==2); // hole retained as even-odd geometry
         const std::vector<Point>& outer=s[0].contours[0].points;Point center={0,0};
         for(size_t j=0;j<outer.size();++j){center.x+=outer[j].x/outer.size();center.y+=outer[j].y/outer.size();}
@@ -35,7 +46,18 @@ int main() {
         NavigationEvent e;assert(hudterm::GrafiteKit::laneEvent(v,e));assert(e.lanes.size()==count);
         assert(e.lanes[0].directions.size()==3&&e.lanes[0].directions[1].shape==7);
         assert(e.lanes[0].directions[0].highlighted&&!e.lanes[0].directions[1].highlighted);
-        contained(renderLanes(e.lanes,Rect(0,0,282,39)),Rect(0,0,282,39));
+        Scene tips=renderLanes(e.lanes,Rect(0,0,282,39));
+        contained(tips,Rect(0,0,282,39));
+        assert(tips.size()==count*3);
+        for(size_t j=0;j<tips.size();++j){
+            const Shape& tip=tips[j];
+            assert(tip.contours.size()==1&&tip.contours[0].points.size()==3);
+            double top=39;
+            for(size_t k=0;k<tip.contours[0].points.size();++k)
+                top=std::min(top,tip.contours[0].points[k].y);
+            assert(fabs(top)<1e-6);
+            assert(tip.fill==(e.lanes[j/3].directions[j%3].highlighted?Color::White:Color::Gray));
+        }
     }
     hudterm::GrafiteKit kit;hudterm::Bmw6wbProfile fixedProfile;
     bool expandedCoordinateSeen=false;

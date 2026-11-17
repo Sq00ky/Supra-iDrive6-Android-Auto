@@ -60,6 +60,9 @@ int main() {
         CHECK(c.media_gain_db == 0 && c.guidance_gain_db == 0 && c.system_gain_db == 0);
         CHECK(c.defer_acks && d.defer_acks);
         CHECK(c.underflow_reports && d.underflow_reports);
+        CHECK(c.speech.enabled && same(c.speech.endpoint, "/input_mono_0") && c.speech.src == 0x1a);
+        CHECK(d.speech.enabled && same(d.speech.endpoint, "/input_mono_0") && d.speech.src == 0x1a);
+        CHECK(c.speech.sink == 0x1 && d.speech.sink == 0x1);
     }
 
     // 2. Browser values, ranges and parsing.
@@ -232,6 +235,51 @@ int main() {
         CHECK(strcmp(audioModeName(AUDIO_MODE_BT), "bt") == 0);
         CHECK(strcmp(audioModeName(AUDIO_MODE_BROWSER), "browser") == 0);
         CHECK(strcmp(audioModeName(AUDIO_MODE_A2I), "a2i") == 0);
+    }
+
+    // 5. Speech settings: browser mode is on by default on the nav prompter, BT off and without a focus; set values win
+    // in both modes; NBT_SPEECH_HOLD_MS clamped to 0..5000.
+    {
+        const BrowserConfig b = readBrowserConfig();
+        CHECK(b.speech.enabled && b.speech.sink == 0x1 && b.speech.hold_ms == 500);
+        CHECK(!readBtConfig().speech.enabled);
+        setenv("NBT_SPEECH", "0", 1);
+        CHECK(!readBrowserConfig().speech.enabled && !readBtConfig().speech.enabled);
+        setenv("NBT_SPEECH", "off", 1);
+        CHECK(!readBrowserConfig().speech.enabled);
+        setenv("NBT_SPEECH", "maybe", 1);
+        CHECK(readBrowserConfig().speech.enabled && !readBtConfig().speech.enabled);
+        setenv("NBT_SPEECH", "1", 1);
+        const BrowserConfig b1 = readBrowserConfig();
+        const BtConfig t1 = readBtConfig();
+        CHECK(b1.speech.enabled && same(b1.speech.endpoint, "/input_mono_0") && b1.speech.src == 0x1a &&
+              b1.speech.sink == 0x1);
+        CHECK(t1.speech.enabled && t1.speech.endpoint == NULL && t1.speech.src == 0 && t1.speech.sink == 0x1);
+
+        setenv("NBT_SPEECH_EP", "/input_stereo_3", 1);
+        setenv("NBT_SPEECH_SRC", "0xba", 1);
+        setenv("NBT_SPEECH_SINK", "3", 1);
+        const BrowserConfig b2 = readBrowserConfig();
+        const BtConfig t2 = readBtConfig();
+        CHECK(same(b2.speech.endpoint, "/input_stereo_3") && b2.speech.src == 0xba && b2.speech.sink == 3);
+        CHECK(same(t2.speech.endpoint, "/input_stereo_3") && t2.speech.src == 0xba && t2.speech.sink == 3);
+
+        // NBT_SPEECH_SRC=0: no focus, prompts stay in the browser mix; empty or garbage keeps the default.
+        setenv("NBT_SPEECH_SRC", "0", 1);
+        CHECK(readBrowserConfig().speech.src == 0);
+        setenv("NBT_SPEECH_SRC", "nav", 1);
+        setenv("NBT_SPEECH_EP", "", 1);
+        const BrowserConfig b3 = readBrowserConfig();
+        const BtConfig t3 = readBtConfig();
+        CHECK(b3.speech.src == 0x1a && same(b3.speech.endpoint, "/input_mono_0"));
+        CHECK(t3.speech.src == 0 && t3.speech.endpoint == NULL);
+        setenv("NBT_SPEECH_HOLD_MS", "9000", 1);
+        CHECK(readBrowserConfig().speech.hold_ms == 5000 && readBtConfig().speech.hold_ms == 5000);
+        setenv("NBT_SPEECH_HOLD_MS", "-5", 1);
+        CHECK(readBrowserConfig().speech.hold_ms == 0);
+        setenv("NBT_SPEECH_HOLD_MS", "abc", 1);
+        CHECK(readBrowserConfig().speech.hold_ms == 500);
+        clearAll();
     }
 
     if (fails) { printf("test_audio_config: %d failure(s)\n", fails); return 1; }

@@ -33,6 +33,7 @@ const int kLinkGiveUp = 5;    // failed sends in a row without ever drawing: no 
 const double kExitCancelRetryS = 0.0;
 const double kCancelRetryS = 60.0;
 const double kStalePosS = 3.0;   // a new maneuver waits at most this long for a position of its own
+const double kRenewM = 100.0;    // a jump up by more than this on a changed step body = a new step that looks the same
 
 double monoS() {
     struct timespec ts;
@@ -49,7 +50,8 @@ volatile int g_mayShow = 0;   // an arrow may be up: the fatal-signal handler se
 Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
     : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
       no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning), have_next_(false), next_since_(0),
-      stage_(kHidden), timed_(false), remind_(false), fallback_(false) {
+      stage_(kHidden), timed_(false), remind_(false), fallback_(false), drawn_step_seq_(0), has_min_m_(false),
+      min_m_(0), renew_(false), depart_(false) {
     d_.setSettings(s);
     d_.setLog(log, log_user);
 }
@@ -73,12 +75,6 @@ const char* approachName(Approach a) {
     return a == kApproachTime ? "time" : a == kApproachDistance ? "distance" : "off";
 }
 
-namespace {
-// Motorway-type turns, due by distance too: AA off-ramps (21-24) and forks (25, 26). Keep-left/right is left out (it
-// is common in towns too), and so are on-ramps (the turn is still on the road before the motorway).
-bool motorwayTurn(int aa_type) { return aa_type >= 21 && aa_type <= 26; }
-}
-
 // True: v is held back (not shown, and a different maneuver shown is cleared).
 bool Core::approachHold(const NavView& v, double now) {
     if (s_.approach == kApproachOff) return false;
@@ -86,8 +82,36 @@ bool Core::approachHold(const NavView& v, double now) {
     return timeHold(v, now);
 }
 
+// The maneuver shown, with a step body that changed since it was drawn, and a distance more than kRenewM above the
+// nearest it got: the turn was made and the next one looks the same. Without this the arrow stays up and counts up
+// to the far turn (0 yd, then most of a mile), with no time rule. A same step only counts down, give or take GPS
+// noise. The nearest, not the last, so the new position may come before or after the new step body.
+bool Core::renewedStep(const NavView& v) {
+    if (!has_shown_ || !v.sameManeuver(shown_)) return false;
+    double m;
+    if (!distanceMetres(v, m)) return false;
+    bool jump = has_min_m_ && v.step_seq != drawn_step_seq_ && m > min_m_ + kRenewM;
+    if (jump) {
+        log("NEW STEP type %d: looks like the one shown, but %.0f m -> %.0f m", v.aa_type, min_m_, m);
+        return true;
+    }
+    if (!has_min_m_ || m < min_m_) min_m_ = m;
+    has_min_m_ = true;
+    return false;
+}
+
+void Core::drawn(const NavView& v) {
+    has_shown_ = true;
+    shown_ = v;
+    drawn_step_seq_ = v.step_seq;
+    double m;
+    has_min_m_ = distanceMetres(v, m);
+    min_m_ = has_min_m_ ? m : 0;
+    renew_ = false;
+}
+
 bool Core::timeHold(const NavView& v, double now) {
-    bool same = has_shown_ && v.sameManeuver(shown_);
+    bool same = isShown(v);
     if (!have_next_ || !v.sameManeuver(next_)) {      // a new next maneuver
         have_next_ = true;
         next_ = v;
@@ -102,7 +126,9 @@ bool Core::timeHold(const NavView& v, double now) {
     double m = 0;
     bool has_m = distanceMetres(v, m), mway = motorwayTurn(v.aa_type) && has_m;
     if (!v.has_step_s && !mway) {                     // nothing to time it by
-        if (v.pos_seq != 0) fallback_ = true;         // a position without seconds (not a step still waiting for one)
+        // A position without seconds (not a step still waiting for one), away from the turn: at it the phone often
+        // leaves them out, which says nothing about whether it sends them.
+        if (v.pos_seq != 0 && (!has_m || m >= kNoSecondsM)) fallback_ = true;
         if (same && timed_) return false;             // shown by time: one position without seconds doesn't hide it
         return distanceHold(v);                       // the distance rule
     }
@@ -136,7 +162,7 @@ bool Core::distanceHold(const NavView& v) {
     if (s_.approach_mi <= 0) return false;
     double m;
     if (!distanceMetres(v, m)) return false;           // unknown distance: show as before (fail open)
-    bool same = has_shown_ && v.sameManeuver(shown_);  // hysteresis: same maneuver only
+    bool same = isShown(v);                            // hysteresis: same maneuver only
     double lim = s_.approach_mi * 1609.344 * (same ? s_.hysteresis : 1.0);
     if (m <= lim) return false;
     if (has_shown_) {
@@ -149,6 +175,15 @@ bool Core::distanceHold(const NavView& v) {
 
 void Core::step(const NavView* in, double now, const char* why_none) {
     if (stop_ != kRunning) return;
+    // A DEPART at 0 m counts as no guidance: after a reroute the arrow shown stays through it (and goes after grace_s,
+    // as in any gap) instead of a straight arrow at 0 yd for a second, drawn and then replaced or cleared.
+    bool depart = in && d_.suppressDepartureAtZero() && departHere(*in);
+    if (depart) {
+        if (!depart_) log("DEPART at 0 m: not shown%s", has_shown_ ? ", the arrow shown stays" : "");
+        in = NULL;
+        why_none = "depart only";
+    }
+    depart_ = depart;
     if (!in) {
         no_dist_ = false;
         if (!has_shown_) return;
@@ -160,7 +195,12 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     off_ = false;
     NavView v = *in;
     // The road as it is stored in shown_, before anything compares the two (an unnamed road is " ").
-    v.road = utf8Prefix(v.road.empty() ? std::string(" ") : v.road, kMaxRoad);
+    if (v.road.empty()) v.road = " ";
+    if (!d_.useFullRoadName()) v.road = utf8Prefix(v.road, kMaxRoad);
+    if (!renew_ && renewedStep(v)) {
+        renew_ = true;                                 // until it is drawn or cleared
+        have_next_ = false;                            // and the time rule judges it from now
+    }
     if (approachHold(v, now)) return;
     // A snapshot without a distance (0x8006 before its 0x8007): keep the last one rather than flicker "-".
     if (v.dist_text.empty() && has_shown_ && !shown_.dist_text.empty() && shown_.dist_text != "-") {
@@ -189,7 +229,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         v.aa_unit = unit;
     }
     v.dist_text = utf8Prefix(v.dist_text, kMaxDist);
-    bool new_man = !has_shown_ || !v.sameManeuver(shown_);
+    bool new_man = !isShown(v);
     bool redraw = !new_man && d_.sameManeuver(v, now);
     if (new_man || redraw) {
         ClusterDisplay::Result r = d_.showManeuver(v, now, new_man, !has_shown_);
@@ -197,8 +237,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
             fail(r);
             return;
         }
-        has_shown_ = true;
-        shown_ = v;
+        drawn(v);
         last_dist_ = v;
         last_dist_t_ = now;
         remind_ = false;                               // drawn whole: the panel is on anyway
@@ -235,6 +274,8 @@ void Core::step(const NavView* in, double now, const char* why_none) {
 void Core::forget() {
     has_shown_ = false;
     remind_ = false;
+    renew_ = false;
+    has_min_m_ = false;
     shown_ = NavView();
     last_dist_ = NavView();
     off_ = false;
@@ -289,8 +330,19 @@ void FactoryRouteWatch::line(const char* s, double now) {
 
 // ---- KombiNav -----------------------------------------------------------------------------------------------------
 
-const char* KombiNav::kFlagFile = "/var/opt/aa/kombi-nav";
-const char* KombiNav::kManualFile = "/opt/aa/kombi-nav";
+namespace {
+const char* const kKombiNavFlagName = "kombi-nav";
+
+// The checkbox flag: the usual pair of files (nbt_paths.hpp), or the paths a host test put in kFlagFile / kManualFile.
+bool kombiNavFlagSet() {
+    if (!KombiNav::kFlagFile && !KombiNav::kManualFile) return nbt::flagSet(kKombiNavFlagName);
+    return (KombiNav::kFlagFile && access(KombiNav::kFlagFile, F_OK) == 0) ||
+           (KombiNav::kManualFile && access(KombiNav::kManualFile, F_OK) == 0);
+}
+} // namespace
+
+const char* KombiNav::kFlagFile = NULL;     // NULL: nbt::flagSet(kKombiNavFlagName)
+const char* KombiNav::kManualFile = NULL;
 const char* KombiNav::kShownFile = "/dev/shmem/nbt-aad-kombi-nav.shown";
 unsigned KombiNav::kWatchSkip = 0;
 
@@ -318,7 +370,7 @@ KombiNav::~KombiNav() {
 bool KombiNav::settingOn() {
     int f = envFlag("NBT_KOMBI_NAV");
     if (f >= 0) return f == 1;
-    return access(kFlagFile, F_OK) == 0 || access(kManualFile, F_OK) == 0;
+    return kombiNavFlagSet();
 }
 
 bool KombiNav::quitting(void* self) {
@@ -342,7 +394,7 @@ bool KombiNav::linkCancel(void* self, std::string* detail) {
 
 bool KombiNav::enabledNow() const {
     if (forced_ >= 0) return forced_ == 1;
-    return access(kFlagFile, F_OK) == 0 || access(kManualFile, F_OK) == 0;
+    return kombiNavFlagSet();
 }
 
 void KombiNav::logLine(const char* line, void* /*user*/) {
@@ -463,6 +515,14 @@ void KombiNav::readApproach() {
                    settings_.approach_mi);
         }
     }
+    // The Settings checkbox "Show directions at any distance": at once, no distance/time gate - but only while
+    // neither env var above is set (they are the documented overrides).
+    if (nbt::navAnyDistanceWanted(getenv("NBT_KOMBI_NAV_APPROACH"), getenv("NBT_KOMBI_NAV_APPROACH_MI"),
+                                  nbt::flagSet(nbt::kNavAnyDistFlagName))) {
+        settings_.approach = kApproachOff;
+        settings_.approach_mi = 0;
+        printf("[KombiNav] \"Show directions at any distance\" on: approach off, shown at once\n");
+    }
     envNumber("NBT_KOMBI_NAV_WARN_S", 10, 120, settings_.warn_s);
     envNumber("NBT_KOMBI_NAV_MAIN_S", 0, 60, settings_.main_s);
     if (settings_.main_s >= settings_.warn_s) {
@@ -492,6 +552,13 @@ std::string KombiNav::approachText() const {
     return b;
 }
 
+std::string KombiNav::junctionText() const {
+    char b[96];
+    if (!settings_.junction) return "off";
+    snprintf(b, sizeof(b), "at the main prompt or %g m", settings_.near_m);
+    return b;
+}
+
 void KombiNav::start(most::Client* most) {
     if (started_) return;
     forced_ = envFlag("NBT_KOMBI_NAV");
@@ -505,6 +572,9 @@ void KombiNav::start(most::Client* most) {
     if (envFlag("NBT_KOMBI_NAV_SHOW_BAR") == 1) settings_.hide_bar = false;
     if (envFlag("NBT_KOMBI_NAV_YIELD") == 0) yield_enabled_ = false;
     if (envFlag("NBT_KOMBI_NAV_LANES") == 0) settings_.lanes = false;
+    if (envFlag("NBT_HUD_JUNCTION") == 0) settings_.junction = false;
+    envNumber("NBT_HUD_NEAR_M", 50, 2000, settings_.near_m);
+    if (envFlag("NBT_HUD_LANES") == 1) settings_.hud_lanes = true;
     e = getenv("NBT_KOMBI_NAV_INPLACE");
     if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
     e = getenv("NBT_CLUSTER");
@@ -517,13 +587,13 @@ void KombiNav::start(most::Client* most) {
                approachText().c_str(), settings_.hide_bar ? "hidden" : "factory", yield_enabled_ ? "on" : "off",
                settings_.lanes ? "on" : "off", settings_.inplace);
     else
-        printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %s, iDrive-route yield %s (and the "
-               "%s)\n", enabledNow() ? "ON" : "off",
-               forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file", display_->name(), target_.c_str(),
-               shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "", approachText().c_str(),
+        printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %s, junction view %s, lanes %s, "
+               "iDrive-route yield %s (%s)\n",
+               enabledNow() ? "ON" : "off", forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file",
+               display_->name(), target_.c_str(), shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "",
+               approachText().c_str(), junctionText().c_str(), settings_.hud_lanes ? "on" : "off",
                yield_enabled_ ? "on" : "off",
-               !strcmp(display_->name(),"6wb") ?
-               "experimental OEM checks bypassed" : "factory navigation on the terminal, always");
+               display_->factoryArbitration() ? "factory navigation on the terminal, always" : "OEM arbitration bypassed");
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
         return;
@@ -544,6 +614,8 @@ void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t le
     KombiNav* self = static_cast<KombiNav*>(user);
     if (!self) return;
     pthread_mutex_lock(&self->mu_);
+    const bool discard = self->display_ && self->display_->discardPreviousRoute();
+    const bool wasActive = discard && self->msgs_.guidanceActive();
     if (self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0)) {
         self->last_msg_t_ = monoS();
         // Presentation bookkeeping only: don't lose a quick INACTIVE/ACTIVE
@@ -551,8 +623,9 @@ void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t le
         if(msg_id==0x8003) {
             int64_t status=0;
             if(pbInt(NavMessages::span(self->msgs_.status),1,status)) {
+                if (wasActive && status!=1) self->msgs_.discardGuidance();
                 if(status==1&&!self->route_active_){++self->navigation_epoch_;self->route_active_=true;}
-                else if(status==2)self->route_active_=false;
+                else if(status==0 || status==2)self->route_active_=false;
             }
         }
     }
@@ -576,7 +649,7 @@ void KombiNav::onFatalSignal() {
 // The shadow mode draws nothing and never touches it: a file a live run left stays for the next live run to clear.
 void KombiNav::markShown(bool on, bool force) {
     if (shadow_) return;
-    if (display_ && !strcmp(display_->name(), "6wb")) on = display_->sentAny();
+    if (display_ && display_->markerTracksSentCommands()) on = display_->sentAny();
     if (on == marked_) return;
     if (on) {
         int fd = open(kShownFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -726,6 +799,9 @@ void KombiNav::tick(double now) {
         markShown(core_->shown() || core_->sentAny());
         return;
     }
+    if (!pv && display_->discardPreviousRoute() &&
+        (core_->shown() || core_->sentAny()))
+        core_->clear(why);
     core_->step(pv, now, why);
     if (core_->takeFallback() && !fallback_noted_) {
         fallback_noted_ = true;

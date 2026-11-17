@@ -12,9 +12,10 @@
 //                              graph after a guidance gap (reroute), a clear, or if the KOMBI rejects the update
 //   guidance off for 8 s, Android Auto session end, the setting turned off, daemon exit, fatal signal
 //                           -> the factory cancel (arrow cleared)
-// Off by default. On with the iDrive menu checkbox "Turn arrows in cluster/HUD" (flag file /var/opt/aa/kombi-nav; a
-// hand-made /opt/aa/kombi-nav also counts) or NBT_KOMBI_NAV=1; NBT_KOMBI_NAV=0 forces it off. The flag is checked
-// once a second, so unticking the box clears the arrow at once.
+// Off by default. On with the iDrive menu checkbox "Turn arrows in cluster/HUD" (flag file kombi-nav in the data dir,
+// /var/opt/aa on a hand install; a hand-made one in the app dir, /opt/aa, also counts: nbt_paths.hpp) or
+// NBT_KOMBI_NAV=1; NBT_KOMBI_NAV=0 forces it off. The flag is checked once a second, so unticking the box clears the
+// arrow at once.
 // Fail closed: a frame the KOMBI rejects stops the feature for the rest of the Android Auto session (wrong car or
 // stale instance handle are rejected at the first frame). Factory navigation wins: when an iDrive route starts
 // (seen in the system log) kombi_nav stops writing without a cancel, until the next Android Auto route.
@@ -69,6 +70,10 @@ public:
 
 private:
     enum Stage { kHidden = 0, kWarned, kMain };
+    // v is the maneuver shown (same type, road and exit), and not a new step that only looks like it.
+    bool isShown(const NavView& v) const { return has_shown_ && !renew_ && v.sameManeuver(shown_); }
+    bool renewedStep(const NavView& v);
+    void drawn(const NavView& v);
     bool approachHold(const NavView& v, double now);
     bool timeHold(const NavView& v, double now);
     bool distanceHold(const NavView& v);
@@ -101,6 +106,14 @@ private:
     bool timed_;            // it was shown by the time rule (not the distance fallback): it stays until the next one
     bool remind_;           // the main prompt is due on the maneuver shown
     bool fallback_;
+    // A next step that looks like the one shown (two right turns onto roads with the same name): the step body changed
+    // since the draw and the distance jumped up from the nearest it got. renew_ holds from then until it is drawn or
+    // cleared, so it is judged and drawn as a new maneuver.
+    uint32_t drawn_step_seq_;   // NavView::step_seq of the last draw
+    bool has_min_m_;
+    double min_m_;              // the nearest the maneuver shown got since it was drawn
+    bool renew_;
+    bool depart_;               // the last step was a DEPART at 0 m (logged once per run of them)
 };
 
 // iDrive route detection from the system log (NavNBTEvoController / MapViewer lines, car-seen 2026-10-31):
@@ -137,7 +150,7 @@ public:
     KombiNav();
     ~KombiNav();
 
-    // Reads NBT_CLUSTER, NBT_HUDTERM and NBT_KOMBI_NAV_*, and starts the worker (idle until the setting is on). Call
+    // Reads NBT_CLUSTER, NBT_HUDTERM, NBT_HUD_* and NBT_KOMBI_NAV_*, and starts the worker (idle until the setting is on). Call
     // once from main(), before the MOST client starts: the 6WA driver attaches to it.
     void start(most::Client* most = NULL);
     // Stops the worker and clears the arrow (one quick attempt). Safe to call twice.
@@ -155,9 +168,11 @@ public:
 
     // The effective on/off: NBT_KOMBI_NAV if set, else the flag files.
     static bool settingOn();
-    // Paths (variables so host tests can point them elsewhere before start()).
-    static const char* kFlagFile;     // /var/opt/aa/kombi-nav (iDrive menu checkbox)
-    static const char* kManualFile;   // /opt/aa/kombi-nav
+    // Paths (variables so host tests can point them elsewhere before start()). The two flag paths are NULL unless a
+    // test sets them: then the flag is nbt::flagSet("kombi-nav") (<data dir>/kombi-nav from the iDrive menu
+    // checkbox, or <app dir>/kombi-nav made by hand).
+    static const char* kFlagFile;
+    static const char* kManualFile;
     static const char* kShownFile;    // /dev/shmem/nbt-aad-kombi-nav.shown: an arrow may be up (survives a SIGKILL)
     // How `sloginfo -w` is started, tried in this order until one works (the HU's posix_spawn refused all paths on
     // the car, 2026-11-01): posix_spawn with file actions, QNX spawn() with an fd map (QNX only), popen.
@@ -224,6 +239,7 @@ private:
     bool createDisplay(const char* id, most::Client* most);   // the place to add a cluster
     void readApproach();                                      // NBT_KOMBI_NAV_APPROACH* into settings_
     std::string approachText() const;                         // for the start-up line
+    std::string junctionText() const;                         // and the 6WA's junction view, for it too
 
     Graph* graph_;                   // j29
     KombiClient* client_;            // j29

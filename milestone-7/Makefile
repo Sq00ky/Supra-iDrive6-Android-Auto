@@ -21,6 +21,7 @@ SRCS = src/main.cpp \
        src/audio/config.cpp \
        src/audio/bt_audio.cpp \
        src/audio/speech_out.cpp \
+       src/audio/speech_focus.cpp \
        src/audio/mic_uplink.cpp \
        src/audio/a2i_stream.cpp \
        src/audio/audio_route.cpp \

@@ -20,6 +20,7 @@
 //
 // Header-only so the host test (tests/test_alt_wifi.cpp) runs without the QNX build.
 #include "wireless_setup.hpp"
+#include "nbt_paths.hpp"
 
 #include <ctype.h>
 #include <errno.h>
@@ -72,8 +73,7 @@ inline AltWifiMode parseAltWifi(const char* v) {
 // group only, with no CarPlay hotspot fallback. A set NBT_ALT_WIFI in nbt-aad.env wins either way. Unticked and unset =
 // the default (CARPLAY). The flag is read once per daemon run: the listener address and the Bluetooth offer have to agree
 // for the whole run, so a change applies at the next Start / Restart.
-static const char* const kWfdOnlyFlagFile = "/var/opt/aa/wifi-direct";
-static const char* const kWfdOnlyManualFile = "/opt/aa/wifi-direct";
+static const char* const kWfdOnlyFlagName = "wifi-direct";   // nbt_paths.hpp flagSet()
 // Pure part (host-tested): NBT_ALT_WIFI's value (NULL = unset) and whether the flag file exists.
 inline AltWifiMode altWifiSetting(const char* env, bool wfdOnlyFlag) {
     if (env && *env) return parseAltWifi(env);
@@ -81,7 +81,7 @@ inline AltWifiMode altWifiSetting(const char* env, bool wfdOnlyFlag) {
 }
 inline bool wfdOnlyFlagSet() {
     static int set = -1;   // read once (see above); two threads racing here read the same file, which is harmless
-    if (set < 0) set = (access(kWfdOnlyFlagFile, F_OK) == 0 || access(kWfdOnlyManualFile, F_OK) == 0) ? 1 : 0;
+    if (set < 0) set = flagSet(kWfdOnlyFlagName) ? 1 : 0;
     return set == 1;
 }
 inline AltWifiMode altWifiMode() { return altWifiSetting(getenv("NBT_ALT_WIFI"), wfdOnlyFlagSet()); }

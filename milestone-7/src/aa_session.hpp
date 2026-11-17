@@ -18,7 +18,8 @@ namespace nbt {
 namespace navdiag { class Recorder; }
 
 typedef void (*SessionEndedCallback)(void* user_data);
-typedef void (*VideoFrameCallback)(uint32_t frame_index, const uint8_t* nal_data, size_t nal_len, uint64_t pts, void* user_data);
+typedef void (*VideoFrameCallback)(uint32_t frame_index, std::vector<uint8_t>& frame_data, size_t data_offset,
+                                   size_t data_len, uint64_t pts, void* user_data);
 typedef void (*CodecConfigCallback)(const uint8_t* config_data, size_t config_len, void* user_data);
 // Android Auto PCM (ch 8 speech / ch 9 media / ch 16 system audio, message 0x0000 = 8-byte PTS + PCM) and stream state.
 typedef void (*AudioFrameCallback)(uint8_t channel, const uint8_t* pcm, size_t pcm_len, uint64_t pts, void* user_data);
@@ -123,6 +124,8 @@ private:
 
     bool sendFrame(uint8_t channel, uint8_t flags, const uint8_t* payload, size_t length);
     bool sendAll(const uint8_t* data, size_t length);
+    std::vector<uint8_t> send_frame_scratch_;          // session thread: framed socket output, retains peak capacity
+    std::vector<uint8_t> mic_message_scratch_;         // session thread: timestamped PCM plaintext
     bool sendSslHandshake(const std::vector<uint8_t>& tls_bytes);
     bool sendAuthComplete();
     bool sendServiceDiscoveryResponse();

@@ -10,7 +10,8 @@
 // /dev/shmem/nbt-aad-app.log, v1.8.67): each file is started fresh per run and capped at 5 MB; once the next line
 // would pass the cap, logging to RAM stops for that run (a last "[Log] RAM log full" line says so; nothing more is
 // written until the next start). NBT_RAM_LOG=0 in nbt-aad.env turns the RAM log off. The app still writes slog.
-// On: the flag file exists; the daemon and the app look for a writable USB stick under /mnt (iDrive mounts sticks
+// On: the flag file exists (usblog in the data dir, written by the checkbox, or in the app dir, made by hand:
+// nbt_paths.hpp); the daemon and the app look for a writable USB stick under /mnt (iDrive mounts sticks
 // as /mnt/umass<...>) and append to <stick>/nbt-aad.log and <stick>/nbt-aad-app.log. A stick plugged in later is
 // picked up within a few seconds; a removed stick stops the file logging until one is back.
 // NBT_LOG_FILE=<path> in nbt-aad.env still forces a daemon log file regardless of the checkbox.
@@ -22,17 +23,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "nbt_paths.hpp"
+
 namespace nbt {
 namespace usblog {
 
-static const char* const kFlag       = "/var/opt/aa/usblog";   // written by the checkbox (persistent partition)
-static const char* const kFlagManual = "/opt/aa/usblog";       // hand-made flag (read only)
-static const char* const kFlagDir    = "/var/opt/aa";
+static const char* const kFlagName   = "usblog";   // <data dir>/usblog from the checkbox, <app dir>/usblog by hand
 static const char* const kDaemonName = "nbt-aad.log";
 static const char* const kAppName    = "nbt-aad-app.log";
 static const long        kMaxBytes   = 64L * 1024L * 1024L;    // bigger at open -> renamed to *.old.log
 
-inline bool enabled() { return access(kFlag, F_OK) == 0 || access(kFlagManual, F_OK) == 0; }
+inline bool enabled() { return flagSet(kFlagName); }
 
 inline bool isWritableDir(const char* p) {
     struct stat st;

@@ -15,10 +15,17 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include <string>
+
 namespace nbt {
 
 static const int kSppReregFastPhaseSec = 120;   // retry at the short interval for this long after a link went away
 static const int kSppReregSlowSec = 30;         // then this often
+// A phone that asked for the link (ServiceRequest / ...Complete / ...Error) this recently is connected and already sees
+// the service: re-registering would only take the service away under it while it retries (Z Fold8 bugreport
+// 2026-11-14: Android Auto retries every ~5 s by itself). Hold re-registration for this long after its last request.
+static const int kSppReregHoldSec = 30;         // default hold after the phone's last SPP request (NBT_SPP_REREG_HOLD_S)
+static const int kSppHoldCapSec = 60;           // during a continuous hold, still one re-registration this often
 
 // Seconds to wait before re-registration number `attempt` (0-based) of one idle period.
 inline int sppReregIntervalSec(int attempt, int base) {
@@ -35,6 +42,32 @@ inline int sppReregBaseSec() {
     int v = atoi(e);
     if (v <= 0) return 0;
     return v > 3600 ? 3600 : v;
+}
+
+// NBT_SPP_REREG_HOLD_S: seconds re-registration is held after the phone's last SPP request (default 30, 0 = no hold,
+// max 600). Pure part takes the env value (NULL = unset).
+inline int sppReregHoldSetting(const char* e) {
+    if (!e || !*e) return kSppReregHoldSec;
+    int v = atoi(e);
+    if (v <= 0) return 0;
+    return v > 600 ? 600 : v;
+}
+inline int sppReregHoldSec() { return sppReregHoldSetting(getenv("NBT_SPP_REREG_HOLD_S")); }
+
+// Cap on a continuous hold: a phone that keeps asking and keeps being refused would otherwise hold re-registration
+// for good. heldSince = when this hold began (or when the last capped round ran). True = run one round now.
+inline bool sppHoldCapDue(uint32_t heldSince, uint32_t nowSec, int capSec = kSppHoldCapSec) {
+    return capSec > 0 && (uint32_t)(nowSec - heldSince) >= (uint32_t)capSec;
+}
+
+// Which phone requests hold re-registration: only the serial-link (Android Auto) one. A2DP / HFP requests come
+// when the phone connects audio and say nothing about the Android Auto link (J29 log 2026-11-16: an A2DP request
+// held a round on its own); BMW logs show only 'SPP'.
+inline bool sppRequestHolds(const std::string& service) { return service == "SPP"; }
+
+// True while re-registration is held: a phone request was seen and the last one is less than holdSec old.
+inline bool sppReregHeld(bool asked, uint32_t lastAskSec, uint32_t nowSec, int holdSec = kSppReregHoldSec) {
+    return asked && holdSec > 0 && (uint32_t)(nowSec - lastAskSec) < (uint32_t)holdSec;
 }
 
 // Idle-period timer: reset() when waiting for a link starts (start-up, end of a link/session, access point back),

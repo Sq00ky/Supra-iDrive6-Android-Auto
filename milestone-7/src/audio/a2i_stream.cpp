@@ -134,11 +134,11 @@ bool A2IPlaybackStream::open(const A2IStreamConfig& cfg) {
     return true;
 }
 
-bool A2IPlaybackStream::start(bool feed) {
+bool A2IPlaybackStream::start(bool feed, bool keep_queued) {
     if (!handle_ || thread_valid_) return false;
     feed_ = feed;
     stop_ = false;
-    ring_.clear();
+    if (!keep_queued) ring_.clear();
     writes_ = 0;
     primed_ = 0;
     underruns_ = 0;
@@ -167,7 +167,7 @@ void A2IPlaybackStream::stop() {
 }
 
 void A2IPlaybackStream::write(const uint8_t* pcm, size_t len) {
-    if (!pcm || len == 0 || !feed_) return;
+    if (!pcm || len == 0) return;
     ring_.write(pcm, len);
 }
 

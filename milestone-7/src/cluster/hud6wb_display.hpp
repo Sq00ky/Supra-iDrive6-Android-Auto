@@ -15,6 +15,11 @@ public:
     void setLog(LogFn f,void* u) { log_=f;user_=u; }
     bool sameManeuver(const NavView& v,double now);
     Result showManeuver(const NavView& v,double now,bool isNew,bool first);
+    bool factoryArbitration() const { return false; }
+    bool markerTracksSentCommands() const { return true; }
+    bool useFullRoadName() const { return true; }
+    bool discardPreviousRoute() const { return true; }
+    bool suppressDepartureAtZero() const { return false; }
     Result updateDistance(const NavView& v,double now);
     Result keepUp(const NavView& v,double now);
     void guidanceGap() {}
@@ -26,7 +31,7 @@ public:
     bool interceptNavigation(const NavView* v,int status,double now);
     double nextUpdateIn(double now) const {return calibration_.nextIn(now);}
     void navigationSessionEnded() {calibration_.reset();calibrationClearQueued_=false;}
-    void navigationRouteStarted() {calibration_.reset();calibration_.observe(1);calibrationClearQueued_=false;}
+    void navigationRouteStarted() {selectCentralSymbol(NULL);calibration_.reset();calibration_.observe(1);calibrationClearQueued_=false;}
     void navigationPresentationCancelled() {calibration_.cancel();calibrationClearQueued_=false;}
     hudterm::Batch calibrationBatch() const;
     hudterm::Batch geometryCalibrationBatch() const;
@@ -41,7 +46,11 @@ private:
     hudterm::PaletteCalibration calibration_;bool calibrationClearQueued_;
     hudterm::GrafiteKit kit_;
     hudterm::Port& port_;hudterm::Bmw6wbProfile p_;hudterm::BmwResources resources_;
-    void remember(const NavView& v,const hudterm::Batch& b);
+    void remember(const NavView& v,const hudterm::Batch& b,bool straight);
+    void selectCentralSymbol(const NavView* v);
+    bool havePolicyStep_,policyHasDistance_,straight_,shownStraight_,queuedStraight_;
+    NavView policyStep_;
+    double policyMinimumMetres_;
     bool mainChanged(const NavView& v) const;
     bool iconChanged(const NavView& v) const;
     bool shadow_,sent_,fresh_,dirty_,shownLanes_;uint32_t epoch_;

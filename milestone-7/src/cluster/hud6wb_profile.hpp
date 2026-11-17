@@ -35,7 +35,7 @@ struct Bmw6wbProfile {
         // Full experimental vector input. No preemptive clipping or horizon margin
         // for maneuvers: actual visibility is to be established on the F31.
         base.glyph=c;
-        base.streetChars=15; base.distanceChars=5; base.streetPunct="-./";
+        base.streetChars=kMaxLatinTextBytes; base.distanceChars=5; base.streetPunct="-./";
     }
 };
 inline bool validProfile(const Bmw6wbProfile& p) {
@@ -59,7 +59,7 @@ inline bool validProfile(const Bmw6wbProfile& p) {
         p.nextGlyph.x0>=0 && p.nextGlyph.y0>=0 && p.nextGlyph.x1>p.nextGlyph.x0 && p.nextGlyph.y1>p.nextGlyph.y0 &&
         p.nextGlyph.x1<p.icons.width && p.nextGlyph.y1<p.icons.height &&
         p.lineWidth>0 && p.laneLineWidth>0 && p.barRangeMetres>0 && p.maxBitmapBytes>=18 && p.maxBitmapBytes<=4096 &&
-        p.base.streetChars>0 && p.base.streetChars<=255 && p.base.distanceChars>0 && p.base.distanceChars<=255;
+        p.base.streetChars>0 && p.base.streetChars<=kMaxLatinTextBytes && p.base.distanceChars>0 && p.base.distanceChars<=255;
 }
 inline HandleSet handlesOf(const Bmw6wbProfile& p) {
     HandleSet h=handlesOf(p.base);

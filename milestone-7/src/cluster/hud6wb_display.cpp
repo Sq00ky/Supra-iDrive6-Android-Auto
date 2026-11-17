@@ -42,7 +42,7 @@ Batch errorBatch(const char* why){Batch b(why,true);return b;}
 
 }
 Hud6wbDisplay::Hud6wbDisplay(Port& port,const Bmw6wbProfile& p,bool shadow,const GrafiteKit& kit)
-    :calibrationClearQueued_(false),kit_(kit),port_(port),p_(p),resources_(p),shadow_(shadow),sent_(false),fresh_(true),dirty_(false),shownLanes_(true),epoch_(port.epoch()),
+    :calibrationClearQueued_(false),kit_(kit),port_(port),p_(p),resources_(p),havePolicyStep_(false),policyHasDistance_(false),straight_(false),shownStraight_(false),queuedStraight_(false),policyMinimumMetres_(0),shadow_(shadow),sent_(false),fresh_(true),dirty_(false),shownLanes_(true),epoch_(port.epoch()),
     mainVisible_(p.main.b),laneVisible_(p.lanes.b),iconVisible_(p.icons.b),log_(NULL),user_(NULL),queuedCall_(0),kitErrorLogged_(false) {}
 void Hud6wbDisplay::log(const std::string& s) const {if(log_)log_(s.c_str(),user_);}
 ClusterDisplay::Result Hud6wbDisplay::health() {
@@ -184,7 +184,33 @@ Batch Hud6wbDisplay::geometryCalibrationBatch() const {
     if(!appendCalibrationBitmap(b,1))return errorBatch("6wb-kit-error: calibration bitmap exceeds verified C05 limit");
     return b;
 }
-bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
+void Hud6wbDisplay::selectCentralSymbol(const NavView* v) {
+    if(!v) {
+        havePolicyStep_=false;
+        straight_=false;
+        return;
+    }
+    double metres=0;
+    const bool valid=v->pos_seq!=0 && v->pos_seq!=v->step_pos_seq &&
+        distanceMetres(*v,metres) && sixwbkit::finite(metres) && metres>=0;
+    const bool renewed=valid && policyHasDistance_ && v->step_seq!=policyStep_.step_seq &&
+        metres>policyMinimumMetres_+100.0;
+    if(!havePolicyStep_ || !v->sameManeuver(policyStep_) || renewed) {
+        havePolicyStep_=true;
+        policyHasDistance_=false;
+        policyStep_=*v;
+        straight_=false;
+    }
+    if(!valid)return;
+    // Enter the real maneuver below 500 m. On the same step, return to straight
+    // after a small increase beyond the threshold to absorb GPS/rounding noise.
+    const double threshold=policyHasDistance_&&!straight_?515.0:500.0;
+    straight_=metres>=threshold;
+    policyMinimumMetres_=policyHasDistance_?std::min(policyMinimumMetres_,metres):metres;
+    policyHasDistance_=true;
+}
+bool Hud6wbDisplay::interceptNavigation(const NavView* v,int status,double now) {
+    selectCentralSymbol(v);
     const hudterm::PaletteCalibration::Phase before=calibration_.phase();
     calibration_.observe(status);
     if(!calibration_.active())return false;
@@ -202,22 +228,34 @@ bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
         return true;
     }
     if(!canDraw())return true; // existing C04 procedure and local dispatch gate
-    if(calibration_.due(now) && calibration_.test()==0)calibration_.nextTest();
+    if(calibration_.due(now) && calibration_.test()<2)calibration_.nextTest();
     if(calibration_.phase()==hudterm::PaletteCalibration::Pending) {
-        Batch b=calibration_.test()==0?calibrationBatch():geometryCalibrationBatch();
+        Batch b;
+        const unsigned test=calibration_.test();
+        switch(test) {
+            case 0: b=calibrationBatch(); break;
+            case 1: b=geometryCalibrationBatch(); break;
+            case 2:
+                b=Batch("6wb-rgb-calibration",false);
+                b.add(kSetVisibility,setVisibility(mainVisible_,false));
+                if(!appendCalibrationBitmap(b,test))b=errorBatch("6wb-kit-error: RGB bitmap exceeds C05 limit");
+                break;
+        }
         if(b.label.find("6wb-kit-error:")==0){log(b.label);calibration_.cancel();return false;}
         for(size_t i=0;i<b.calls.size();++i)if(!callOk(b.calls[i],handlesOf(p_),true)) {
             log("6wb-kit-error: invalid calibration frame");calibration_.cancel();return false;
         }
         if(b.calls.size()>128){log("6wb calibration: batch limit exceeded");calibration_.cancel();return false;}
         if(!submit(b))return true;
-        mainVisible_=other(mainVisible_,p_.main);iconVisible_=other(iconVisible_,p_.icons);sent_=!shadow_;calibration_.queued();
-        log(calibration_.test()==0?"6wb calibration A: palette + bitmap 1 queued":"6wb calibration B: steps + bitmap 2 queued");return true;
+        if(test<2)mainVisible_=other(mainVisible_,p_.main);
+        iconVisible_=other(iconVisible_,p_.icons);sent_=!shadow_;calibration_.queued();
+        const char* const labels[]={"6wb calibration A: palette + bitmap 1 queued",
+            "6wb calibration B: steps + bitmap 2 queued","6wb calibration C: RGB bitmap queued"};
+        log(labels[test]);return true;
     }
     if(calibration_.phase()==hudterm::PaletteCalibration::Dispatching) {
         calibration_.dispatched(now);
-        log(calibration_.test()==0?"6wb calibration A: local dispatch complete; monotonic hold +10000 ms":
-            "6wb calibration B: local dispatch complete; monotonic hold +10000 ms");return true;
+        log("6wb calibration: local dispatch complete; monotonic hold +10000 ms");return true;
     }
     if(calibration_.phase()==hudterm::PaletteCalibration::Holding && !calibration_.due(now))return true;
     if(!calibrationClearQueued_) {
@@ -235,14 +273,16 @@ bool Hud6wbDisplay::interceptNavigation(const NavView*,int status,double now) {
     log("6wb calibration: both surfaces cleared; resume current navigation snapshot");return false;
 }
 bool Hud6wbDisplay::mainChanged(const NavView& v) const {
-    return fresh_ || v.aa_type!=shown_.aa_type || v.has_exit_angle!=shown_.has_exit_angle ||
+    if(fresh_ || straight_!=shownStraight_)return true;
+    if(straight_)return false;
+    return v.aa_type!=shown_.aa_type || v.has_exit_angle!=shown_.has_exit_angle ||
         (v.has_exit_angle && v.exit_angle!=shown_.exit_angle) || v.has_exit_number!=shown_.has_exit_number ||
         (v.has_exit_number && v.exit_number!=shown_.exit_number);
 }
 bool Hud6wbDisplay::iconChanged(const NavView& v) const {
     if(fresh_ || v.has_next!=shown_.has_next)return true;
     if(v.has_next && (v.next_type!=shown_.next_type || v.next_has_angle!=shown_.next_has_angle ||
-       (v.next_has_angle && v.next_angle!=shown_.next_angle)))return true;
+       (v.next_has_angle && v.next_angle!=shown_.next_angle) || v.next_exit_number!=shown_.next_exit_number))return true;
     if(p_.roadShields) {
         RoadShield a=roadShield(v.road),b=roadShield(shown_.road);
         if(a.kind!=b.kind || a.number!=b.number)return true;
@@ -256,19 +296,24 @@ bool Hud6wbDisplay::sameManeuver(const NavView& v,double) {
 Batch Hud6wbDisplay::render(const NavView& v) const {
     Batch b("6wb-guidance",false);
     const KitBarState bar=kitBarState(v,p_.barRangeMetres);
-    sixwbkit::Maneuver::Value m=GrafiteKit::maneuver(v.aa_type);
+    NavView central=v;
+    if(straight_) {
+        central.aa_type=36;
+        central.has_exit_angle=false;
+        central.has_exit_number=false;
+    }
+    sixwbkit::Maneuver::Value m=GrafiteKit::maneuver(central.aa_type);
     sixwbkit::PlanePolicy::Value policy=sixwbkit::describe(m).policy;
     const Rect& useful=p_.base.glyph;
     uint16_t target=other(mainVisible_,p_.main);
     uint16_t lane=other(laneVisible_,p_.lanes),icon=other(iconVisible_,p_.icons);
-    if(v.aa_type<0||v.aa_type>46)return errorBatch("6wb-kit-error: unsupported AA maneuver code");
     // Preflight the whole picture before any buffer is cleared or hidden.
     if(mainChanged(v)) {
         if(policy==sixwbkit::PlanePolicy::Hidden) {
             b.add(kSetVisibility,setVisibility(mainVisible_,false));
         } else {
             Batch drawing;
-            if(!kit_.central(v,target,useful,drawing))return errorBatch("6wb-kit-error: central palette/geometry not representable");
+            if(!kit_.central(central,target,useful,drawing))return errorBatch("6wb-kit-error: central palette/geometry not representable");
             b.add(kRemoveAllItems,removeAllItems(target));
             b.calls.insert(b.calls.end(),drawing.calls.begin(),drawing.calls.end());
             b.add(kSwitchVisibility,switchVisibility(mainVisible_,target));
@@ -285,19 +330,22 @@ Batch Hud6wbDisplay::render(const NavView& v) const {
     }
     if(iconChanged(v)) {
         RoadShield shield;if(p_.roadShields)shield=roadShield(v.road);
-        bool picture=shield.kind || v.has_next;
+        const sixwbkit::Maneuver::Value nextType=GrafiteKit::maneuver(v.next_type);
+        const bool nextDrawable=v.has_next && sixwbkit::describe(nextType).policy!=sixwbkit::PlanePolicy::Hidden;
+        bool picture=shield.kind || nextDrawable;
         if(picture) {
             std::vector<uint32_t> px=shieldPicture(p_.icons.width,p_.icons.height,shield);
-            if(v.has_next && v.next_type>0) {
+            if(nextDrawable) {
                 Rect r=p_.nextGlyph;
-                sixwbkit::NavigationEvent next;next.maneuver=GrafiteKit::maneuver(v.next_type);
+                sixwbkit::NavigationEvent next;next.maneuver=nextType;
                 next.hasExitAngle=v.next_has_angle;next.exitAngle=(double)v.next_angle;
+                next.hasExitNumber=v.next_exit_number>0;next.exitNumber=(unsigned)v.next_exit_number;
                 rasterKit(px,p_.icons.width,p_.icons.height,sixwbkit::renderManeuver(next,sixwbkit::Rect(r.x0,r.y0,r.x1-r.x0,r.y1-r.y0)));
             }
             std::vector<uint8_t> payload=bitmap(icon,0,px,p_.icons.width,p_.icons.height,p_.maxBitmapBytes);
             if(!payload.empty()) {Call c(0xC05,payload);c.txType=0;b.calls.push_back(c);
                 b.add(kSwitchVisibility,switchVisibility(iconVisible_,icon));}
-            else return errorBatch("6wb-kit-error: next icon exceeds verified C05 limit");
+            else picture=false;
         }
         b.add(kSetVisibility,setVisibility(icon,picture));b.add(kSetVisibility,setVisibility(iconVisible_,false));
     }
@@ -321,7 +369,7 @@ Batch Hud6wbDisplay::render(const NavView& v) const {
     if(b.calls.size()>4096)return errorBatch("6wb-kit-error: bounded frame call budget exceeded");
     return b;
 }
-void Hud6wbDisplay::remember(const NavView& v,const Batch& b) {
+void Hud6wbDisplay::remember(const NavView& v,const Batch& b,bool straight) {
     // Commit predicted buffer state only after the batch is accepted. The next
     // batch waits for local dispatch completion; acknowledgement order is irrelevant.
     for(size_t i=0;i<b.calls.size();++i)if(b.calls[i].fkt==kSwitchVisibility) {
@@ -331,7 +379,7 @@ void Hud6wbDisplay::remember(const NavView& v,const Batch& b) {
         else if(from==iconVisible_)iconVisible_=to;
     }
     if(!b.calls.empty())sent_=!shadow_;
-    fresh_=false;dirty_=false;shown_=v;shownLanes_=settings_.lanes;
+    fresh_=false;dirty_=false;shown_=v;shownStraight_=straight;shownLanes_=settings_.lanes;
 }
 ClusterDisplay::Result Hud6wbDisplay::showManeuver(const NavView& v,double,bool,bool) {
     Result r=health();if(r!=kOk)return r;
@@ -346,8 +394,8 @@ ClusterDisplay::Result Hud6wbDisplay::showManeuver(const NavView& v,double,bool,
             return kInternal;
         }
         for(size_t i=0;i<b.calls.size();++i)if(!callOk(b.calls[i],handlesOf(p_),true))return kInternal;
-        if(b.calls.empty()){remember(v,b);return kOk;}
-        queuedPicture_=b;queuedView_=v;queuedCall_=0;
+        if(b.calls.empty()){remember(v,b,straight_);return kOk;}
+        queuedPicture_=b;queuedView_=v;queuedStraight_=straight_;queuedCall_=0;
     }
     // Chunking is an adapter concern, not a new MOST queue or retry strategy.
     // One bounded chunk is dispatched at a time. The visible buffer flips only
@@ -357,7 +405,7 @@ ClusterDisplay::Result Hud6wbDisplay::showManeuver(const NavView& v,double,bool,
     if(!submit(chunk)){dirty_=true;return health();}
     sent_=!shadow_;queuedCall_=end;
     if(queuedCall_==queuedPicture_.calls.size()) {
-        remember(queuedView_,queuedPicture_);queuedPicture_=Batch();queuedCall_=0;
+        remember(queuedView_,queuedPicture_,queuedStraight_);queuedPicture_=Batch();queuedCall_=0;
     } else dirty_=true;
     return kOk;
 }
@@ -370,12 +418,12 @@ ClusterDisplay::Result Hud6wbDisplay::keepUp(const NavView& v,double now) {
     return health();
 }
 Batch Hud6wbDisplay::clearBatch() const {
-    Batch b("6wb-clear",true);b.add(kSetVisibility,setVisibility(p_.base.frame,false));
+    Batch b("6wb-clear",true,kSlotAll);b.add(kSetVisibility,setVisibility(p_.base.frame,false));
     const uint16_t hs[]={p_.main.a,p_.main.b,p_.lanes.a,p_.lanes.b};
     for(size_t i=0;i<4;++i)b.add(kRemoveAllItems,removeAllItems(hs[i]));
     b.add(kSetVisibility,setVisibility(p_.icons.a,false));b.add(kSetVisibility,setVisibility(p_.icons.b,false));
     b.add(kSetVisibility,setVisibility(p_.bar,false));
-    b.add(kTextareaSetText,latinText(p_.base.street,"",15));b.add(kTextareaSetText,latinText(p_.base.distance,"",5));
+    b.add(kTextareaSetText,latinText(p_.base.street,"",p_.base.streetChars));b.add(kTextareaSetText,latinText(p_.base.distance,"",5));
     b.add(kTextareaSetText,latinText(p_.base.unit,"",3));return b;
 }
 bool Hud6wbDisplay::clear(std::string* detail) {
@@ -391,6 +439,7 @@ bool Hud6wbDisplay::clear(std::string* detail) {
     return true;
 }
 void Hud6wbDisplay::forget() {
+    selectCentralSymbol(NULL);
     sent_=false;fresh_=true;dirty_=true;shown_=NavView();queuedPicture_=Batch();queuedCall_=0;kitErrorLogged_=false;
     mainVisible_=p_.main.b;laneVisible_=p_.lanes.b;iconVisible_=p_.icons.b;
 }
