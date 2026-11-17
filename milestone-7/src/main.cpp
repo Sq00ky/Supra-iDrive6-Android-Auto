@@ -1749,7 +1749,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.87-sppreq"
+#define NBT_AAD_BUILD "v1.9.89-sppreq"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
