@@ -98,6 +98,26 @@ int runWfdOwnCommand(int argc, char** argv) {
     _exit(on ? 0 : 1);   // the reply reader is blocked in sss_read
 }
 
+int runWfdStatusCommand() {
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    GcfClient g;
+    std::string why;
+    if (!g.open("nbtaad_wst", why)) {
+        printf("[WfdOwn] cannot talk to the car's connection manager: %s\n", why.c_str());
+        printf("wfd-own-status: on=-1 ssid=\n");
+        fflush(stdout);
+        _exit(1);
+    }
+    std::string r = g.call("Wlan_ConnMngr_WFD_isWFDEnable", "interfaceName='wfd0'", 10), v;
+    int on = (gcfResult(r) == 0 && gcfField(r, "wfd_on", v)) ? (v == "1" ? 1 : 0) : -1;
+    std::string ssid;
+    r = g.call("Wlan_ConnMngr_WFD_getPersistedGroupList", "interfaceName='wfd0'", 10);
+    wfdPersistedGoSsid(r, ssid);
+    printf("wfd-own-status: on=%d ssid=%s\n", on, ssid.c_str());
+    fflush(stdout);
+    _exit(0);   // the reply reader is blocked in sss_read
+}
+
 // ---------------------------------------------------------------- daemon side
 static bool makeOwnPass(std::string& pass, std::string& where) {
     const char* e = getenv("NBT_WFD_PASS");
@@ -154,6 +174,37 @@ static std::string selfExe() {
         if (!p.empty() && p[0] == '/' && access(p.c_str(), X_OK) == 0 && p.find('\'') == std::string::npos) return p;
     }
     return daemonPath();
+}
+
+bool wfdOwnStatus(WfdWatchState& st) {
+    st = WfdWatchState();
+    const std::string self = selfExe();
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "LD_LIBRARY_PATH=/opt/conn/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} '%s' --wfd-own-status 2>&1",
+             self.c_str());
+    FILE* p = popen(cmd, "r");
+    if (!p) return false;
+    std::string out;
+    char line[512];
+    while (fgets(line, sizeof(line), p)) out += line;
+    pclose(p);
+    if (!wfdStatusParse(out, st.on, st.ssid)) return false;
+    p = popen("pidin ar 2>/dev/null", "r");
+    if (p) {
+        std::string text;
+        while (fgets(line, sizeof(line), p)) text += line;
+        pclose(p);
+        st.dhcpdPid = wfdDhcpdPid(text);
+    }
+    for (size_t i = 0; i < wfdPassPathCount(); ++i) {
+        struct stat sb;
+        if (stat(wfdPassPaths()[i], &sb) != 0) continue;
+        char b[256];
+        snprintf(b, sizeof(b), "%s %ld %ld", wfdPassPaths()[i], (long)sb.st_mtime, (long)sb.st_size);
+        st.carFile = b;
+        break;
+    }
+    return true;
 }
 
 bool applyWfdOwnPass(ApInfo& ap, std::string& passPath) {

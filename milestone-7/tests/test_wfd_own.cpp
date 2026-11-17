@@ -11,7 +11,47 @@
 static int fails = 0;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
 
+static void testWatch() {
+    // setting
+    CHECK(nbt::wfdWatchSetting(NULL) == 20 && nbt::wfdWatchSetting("") == 20);
+    CHECK(nbt::wfdWatchSetting("0") == 0 && nbt::wfdWatchSetting("-3") == 0);
+    CHECK(nbt::wfdWatchSetting("2") == 5 && nbt::wfdWatchSetting("45") == 45 && nbt::wfdWatchSetting("9999") == 600);
+    // status line
+    int on = 9;
+    std::string ssid;
+    CHECK(nbt::wfdStatusParse("[WfdOwn] x\nwfd-own-status: on=1 ssid=DIRECT-03-Toyota51807\n", on, ssid));
+    CHECK(on == 1 && ssid == "DIRECT-03-Toyota51807");
+    CHECK(nbt::wfdStatusParse("wfd-own-status: on=0 ssid=\n", on, ssid) && on == 0 && ssid.empty());
+    CHECK(nbt::wfdStatusParse("wfd-own-status: on=-1 ssid=\n", on, ssid) && on == -1);
+    CHECK(!nbt::wfdStatusParse("nothing here\n", on, ssid));
+    // pidin ar (QNX shape: right-aligned pid, then the command line)
+    const char* pidin =
+        "     pid Arguments\n"
+        "       1 procnto-instr\n"
+        "  540689 /bin/dhcpd -cf /var/opt/conn/dhcpd.uap0.conf -lf /tmp/dhcpd.uap0.leases uap0\n"
+        " 1298457 /bin/dhcpd -cf /var/opt/conn/dhcpd.wfd0.conf -lf /tmp/dhcpd.wfd0.leases wfd0\n";
+    CHECK(nbt::wfdDhcpdPid(pidin) == 1298457);
+    CHECK(nbt::wfdDhcpdPid("     pid Arguments\n  540689 /bin/dhcpd uap0\n") == 0);
+    CHECK(nbt::wfdDhcpdPid("") == 0);
+    // verdicts
+    nbt::WfdWatchState b;
+    b.on = 1; b.ssid = "DIRECT-03-Toyota51807"; b.dhcpdPid = 1298457; b.carFile = "/var/opt/conn/WFDPass.conf 1700000000 20";
+    nbt::WfdWatchState n = b;
+    CHECK(nbt::wfdWatchVerdict(b, n).empty());
+    n.on = -1; n.ssid = ""; CHECK(nbt::wfdWatchVerdict(b, n).empty());             // no answer is not a takeover
+    n = b; n.on = 0; CHECK(nbt::wfdWatchVerdict(b, n).find("off") != std::string::npos);
+    n = b; n.dhcpdPid = 1400001; CHECK(nbt::wfdWatchVerdict(b, n).find("set up again") != std::string::npos);
+    n = b; n.dhcpdPid = 0; CHECK(nbt::wfdWatchVerdict(b, n).find("gone") != std::string::npos);
+    n = b; n.ssid = "DIRECT-03-BMW12345"; CHECK(nbt::wfdWatchVerdict(b, n).find("name changed") != std::string::npos);
+    n = b; n.carFile = "/var/opt/conn/WFDPass.conf 1700009999 20";
+    CHECK(nbt::wfdWatchVerdict(b, n).find("WFDPass.conf") != std::string::npos);
+    nbt::WfdWatchState noDhcp = b; noDhcp.dhcpdPid = 0; n = noDhcp;                  // baseline without dhcpd seen
+    CHECK(nbt::wfdWatchVerdict(noDhcp, n).empty());
+    printf("watch: ok\n");
+}
+
 int main() {
+    testWatch();
     // ---- setting + decision ------------------------------------------------------------
     CHECK(nbt::wfdOwnPassSetting(NULL) == nbt::WFD_OWN_AUTO);
     CHECK(nbt::wfdOwnPassSetting("") == nbt::WFD_OWN_AUTO);

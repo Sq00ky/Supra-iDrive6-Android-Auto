@@ -20,6 +20,7 @@
 
 #include "alt_wifi.hpp"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -123,6 +124,78 @@ inline bool wfdOwnParseResult(const std::string& out, bool& ok, std::string& ssi
 
 // One-shot child: nbt-aad --wfd-own <passphrase> [ssid]. Prints progress lines and the result line; 0 = group on.
 int runWfdOwnCommand(int argc, char** argv);
+
+// ---- watch: does the car take the group back? ---------------------------------------------------------------------
+// The group's passphrase cannot be read back (wfd_own.hpp top), so the watch looks at what the car must change to put
+// its own passphrase back: Wi-Fi Direct switched off, the group set up again (the car's dhcpd on wfd0 restarts with a
+// new pid on every WFD_disable/enable - car-proven), a different group name, or a rewritten WFDPass.conf.
+// NBT_WFD_WATCH_S: seconds between checks (default 20, 0 = off, 5..600).
+inline int wfdWatchSetting(const char* e) {
+    if (!e || !*e) return 20;
+    int v = atoi(e);
+    if (v <= 0) return 0;
+    return v < 5 ? 5 : v > 600 ? 600 : v;
+}
+inline int wfdWatchSec() { return wfdWatchSetting(getenv("NBT_WFD_WATCH_S")); }
+
+struct WfdWatchState {
+    int on;                 // isWFDEnable wfd_on: 1, 0, -1 = no answer
+    std::string ssid;       // persisted GO group name, empty = none / no answer
+    long dhcpdPid;          // the car's dhcpd on wfd0, 0 = not running
+    std::string carFile;    // "<path> <mtime> <size>" of the first WFDPass.conf, empty = none
+    WfdWatchState() : on(-1), dhcpdPid(0) {}
+};
+
+// The status child's line `wfd-own-status: on=1 ssid=DIRECT-03-Toyota51807` -> on (-1 when not answered) + ssid.
+inline bool wfdStatusParse(const std::string& out, int& on, std::string& ssid) {
+    size_t p = out.rfind("wfd-own-status:");
+    if (p == std::string::npos) return false;
+    std::string line = out.substr(p);
+    size_t nl = line.find_first_of("\r\n");
+    if (nl != std::string::npos) line = line.substr(0, nl);
+    on = line.find(" on=1") != std::string::npos ? 1 : line.find(" on=0") != std::string::npos ? 0 : -1;
+    ssid.clear();
+    size_t s = line.find(" ssid=");
+    if (s != std::string::npos) ssid = wfdTrim(line.substr(s + 6));
+    return true;
+}
+
+// `pidin ar` text -> pid of the dhcpd serving wfd0 (the line's leading number), 0 when there is none.
+inline long wfdDhcpdPid(const std::string& pidin) {
+    size_t pos = 0;
+    while (pos < pidin.size()) {
+        size_t e = pidin.find('\n', pos);
+        std::string l = pidin.substr(pos, e == std::string::npos ? std::string::npos : e - pos);
+        pos = e == std::string::npos ? pidin.size() : e + 1;
+        if (l.find("dhcpd") == std::string::npos || l.find("wfd0") == std::string::npos) continue;
+        size_t i = l.find_first_not_of(" \t");
+        if (i == std::string::npos || l[i] < '0' || l[i] > '9') continue;
+        return atol(l.c_str() + i);
+    }
+    return 0;
+}
+
+// Empty when `now` still looks like nbt-aad's group as set up at `base`, else why not. Unknowns (no answer) never
+// count: a missed status call is not the car taking the group back.
+inline std::string wfdWatchVerdict(const WfdWatchState& base, const WfdWatchState& now) {
+    if (now.on == 0) return "the car switched Wi-Fi Direct off";
+    if (base.dhcpdPid > 0 && now.dhcpdPid == 0) return "the car's dhcpd on wfd0 is gone";
+    if (base.dhcpdPid > 0 && now.dhcpdPid > 0 && now.dhcpdPid != base.dhcpdPid) {
+        char b[96];
+        snprintf(b, sizeof(b), "the group was set up again (dhcpd on wfd0 restarted, pid %ld -> %ld)", base.dhcpdPid,
+                 now.dhcpdPid);
+        return b;
+    }
+    if (!base.ssid.empty() && !now.ssid.empty() && now.ssid != base.ssid)
+        return "the group name changed ('" + base.ssid + "' -> '" + now.ssid + "')";
+    if (base.carFile != now.carFile) return "the car rewrote its WFDPass.conf";
+    return "";
+}
+
+// One-shot child: nbt-aad --wfd-own-status. Prints `wfd-own-status: on=<0|1|-1> ssid=<persisted GO ssid>`.
+int runWfdStatusCommand();
+// Daemon side: the child above + pidin + WFDPass.conf stat. False when the child could not be run.
+bool wfdOwnStatus(WfdWatchState& st);
 
 // Daemon side: our passphrase (NBT_WFD_PASS, else the stored one, else a new one stored in the data dir), then the
 // child above. On success `ap` is filled (ssid, key, WPA2) and true is returned. Logs every step.

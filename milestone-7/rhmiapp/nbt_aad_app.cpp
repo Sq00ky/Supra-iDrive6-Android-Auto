@@ -73,7 +73,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-68-autors (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-69-wfdpass (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -1884,7 +1884,7 @@ void showWfdOnly(bmw::PluginApp* app) {
     g_wfdOnlyShown = true;
 }
 bool onWfdOnlyToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kWfdOnlyFlag, "Use WiFi Direct Network (NBT_ALT_WIFI in nbt-aad.env wins)");
+    toggleFlagFile(kWfdOnlyFlag, "Use WiFi Direct Network (own password; NBT_ALT_WIFI in nbt-aad.env wins)");
     if (g_runApp) showWfdOnly(g_runApp);
     return true;
 }
