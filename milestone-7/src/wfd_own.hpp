@@ -192,6 +192,49 @@ inline std::string wfdWatchVerdict(const WfdWatchState& base, const WfdWatchStat
     return "";
 }
 
+// ---- the group's name for the phone (every mode) -------------------------------------------------------------------
+// The head-unit ladder (alt_wifi.hpp resolveWfdSsid: NBT_WFD_SSID, ifconfig, mwud, the WLAN persistency) first; when it
+// has nothing (Y24073J: no ssid line, mwud refuses with errno 261, no persistency), the car's connection manager's
+// stored group name (getPersistedGroupList). Only a DIRECT-xx-<name> counts. `source` says which one answered.
+inline bool wfdPickSsid(bool ladderOk, const std::string& ladder, const std::string& connMngr, std::string& ssid,
+                        std::string& source) {
+    std::string dn;
+    if (ladderOk && !ladder.empty()) { ssid = ladder; source = "head unit"; return true; }
+    if (!connMngr.empty() && wfdDeviceNameFromSsid(connMngr, dn)) {
+        ssid = connMngr;
+        source = "the car's connection manager";
+        return true;
+    }
+    ssid.clear();
+    source.clear();
+    return false;
+}
+
+// What DIRECT mode is missing, for the "wireless Android Auto is unavailable" line. ownTried: nbt-aad tried to set its
+// own passphrase (NBT_WFD_OWN_PASS decided so) and failed.
+enum WfdMissing { WFD_MISSING_NOTHING = 0, WFD_MISSING_PASS = 1, WFD_MISSING_SSID = 2, WFD_MISSING_BOTH = 3 };
+inline WfdMissing wfdMissing(bool havePass, bool haveSsid) {
+    return (WfdMissing)((havePass ? 0 : 1) | (haveSsid ? 0 : 2));
+}
+inline std::string wfdMissingText(WfdMissing m, bool ownTried) {
+    std::string pass = ownTried ? "no usable Wi-Fi Direct passphrase (nbt-aad's own could not be set, see the [WfdOwn] "
+                                  "lines, and no usable WFDPass.conf)"
+                                : "no usable Wi-Fi Direct passphrase (/var/opt/conn/WFDPass.conf, then "
+                                  "/fs/sda1/opt/conn/WFDPass.conf)";
+    std::string ssid = "no Wi-Fi Direct group name (not from the head unit's files, mwud or the car's connection manager; "
+                       "NBT_WFD_SSID=DIRECT-03-<brand><last5> pins one)";
+    switch (m) {
+    case WFD_MISSING_PASS: return pass + "; the group name is known";
+    case WFD_MISSING_SSID: return "the passphrase is fine, but " + ssid;
+    case WFD_MISSING_BOTH: return pass + ", and " + ssid;
+    default: return "the Wi-Fi Direct group could not be offered";
+    }
+}
+
+// Daemon side: the group name from the car's connection manager (the --wfd-own-status child), cached once found; a
+// miss is asked again at most every 30 s. Logs each outcome once.
+bool wfdSsidFromConnMngr(std::string& ssid);
+
 // One-shot child: nbt-aad --wfd-own-status. Prints `wfd-own-status: on=<0|1|-1> ssid=<persisted GO ssid>`.
 int runWfdStatusCommand();
 // Daemon side: pidin + WFDPass.conf stat, and with `gcf` also the child above (it loads the car libraries and registers

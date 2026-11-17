@@ -15,6 +15,13 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > `nbt-aad.env` edits are not watched. `NBT_SETTINGS_RESTART=0` turns it off. App log: `settings changed (...) ->
 > restarting nbt-aad`. Confirmed on the J29: three restarts, phone back on wireless Android Auto in 4.5-6 s each.
 >
+> **v1.9.94-wfdssid: the Wi-Fi Direct group name from the car's connection manager.** In DIRECT mode, when the
+> head unit's files, `ifconfig` and mwud give no group name (Y24073J: no ssid line, mwud refuses with errno 261),
+> nbt-aad asks the car's connection manager for its stored group (`getPersistedGroupList`, `DIRECT-xx-<name>`) and
+> offers that, also with the car's own `WFDPass.conf` (before, only the own-passphrase path asked it). Asked again at
+> most every 30 s until it answers, then kept. The "wireless Android Auto is unavailable" line now says what is
+> missing: the passphrase, the group name, or both. `NBT_WFD_SSID` still pins a name.
+>
 > **v1.9.93-wfdpass3 / rhmiapp-69-wfdpass (test build): Use WiFi Direct Network (own password).** Not every car has
 > a usable `/var/opt/conn/WFDPass.conf`, and the group's passphrase cannot be read anywhere else. With **Use WiFi
 > Direct Network (own password)** ticked (or `NBT_ALT_WIFI=DIRECT`) and no usable `WFDPass.conf` (missing, empty or

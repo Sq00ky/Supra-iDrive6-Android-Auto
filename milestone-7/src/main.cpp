@@ -767,6 +767,7 @@ static int g_wfdOwnFails = 0;
 static nbt::ApInfo g_wfdOwnAp;
 static std::string g_wfdOwnPath;
 static const int kWfdOwnRetrySec = 30;
+static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
 
 static bool wfdOwnMode() {
     return nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT && nbt::wfdOwnPassMode() != nbt::WFD_OWN_NEVER;
@@ -940,13 +941,12 @@ static bool apConfigPresent(const char* cfg) {
 }
 
 static void logNoApConfig(const char* cfg) {
-    if (nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT)
-        printf("[Wireless] no usable Wi-Fi Direct passphrase (/var/opt/conn/WFDPass.conf, then "
-               "/fs/sda1/opt/conn/WFDPass.conf)%s: NBT_ALT_WIFI=DIRECT has no CarPlay fallback, so wireless Android "
-               "Auto is unavailable, Bluetooth links are left alone; checking again every %d s\n",
-               wfdOwnMode() ? " and nbt-aad's own passphrase could not be set (see the [WfdOwn] lines)" : "",
-               kApCfgRecheckSec);
-    else
+    if (nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT) {
+        nbt::WfdMissing m = g_wfdMissing ? (nbt::WfdMissing)g_wfdMissing : nbt::WFD_MISSING_PASS;
+        printf("[Wireless] %s: NBT_ALT_WIFI=DIRECT has no CarPlay fallback, so wireless Android Auto is unavailable, "
+               "Bluetooth links are left alone; checking again every %d s\n",
+               nbt::wfdMissingText(m, g_wfdOwnFails > 0).c_str(), kApCfgRecheckSec);
+    } else
         printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are "
                "left alone; checking again every %d s. A car without the CarPlay hotspot (no CarPlay licence) can use "
                "its Wi-Fi Direct group: tick \"Use WiFi Direct Network\" in Settings\n",
@@ -1142,10 +1142,17 @@ static void* wirelessThread(void*) {
             }
             // Quiet here: logWfdAp() prints the passphrase once per value, not on every link attempt.
             bool havePass = !ownUsed && nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true);
-            std::string wfdSsid;
+            std::string wfdSsid, ladderSsid, cmSsid, ssidFrom;
+            bool haveSsid = false;
+            if (!ownUsed && havePass) {
+                const bool ladderOk = nbt::resolveWfdSsid(wfdIfn, ladderSsid);
+                if (!ladderOk) nbt::wfdSsidFromConnMngr(cmSsid);
+                haveSsid = nbt::wfdPickSsid(ladderOk, ladderSsid, cmSsid, wfdSsid, ssidFrom);
+            }
+            g_wfdMissing = ownUsed ? nbt::WFD_MISSING_NOTHING : nbt::wfdMissing(havePass, havePass && haveSsid);
             if (ownUsed) {
                 // the group is in directChoices already
-            } else if (havePass && nbt::resolveWfdSsid(wfdIfn, wfdSsid)) {
+            } else if (havePass && haveSsid) {
                 wfd.ssid = wfdSsid;
                 ApChoice c;
                 c.ap = wfd;
@@ -1154,8 +1161,8 @@ static void* wirelessThread(void*) {
                 c.direct = true;
                 directChoices.push_back(c);
             } else if (havePass) {
-                printf("[Wireless] Wi-Fi Direct: no SSID for %s, skipping the DIRECT group on this link (NBT_WFD_SSID "
-                       "pins one)\n", wfdIfn);
+                printf("[Wireless] Wi-Fi Direct: no SSID for %s (head unit and the car's connection manager), skipping "
+                       "the DIRECT group on this link (NBT_WFD_SSID pins one)\n", wfdIfn);
             } else {
                 printf("[Wireless] Wi-Fi Direct: no usable passphrase file (%s), skipping the DIRECT group on this "
                        "link\n", nbt::wfdPassPaths()[0]);
@@ -1939,7 +1946,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.93-wfdpass3"
+#define NBT_AAD_BUILD "v1.9.94-wfdssid"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.

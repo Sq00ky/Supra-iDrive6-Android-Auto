@@ -210,6 +210,33 @@ bool wfdOwnStatus(WfdWatchState& st, bool gcf) {
     return true;
 }
 
+bool wfdSsidFromConnMngr(std::string& ssid) {
+    static std::string cached;
+    static time_t lastTry = 0;
+    static int lastLogged = -1;   // 0 = miss logged, 1 = hit logged
+    if (!cached.empty()) { ssid = cached; return true; }
+    time_t now = time(NULL);
+    if (lastTry && now - lastTry < 30 && now >= lastTry) return false;
+    lastTry = now;
+    WfdWatchState st;
+    std::string dn;
+    bool ran = wfdOwnStatus(st, true);
+    if (ran && !st.ssid.empty() && wfdDeviceNameFromSsid(st.ssid, dn)) {
+        cached = ssid = st.ssid;
+        if (lastLogged != 1)
+            printf("[Wireless] Wi-Fi Direct SSID: '%s' (the car's connection manager, getPersistedGroupList)\n",
+                   ssid.c_str());
+        lastLogged = 1;
+        return true;
+    }
+    if (lastLogged != 0)
+        printf("[Wireless] Wi-Fi Direct SSID: the car's connection manager %s (asked again every 30 s)\n",
+               !ran ? "could not be asked (the --wfd-own-status child did not answer)"
+                    : "has no stored group of the form DIRECT-xx-<name>");
+    lastLogged = 0;
+    return false;
+}
+
 bool applyWfdOwnPass(ApInfo& ap, std::string& passPath) {
     std::string pass;
     makeOwnPass(pass, passPath);

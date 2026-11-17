@@ -50,8 +50,38 @@ static void testWatch() {
     printf("watch: ok\n");
 }
 
+static void testPickSsid() {
+    std::string s, from;
+    // Y24073J: WFDPass.conf fine, ladder empty (no ssid line, mwud errno 261, no persistency) -> connection manager
+    CHECK(nbt::wfdPickSsid(false, "", "DIRECT-03-BMW12345", s, from));
+    CHECK(s == "DIRECT-03-BMW12345" && from == "the car's connection manager");
+    // the ladder (incl. an NBT_WFD_SSID pin) wins when it answers
+    CHECK(nbt::wfdPickSsid(true, "DIRECT-03-Toyota51807", "DIRECT-03-Other99999", s, from));
+    CHECK(s == "DIRECT-03-Toyota51807" && from == "head unit");
+    // nothing usable
+    CHECK(!nbt::wfdPickSsid(false, "", "", s, from) && s.empty() && from.empty());
+    CHECK(!nbt::wfdPickSsid(false, "", "MyHomeWifi", s, from));       // not DIRECT-xx-<name>
+    CHECK(!nbt::wfdPickSsid(true, "", "", s, from));                  // ladderOk with an empty name is not a name
+    // what is missing
+    CHECK(nbt::wfdMissing(true, true) == nbt::WFD_MISSING_NOTHING);
+    CHECK(nbt::wfdMissing(true, false) == nbt::WFD_MISSING_SSID);
+    CHECK(nbt::wfdMissing(false, true) == nbt::WFD_MISSING_PASS);
+    CHECK(nbt::wfdMissing(false, false) == nbt::WFD_MISSING_BOTH);
+    std::string t = nbt::wfdMissingText(nbt::WFD_MISSING_SSID, false);
+    CHECK(t.find("passphrase is fine") != std::string::npos && t.find("group name") != std::string::npos);
+    CHECK(t.find("own could not be set") == std::string::npos);
+    t = nbt::wfdMissingText(nbt::WFD_MISSING_PASS, true);
+    CHECK(t.find("own could not be set") != std::string::npos);
+    t = nbt::wfdMissingText(nbt::WFD_MISSING_PASS, false);
+    CHECK(t.find("WFDPass.conf") != std::string::npos && t.find("own could not be set") == std::string::npos);
+    t = nbt::wfdMissingText(nbt::WFD_MISSING_BOTH, false);
+    CHECK(t.find("passphrase") != std::string::npos && t.find("group name") != std::string::npos);
+    printf("pick ssid: ok\n");
+}
+
 int main() {
     testWatch();
+    testPickSsid();
     // ---- setting + decision ------------------------------------------------------------
     CHECK(nbt::wfdOwnPassSetting(NULL) == nbt::WFD_OWN_AUTO);
     CHECK(nbt::wfdOwnPassSetting("") == nbt::WFD_OWN_AUTO);
