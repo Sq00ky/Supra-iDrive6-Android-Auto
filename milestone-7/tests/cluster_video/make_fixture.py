@@ -71,11 +71,7 @@ def main():
     ffmpeg = os.environ.get("FFMPEG") or shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("Set FFMPEG or install ffmpeg on PATH")
-    for name, source in [
-        ("fixture", "testsrc2=size=800x480:rate=10"),
-        ("static", "color=c=blue:size=800x480:rate=10"),
-    ]:
-        write_fixture(destination, ffmpeg, name, source)
+    write_fixture(destination, ffmpeg, "fixture", "testsrc2=size=800x480:rate=10")
 
 
 if __name__ == "__main__":

@@ -123,36 +123,12 @@ target_link_libraries(nbt-aad PRIVATE
 # reconfiguring CLUSTER_PROFILE therefore rebuilds the affected objects.
 if(CLUSTER_PROFILE STREQUAL "g30")
     set(VIDEO_SOURCE src/cluster/video)
-    set(OPENH264 third_party/openh264)
-    file(GLOB OPENH264_COMMON "${OPENH264}/codec/common/src/*.cpp")
-    list(FILTER OPENH264_COMMON EXCLUDE REGEX "/Wels[^/]*\\.cpp$")
-    file(GLOB OPENH264_CORE "${OPENH264}/codec/decoder/core/src/*.cpp")
-    list(REMOVE_ITEM OPENH264_CORE
-        "${CMAKE_CURRENT_SOURCE_DIR}/${OPENH264}/codec/decoder/core/src/wels_decoder_thread.cpp")
-    set(OPENH264_INCLUDES
-        ${OPENH264}/codec/api
-        ${OPENH264}/codec/api/wels
-        ${OPENH264}/codec/common/inc
-        ${OPENH264}/codec/decoder/core/inc
-        ${OPENH264}/codec/decoder/plus/inc
-    )
-    add_library(cluster-video-decoder STATIC
-        ${OPENH264_COMMON}
-        ${OPENH264_CORE}
-        ${OPENH264}/codec/decoder/plus/src/welsDecoderExt.cpp
-        ${VIDEO_SOURCE}/decoder_port.cpp
-    )
-    target_include_directories(cluster-video-decoder PRIVATE ${OPENH264_INCLUDES})
-    target_compile_options(cluster-video-decoder PRIVATE
-        -O2 -Wall -D_QNX_SOURCE -fno-exceptions -fno-rtti -fno-strict-aliasing)
-    target_link_libraries(cluster-video-decoder PRIVATE cluster-profile)
-    set_target_properties(cluster-video-decoder PROPERTIES
-        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/cluster/${CLUSTER_PROFILE}")
-
-    add_executable(kombi-player ${VIDEO_SOURCE}/player.cpp ${VIDEO_SOURCE}/supervisor.cpp)
-    target_include_directories(kombi-player PRIVATE ${OPENH264_INCLUDES})
+    add_executable(kombi-player
+        ${VIDEO_SOURCE}/player.cpp
+        ${VIDEO_SOURCE}/supervisor.cpp
+        ${VIDEO_SOURCE}/hardware_decoder.cpp)
     target_compile_options(kombi-player PRIVATE -O2 -Wall -D_QNX_SOURCE -fno-rtti)
-    target_link_libraries(kombi-player PRIVATE cluster-profile cluster-video-decoder screen socket m)
+    target_link_libraries(kombi-player PRIVATE cluster-profile screen socket m)
 
     add_executable(cluster-inspect ${VIDEO_SOURCE}/inspect.cpp)
     target_compile_options(cluster-inspect PRIVATE -O2 -Wall -D_QNX_SOURCE)

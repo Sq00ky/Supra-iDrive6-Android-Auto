@@ -1,7 +1,7 @@
 // The only component allowed to own the physical PiP session. Control,
 // ScreenOutput, the selected resource profile and row-0 metadata preserve the protocol and
 // pixel layout verified by the standalone demo in the car.
-#include "decoder.hpp"
+#include "hardware_decoder.hpp"
 #include "protocol.hpp"
 #include "recovery.hpp"
 #include "native/screen_output.hpp"
@@ -19,7 +19,7 @@ namespace {
 struct Player {
     kombi::pip::screen::ScreenOutput output;
     Control control;
-    Decoder decoder;
+    HardwareDecoder decoder;
     bool active, marked, cancelled, presenting, have_picture;
     unsigned number, epoch, last_present;
     uint8_t pixels[nbt::cluster::VideoProfile::ContentWidth *
@@ -80,21 +80,28 @@ struct Player {
 
     bool pump() {
         if (expired()) return false;
-        if (!active) return true;
-        const unsigned began = millis();
-        if (!control.pump()) return false;
-        if (millis() - began >= 250)
-            printf("AA_CLUSTER_SLOW stage=control elapsed_ms=%u\n", millis() - began);
-        if (!control.cluster_selected()) return !presenting || suspend_output();
-        if (!presenting && have_picture) {
-            if (!start_output() || !present_picture()) return false;
-            printf("AA_CLUSTER_RESUMED sink=cluster frames=%u\n", number);
+        if (active) {
+            const unsigned began = millis();
+            if (!control.pump()) return false;
+            if (millis() - began >= 250)
+                printf("AA_CLUSTER_SLOW stage=control elapsed_ms=%u\n", millis() - began);
+            if (!control.cluster_selected()) {
+                if (presenting && !suspend_output()) return false;
+            } else if (!presenting && have_picture) {
+                if (!start_output() || !present_picture()) return false;
+                printf("AA_CLUSTER_RESUMED sink=cluster frames=%u\n", number);
+            }
         }
-        // Silence is valid for unchanged AA maps; frame cadence is not health.
-        return true;
+        // Native hardware output can arrive after the last encoded packet.
+        // Poll it even while the phone is quiet or HUD has suspended PiP.
+        const int decoded = decoder.poll_picture(pixels);
+        if (decoded < 0) return false;
+        return decoded == 0 || decoded_picture(0);
     }
 
-    bool read(int fd, uint8_t* destination, unsigned size) {
+    enum ReadResult { ReadComplete, ReadClosed, ReadPlaybackError };
+
+    ReadResult read(int fd, uint8_t* destination, unsigned size) {
         unsigned done = 0;
         // Silence before a packet is allowed. Once a partial packet stalls,
         // enforce the original three-second assembly deadline.
@@ -102,11 +109,11 @@ struct Player {
         while (done < size && !expired()) {
             if (done && deadline.expired(millis())) {
                 printf("AA_CLUSTER_READ_STOP reason=partial_timeout bytes=%u/%u\n", done, size);
-                return false;
+                return ReadClosed;
             }
             if (!pump()) {
-                printf("AA_CLUSTER_READ_STOP reason=control bytes=%u/%u\n", done, size);
-                return false;
+                printf("AA_CLUSTER_READ_STOP reason=playback bytes=%u/%u\n", done, size);
+                return ReadPlaybackError;
             }
             PollFD pollfd = {fd, PollRead, 0};
             int result = poll(&pollfd, 1, 20);
@@ -116,12 +123,12 @@ struct Player {
             if (result < 0 || pollfd.revents & PollErrorOrHangup) {
                 printf("AA_CLUSTER_READ_STOP reason=poll bytes=%u/%u events=%d errno=%d\n", done,
                        size, pollfd.revents, *__get_errno_ptr());
-                return false;
+                return ReadClosed;
             }
             if (!result) {
                 if (done && deadline.expired(millis())) {
                     printf("AA_CLUSTER_READ_STOP reason=partial_timeout bytes=%u/%u\n", done, size);
-                    return false;
+                    return ReadClosed;
                 }
                 continue;
             }
@@ -132,7 +139,7 @@ struct Player {
             if (result <= 0) {
                 printf("AA_CLUSTER_READ_STOP reason=transport bytes=%u/%u rc=%d errno=%d\n", done,
                        size, result, *__get_errno_ptr());
-                return false;
+                return ReadClosed;
             }
             // Start the assembly budget at the first byte, not before an
             // arbitrarily long unchanged-map silence.
@@ -143,7 +150,7 @@ struct Player {
         if (done != size) {
             printf("AA_CLUSTER_READ_STOP reason=trial_end bytes=%u/%u\n", done, size);
         }
-        return done == size;
+        return done == size ? ReadComplete : ReadClosed;
     }
 
     bool start_output() {
@@ -223,6 +230,10 @@ struct Player {
         if (!status) {
             return true;
         }
+        return decoded_picture(be64(packet_header + 16));
+    }
+
+    bool decoded_picture(uint64_t pts) {
         have_picture = true;
         if (!active) {
             if (!control.connect_sink()) return false;
@@ -235,7 +246,7 @@ struct Player {
         if (!present_picture()) return false;
         if (number == 1 || number % 30 == 0) {
             printf("AA_CLUSTER_POST frames=%u pts=%llu source=%ux%u content=%ux%u\n", number,
-                   (unsigned long long)be64(packet_header + 16),
+                   (unsigned long long)pts,
                    unsigned(nbt::cluster::VideoProfile::SourceWidth),
                    unsigned(nbt::cluster::VideoProfile::SourceHeight),
                    unsigned(nbt::cluster::VideoProfile::ContentWidth),
@@ -287,14 +298,20 @@ extern "C" int demo_main() {
             goto done;
         }
         uint8_t packet_header[HeaderSize];
-        while (!expired() && player->read(client, packet_header, sizeof(packet_header))) {
+        while (!expired()) {
+            Player::ReadResult header_result = player->read(client, packet_header, sizeof(packet_header));
+            if (header_result == Player::ReadClosed) break;
+            if (header_result == Player::ReadPlaybackError) {
+                if (player->cancelled || expired()) result = 0;
+                goto done;
+            }
             if (!valid_header(packet_header)) {
                 printf("AA_CLUSTER_INVALID_HEADER\n");
                 goto done;
             }
             unsigned payload_size = be32(packet_header + 12);
-            if (payload_size && !player->read(client, payload, payload_size)) {
-                if (expired()) {
+            if (payload_size && player->read(client, payload, payload_size) != Player::ReadComplete) {
+                if (player->cancelled || expired()) {
                     result = 0;
                 }
                 goto done;
@@ -333,6 +350,8 @@ done:
 int main(int argc, char** argv) {
     setvbuf(stdout, 0, _IOLBF, 0);
     setvbuf(stderr, 0, _IONBF, 0);
+    if (argc == 3 && !strcmp(argv[1], "--cleanup-renderer"))
+        return HardwareDecoder::cleanup_owner(argv[2]);
     if (argc == 3 && !strcmp(argv[1], "--supervise")) {
         return supervise_player(argv[0], argv[2]);
     }

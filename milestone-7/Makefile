@@ -220,30 +220,22 @@ kdprobe: tools/kdprobe.cpp
 
 # Native player and read-only Screen inspector. No installation side effects.
 # Only profiles with the tested video hardware capability expose these targets.
-QNX_AR ?= ntoarmv7-ar
 CLUSTER_VIDEO_SRC = src/cluster/video
 CLUSTER_VIDEO_HEADERS = $(wildcard $(CLUSTER_VIDEO_SRC)/*.hpp \
                        $(CLUSTER_VIDEO_SRC)/native/*.hpp $(CLUSTER_VIDEO_SRC)/native/*.inc \
                        src/cluster/guidance/*.hpp) $(CLUSTER_PROFILE_HEADERS) \
                        src/cluster/video_settings.hpp
-OPENH264 = third_party/openh264
-OPENH264_SRCS = $(filter-out $(OPENH264)/codec/common/src/Wels%, $(wildcard $(OPENH264)/codec/common/src/*.cpp)) \
-               $(filter-out $(OPENH264)/codec/decoder/core/src/wels_decoder_thread.cpp, $(wildcard $(OPENH264)/codec/decoder/core/src/*.cpp)) \
-               $(OPENH264)/codec/decoder/plus/src/welsDecoderExt.cpp
-OPENH264_OBJS = $(patsubst $(OPENH264)/%.cpp,$(CLUSTER_OUT)/decoder/%.o,$(OPENH264_SRCS)) $(CLUSTER_OUT)/decoder_port.o
-OPENH264_INCLUDES = -I$(OPENH264)/codec/api -I$(OPENH264)/codec/api/wels \
-                    -I$(OPENH264)/codec/common/inc -I$(OPENH264)/codec/decoder/core/inc \
-                    -I$(OPENH264)/codec/decoder/plus/inc
 CLUSTER_VIDEO_FLAGS = -O2 -Wall -D_QNX_SOURCE -Wc,-std=gnu++0x \
                       -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp \
                       -I./src $(CLUSTER_DEFINES)
 
-.PHONY: kombi-player cluster-inspect g30-player g30-inspect
+.PHONY: kombi-player kombi-player-hardware cluster-inspect g30-player g30-inspect
 ifeq ($(CLUSTER_PROFILE),g30)
 kombi-player: $(CLUSTER_OUT)/kombi-player
+kombi-player-hardware: $(CLUSTER_OUT)/kombi-player-hardware
 cluster-inspect: $(CLUSTER_OUT)/inspect
 else
-kombi-player cluster-inspect:
+kombi-player kombi-player-hardware cluster-inspect:
 	@echo "CLUSTER_PROFILE=$(CLUSTER_PROFILE) has no video hardware profile; select CLUSTER_PROFILE=g30" >&2
 	@exit 2
 endif
@@ -254,23 +246,16 @@ g30-player:
 g30-inspect:
 	$(MAKE) CLUSTER_PROFILE=g30 cluster-inspect
 
-$(CLUSTER_OUT)/decoder/%.o: $(OPENH264)/%.cpp
+CLUSTER_PLAYER_SRCS = $(CLUSTER_VIDEO_SRC)/player.cpp $(CLUSTER_VIDEO_SRC)/supervisor.cpp $(CLUSTER_VIDEO_SRC)/hardware_decoder.cpp
+
+$(CLUSTER_OUT)/kombi-player: Makefile $(CLUSTER_PLAYER_SRCS) $(CLUSTER_VIDEO_HEADERS)
 	@mkdir -p $(@D)
-	$(CXX) $(CLUSTER_VIDEO_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
+	$(CXX) $(CLUSTER_VIDEO_FLAGS) -fno-rtti $(CLUSTER_PLAYER_SRCS) -L./lib -lscreen -lsocket -lm -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
 
-$(CLUSTER_OUT)/decoder_port.o: $(CLUSTER_VIDEO_SRC)/decoder_port.cpp $(CLUSTER_VIDEO_HEADERS)
-	@mkdir -p $(@D)
-	$(CXX) $(CLUSTER_VIDEO_FLAGS) -fno-exceptions -fno-rtti -fno-strict-aliasing $(OPENH264_INCLUDES) -Wp,-MMD,$(@:.o=.d) -Wp,-MP -Wp,-MT,$@ -c $< -o $@
-
-$(CLUSTER_OUT)/libopenh264-decoder.a: $(OPENH264_OBJS)
-	rm -f $@
-	$(QNX_AR) rcs $@ $(OPENH264_OBJS)
-
-$(CLUSTER_OUT)/kombi-player: $(CLUSTER_VIDEO_SRC)/player.cpp $(CLUSTER_VIDEO_SRC)/supervisor.cpp $(CLUSTER_VIDEO_HEADERS) $(CLUSTER_OUT)/libopenh264-decoder.a
-	$(CXX) $(CLUSTER_VIDEO_FLAGS) -fno-rtti $(OPENH264_INCLUDES) $(CLUSTER_VIDEO_SRC)/player.cpp $(CLUSTER_VIDEO_SRC)/supervisor.cpp $(CLUSTER_OUT)/libopenh264-decoder.a -L./lib -lscreen -lsocket -lm -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
+# Older bench scripts use this output name.
+$(CLUSTER_OUT)/kombi-player-hardware: $(CLUSTER_OUT)/kombi-player
+	cp $< $@
 
 $(CLUSTER_OUT)/inspect: $(CLUSTER_VIDEO_SRC)/inspect.cpp $(CLUSTER_VIDEO_HEADERS)
 	@mkdir -p $(@D)
 	$(CXX) $(CLUSTER_VIDEO_FLAGS) $< -L./lib -lscreen -lang-c++ -Wl,-rpath,/lib:/usr/lib -o $@
-
--include $(OPENH264_OBJS:.o=.d)

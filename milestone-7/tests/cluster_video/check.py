@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Host regressions for the G30 stream, native player lifecycle and pixel contract."""
 
-import concurrent.futures
 import json
 import os
 from pathlib import Path
@@ -12,7 +11,6 @@ import sys
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 SOURCE = ROOT / "src/cluster/video"
-VENDOR = ROOT / "third_party/openh264"
 OUTPUT = ROOT / "tests/build/cluster_video"
 
 COMPILER = shlex.split(os.environ.get("CXX", "clang++"))
@@ -24,16 +22,16 @@ COMPILER_FLAGS = [
     "-fsanitize=address,undefined",
     "-fno-omit-frame-pointer",
 ]
-INCLUDES = ["-I" + str(ROOT / "src")] + [
-    "-I" + str(VENDOR / "codec" / directory)
-    for directory in ("api", "api/wels", "common/inc", "decoder/core/inc", "decoder/plus/inc")
-]
+INCLUDES = ["-I" + str(ROOT / "src")]
 TEST_ENV = dict(
     os.environ,
     UBSAN_OPTIONS="halt_on_error=1",
     ASAN_OPTIONS="detect_leaks=0" if sys.platform == "darwin" else "detect_leaks=1",
 )
 TEST_PROGRAMS = (
+    "hardware_decoder",
+    "hardware_capture",
+    "hardware_scaling",
     "recovery",
     "player_service",
     "router",
@@ -69,47 +67,6 @@ def run(name, command, cwd=ROOT):
     return process.stdout
 
 
-def compile_decoder_source(source):
-    object_file = OUTPUT / (source.stem + ".o")
-    run(
-        "compile-" + source.stem,
-        [
-            *COMPILER,
-            *COMPILER_FLAGS,
-            "-Wno-deprecated-register",
-            "-fno-exceptions",
-            "-fno-rtti",
-            "-fno-strict-aliasing",
-            *INCLUDES,
-            "-c",
-            source,
-            "-o",
-            object_file,
-        ],
-    )
-    return object_file
-
-
-def build_decoder_archive():
-    sources = [
-        source
-        for source in sorted((VENDOR / "codec/common/src").glob("*.cpp"))
-        if not source.name.startswith("Wels")
-    ]
-    sources += [
-        source
-        for source in sorted((VENDOR / "codec/decoder/core/src").glob("*.cpp"))
-        if source.name != "wels_decoder_thread.cpp"
-    ]
-    sources += [VENDOR / "codec/decoder/plus/src/welsDecoderExt.cpp", SOURCE / "decoder_port.cpp"]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        objects = list(pool.map(compile_decoder_source, sources))
-    archive = OUTPUT / "decoder.a"
-    archive.unlink(missing_ok=True)
-    run("archive", ["ar", "rcs", archive, *objects])
-    return archive
-
-
 def openssl_flags():
     flags = shlex.split(os.environ.get("OPENSSL_CFLAGS", ""))
     if flags:
@@ -136,12 +93,11 @@ def main():
         run("profile-" + profile, [OUTPUT / ("profile-" + profile)])
         passed.append("profile-" + profile)
         print("PASS profile-" + profile, flush=True)
-    archive = build_decoder_archive()
     run("fixture", [sys.executable, HERE / "make_fixture.py", OUTPUT])
 
     for name in TEST_PROGRAMS:
         peer_flags = ["-DNBT_CLUSTER_HOST_TEST", "-I" + str(HERE)] if name in NATIVE_PEER_TESTS else []
-        libraries = [archive] if name in DECODER_TESTS else []
+        peer_sources = [HERE / "player_renderer_peer.cpp"] if name in DECODER_TESTS else []
         run(
             "compile-" + name,
             [
@@ -151,7 +107,7 @@ def main():
                 "-pthread",
                 *INCLUDES,
                 HERE / f"test_{name}.cpp",
-                *libraries,
+                *peer_sources,
                 "-o",
                 OUTPUT / name,
             ],
@@ -207,8 +163,8 @@ def main():
     )
     TEST_ENV["CLUSTER_TEST_SUPERVISOR_BIN"] = str(OUTPUT / "supervisor-fixture")
     run("supervisor", [sys.executable, HERE / "test_supervisor.py"])
-    passed.append("native-supervisor (15 tests)")
-    print("PASS native-supervisor (15 tests)", flush=True)
+    passed.append("native-supervisor (17 tests)")
+    print("PASS native-supervisor (17 tests)", flush=True)
     (OUTPUT / "result.json").write_text(
         json.dumps(
             {

@@ -6,11 +6,10 @@ and hardware decoder. Related discussion: [issue #226](https://github.com/Sq00ky
 
 `bridge.cpp` runs inside `nbt-aad`, handling stream negotiation, the live setting,
 bounded buffering and acknowledgements. `player.cpp` builds a separate process
-that decodes with OpenH264 and presents native PiP. `native/` implements the
+that submits cluster H.264 to a second NBT mm-renderer context and presents its output on PiP. `native/` implements the
 BMW control/Guidance exchanges, resource profile, Screen output and metadata.
 `inspect.cpp` builds a read-only Screen diagnostic. The iDrive setting and its
-labels live in `../../../rhmiapp/`; decoder sources live in
-`../../../third_party/openh264/` (paths relative to `milestone-7/src/cluster/video`).
+labels live in `../../../rhmiapp/`.
 
 ## Code map
 
@@ -24,7 +23,8 @@ from the native BMW services used to acquire the cluster display.
 | `manifest.hpp` | Clear the cluster channel's advertised margins and insets while preserving every protobuf message length and all other channels. |
 | `router.hpp`, `credits.hpp` | Track focus, stream generations, keyframe recovery and deferred phone acknowledgements. Late completions from an old stream must not acknowledge a new one. |
 | `encoded_queue.hpp`, `protocol.hpp` | Bound queued H.264 data and define the local daemon-to-player framing. |
-| `decoder.hpp`, `decoder_port.cpp` | Decode with OpenH264, convert frames and avoid posting unchanged images; provide the QNX decoder portability functions. |
+| `hardware_decoder.cpp`, `hardware_session.hpp`, `hardware_pixels.hpp`, `native/renderer_api.hpp` | Native hardware decoder, scaled Screen readback, PiP packing and factory API bindings. |
+| `hardware_capture.hpp` | Capture worker and one-picture mailbox. Input sends every encoded reference frame while copying/resizing runs independently. Joins capture before releasing renderer/Screen objects. |
 | `supervisor.cpp`, `supervisor.hpp` | Own the player process, temporary producer address and exclusive lease. Reap the player before releasing the address. |
 | `player_service.hpp`, `recovery.hpp` | Restart a failed helper after its supervisor exits; bound retry backoff and socket progress deadlines. |
 | `process.hpp`, `service_spawn.hpp`, `service_log.hpp` | Spawn with mapped descriptors and relay both child output streams to the daemon's current log. |
@@ -50,7 +50,7 @@ libraries, run from `milestone-7`:
 make CLUSTER_PROFILE=g30 nbt-aad rhmiapp kombi-player cluster-inspect
 ```
 
-Override `QCC` and `QNX_AR` when necessary. Outputs are `nbt-aad`,
+Set `QCC` to override the compiler path. Outputs are `nbt-aad`,
 `rhmiapp/libNbtAad.so`, `build/cluster/g30/kombi-player` and `build/cluster/g30/inspect`.
 The plugin also requires its matching manifest, XML, text and image bundles
 from `rhmiapp/`. These targets compile source; packaging and installation are
@@ -66,6 +66,51 @@ declarations from `tests/cluster_video/`, which is absent from production includ
 NBT's Screen header is not part of the base SDP 6.5 installation, so
 `native/native_screen.hpp` retains the car-verified Screen binding and property
 values. This is independent of the host test stubs.
+
+### Hardware decoder
+
+The G30 `kombi-player` target uses the factory mm-renderer and IVA-HD for the
+cluster stream. If the second context fails, the player reports the failure
+and follows the existing cleanup and recovery path.
+
+The native backend connects to the existing factory renderer. It owns only
+`kombi_hw_<PID>` and its private mdev input/group, retaining the main decoder.
+The car-tested dual-decode probe supplies the setup parameters and input
+message framing. Screen is asked to scale the entire decoded 800×480 window
+directly into a 522×313 BGRA pixmap. The player copies its rows into the existing
+620×313 content rectangle with 49-pixel opaque sidebars; it performs no CPU
+interpolation. Readback is limited to 15 per second. This is
+not a zero-copy pipeline. No foreign decoder buffer is mapped or assumed to
+be a stable front buffer.
+
+The input thread feeds mdev; a separate worker reads and packs scaled pictures. The
+player's `poll_picture` only takes the newest completed picture without waiting for
+Screen. The mailbox holds one pending picture and uses two reusable RAM buffers;
+old pending pictures can be replaced, but encoded reference frames are never
+dropped by this worker. Small progress counters are mutex-protected; no lock
+spans readback or fitting. Capture cadence is measured from completion, so a
+slow copy cannot cause immediate repeated captures. Shutdown joins the worker
+before destroying renderer/Screen resources, and reset discards pending pixels.
+`AA_HW_FRAME` records `capture=522x313 scaling=screen`, `readback_us` (including
+the requested native resize) and `pack_us` (row copies/padding). Geometry,
+stride and format are checked before reading pixels. The decoder's padded
+896×576 allocation and 800×480 viewport stay unchanged, as does the final
+800×480 PiP backing and metadata row. Native scaling quality, actual acceleration
+and frame rate require a physical firmware test; the request is not a claim
+that a particular GPU/scaler engine was selected.
+
+Output is polled independently of encoded input, so an asynchronously decoded
+last frame can appear while the phone is quiet. First output has a five-second
+grace interval; input IPC has a 250 ms deadline and Screen readback has a
+one-second IPC deadline. Quiet, unchanged pictures remain valid afterwards.
+On child exit, the supervisor uses a bounded helper to remove only that
+reaped child's renderer context. Failed cleanup retains the exclusive lease.
+
+`AA_HW_READY`, `AA_HW_INPUT`, `AA_HW_FRAME` and `AA_CLUSTER_POST` distinguish
+setup, accepted input, copied pixels and PiP posting. None alone proves
+physical visible output or sustained hardware throughput. Host peers test the
+contract and failure paths; actual IVA-HD/NV12 output still requires a car
+test.
 
 ## Runtime integration
 
@@ -153,8 +198,8 @@ stayed connected; diagnostics recorded 840 posts across two map sessions.
 That evidence belongs to the precursor deployment. This public source layout
 has not been installed in the car. Host regressions live in
 [tests/cluster_video](../../../tests/cluster_video/README.md) and run with `make check-cluster-video` or the
-existing `make check`. They exercise the real decoder, player loop and session
-parser with simulated native services, including disconnects, rapid toggles,
+existing `make check`. They exercise the player loop, native renderer protocol and session
+parser with controlled renderer and Screen peers, including disconnects, rapid toggles,
 malformed input and partial-startup cleanup. Native build records and
 deployment evidence remain outside this repository.
 Concurrent factory navigation is not arbitrated; custom HUD video and other

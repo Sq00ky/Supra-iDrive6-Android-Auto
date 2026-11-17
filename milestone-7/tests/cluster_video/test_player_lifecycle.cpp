@@ -1,5 +1,5 @@
-// Run the production player entry point, real decoder and cleanup paths.
-// Only QNX Screen, sockets, signals and time are replaced; no vehicle access.
+// Run the player loop and decoder session against deterministic renderer, Screen and socket peers.
+#include <string.h>
 #define socket fake_socket
 #define connect fake_connect
 #define bind fake_bind
@@ -9,7 +9,8 @@
 #define send fake_send
 #define sendto fake_sendto
 #define recv fake_recv
-#define close fake_close
+// Bind the socket stub locally so decoder and Screen close() methods keep their names.
+extern "C" { static int close(int); }
 #define poll fake_poll
 #define usleep fake_usleep
 #define clock_gettime fake_clock
@@ -157,7 +158,7 @@ extern "C" int fake_getsockopt(int, int, int, void *, unsigned *) {
 extern "C" int fake_fcntl(int, int, ...) {
     return 0;
 }
-extern "C" int fake_close(int fd) {
+extern "C" int close(int fd) {
     check(fd >= 10 && unsigned(fd) < peer::next_descriptor && peer::sockets[fd].open,
           "close only a live owned descriptor");
     peer::sockets[fd].open = false;
@@ -381,8 +382,9 @@ static void test_invalid_stream_data() {
     peer::expect_cleaned(true, 1);
     const uint8_t broken_slice[] = {0, 0, 0, 1, 0x65, 0xff, 0xff, 0xff};
     prepare_one_frame();
-    peer::packet(Video, 3, broken_slice, sizeof(broken_slice));
-    check(demo_main() != 0, "damaged H264 rejected");
+    peer::packet(Reset, 4);
+    peer::packet(Video, 4, broken_slice, sizeof(broken_slice));
+    check(demo_main() != 0, "new renderer session requires SPS and PPS with its IDR");
     peer::expect_cleaned(true, 1);
 }
 
@@ -437,7 +439,7 @@ static void test_hud_pause_resume() {
     header(h, Reset, 3, 0, 0);
     check(player->packet(h, 0, false), "decoder reset");
     header(h, Video, 3, first_frame_size, 0);
-    check(player->packet(h, first_frame, false), "initial map");
+    check(player->packet(h, first_frame, false) && player->pump(), "initial map");
     const int sink = player->control.control;
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
         unsigned posts = screen_peer::posts;
@@ -447,11 +449,11 @@ static void test_hud_pause_resume() {
               player->control.guidance == -1, "HUD pause releases output and Guidance");
         check(player->control.control == sink && !peer::cancellation_count,
               "HUD pause retains original subscription");
-        check(player->packet(h, first_frame, false) && unsigned(screen_peer::posts) == posts,
+        check(player->packet(h, first_frame, false) && player->pump() && unsigned(screen_peer::posts) == posts,
               "HUD pause consumes video without cluster-plane posts");
         notify_sink(*player, false);
         check(player->pump() && player->presenting, "cluster selection resumes without setting toggle");
-        check(unsigned(screen_peer::posts) == posts + 1, "unchanged map is re-presented on resume");
+        check(unsigned(screen_peer::posts) == posts + 1, "cached map is re-presented on resume");
     }
     notify_sink(*player, true);
     check(player->pump(), "pause before map-off");
@@ -472,7 +474,7 @@ static void test_start_with_hud_selected() {
     header(h, Reset, 3, 0, 0);
     check(player->packet(h, 0, false), "reset with HUD initially selected");
     header(h, Video, 3, first_frame_size, 0);
-    check(player->packet(h, first_frame, false), "cache map with HUD initially selected");
+    check(player->packet(h, first_frame, false) && player->pump(), "cache map with HUD initially selected");
     check(player->active && !player->presenting && !peer::handle_created && !screen_peer::posts,
           "initial HUD does not acquire a cluster output");
     notify_sink(*player, false);

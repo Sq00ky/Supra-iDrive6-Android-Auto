@@ -196,6 +196,7 @@ class Supervisor {
     pid_t child_pid_;
     bool lease_acquired_;
     bool address_acquired_;
+    bool renderer_cleaned_;
 
     int command(const std::string& executable, const char* argument1, const char* argument2,
                 std::string& text) {
@@ -314,6 +315,10 @@ class Supervisor {
     }
     bool cleanup() {
         // The child has exited/reaped before its producer address is released.
+        if (!renderer_cleaned_) {
+            puts("AA_CLUSTER_SERVICE_CLEANUP renderer_pending=1 lease_retained=1");
+            return false;
+        }
         bool ok = true;
         if (address_acquired_) {
             if (configure_producer_address(false)) {
@@ -352,7 +357,7 @@ class Supervisor {
   public:
     Supervisor(const SupervisorPaths& paths, const char* executable, pid_t parent)
         : paths_(paths), executable_(executable), owner_pid_(parent), child_pid_(-1),
-          lease_acquired_(false), address_acquired_(false) {}
+          lease_acquired_(false), address_acquired_(false), renderer_cleaned_(true) {}
     int run() {
         struct utsname u;
         std::string text;
@@ -455,6 +460,11 @@ class Supervisor {
             }
             usleep(ChildPollUs);
         }
+        // Bound remote renderer cleanup in a separate helper. Never restart a
+        // decoder while its previous context may still own hardware buffers.
+        char child_text[32]; snprintf(child_text, sizeof(child_text), "%ld", long(child_pid_));
+        renderer_cleaned_ = command(executable_, "--cleanup-renderer", child_text, text) == 0;
+        printf("%s", text.c_str());
         child_pid_ = -1;
         int rc = exit_code(status);
         if (rc) {
@@ -481,7 +491,7 @@ int supervise_player(const char* executable, const char* parent, const Superviso
     signal(SIGPIPE, SIG_IGN);
     umask(077);
     // Same loader paths as the previous installed helper, inherited by children.
-    setenv("LD_LIBRARY_PATH", "/opt/mm/lib:/lib:/usr/lib:/opt/sys/lib:/opt/car/lib", 1);
+    setenv("LD_LIBRARY_PATH", "/opt/mm/lib:/opt/conn/lib/carplay:/opt/conn/lib/carplay/mmedia:/boot/lib:/lib:/usr/lib:/opt/os/lib:/opt/sys/lib:/opt/core/lib:/opt/car/lib:/lib/graphics/omap5430", 1);
     return Supervisor(paths, executable, pid_t(owner)).run();
 }
 } // namespace aa_cluster

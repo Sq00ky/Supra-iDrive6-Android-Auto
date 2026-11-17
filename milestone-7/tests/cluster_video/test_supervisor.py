@@ -52,6 +52,12 @@ if test "$1" = --inspect; then
   echo SCREEN_INSPECT_OK secondary=800x480
   exit 0
 fi
+if test "$1" = --cleanup-renderer; then
+  kill -0 "$2" 2>/dev/null && exit 1
+  echo "$2" > "$TEST_ROOT/renderer-cleaned.pid"
+  test ! -f "$TEST_ROOT/fail_renderer_cleanup" || exit 1
+  exit 0
+fi
 test "$1" = --service || exit 2
 echo $$ > "$TEST_ROOT/player.pid"
 """
@@ -231,6 +237,25 @@ echo $$ > "$TEST_ROOT/player.pid"
             self.process.communicate(timeout=5)
             self.assertEqual(self.process.returncode, 90)
         self.assertFalse((self.root / "actions").exists())
+
+    def test_renderer_cleanup_targets_reaped_child(self):
+        self.start_supervisor()
+        self.wait_for_player()
+        self.process.terminate()
+        self.expect_cleaned()
+        self.assertEqual((self.root / "renderer-cleaned.pid").read_text(),
+                         (self.root / "player.pid").read_text())
+
+    def test_failed_renderer_cleanup_retains_lease_and_alias(self):
+        self.start_supervisor()
+        self.wait_for_player()
+        (self.root / "fail_renderer_cleanup").touch()
+        self.process.terminate()
+        text = self.process.communicate(timeout=6)[0]
+        self.assertEqual(self.process.returncode, 96, text)
+        self.assertIn("renderer_pending=1 lease_retained=1", text)
+        self.assertTrue((self.root / "lease.lock").exists())
+        self.assertTrue((self.root / "alias").exists())
 
 
 if __name__ == "__main__":
