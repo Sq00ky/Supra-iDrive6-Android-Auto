@@ -1,0 +1,2 @@
+# Keep the byte-exact J29 transcript unchanged on Windows checkouts.
+milestone-7/tests/fixtures/j29_golden.txt text eol=lf
