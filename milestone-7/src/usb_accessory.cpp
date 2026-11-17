@@ -23,7 +23,8 @@
 namespace nbt {
 
 static const int kMaxSessionsPerNode = 3;     // then the phone has to be replugged (it stays in accessory mode)
-static const double kRetryGapS = 3.0;         // between sessions on the same accessory connection
+static const double kRetryGapS = 3.0;         // after a bridge that failed to start (no session ran)
+// Between sessions on the same accessory connection: aoap::sessionRetryGapS() (5 s, then 10 s).
 // A node can show up in /dev before its driver answers (or another client holds it): retry, without that
 // counting as a session.
 static const int kMaxSwitchTries = 5;         // /dev/android*: open or switch devctl failed
@@ -51,9 +52,10 @@ static const double kSelfSwitchAfterS = 0.5;
 // After our switch the phone drops off the bus and comes back as an accessory; if its aoap-switch node is still there
 // this long after, the switch did nothing and the node no longer holds wireless off.
 static const double kSwitchSettleS = 10.0;
-// After a USB reset: no session on the phone for this long (medialauncher waits 2 s for its own resets). If it comes
-// back as a new device, that one starts straight away.
-static const double kResetSettleS = 3.0;
+// After a USB reset: no session on the phone for this long (medialauncher waits 2 s for its own resets; a Samsung S25
+// took 2 s after the reset to hand the new connection to Android Auto). If it comes back as a new device, that one
+// starts straight away.
+static const double kResetSettleS = 5.0;
 // A phone that does not answer may just be starting Android Auto (or showing a prompt): a reset would start that over.
 // So one more try first.
 static const int kSilentSessionsBeforeReset = 2;
@@ -161,7 +163,7 @@ static void raisePriority() {
     if (pthread_getschedparam(pthread_self(), &policy, &sp) != 0 || sp.sched_priority >= prio) return;
     sp.sched_priority = prio;
     int r = pthread_setschedparam(pthread_self(), policy, &sp);
-    if (r != 0) printf("[UsbAccessory] USB reader priority %d not set: %s\n", prio, strerror(r));
+    if (r != 0) aoap::usbLog("[UsbAccessory] USB reader priority %d not set: %s\n", prio, strerror(r));
 #endif
 }
 
@@ -199,7 +201,7 @@ void FlowStats::add(UsbBridge* b, size_t n, size_t queued) {
     ++transfers;
     frames_bytes += static_cast<unsigned>(n);
     if (now - window_s >= 1.0) {
-        printf("[UsbAccessory] %s +%.1f s: %u transfers, %u bytes in %.1f s (%u waiting)\n", dir, now, transfers,
+        aoap::usbLog("[UsbAccessory] %s +%.1f s: %u transfers, %u bytes in %.1f s (%u waiting)\n", dir, now, transfers,
                frames_bytes, now - window_s, (unsigned)queued);
         transfers = 0;
         frames_bytes = 0;
@@ -207,8 +209,8 @@ void FlowStats::add(UsbBridge* b, size_t n, size_t queued) {
 }
 
 void FlowStats::end(UsbBridge* b) {
-    if (last_s < 0) printf("[UsbAccessory] %s: no transfers\n", dir);
-    else printf("[UsbAccessory] %s: %u transfers, the last at +%.3f s (bridge ended at +%.3f s)\n", dir, total,
+    if (last_s < 0) aoap::usbLog("[UsbAccessory] %s: no transfers\n", dir);
+    else aoap::usbLog("[UsbAccessory] %s: %u transfers, the last at +%.3f s (bridge ended at +%.3f s)\n", dir, total,
                 last_s, monoSec() - b->start_s);
 }
 
@@ -265,7 +267,7 @@ static void* bridgeReader(void* arg) {
         pthread_mutex_unlock(&b->mu);
         if (full) { why = "session not reading (receive queue full)"; break; }
     }
-    printf("[UsbAccessory] USB reader ended (%s)\n", why);
+    aoap::usbLog("[UsbAccessory] USB reader ended (%s)\n", why);
     b->set(b->stop, true);
     b->set(b->reader_done, true);
     return NULL;
@@ -275,7 +277,7 @@ static void* bridgeReader(void* arg) {
 static bool directRx(const uint8_t* data, size_t n, void* user) {
     UsbBridge* b = reinterpret_cast<UsbBridge*>(user);
     if (!data) {
-        printf("[UsbAccessory] USB reader ended (%s)\n", b->link->why());
+        aoap::usbLog("[UsbAccessory] USB reader ended (%s)\n", b->link->why());
         b->set(b->stop, true);
         return false;
     }
@@ -288,7 +290,7 @@ static bool directRx(const uint8_t* data, size_t n, void* user) {
     }
     pthread_mutex_unlock(&b->mu);
     if (full) {
-        printf("[UsbAccessory] USB reader ended (session not reading (receive queue full))\n");
+        aoap::usbLog("[UsbAccessory] USB reader ended (session not reading (receive queue full))\n");
         b->set(b->stop, true);
     }
     return !full;
@@ -327,7 +329,7 @@ static void* bridgeForwarder(void* arg) {
         }
         b->bytes_in += t.size();
     }
-    printf("[UsbAccessory] USB forwarder ended (%s; at most %u transfers waited for the session)\n", why,
+    aoap::usbLog("[UsbAccessory] USB forwarder ended (%s; at most %u transfers waited for the session)\n", why,
            (unsigned)most_queued);
     stats.end(b);
     b->set(b->stop, true);
@@ -373,7 +375,7 @@ static void* bridgeWriter(void* arg) {
         pending.erase(pending.begin(), pending.begin() + off);
         if (!ok) { why = b->stopping() ? "stopped" : strerror(errno); break; }
     }
-    printf("[UsbAccessory] USB writer ended (%s)\n", why);
+    aoap::usbLog("[UsbAccessory] USB writer ended (%s)\n", why);
     stats.end(b);
     b->set(b->stop, true);
     b->set(b->writer_done, true);
@@ -450,14 +452,15 @@ void UsbAccessory::handleFailedSession() {
 
 bool UsbAccessory::resetPhone(const std::string& key, const char* why) {
     if (!resets_.take(monoSec())) {
-        printf("[UsbAccessory] %s: %s, but %d USB resets did not help: not resetting it again for now, unplug and "
+        aoap::usbLog("[UsbAccessory] %s: %s, but %d USB resets did not help: not resetting it again for now, unplug and "
                "replug the phone\n", key.c_str(), why, (int)aoap::ResetBudget::kMax);
         return false;
     }
-    printf("[UsbAccessory] %s: %s: resetting it\n", key.c_str(), why);
+    aoap::usbLog("[UsbAccessory] %s: %s: resetting it\n", key.c_str(), why);
     if (!direct_->resetDevice(key)) return false;
     AccessoryNode* n = findNode(key);
-    if (n) n->next_try_s = monoSec() + kResetSettleS;
+    const double settle = monoSec() + kResetSettleS;
+    if (n && n->next_try_s < settle) n->next_try_s = settle;   // keeps a longer retry gap already set
     return true;
 }
 
@@ -475,7 +478,7 @@ bool UsbAccessory::start() {
     if (usbDirectEnabled() && !direct_) {
         direct_ = new UsbDirect();
         if (!direct_->start()) {
-            printf("[UsbAccessory] NBT_USB_DIRECT: io-usb not available, using %s/oap* instead\n", dev_dir_.c_str());
+            aoap::usbLog("[UsbAccessory] NBT_USB_DIRECT: io-usb not available, using %s/oap* instead\n", dev_dir_.c_str());
             delete direct_;
             direct_ = NULL;
         } else if (usbClaimDriverEnabled()) {
@@ -490,7 +493,7 @@ bool UsbAccessory::start() {
         watch_thread_ = 0;
         return false;
     }
-    printf("[UsbAccessory] watching %s/android* and %s/oap* (Android Auto over USB, experimental)\n",
+    aoap::usbLog("[UsbAccessory] watching %s/android* and %s/oap* (Android Auto over USB, experimental)\n",
            dev_dir_.c_str(), dev_dir_.c_str());
     return true;
 }
@@ -509,7 +512,7 @@ void UsbAccessory::stop() {
         direct_ = NULL;
     }
     setFlag(phone_present_, false);
-    printf("[UsbAccessory] stopped.\n");
+    aoap::usbLog("[UsbAccessory] stopped.\n");
 }
 
 void* UsbAccessory::watchThreadStub(void* arg) {
@@ -562,7 +565,7 @@ void UsbAccessory::watchLoop() {
         }
         for (size_t i = nodes_.size(); i-- > 0;) {
             if (!contains(accs, nodes_[i].name) && !(direct_ && direct_drivers_ > 0)) {
-                printf("[UsbAccessory] %s%s%s gone (phone unplugged)\n", direct_ ? "" : dev_dir_.c_str(),
+                aoap::usbLog("[UsbAccessory] %s%s%s gone (phone unplugged)\n", direct_ ? "" : dev_dir_.c_str(),
                        direct_ ? "" : "/", nodes_[i].name.c_str());
                 nodes_.erase(nodes_.begin() + i);
             }
@@ -599,7 +602,7 @@ void UsbAccessory::watchLoop() {
                 } else if (++s->tries >= kMaxSwitchTries) {
                     s->done = true;
                     s->done_s = now;
-                    printf("[UsbAccessory] %s: giving up after %d tries; unplug and replug the phone to try again "
+                    aoap::usbLog("[UsbAccessory] %s: giving up after %d tries; unplug and replug the phone to try again "
                            "(wireless Android Auto stays available meanwhile)\n", path.c_str(), s->tries);
                 } else {
                     s->next_try_s = now + kNodeRetryS;
@@ -620,11 +623,11 @@ void UsbAccessory::watchLoop() {
                 if (r == kBridgeStarted) {
                     n->open_fails = 0;
                     if (++n->sessions == kMaxSessionsPerNode)
-                        printf("[UsbAccessory] last session attempt on %s: after it, unplug and replug the phone\n",
+                        aoap::usbLog("[UsbAccessory] last session attempt on %s: after it, unplug and replug the phone\n",
                                accs[i].c_str());
                 } else if (r == kBridgeOpenFailed) {
                     if (++n->open_fails >= kMaxOpenFails)
-                        printf("[UsbAccessory] %s: could not be opened %d times in a row, giving up; unplug and "
+                        aoap::usbLog("[UsbAccessory] %s: could not be opened %d times in a row, giving up; unplug and "
                                "replug the phone to try again (wireless Android Auto stays available meanwhile)\n",
                                accs[i].c_str(), n->open_fails);
                     n->next_try_s = now + kNodeRetryS;
@@ -662,30 +665,31 @@ bool UsbAccessory::usbWantsPhone(const std::vector<std::string>& androids, const
 UsbAccessory::TriggerResult UsbAccessory::trigger(const char* path) {
     int fd = open(path, O_RDWR | O_NOCTTY);
     if (fd < 0) {
-        printf("[UsbAccessory] %s: open failed: %s\n", path, strerror(errno));
+        aoap::usbLog("[UsbAccessory] %s: open failed: %s\n", path, strerror(errno));
         return kTriggerFailed;
     }
     int mode = 0, proto = 0;
     int rm = doDevctl(fd, aoap::kDcmdGetMode, &mode, sizeof(mode));
     int rp = doDevctl(fd, aoap::kDcmdGetProtocol, &proto, sizeof(proto));
-    printf("[UsbAccessory] %s: phone found, AOA protocol %d (%s), mode %d (%s)\n", path, proto,
+    aoap::usbLog("[UsbAccessory] %s: phone found, AOA protocol %d (%s), mode %d (%s)\n", path, proto,
            rp ? strerror(rp) : "ok", mode, rm ? strerror(rm) : "ok");
     if (rm == 0 && mode != 0) {
         // aoap-switch answers a second switch with success without doing anything: say who was first.
-        printf("[UsbAccessory] %s: already switched by another client (BMW A4A?), leaving it alone\n", path);
+        aoap::usbLog("[UsbAccessory] %s: already switched by another client (BMW A4A?), leaving it alone\n", path);
         close(fd);
         return kTriggerOtherClient;
     }
 
     aoap::Identity id;
     aoap::fillIdentity(id, getenv("NBT_USB_MANUFACTURER"), getenv("NBT_USB_MODEL"));
+    if (direct_) direct_->noteSwitchSent();   // the accessory it comes back as is ours: no start-up reset
     int r = doDevctl(fd, aoap::kDcmdConfigSwitch, &id, sizeof(id));
     close(fd);
     if (r != 0) {
-        printf("[UsbAccessory] %s: accessory switch failed: %s\n", path, strerror(r));
+        aoap::usbLog("[UsbAccessory] %s: accessory switch failed: %s\n", path, strerror(r));
         return kTriggerFailed;
     }
-    printf("[UsbAccessory] %s: switch to accessory mode sent as '%s' / '%s'; waiting for %s/oap*\n", path,
+    aoap::usbLog("[UsbAccessory] %s: switch to accessory mode sent as '%s' / '%s'; waiting for %s/oap*\n", path,
            id.manufacturer, id.model, dev_dir_.c_str());
     return kTriggerSwitched;
 }
@@ -700,13 +704,13 @@ UsbAccessory::BridgeResult UsbAccessory::startBridge(const std::string& node) {
     } else {
         ufd = open(path.c_str(), O_RDWR | O_NOCTTY);
         if (ufd < 0) {
-            printf("[UsbAccessory] %s: open failed: %s\n", path.c_str(), strerror(errno));
+            aoap::usbLog("[UsbAccessory] %s: open failed: %s\n", path.c_str(), strerror(errno));
             return kBridgeOpenFailed;
         }
     }
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
-        printf("[UsbAccessory] socketpair failed: %s\n", strerror(errno));
+        aoap::usbLog("[UsbAccessory] socketpair failed: %s\n", strerror(errno));
         if (link) link->close();
         if (ufd >= 0) close(ufd);
         return kBridgeFailed;
@@ -722,12 +726,12 @@ UsbAccessory::BridgeResult UsbAccessory::startBridge(const std::string& node) {
     last_node_ = node;
     not_ours_ticks_ = 0;
     if (!b->has_writer || (link && !link->startRx(&directRx, b))) {
-        printf("[UsbAccessory] bridge threads failed to start\n");
+        aoap::usbLog("[UsbAccessory] bridge threads failed to start\n");
         close(sv[1]);
         return reapBridge(true) ? kBridgeFailed : kBridgeLeaked;
     }
 
-    printf("[UsbAccessory] %s open: starting Android Auto over USB (session fd %d)\n", path.c_str(), sv[1]);
+    aoap::usbLog("[UsbAccessory] %s open: starting Android Auto over USB (session fd %d)\n", path.c_str(), sv[1]);
     if (client_callback_) {
         client_callback_(sv[1], client_user_data_);   // the session owns sv[1] from here on
     } else {
@@ -748,7 +752,7 @@ bool UsbAccessory::reapBridge(bool force) {
         Transport o = owner_ ? owner_(owner_data_) : kTransportUsb;
         not_ours_ticks_ = (o != kTransportUsb) ? not_ours_ticks_ + 1 : 0;
         if (not_ours_ticks_ >= kNotOursTicks && !b->stopping()) {
-            printf("[UsbAccessory] the session on %s is over (owner now: %s): ending the bridge\n", b->node.c_str(),
+            aoap::usbLog("[UsbAccessory] the session on %s is over (owner now: %s): ending the bridge\n", b->node.c_str(),
                    transportName(o));
             b->set(b->stop, true);
         }
@@ -770,7 +774,7 @@ bool UsbAccessory::reapBridge(bool force) {
         if (!force) return true;
         // Leave it to itself: its threads keep their own fds (closing them could hand the numbers to the next
         // bridge) and the object. The node is not used again until the phone is replugged.
-        printf("[UsbAccessory] bridge on %s did not stop in 3 s: abandoning it until the phone is replugged\n",
+        aoap::usbLog("[UsbAccessory] bridge on %s did not stop in 3 s: abandoning it until the phone is replugged\n",
                b->node.c_str());
         if (b->has_reader) pthread_detach(b->reader);
         if (b->has_fwd) pthread_detach(b->fwd);
@@ -789,10 +793,15 @@ bool UsbAccessory::reapBridge(bool force) {
     if (b->usb_fd >= 0) close(b->usb_fd);
     close(b->sock_fd);
     const double end = monoSec();
-    printf("[UsbAccessory] %s closed after %.1f s: %llu bytes from the phone, %llu bytes to it\n", b->node.c_str(),
+    aoap::usbLog("[UsbAccessory] %s closed after %.1f s: %llu bytes from the phone, %llu bytes to it\n", b->node.c_str(),
            end - b->start_s, (unsigned long long)b->bytes_in, (unsigned long long)b->bytes_out);
     AccessoryNode* n = findNode(b->node);
-    if (n) n->next_try_s = end + kRetryGapS;
+    if (n) {
+        n->next_try_s = end + aoap::sessionRetryGapS(n->sessions);
+        if (n->sessions < kMaxSessionsPerNode)
+            aoap::usbLog("[UsbAccessory] next session on %s in %.0f s (attempt %d of %d)\n", b->node.c_str(),
+                         aoap::sessionRetryGapS(n->sessions), n->sessions + 1, kMaxSessionsPerNode);
+    }
     delete b;
     bridge_ = NULL;
     not_ours_ticks_ = 0;

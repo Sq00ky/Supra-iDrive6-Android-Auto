@@ -3,7 +3,7 @@
 // Host test for src/usb_aoap.hpp (devctl layout, node names, frame lengths) and src/usb_accessory.cpp (watcher +
 // bridge threads). A pty linked as <dir>/oap12 stands in for devc-serusb-aoap: the master side is the phone.
 // g++ -std=gnu++98 -Wall -Wextra -pthread -Iinclude -Isrc -o /tmp/test_usb_accessory
-//     tests/test_usb_accessory.cpp src/usb_accessory.cpp src/usb_direct.cpp && /tmp/test_usb_accessory   (~32 s: real retry gaps)
+//     tests/test_usb_accessory.cpp src/usb_accessory.cpp src/usb_direct.cpp && /tmp/test_usb_accessory   (~45 s: real retry gaps)
 #include "usb_aoap.hpp"
 #include "usb_accessory.hpp"
 #include "nbt_env.hpp"
@@ -75,6 +75,33 @@ static void testHeader() {
     assert(aoap::frameLength(first, 4) == 8 + 0x4000);
     assert(aoap::frameLength(middle, 4) == 4 + 0x100);
     printf("header: ok\n");
+}
+
+// 2026-11-17 (Samsung S25): nbt-aad's own switch brought the phone back 0.5 s after connecting to io-usb, inside the
+// start window, and it was reset as if left over from an earlier run.
+static void testStartState() {
+    const double w = 1.0;
+    // Reported during usbd_connect: there before nbt-aad ran.
+    assert(aoap::accessoryStartState(0, 100.0, 0, w) == aoap::kAccAtConnect);
+    // Inside the window, nobody here switched it (medialauncher, or plugged in right then): reset as before.
+    assert(aoap::accessoryStartState(100.0, 100.4, 0, w) == aoap::kAccSoonAfterConnect);
+    // The S25 case: our switch at 100.1, back as an accessory at 100.6: ours, no reset.
+    assert(aoap::accessoryStartState(100.0, 100.6, 100.1, w) == aoap::kAccSwitchedByUs);
+    // A switch sent after the accessory appeared does not make that accessory ours.
+    assert(aoap::accessoryStartState(100.0, 100.3, 100.5, w) == aoap::kAccSoonAfterConnect);
+    // Later plug-ins are new either way.
+    assert(aoap::accessoryStartState(100.0, 130.0, 0, w) == aoap::kAccNew);
+    assert(aoap::accessoryStartState(100.0, 130.0, 129.5, w) == aoap::kAccSwitchedByUs);
+    assert(aoap::resetAtStart(aoap::kAccAtConnect) && aoap::resetAtStart(aoap::kAccSoonAfterConnect));
+    assert(!aoap::resetAtStart(aoap::kAccSwitchedByUs) && !aoap::resetAtStart(aoap::kAccNew));
+    // Gaps between sessions on one plug-in.
+    assert(aoap::sessionRetryGapS(1) == 5.0 && aoap::sessionRetryGapS(2) == 10.0 && aoap::sessionRetryGapS(3) == 20.0);
+    assert(aoap::sessionRetryGapS(0) == 5.0);
+    // Log tag split for usbLog.
+    assert(aoap::logTagEnd("[UsbDirect] accessory") == 12);
+    assert(aoap::logTagEnd("[UsbAccessory] x") == 15);
+    assert(aoap::logTagEnd("no tag") == 0 && aoap::logTagEnd("[x]y") == 0 && aoap::logTagEnd(NULL) == 0);
+    printf("start state: ok\n");
 }
 
 static void testResetBudget() {
@@ -239,9 +266,11 @@ static void testBridge() {
     // there is no way to reset the phone from there.
     usb.noteSessionFailed(true);
     endSession();
-    assert(waitSessions(2, 5.0));
+    assert(!waitSessions(2, 4.0));   // not before the 5 s gap (aoap::sessionRetryGapS)
+    assert(waitSessions(2, 3.5));
     endSession();
-    assert(waitSessions(3, 5.0));
+    assert(!waitSessions(3, 8.5));   // then 10 s
+    assert(waitSessions(3, 3.5));
     endSession();
     assert(!waitSessions(4, 4.5));
     assert(!usb.phonePresent());   // out of sessions: still plugged in, but wireless may have the phone
@@ -311,7 +340,7 @@ static void testStalledWriter() {
     assert(queued > 64 * 1024);
     usleep(300000);
     endSession();   // ByeBye: the session is over, the phone is still silent
-    assert(waitSessions(base + 2, 6.0));   // reaped (~1 s) + retry gap (3 s)
+    assert(waitSessions(base + 2, 8.0));   // reaped (~1 s) + retry gap (5 s)
     printf("stalled writer: ok\n");
 
     // stop() with the new bridge stuck the same way (the pty is still full) returns promptly too.
@@ -423,6 +452,7 @@ int main() {
     testUsbDirectSetting();
     testHeader();
     testResetBudget();
+    testStartState();
     testBridge();
     testStalledWriter();
     testOpenRetries();

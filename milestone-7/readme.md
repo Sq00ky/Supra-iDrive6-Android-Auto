@@ -38,6 +38,17 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > sets the hold (default 30 s, 0 = none); during a continuous hold one re-registration still runs every 60 s, so a
 > phone that keeps being refused does not switch the recovery off. The hint after refused links no longer blames Bluetooth audio (a Z Fold8 was refused
 > with A2DP connected and the security check passed): it points at the phone's functions in iDrive and re-pairing.
+>
+> **v1.9.92-usbfix: a phone nbt-aad switched to Android Auto itself is no longer reset at start-up.** With the phone
+> already plugged in when nbt-aad starts (boot, Restart, a settings change), nbt-aad switches it to accessory mode;
+> a fast phone (Samsung S25, 0.5 s) came back inside the 1 s start window and was taken for one left in accessory
+> mode by an earlier run and reset. The phone then attached twice and its Android Auto session never started, three
+> tries, then "unplug and replug". Present since v1.9.26 (the start-up reset). Now an accessory that appears after
+> nbt-aad's own switch is never reset; one that really was there before still is. Sessions on the same plug-in are
+> retried 5 s and then 10 s apart (was 3 s) and a reset is followed by 5 s of quiet (was 3 s), so the phone has
+> given up on the failed session first. Every `[UsbAccessory]` / `[UsbDirect]` line now carries the seconds since
+> boot, and the accessory line says why it is or is not reset.
+> Log: `accessory 18d1:2d00 at usb0.2.0 (interface 0): switched by nbt-aad 0.48 s ago: no reset`.
 > Log: `[Wireless] ... not re-registering the service under it`, `held for 60 s while the phone keeps asking: one
 > re-registration anyway`, `deregister answered 5 and register answered 5`.
 

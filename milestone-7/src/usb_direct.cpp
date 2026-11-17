@@ -40,7 +40,7 @@ static const double kSwitchGiveUpS = 120.0;           // after this long plugged
 static const unsigned kCtrlTimeoutMs = 1000;
 static const size_t kCtrlBuf = 256;
 // io-usb reports the devices already plugged in right after usbd_connect. A phone plugged in within this time counts
-// too: it only gets a reset it didn't need.
+// too (it only gets a reset it didn't need), unless nbt-aad switched it itself (aoap::accessoryStartState).
 static const double kPresentAtStartS = 1.0;
 
 // Where medialauncher starts the accessory driver from (umass-enum.cfg), and what /opt/mm resolves to on the car.
@@ -100,7 +100,7 @@ static void deadline(struct timespec& ts, unsigned ms) {
     }
 }
 
-UsbDirect::UsbDirect() : conn_(NULL), connected_s_(0), claim_(NULL) {
+UsbDirect::UsbDirect() : conn_(NULL), connected_s_(0), switch_s_(0), claim_(NULL) {
     pthread_mutex_init(&mu_, NULL);
 }
 
@@ -126,7 +126,7 @@ bool UsbDirect::start() {
     parm.connect_wait = USBD_CONNECT_WAIT;
     int r = usbd_connect(&parm, &conn_);
     if (r != EOK) {
-        printf("[UsbDirect] usbd_connect failed: %s\n", strerror(r));
+        aoap::usbLog("[UsbDirect] usbd_connect failed: %s\n", strerror(r));
         conn_ = NULL;
         g_direct = NULL;
         return false;
@@ -134,7 +134,7 @@ bool UsbDirect::start() {
     pthread_mutex_lock(&mu_);
     connected_s_ = monoS();
     pthread_mutex_unlock(&mu_);
-    printf("[UsbDirect] connected to io-usb: phones are switched and read through libusbdi (NBT_USB_DIRECT)\n");
+    aoap::usbLog("[UsbDirect] connected to io-usb: phones are switched and read through libusbdi (NBT_USB_DIRECT)\n");
     return true;
 }
 
@@ -172,13 +172,15 @@ void UsbDirect::inserted(const void* p) {
         }
         pthread_mutex_unlock(&mu_);
         if (!known)
-            printf("[UsbDirect] USB device %04x:%04x (class %02x) at %s\n", (unsigned)inst->ident.vendor,
+            aoap::usbLog("[UsbDirect] USB device %04x:%04x (class %02x) at %s\n", (unsigned)inst->ident.vendor,
                    (unsigned)inst->ident.device, (unsigned)inst->ident.dclass, key.c_str());
         return;
     }
     pthread_mutex_lock(&mu_);
     bool known = false;
     for (size_t i = 0; i < accs_.size(); ++i) known = known || accs_[i].key == key;   // one entry per device
+    aoap::StartState st = aoap::kAccNew;
+    double since_connect = 0, since_switch = 0;
     if (!known) {
         Accessory a;
         a.key = key;
@@ -186,13 +188,33 @@ void UsbDirect::inserted(const void* p) {
                           reinterpret_cast<const uint8_t*>(inst) + sizeof(*inst));
         a.seen_s = monoS();
         a.link = NULL;
-        a.present_at_start = connected_s_ == 0 || a.seen_s - connected_s_ < kPresentAtStartS;
+        st = aoap::accessoryStartState(connected_s_, a.seen_s, switch_s_, kPresentAtStartS);
+        a.present_at_start = aoap::resetAtStart(st);
+        since_connect = connected_s_ > 0 ? a.seen_s - connected_s_ : 0;
+        since_switch = switch_s_ > 0 ? a.seen_s - switch_s_ : 0;
         accs_.push_back(a);
     }
     pthread_mutex_unlock(&mu_);
-    if (!known)
-        printf("[UsbDirect] accessory %04x:%04x at %s (interface %u)\n", (unsigned)inst->ident.vendor,
-               (unsigned)inst->ident.device, key.c_str(), (unsigned)inst->iface);
+    if (!known) {
+        char why[128];
+        switch (st) {
+        case aoap::kAccAtConnect:
+            snprintf(why, sizeof(why), "already there when nbt-aad connected to io-usb: reset before the first session");
+            break;
+        case aoap::kAccSoonAfterConnect:
+            snprintf(why, sizeof(why), "appeared %.2f s after nbt-aad connected, not switched by it: reset before the "
+                     "first session", since_connect);
+            break;
+        case aoap::kAccSwitchedByUs:
+            snprintf(why, sizeof(why), "switched by nbt-aad %.2f s ago: no reset", since_switch);
+            break;
+        default:
+            snprintf(why, sizeof(why), "plugged in %.1f s after nbt-aad connected: no reset", since_connect);
+            break;
+        }
+        aoap::usbLog("[UsbDirect] accessory %04x:%04x at %s (interface %u): %s\n", (unsigned)inst->ident.vendor,
+                     (unsigned)inst->ident.device, key.c_str(), (unsigned)inst->iface, why);
+    }
 }
 
 void UsbDirect::removed(const void* p) {
@@ -201,7 +223,7 @@ void UsbDirect::removed(const void* p) {
     pthread_mutex_lock(&mu_);
     for (size_t i = accs_.size(); i-- > 0;) {
         if (accs_[i].key != key) continue;
-        printf("[UsbDirect] accessory %s removed\n", key.c_str());
+        aoap::usbLog("[UsbDirect] accessory %s removed\n", key.c_str());
         if (accs_[i].link) accs_[i].link->gone();   // lock order: UsbDirect::mu_, then the link's
         accs_.erase(accs_.begin() + i);
     }
@@ -240,7 +262,7 @@ UsbDirectLink* UsbDirect::open(const std::string& key) {
     struct usbd_device* dev = NULL;
     int r = usbd_attach(conn_, &inst, 0, &dev);
     if (r != EOK) {
-        printf("[UsbDirect] %s: usbd_attach failed: %s\n", key.c_str(), strerror(r));
+        aoap::usbLog("[UsbDirect] %s: usbd_attach failed: %s\n", key.c_str(), strerror(r));
         return NULL;
     }
     UsbDirectLink* link = new UsbDirectLink(this, key, dev);
@@ -258,7 +280,7 @@ UsbDirectLink* UsbDirect::open(const std::string& key) {
     }
     pthread_mutex_unlock(&mu_);
     if (!still) {
-        printf("[UsbDirect] %s: unplugged while it was being opened\n", key.c_str());
+        aoap::usbLog("[UsbDirect] %s: unplugged while it was being opened\n", key.c_str());
         delete link;
         return NULL;
     }
@@ -285,6 +307,12 @@ bool UsbDirect::takePresentAtStart(const std::string& key) {
     return present;
 }
 
+void UsbDirect::noteSwitchSent() {
+    pthread_mutex_lock(&mu_);
+    switch_s_ = monoS();
+    pthread_mutex_unlock(&mu_);
+}
+
 bool UsbDirect::resetDevice(const std::string& key) {
     if (!conn_) return false;
     usbd_device_instance_t inst;
@@ -298,7 +326,7 @@ bool UsbDirect::resetDevice(const std::string& key) {
     }
     pthread_mutex_unlock(&mu_);
     if (!found) {
-        printf("[UsbDirect] %s: not reset: unplugged, or a link is still open on it\n", key.c_str());
+        aoap::usbLog("[UsbDirect] %s: not reset: unplugged, or a link is still open on it\n", key.c_str());
         return false;
     }
 
@@ -306,16 +334,16 @@ bool UsbDirect::resetDevice(const std::string& key) {
     struct usbd_device* dev = NULL;
     int r = usbd_attach(conn_, &inst, 0, &dev);
     if (r != EOK) {
-        printf("[UsbDirect] %s: not reset: usbd_attach failed: %s\n", key.c_str(), strerror(r));
+        aoap::usbLog("[UsbDirect] %s: not reset: usbd_attach failed: %s\n", key.c_str(), strerror(r));
         return false;
     }
     r = usbd_reset_device(dev);
     usbd_detach(dev);
     if (r != EOK) {
-        printf("[UsbDirect] %s: usbd_reset_device failed: %s\n", key.c_str(), strerror(r));
+        aoap::usbLog("[UsbDirect] %s: usbd_reset_device failed: %s\n", key.c_str(), strerror(r));
         return false;
     }
-    printf("[UsbDirect] %s: USB reset done\n", key.c_str());
+    aoap::usbLog("[UsbDirect] %s: USB reset done\n", key.c_str());
     return true;
 }
 
@@ -438,6 +466,7 @@ int UsbDirect::switchPhones(const aoap::Identity& id, double min_age_s) {
         memcpy(&inst, &due[i].instance[0], sizeof(inst));
         int proto = 0;
         char why[128] = "";
+        noteSwitchSent();   // before: the phone can be back as an accessory before aoaSwitch() returns
         SwitchResult r = aoaSwitch(conn_, &inst, id, &proto, why, sizeof(why));
         const double t = monoS();
         bool give_up = r == kSwitchTimedOut || (r != kSwitchSent && t - due[i].seen_s >= kSwitchGiveUpS);
@@ -456,16 +485,16 @@ int UsbDirect::switchPhones(const aoap::Identity& id, double min_age_s) {
         const char* k = due[i].key.c_str();
         if (r == kSwitchSent) {
             ++switched;
-            printf("[UsbDirect] %s: AOA protocol %d: switch to accessory mode sent as '%s' / '%s'\n", k, proto,
+            aoap::usbLog("[UsbDirect] %s: AOA protocol %d: switch to accessory mode sent as '%s' / '%s'\n", k, proto,
                    id.manufacturer, id.model);
         } else if (r == kSwitchTimedOut) {
-            printf("[UsbDirect] %s: no answer to the accessory request (%s): not a phone, not asking it again\n", k,
+            aoap::usbLog("[UsbDirect] %s: no answer to the accessory request (%s): not a phone, not asking it again\n", k,
                    why);
         } else if (give_up) {
-            printf("[UsbDirect] %s: still not switched after %.0f s (%s): not asking any more\n", k, kSwitchGiveUpS,
+            aoap::usbLog("[UsbDirect] %s: still not switched after %.0f s (%s): not asking any more\n", k, kSwitchGiveUpS,
                    why);
         } else if (due[i].last != r) {
-            printf("[UsbDirect] %s: %s (%s): asking again every %.0f s while it is plugged in\n", k,
+            aoap::usbLog("[UsbDirect] %s: %s (%s): asking again every %.0f s while it is plugged in\n", k,
                    r == kNoAoa ? "refused the accessory request (phone set to charging only, or locked?)"
                                : "accessory switch failed",
                    why, kSwitchRetryS);
@@ -510,7 +539,7 @@ static void* claimThread(void* arg) {
             c->ctp = r;
             dispatch_handler(r);
         } else if (errno != ETIMEDOUT && errno != EINTR) {
-            printf("[UsbDirect] driver path claim: dispatch_block failed: %s\n", strerror(errno));
+            aoap::usbLog("[UsbDirect] driver path claim: dispatch_block failed: %s\n", strerror(errno));
             break;
         }
     }
@@ -542,7 +571,7 @@ bool UsbDirect::claimAoapDriver() {
     for (unsigned i = 0; i < kAoapDriverPathCount; ++i) c->ids[i] = -1;
     c->dpp = dispatch_create();
     if (!c->dpp) {
-        printf("[UsbDirect] driver path claim: dispatch_create failed: %s\n", strerror(errno));
+        aoap::usbLog("[UsbDirect] driver path claim: dispatch_create failed: %s\n", strerror(errno));
         freeClaim(c);
         return false;
     }
@@ -568,14 +597,14 @@ bool UsbDirect::claimAoapDriver() {
         c->ids[i] = resmgr_attach(c->dpp, &ra, kAoapDriverPaths[i], _FTYPE_ANY, _RESMGR_FLAG_SELF, &c->connect,
                                   &c->io, &c->attr);
         if (c->ids[i] == -1)
-            printf("[UsbDirect] driver path claim: %s: %s\n", kAoapDriverPaths[i], strerror(errno));
+            aoap::usbLog("[UsbDirect] driver path claim: %s: %s\n", kAoapDriverPaths[i], strerror(errno));
         else
             ++attached;
     }
     c->ctp = attached ? dispatch_context_alloc(c->dpp) : NULL;
     c->has_thread = c->ctp && pthread_create(&c->thread, NULL, &claimThread, c) == 0;
     if (!c->has_thread) {
-        if (attached) printf("[UsbDirect] driver path claim: could not start its thread\n");
+        if (attached) aoap::usbLog("[UsbDirect] driver path claim: could not start its thread\n");
         freeClaim(c);
         return false;
     }
@@ -588,16 +617,16 @@ bool UsbDirect::claimAoapDriver() {
         err[i] = fd < 0 ? errno : 0;
         if (fd >= 0) ::close(fd);
         if (err[i] != EACCES)
-            printf("[UsbDirect] driver path claim: opening %s: %s\n", kAoapDriverPaths[i],
+            aoap::usbLog("[UsbDirect] driver path claim: opening %s: %s\n", kAoapDriverPaths[i],
                    err[i] ? strerror(err[i]) : "opened (not refused)");
     }
     if (err[0] != EACCES) {
-        printf("[UsbDirect] driver path claim not effective: stopping devc-serusb-aoap instead\n");
+        aoap::usbLog("[UsbDirect] driver path claim not effective: stopping devc-serusb-aoap instead\n");
         freeClaim(c);
         return false;
     }
     claim_ = c;
-    printf("[UsbDirect] claimed %s: the head unit cannot start devc-serusb-aoap while nbt-aad runs "
+    aoap::usbLog("[UsbDirect] claimed %s: the head unit cannot start devc-serusb-aoap while nbt-aad runs "
            "(NBT_USB_CLAIM_DRIVER=0 turns this off)\n", kAoapDriverPaths[0]);
     return true;
 }
@@ -606,7 +635,7 @@ void UsbDirect::releaseAoapDriver() {
     if (!claim_) return;
     freeClaim(claim_);
     claim_ = NULL;
-    printf("[UsbDirect] released the devc-serusb-aoap path\n");
+    aoap::usbLog("[UsbDirect] released the devc-serusb-aoap path\n");
 }
 
 int UsbDirect::stopAoapDriver() {
@@ -641,7 +670,7 @@ int UsbDirect::stopAoapDriver() {
         bool alive = false;
         for (size_t j = 0; j < pids.size(); ++j) alive = alive || pids[j] == signalled_[i].pid;
         if (!alive) {
-            printf("[UsbDirect] devc-serusb-aoap (pid %ld) has exited: only nbt-aad reads the phone now\n",
+            aoap::usbLog("[UsbDirect] devc-serusb-aoap (pid %ld) has exited: only nbt-aad reads the phone now\n",
                    signalled_[i].pid);
             signalled_.erase(signalled_.begin() + i);
         }
@@ -653,13 +682,13 @@ int UsbDirect::stopAoapDriver() {
         }
         if (!s) {
             kill((pid_t)pids[j], SIGTERM);
-            printf("[UsbDirect] stopping devc-serusb-aoap (pid %ld) so it does not read the phone alongside us\n",
+            aoap::usbLog("[UsbDirect] stopping devc-serusb-aoap (pid %ld) so it does not read the phone alongside us\n",
                    pids[j]);
             Signalled n = { pids[j], now, false };
             signalled_.push_back(n);
         } else if (!s->killed && now - s->term_s >= 2.0) {
             kill((pid_t)pids[j], SIGKILL);
-            printf("[UsbDirect] devc-serusb-aoap (pid %ld) is still there 2 s after SIGTERM: SIGKILL\n", pids[j]);
+            aoap::usbLog("[UsbDirect] devc-serusb-aoap (pid %ld) is still there 2 s after SIGTERM: SIGKILL\n", pids[j]);
             s->killed = true;
         }
     }
@@ -703,13 +732,13 @@ bool UsbDirectLink::openFrom(struct usbd_desc_node* ifc, const char* how) {
         else bout = ed;
     }
     if (!bin || !bout) {
-        printf("[UsbDirect] %s: %s: %d endpoints, no bulk in/out pair\n", key_.c_str(), how, eps);
+        aoap::usbLog("[UsbDirect] %s: %s: %d endpoints, no bulk in/out pair\n", key_.c_str(), how, eps);
         return false;
     }
     int ri = usbd_open_pipe(dev_, bin, &in_);
     int ro = usbd_open_pipe(dev_, bout, &out_);
     if (ri != EOK || ro != EOK) {
-        printf("[UsbDirect] %s: opening the bulk pipes failed: in %s, out %s\n", key_.c_str(), strerror(ri),
+        aoap::usbLog("[UsbDirect] %s: opening the bulk pipes failed: in %s, out %s\n", key_.c_str(), strerror(ri),
                strerror(ro));
         if (ri == EOK) usbd_close_pipe(in_);
         if (ro == EOK) usbd_close_pipe(out_);
@@ -717,7 +746,7 @@ bool UsbDirectLink::openFrom(struct usbd_desc_node* ifc, const char* how) {
         return false;
     }
     max_packet_out_ = bout->endpoint.wMaxPacketSize ? bout->endpoint.wMaxPacketSize : 512;
-    printf("[UsbDirect] %s: %s: bulk in 0x%02x / out 0x%02x (max packet %u / %u)\n", key_.c_str(), how,
+    aoap::usbLog("[UsbDirect] %s: %s: bulk in 0x%02x / out 0x%02x (max packet %u / %u)\n", key_.c_str(), how,
            (unsigned)bin->endpoint.bEndpointAddress, (unsigned)bout->endpoint.bEndpointAddress,
            (unsigned)bin->endpoint.wMaxPacketSize, max_packet_out_);
     return true;
@@ -736,7 +765,7 @@ bool UsbDirectLink::openPipes(unsigned config, unsigned iface, unsigned alternat
         usbd_descriptors_t* ifd;
         if (!usbd_parse_descriptors(dev_, NULL, USB_DESC_DEVICE, 0, &dn) ||
             !usbd_parse_descriptors(dev_, dn, USB_DESC_CONFIGURATION, 0, &cn)) {
-            printf("[UsbDirect] %s: no device / configuration descriptor\n", key_.c_str());
+            aoap::usbLog("[UsbDirect] %s: no device / configuration descriptor\n", key_.c_str());
             return false;
         }
         for (int i = 0; !in_ && (ifd = usbd_parse_descriptors(dev_, cn, USB_DESC_INTERFACE, i, &ifc)); ++i) {
@@ -747,7 +776,7 @@ bool UsbDirectLink::openPipes(unsigned config, unsigned iface, unsigned alternat
         }
     }
     if (!(in_ && out_)) {
-        printf("[UsbDirect] %s: no bulk in/out endpoint pair found\n", key_.c_str());
+        aoap::usbLog("[UsbDirect] %s: no bulk in/out endpoint pair found\n", key_.c_str());
         return false;
     }
     slots_.resize(kRxSlots);
@@ -759,14 +788,14 @@ bool UsbDirectLink::openPipes(unsigned config, unsigned iface, unsigned alternat
         s.seq = 0;
         s.busy = false;
         if (!s.urb || !s.buf) {
-            printf("[UsbDirect] %s: out of USB transfer memory\n", key_.c_str());
+            aoap::usbLog("[UsbDirect] %s: out of USB transfer memory\n", key_.c_str());
             return false;
         }
     }
     tx_urb_ = usbd_alloc_urb(NULL);
     tx_buf_ = reinterpret_cast<uint8_t*>(usbd_alloc(kTxBuf));
     if (!tx_urb_ || !tx_buf_) {
-        printf("[UsbDirect] %s: out of USB transfer memory\n", key_.c_str());
+        aoap::usbLog("[UsbDirect] %s: out of USB transfer memory\n", key_.c_str());
         return false;
     }
     return true;
@@ -793,7 +822,7 @@ bool UsbDirectLink::startRx(UsbRxCallback cb, void* user) {
     bool ok = true;
     for (size_t i = 0; i < slots_.size() && ok; ++i) ok = submit(&slots_[i]);
     pthread_mutex_unlock(&mu_);
-    if (!ok) printf("[UsbDirect] %s: %s\n", key_.c_str(), why_);
+    if (!ok) aoap::usbLog("[UsbDirect] %s: %s\n", key_.c_str(), why_);
     return ok;
 }
 
@@ -875,7 +904,7 @@ bool UsbDirectLink::transfer(const uint8_t* p, size_t n) {
     if (r != EOK) {
         tx_busy_ = false;
         pthread_mutex_unlock(&mu_);
-        printf("[UsbDirect] %s: USB write of %u bytes failed: %s\n", key_.c_str(), (unsigned)n, strerror(r));
+        aoap::usbLog("[UsbDirect] %s: USB write of %u bytes failed: %s\n", key_.c_str(), (unsigned)n, strerror(r));
         return false;
     }
     // abort() makes io-usb complete it; the wait is bounded anyway so a lost completion cannot hang the writer.
@@ -906,7 +935,7 @@ bool UsbDirectLink::write(const uint8_t* p, size_t n) {
             pthread_mutex_unlock(&mu_);
             if (stopping) return false;
             zlp_ok_ = false;
-            printf("[UsbDirect] %s: zero-length USB write refused: not sending them any more\n", key_.c_str());
+            aoap::usbLog("[UsbDirect] %s: zero-length USB write refused: not sending them any more\n", key_.c_str());
         }
     }
     return true;
@@ -951,7 +980,7 @@ void UsbDirectLink::close() {
     if (!drained) {
         // io-usb still owns some transfers: freeing them could crash in a late callback. Keep it all, and keep the
         // accessory marked as in use until the phone is unplugged.
-        printf("[UsbDirect] %s: %u USB transfers did not complete after the abort: leaving them until the phone is "
+        aoap::usbLog("[UsbDirect] %s: %u USB transfers did not complete after the abort: leaving them until the phone is "
                "replugged\n", key_.c_str(), left);
         return;
     }
@@ -961,10 +990,10 @@ void UsbDirectLink::close() {
 
 #else   // host builds (tests): there is no io-usb
 
-UsbDirect::UsbDirect() : conn_(NULL), connected_s_(0), claim_(NULL) { pthread_mutex_init(&mu_, NULL); }
+UsbDirect::UsbDirect() : conn_(NULL), connected_s_(0), switch_s_(0), claim_(NULL) { pthread_mutex_init(&mu_, NULL); }
 UsbDirect::~UsbDirect() { pthread_mutex_destroy(&mu_); }
 bool UsbDirect::start() {
-    printf("[UsbDirect] needs QNX io-usb: not available here\n");
+    aoap::usbLog("[UsbDirect] needs QNX io-usb: not available here\n");
     return false;
 }
 void UsbDirect::stop() {}
@@ -972,6 +1001,7 @@ std::vector<std::string> UsbDirect::accessories(double) { return std::vector<std
 UsbDirectLink* UsbDirect::open(const std::string&) { return NULL; }
 bool UsbDirect::resetDevice(const std::string&) { return false; }
 bool UsbDirect::takePresentAtStart(const std::string&) { return false; }
+void UsbDirect::noteSwitchSent() {}
 int UsbDirect::switchPhones(const aoap::Identity&, double) { return 0; }
 bool UsbDirect::claimAoapDriver() { return false; }
 void UsbDirect::releaseAoapDriver() {}

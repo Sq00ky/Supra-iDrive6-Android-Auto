@@ -14,9 +14,12 @@
 //    Each read() is answered with one whole USB transfer and the rest of it is dropped when the caller's
 //    buffer is smaller, so it must always be read with a buffer of at least the -l size.
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 namespace nbt {
 namespace aoap {
@@ -105,6 +108,59 @@ private:
     int used_;
     double last_s_;
 };
+
+// Why an accessory (a phone already in accessory mode) is or is not reset before its first session.
+enum StartState {
+    kAccNew = 0,              // plugged in (or switched by someone else) while nbt-aad ran: no reset
+    kAccAtConnect,            // reported during usbd_connect: in accessory mode before nbt-aad ran -> reset
+    kAccSoonAfterConnect,     // appeared within the start window and nobody here switched it -> reset
+    kAccSwitchedByUs          // appeared after nbt-aad sent a switch itself: it is ours, fresh -> no reset
+};
+// connected_s: when usbd_connect returned (0 = still in it); seen_s: when io-usb reported the accessory; switch_s:
+// when nbt-aad last sent an accessory switch (either path), 0 = never. A Samsung S25 came back 0.5 s after our own
+// switch, inside the 1 s start window, and was reset: it then attached twice and its session failed (2026-11-17).
+inline StartState accessoryStartState(double connected_s, double seen_s, double switch_s, double window_s) {
+    if (connected_s == 0) return kAccAtConnect;
+    if (switch_s > 0 && seen_s >= switch_s) return kAccSwitchedByUs;
+    if (seen_s - connected_s < window_s) return kAccSoonAfterConnect;
+    return kAccNew;
+}
+inline bool resetAtStart(StartState s) { return s == kAccAtConnect || s == kAccSoonAfterConnect; }
+
+// Gap before the next session on the same plug-in, after `started` sessions. A phone needs a few seconds to give up
+// on a failed session (its own start-up timeout is 5 s); a retry 3 s later met a phone still tearing down
+// ("No USB state changes occurred within 2000ms", 2026-11-17).
+inline double sessionRetryGapS(int started) {
+    return started <= 1 ? 5.0 : started == 2 ? 10.0 : 20.0;
+}
+
+// Length of a leading "[Tag] " in a log format, 0 if there is none.
+inline size_t logTagEnd(const char* fmt) {
+    if (!fmt || fmt[0] != '[') return 0;
+    const char* e = strchr(fmt, ']');
+    return (e && e[1] == ' ') ? static_cast<size_t>(e - fmt) + 2 : 0;
+}
+
+inline double upS() {   // seconds since boot: the clock of main.cpp's [%9.3f] lines and of the iDrive app log
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+// printf for the [UsbAccessory] / [UsbDirect] lines: the seconds since boot go in after the tag, so a USB log can be
+// lined up with the other daemon lines and a phone's logcat. One write per line (threads log concurrently).
+inline void usbLog(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+inline void usbLog(const char* fmt, ...) {
+    char line[1024];
+    size_t t = logTagEnd(fmt);
+    int n = snprintf(line, sizeof(line), "%.*s[%9.3f] ", (int)t, fmt, upS());
+    if (n < 0 || n >= (int)sizeof(line)) n = 0;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line + n, sizeof(line) - n, fmt + t, ap);
+    va_end(ap);
+    fputs(line, stdout);
+}
 
 } // namespace aoap
 } // namespace nbt
