@@ -7,13 +7,13 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
-> **v1.9.88-autors / rhmiapp-68-autors (test build): Settings changes apply at once.** The app notes every Settings
+> **v1.9.88-autors / rhmiapp-68-autors: Settings changes apply at once.** The app notes every Settings
 > checkbox when the Settings page opens and compares when you go back to the Android Auto main page (Start / Force Stop
 > / Restart / Settings / About). If any checkbox changed and nbt-aad is running, it restarts nbt-aad, the same as the
 > Restart row, so no manual Restart is needed. A box ticked and unticked again counts as no change. Left another way (a
 > hard key), the check happens the next time the main page shows. A running phone session drops and reconnects.
 > `nbt-aad.env` edits are not watched. `NBT_SETTINGS_RESTART=0` turns it off. App log: `settings changed (...) ->
-> restarting nbt-aad`. Not car-tested.
+> restarting nbt-aad`. Confirmed on the J29: three restarts, phone back on wireless Android Auto in 4.5-6 s each.
 
 > **v1.9.64-navset: navigation settings on the Settings page.** The cluster/HUD checkbox is now **Show navigation in
 > HUD/gauge cluster** (same flag file, `/var/opt/aa/kombi-nav`). A new **Show directions at any distance** checkbox
