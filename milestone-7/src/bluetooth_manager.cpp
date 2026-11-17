@@ -40,7 +40,8 @@ const char* gapErrorName(uint32_t e) {
 enum SppState { SPP_IDLE, SPP_REG_SENT, SPP_DEREG_SENT, SPP_REREG_SENT, SPP_DONE };
 volatile SppState g_spp = SPP_IDLE;
 volatile bool g_periodic = false;      // current deregister/register pair was started by reregister()
-volatile bool g_bounce = false;        // ... and by requestSppBounce() (handshake failed), not the periodic loop
+volatile bool g_bounce = false;
+volatile uint32_t g_lastDeregErr = 0xFFFFFFFFu;   // GapErrorCode of the deregister in the current round (none = ~0)        // ... and by requestSppBounce() (handshake failed), not the periodic loop
 volatile bool g_txBusy = false;        // reregister() is inside sendRequest on the wireless thread
 uint32_t g_stateSec = 0;               // when g_spp last changed (monotonic s)
 pthread_mutex_t g_stateMx = PTHREAD_MUTEX_INITIALIZER;
@@ -279,7 +280,14 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
             sendDeregister(c, "clearing a stale registration, then retrying");
             return;
         }
-        if (err != 0 && g_periodic)
+        if (err == 5 && g_periodic && g_lastDeregErr == 5) {
+            // Deregister 5 then register 5: in 250 of 250 logged rounds the pair came together. Logged as measured
+            // codes, not read as a failure (it is not known what 5 means here: DEFAULT, "already registered?").
+            static unsigned pairs = 0;
+            if ((pairs++ % 20) == 0)
+                printf("[BluetoothManager] deregister answered 5 and register answered 5 (%u such round(s) so far): "
+                       "logged, not treated as a failure; the next automatic round follows\n", pairs);
+        } else if (err != 0 && g_periodic)
             printf("[BluetoothManager] re-registering the Android Auto Bluetooth service failed: use Restart in the "
                    "iDrive menu (the next automatic try follows)\n");
         else if (err != 0)
@@ -297,19 +305,7 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
     } else if (g_spp == SPP_DEREG_SENT && type == 0x200 && id != kRspDeviceListGet && id != kRspServiceListGet) {
         // Deregister response (0x80000044 on the car); take the first plain response after the request.
         uint32_t err = readErr(pl, len);
-        if (err == 5 && g_periodic && !g_bounce) {   // a bounce always registers again
-            // Seen on P18362I and Y24073J (18 of 39 rounds on one car): the deregister answers DEFAULT and the register
-            // after it always answers DEFAULT ("already registered") too, so the car kept the registration and
-            // registering again changes nothing. Leave it registered, no "use Restart" warning.
-            static unsigned kept = 0;
-            if ((kept++ % 20) == 0)
-                printf("[BluetoothManager] SppUuidDeregister response (id=0x%x): GapErrorCode=5: the car kept the "
-                       "registration, the Android Auto Bluetooth service stays registered (not registering again; %u "
-                       "time(s) so far)\n", id, kept);
-            setState(SPP_DONE);
-            fflush(stdout);
-            return;
-        }
+        g_lastDeregErr = err;   // always register again and log what the register answers (a measurement, not a guess)
         printf("[BluetoothManager] SppUuidDeregister response (id=0x%x): GapErrorCode=%u (%s); registering again\n",
                id, err, gapErrorName(err));
         setState(SPP_REREG_SENT);
@@ -384,7 +380,7 @@ bool sppPhoneAsking(unsigned* agoSec) {
     pthread_mutex_unlock(&g_dirMx);
     uint32_t now = monoSec();
     if (agoSec) *agoSec = seen ? (unsigned)(now - at) : 0;
-    return sppReregHeld(seen, at, now);
+    return sppReregHeld(seen, at, now, sppReregHoldSec());
 }
 
 BluetoothManager::BluetoothManager() : is_registered_(false) {}
@@ -430,6 +426,7 @@ bool BluetoothManager::reregister(const char* why, bool bounce) {
     g_stateSec = monoSec();
     g_periodic = true;
     g_bounce = bounce;
+    g_lastDeregErr = 0xFFFFFFFFu;
     g_txBusy = true;
     pthread_mutex_unlock(&g_stateMx);
 

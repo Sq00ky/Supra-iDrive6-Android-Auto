@@ -58,7 +58,7 @@ int sppDirLinkResult(bool phoneOpened, bool spoke);  // new model (SppDirection:
 bool sppDirGate();                                   // leave car-opened links alone now?
 int sppDirModel();
 unsigned sppDirRequests();
-// A phone asked for a Bluetooth serial link (any ServiceRequest inform) within kSppReregHoldSec: periodic
+// A phone asked for the Android Auto serial link (a ServiceRequest inform for 'SPP') within NBT_SPP_REREG_HOLD_S: periodic
 // re-registration is held. agoSec (optional) gets the age of the last request. Thread-safe.
 bool sppPhoneAsking(unsigned* agoSec);
 

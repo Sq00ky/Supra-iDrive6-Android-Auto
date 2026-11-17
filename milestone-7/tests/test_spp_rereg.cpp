@@ -32,6 +32,25 @@ int main() {
     // Only the serial-link request holds (A2DP / HFP come with every audio connect; J29 2026-11-16).
     assert(sppRequestHolds("SPP"));
     assert(!sppRequestHolds("A2DP_SOURCE") && !sppRequestHolds("HFPGW") && !sppRequestHolds(""));
+    // NBT_SPP_REREG_HOLD_S: unset = 30, 0 / negative = no hold, clamped at 600.
+    assert(sppReregHoldSetting(NULL) == kSppReregHoldSec && sppReregHoldSetting("") == kSppReregHoldSec);
+    assert(sppReregHoldSetting("0") == 0 && sppReregHoldSetting("-4") == 0);
+    assert(sppReregHoldSetting("45") == 45 && sppReregHoldSetting("99999") == 600);
+    // Cap: one round per kSppHoldCapSec of continuous hold, wrap-safe; 0 = never.
+    assert(!sppHoldCapDue(1000, 1000) && !sppHoldCapDue(1000, 1000 + kSppHoldCapSec - 1));
+    assert(sppHoldCapDue(1000, 1000 + kSppHoldCapSec));
+    assert(sppHoldCapDue(0xFFFFFFF0u, 0xFFFFFFF0u + kSppHoldCapSec));   // wraps past 0
+    assert(!sppHoldCapDue(1000, 5000, 0));
+    // A phone refused every 5 s for 10 min: with the cap, one round per minute (the simulation the referee ran gave 0).
+    {
+        uint32_t heldSince = 0;
+        int rounds = 0;
+        for (uint32_t now = 100; now < 100 + 600; ++now) {
+            if (!heldSince) heldSince = now;
+            if (sppHoldCapDue(heldSince, now)) { ++rounds; heldSince = now; }
+        }
+        assert(rounds == 600 / kSppHoldCapSec - 1 || rounds == 600 / kSppHoldCapSec);
+    }
     printf("test_spp_rereg OK\n");
     return 0;
 }

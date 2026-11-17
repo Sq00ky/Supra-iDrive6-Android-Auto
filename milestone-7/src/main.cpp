@@ -856,12 +856,18 @@ static void* wirelessThread(void*) {
     // cold start, and after the head unit slept): register the Bluetooth service again, as Restart does.
     nbt::SppReregTimer rereg;
     rereg.configure(nbt::sppReregBaseSec());
-    if (rereg.enabled())
+    if (rereg.enabled()) {
         printf("[Wireless] while no phone opens the Android Auto Bluetooth link, the Bluetooth service is registered "
                "again (like Restart does) every %d s for %d s, then every %d s (NBT_SPP_REREG_S=0 turns this off)\n",
                nbt::sppReregBaseSec(), nbt::kSppReregFastPhaseSec,
                nbt::sppReregIntervalSec(1 << 20, nbt::sppReregBaseSec()));
-    else
+        if (nbt::sppReregHoldSec() > 0)
+            printf("[Wireless] held for %d s after each SPP request from the phone (it retries by itself), with one "
+                   "re-registration per %d s of continuous hold (NBT_SPP_REREG_HOLD_S=0 = no hold)\n",
+                   nbt::sppReregHoldSec(), nbt::kSppHoldCapSec);
+        else
+            printf("[Wireless] no hold while the phone asks (NBT_SPP_REREG_HOLD_S=0)\n");
+    } else
         printf("[Wireless] automatic Bluetooth service re-registration off (NBT_SPP_REREG_S=0)\n");
     bool idleWait = false;      // waiting for a link; the re-registration timer runs from when this started
     uint32_t idleStart = 0;
@@ -926,18 +932,29 @@ static void* wirelessThread(void*) {
                 // Held while the phone asks for the link: checked BEFORE due(), so held time does not use up the
                 // 5 s steps of the schedule (the next round after the hold is still a short one).
                 unsigned ago = 0;
+                static uint32_t heldSince = 0;   // start of the current continuous hold (0 = not holding)
+                bool capRound = false;
                 if (nbt::sppPhoneAsking(&ago)) {
-                    static unsigned held = 0;
-                    static uint32_t lastNote = 0;
-                    if (held++ == 0 || now - lastNote >= 30) {
-                        lastNote = now;
-                        printf("[Wireless] [%9.3f] the phone asked for the Android Auto Bluetooth link %u s ago: not "
-                               "re-registering the service under it (it retries by itself)\n", upSec(), ago);
+                    if (!heldSince) heldSince = now ? now : 1;
+                    if (!nbt::sppHoldCapDue(heldSince, now)) {
+                        static unsigned held = 0;
+                        static uint32_t lastNote = 0;
+                        if (held++ == 0 || now - lastNote >= 30) {
+                            lastNote = now;
+                            printf("[Wireless] [%9.3f] the phone asked for the Android Auto Bluetooth link %u s ago: not "
+                                   "re-registering the service under it (it retries by itself)\n", upSec(), ago);
+                        }
+                        usleep(500000);
+                        continue;
                     }
-                    usleep(500000);
-                    continue;
+                    heldSince = now ? now : 1;   // the next capped round after another kSppHoldCapSec
+                    capRound = true;
+                    printf("[Wireless] [%9.3f] held for %d s while the phone keeps asking: one re-registration anyway\n",
+                           upSec(), nbt::kSppHoldCapSec);
+                } else {
+                    heldSince = 0;
                 }
-                if (!rereg.due(now)) { usleep(500000); continue; }
+                if (!capRound && !rereg.due(now)) { usleep(500000); continue; }
                 char why[96];
                 snprintf(why, sizeof(why), "no Android Auto Bluetooth link for %u s (try %d)",
                          (unsigned)(now - idleStart), rereg.attempts());
@@ -1755,7 +1772,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.90-sppreq2"
+#define NBT_AAD_BUILD "v1.9.91-sppreq3"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.

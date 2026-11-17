@@ -29,14 +29,17 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > run - this removes the I/O, not the formatting - so it answers "does writing the log cost anything", not "are the
 > printf calls free".
 >
-> **v1.9.90-sppreq2 (v1.9.89-sppreq car-tested on the J29; v1.9.90 counts only the phone's SPP requests, keeps the schedule's short steps through a hold, and a handshake-failure bounce always registers again): no Bluetooth re-registration while the phone is asking for the link.** The periodic re-registration no longer runs then.
+> **v1.9.91-sppreq3 (v1.9.89-sppreq car-tested on the J29; v1.9.90 counts only the phone's SPP requests, keeps the schedule's short steps through a hold, and a handshake-failure bounce always registers again; v1.9.91 adds the hold setting and cap and always registers after a deregister): no Bluetooth re-registration while the phone is asking for the link.** The periodic re-registration no longer runs then.
 > A phone that sent a ServiceRequest in the last 30 s is connected and already sees the service, and Android Auto
 > retries every ~5 s by itself; re-registering only removed the service under it. The request informs are now
 > watched on every car (Toyota too, also with `NBT_SPP_DIRECTION=0`), read-only. A deregister answered with
-> GapErrorCode 5 means the car kept the registration: the daemon leaves it registered instead of registering again
-> and warning "use Restart". The hint after refused links no longer blames Bluetooth audio (a Z Fold8 was refused
+> GapErrorCode 5 is followed by the register as before; when that answers 5 too (250 of 250 logged rounds), both
+> codes are logged and no "use Restart" warning is printed (what 5 means there is not known). `NBT_SPP_REREG_HOLD_S`
+> sets the hold (default 30 s, 0 = none); during a continuous hold one re-registration still runs every 60 s, so a
+> phone that keeps being refused does not switch the recovery off. The hint after refused links no longer blames Bluetooth audio (a Z Fold8 was refused
 > with A2DP connected and the security check passed): it points at the phone's functions in iDrive and re-pairing.
-> Log: `[Wireless] ... not re-registering the service under it`, `the car kept the registration`.
+> Log: `[Wireless] ... not re-registering the service under it`, `held for 60 s while the phone keeps asking: one
+> re-registration anyway`, `deregister answered 5 and register answered 5`.
 
 > **v1.8.73-wfd: `NBT_ALT_WIFI` (experiment, off): the Wi-Fi Direct group instead of the CarPlay hotspot.**
 > Cars without the CarPlay licence have no usable `iap2.cfg`, so they were told "no Wi-Fi hotspot config" and wireless
