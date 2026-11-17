@@ -76,6 +76,19 @@ The workflow stops and says why when:
 - the archive of that version is on another release, or on this one with other bytes
 - `author.pub` is there but cannot be read, or the secret is missing or not the key of `author.pub`
 
+## Logs
+
+`manifest.json` names three logs in its `logs`, so that the NBTApps phone app can pull them from the car and the
+user can send them on: `nbt-aad.log` (the daemon), `nbt-aad-app.log` (the iDrive app) and `nbt-aad-pf_aa.out`
+(the last PF rules run), all in `/dev/shmem`. They are the RAM logs: fresh at each start and at most 5 MB each.
+They are not there while **Save logs to USB** or **Disable logging** is ticked, or with `NBT_RAM_LOG=0`. The log
+on the USB stick is not pulled.
+
+A `logs` path in `/dev/shmem` is new in NBTApps: agents up to 1.4.1 and phone apps up to 0.6.0 refuse the whole
+manifest. So the manifest sets `requires.agent` to `>1.4.1`, which every later agent matches, pre-releases too.
+Publish such a package only after an NBTApps release (agent and app) that has it. The workflow checks the package
+with an NBTApps commit whose `nbtpkg.py` takes these paths (6865e8a or later), or `fetch` refuses the manifest.
+
 ## Running it again
 
 If the files were attached after the release was published, the first run fails because they were not there yet.

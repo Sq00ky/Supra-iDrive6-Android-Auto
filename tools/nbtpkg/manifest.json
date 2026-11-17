@@ -3,6 +3,7 @@
   "id": "com.github.sq00ky.android-auto",
   "name": "Android Auto",
   "version": "@VERSION@",
+  "requires": {"agent": ">1.4.1"},
   "install": {
     "files": [
       {"src": "payload/nbt-aad", "dest": "${app}/nbt-aad", "mode": "0755"},
@@ -10,5 +11,10 @@
     ],
     "serialServices": [{"name": "AndroidAuto", "program": "nbt-aad"}],
     "reboot": "hmi-restart"
-  }
+  },
+  "logs": [
+    {"path": "/dev/shmem/nbt-aad.log"},
+    {"path": "/dev/shmem/nbt-aad-app.log"},
+    {"path": "/dev/shmem/nbt-aad-pf_aa.out"}
+  ]
 }

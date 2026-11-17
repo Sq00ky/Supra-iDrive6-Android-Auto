@@ -196,6 +196,9 @@ class HappyPath(Base):
                       {"src": "payload/plugin/", "dest": "${plugins}/NbtAad/", "mode": "0644"}],
             "serialServices": [{"name": "AndroidAuto", "program": "nbt-aad"}],
             "reboot": "hmi-restart"})
+        self.assertEqual(manifest["logs"], [{"path": "/dev/shmem/nbt-aad.log"}, {"path": "/dev/shmem/nbt-aad-app.log"},
+                                            {"path": "/dev/shmem/nbt-aad-pf_aa.out"}])
+        self.assertEqual(manifest["requires"], {"agent": ">1.4.1"})
         self.assertEqual(sorted(c["path"] for c in manifest["contents"]),
                          sorted(["LICENSE.md", "payload/nbt-aad"] + ["payload/plugin/" + n for n in mk.PLUGIN_FILES]))
 
