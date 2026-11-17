@@ -194,8 +194,9 @@ inline std::string wfdWatchVerdict(const WfdWatchState& base, const WfdWatchStat
 
 // One-shot child: nbt-aad --wfd-own-status. Prints `wfd-own-status: on=<0|1|-1> ssid=<persisted GO ssid>`.
 int runWfdStatusCommand();
-// Daemon side: the child above + pidin + WFDPass.conf stat. False when the child could not be run.
-bool wfdOwnStatus(WfdWatchState& st);
+// Daemon side: pidin + WFDPass.conf stat, and with `gcf` also the child above (it loads the car libraries and registers
+// a GCF client, so the watch asks it only now and then). False when the child was asked for and could not be run.
+bool wfdOwnStatus(WfdWatchState& st, bool gcf);
 
 // Daemon side: our passphrase (NBT_WFD_PASS, else the stored one, else a new one stored in the data dir), then the
 // child above. On success `ap` is filled (ssid, key, WPA2) and true is returned. Logs every step.

@@ -176,19 +176,22 @@ static std::string selfExe() {
     return daemonPath();
 }
 
-bool wfdOwnStatus(WfdWatchState& st) {
+bool wfdOwnStatus(WfdWatchState& st, bool gcf) {
     st = WfdWatchState();
+    char line[512];
+    FILE* p = NULL;
+    if (gcf) {
     const std::string self = selfExe();
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "LD_LIBRARY_PATH=/opt/conn/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} '%s' --wfd-own-status 2>&1",
              self.c_str());
-    FILE* p = popen(cmd, "r");
+    p = popen(cmd, "r");
     if (!p) return false;
     std::string out;
-    char line[512];
     while (fgets(line, sizeof(line), p)) out += line;
     pclose(p);
     if (!wfdStatusParse(out, st.on, st.ssid)) return false;
+    }
     p = popen("pidin ar 2>/dev/null", "r");
     if (p) {
         std::string text;

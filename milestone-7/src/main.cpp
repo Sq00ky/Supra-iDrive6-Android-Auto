@@ -850,6 +850,8 @@ static void* wfdWatchThread(void*) {
     bool haveBase = false;
     uint32_t baseFor = 0, baseAt = 0, lastStill = 0;
     bool failLogged = false;
+    unsigned tick = 0;
+    const unsigned kGcfEvery = 6;   // the connection manager every 6th check (~2 min at 20 s), pidin + stat every check
     while (g_running) {
         for (int i = 0; i < every && g_running; ++i) sleep(1);
         if (!g_running) break;
@@ -857,7 +859,10 @@ static void* wfdWatchThread(void*) {
         const uint32_t appliedAt = g_wfdOwnAt;
         if (monoSecs() - appliedAt < 15) continue;   // our own enable: dhcpd still settling
         nbt::WfdWatchState st;
-        if (!nbt::wfdOwnStatus(st)) {
+        bool gcf = !haveBase || baseFor != appliedAt || (++tick % kGcfEvery) == 0;
+        if (!gcf && nbt::wfdOwnStatus(st, false) && !nbt::wfdWatchVerdict(base, st).empty())
+            gcf = true;   // something changed: ask the connection manager too, for the log line
+        if (gcf && !nbt::wfdOwnStatus(st, true)) {
             if (!failLogged) printf("[WfdOwn] watch: the status check could not run (skipped until it does)\n");
             failLogged = true;
             continue;
