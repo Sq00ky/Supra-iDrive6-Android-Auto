@@ -614,16 +614,17 @@ void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t le
     KombiNav* self = static_cast<KombiNav*>(user);
     if (!self) return;
     pthread_mutex_lock(&self->mu_);
-    const bool discard = self->display_ && self->display_->discardPreviousRoute();
+    const bool discard = msg_id == 0x8003 && self->display_ && self->display_->discardPreviousRoute();
     const bool wasActive = discard && self->msgs_.guidanceActive();
     if (self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0)) {
         self->last_msg_t_ = monoS();
         // Presentation bookkeeping only: don't lose a quick INACTIVE/ACTIVE
-        // transition between worker snapshots. Stored NAV bodies are unchanged.
+        // transition between worker snapshots or reuse data from an ended route.
         if(msg_id==0x8003) {
             int64_t status=0;
             if(pbInt(NavMessages::span(self->msgs_.status),1,status)) {
-                if (wasActive && status!=1) self->msgs_.discardGuidance();
+                if (discard && status!=1 && (wasActive || status==0 || status==2))
+                    self->msgs_.discardGuidance();
                 if(status==1&&!self->route_active_){++self->navigation_epoch_;self->route_active_=true;}
                 else if(status==0 || status==2)self->route_active_=false;
             }
