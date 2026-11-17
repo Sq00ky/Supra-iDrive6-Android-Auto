@@ -196,8 +196,10 @@ inline std::string wfdWatchVerdict(const WfdWatchState& base, const WfdWatchStat
 // The head-unit ladder (alt_wifi.hpp resolveWfdSsid: NBT_WFD_SSID, ifconfig, mwud, the WLAN persistency) first; when it
 // has nothing (Y24073J: no ssid line, mwud refuses with errno 261, no persistency), the car's connection manager's
 // stored group name (getPersistedGroupList). Only a DIRECT-xx-<name> counts. `source` says which one answered.
+// Last rung: `derived` = DIRECT-03-<brand><last5> built from the VIN (wfdSsidFromVinBrand), used only when neither the
+// head unit nor the connection manager has a name.
 inline bool wfdPickSsid(bool ladderOk, const std::string& ladder, const std::string& connMngr, std::string& ssid,
-                        std::string& source) {
+                        std::string& source, const std::string& derived = std::string()) {
     std::string dn;
     if (ladderOk && !ladder.empty()) { ssid = ladder; source = "head unit"; return true; }
     if (!connMngr.empty() && wfdDeviceNameFromSsid(connMngr, dn)) {
@@ -205,10 +207,104 @@ inline bool wfdPickSsid(bool ladderOk, const std::string& ladder, const std::str
         source = "the car's connection manager";
         return true;
     }
+    if (!derived.empty() && wfdDeviceNameFromSsid(derived, dn)) {
+        ssid = derived;
+        source = "built from the VIN and brand";
+        return true;
+    }
     ssid.clear();
     source.clear();
     return false;
 }
+
+// ---- VIN and brand (for a car that never stored a group name) -----------------------------------------------------
+// The head unit builds the name as "DIRECT-03-" + <Manufacturer> + last 5 characters of the VIN, spaces removed
+// (Connectivity CWlanWiFiDirectCfg::startUp, re-wfd-ssid.md). A car without CarPlay coding has no carplay.ini and may
+// never have stored a group, so nbt-aad reads the VIN from the car's own coding (libPalCoding.so get_long_vin, the call
+// the speech daemon uses) and takes the brand from carplay.ini or the VIN's manufacturer code.
+
+// A 17-character VIN: digits and capitals, no I, O or Q.
+inline bool wfdVinValid(const std::string& v) {
+    if (v.size() != 17) return false;
+    for (size_t i = 0; i < v.size(); ++i) {
+        char c = v[i];
+        bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z');
+        if (!ok || c == 'I' || c == 'O' || c == 'Q') return false;
+    }
+    return true;
+}
+
+// For the log: the manufacturer code and the last 5 only (the last 5 are in the network name anyway).
+inline std::string wfdVinShort(const std::string& v) {
+    if (v.size() < 8) return "?";
+    return v.substr(0, 3) + "..." + v.substr(v.size() - 5);
+}
+
+// Brand from the World Manufacturer Identifier (first 3 VIN characters), spelled as the head unit's Manufacturer
+// coding (BMW | MINI | BMWi | Toyota | Rolls-Royce). Empty when unknown. WZ1 = GR Supra (seen in the J29 coding file);
+// WBY = BMW i, spelled "BMWi" (inference: the coding value list, not yet seen on an i3/i8).
+inline std::string wfdBrandFromWmi(const std::string& vin) {
+    if (vin.size() < 3) return "";
+    std::string w = vin.substr(0, 3);
+    if (w == "WZ1") return "Toyota";
+    if (w == "WMW" || w == "WMZ") return "MINI";
+    if (w == "WBY") return "BMWi";
+    if (w == "SCA") return "Rolls-Royce";
+    if (w == "WBA" || w == "WBS" || w == "WBX" || w == "WB1" || w == "WB3" || w == "WB5" || w == "4US" || w == "5UX" ||
+        w == "5UM" || w == "5YM" || w == "5UJ")
+        return "BMW";
+    return "";
+}
+
+// [General] Manufacturer= from a carplay.ini text, empty when absent.
+inline std::string wfdIniManufacturer(const std::string& text) {
+    size_t p = 0;
+    while (p < text.size()) {
+        size_t e = text.find('\n', p);
+        std::string l = wfdTrim(text.substr(p, e == std::string::npos ? std::string::npos : e - p));
+        p = e == std::string::npos ? text.size() : e + 1;
+        if (l.compare(0, 13, "Manufacturer=") == 0) return wfdTrim(l.substr(13));
+    }
+    return "";
+}
+
+// "DIRECT-03-" + brand + last5(vin), every space removed (removeWhiteSpaces in Connectivity). Empty if either is missing.
+inline std::string wfdSsidFromVinBrand(const std::string& vin, const std::string& brand) {
+    if (!wfdVinValid(vin) || brand.empty()) return "";
+    std::string s = "DIRECT-03-" + brand + vin.substr(12);
+    std::string out;
+    for (size_t i = 0; i < s.size(); ++i)
+        if (s[i] != ' ') out += s[i];
+    return out;
+}
+
+// The child's line `long-vin: ok=1 vin=<17>` -> vin (empty unless ok=1 and valid). False if there is no such line.
+inline bool wfdLongVinParse(const std::string& out, std::string& vin, std::string& why) {
+    size_t p = out.rfind("long-vin:");
+    if (p == std::string::npos) return false;
+    std::string line = out.substr(p);
+    size_t nl = line.find_first_of("\r\n");
+    if (nl != std::string::npos) line = line.substr(0, nl);
+    vin.clear();
+    why.clear();
+    size_t v = line.find(" vin=");
+    std::string cand = v == std::string::npos ? "" : wfdTrim(line.substr(v + 5));
+    size_t sp = cand.find(' ');
+    if (sp != std::string::npos) cand = cand.substr(0, sp);
+    size_t w = line.find(" why=");
+    if (w != std::string::npos) why = wfdTrim(line.substr(w + 5));
+    if (line.find(" ok=1") != std::string::npos && wfdVinValid(cand)) vin = cand;
+    else if (why.empty()) why = cand.empty() ? "no VIN" : "not a 17-character VIN";
+    return true;
+}
+
+// One-shot child: nbt-aad --long-vin. dlopen()s /opt/speech/lib/libPalCoding.so (NBT_PALCODING overrides), calls
+// get_long_vin(char*) and prints `long-vin: ok=<0|1> vin=<17> why=<text>`. In a child so the car library can't take
+// the daemon down.
+int runLongVinCommand();
+// Daemon side: VIN (child above, once per run) + brand (carplay.ini, else the WMI) -> DIRECT-03-<brand><last5>.
+// Logs the outcome once. False when the VIN or the brand is not available.
+bool wfdSsidFromVin(std::string& ssid);
 
 // What DIRECT mode is missing, for the "wireless Android Auto is unavailable" line. ownTried: nbt-aad tried to set its
 // own passphrase (NBT_WFD_OWN_PASS decided so) and failed.

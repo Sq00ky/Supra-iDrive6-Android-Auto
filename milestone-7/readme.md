@@ -15,6 +15,16 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > `nbt-aad.env` edits are not watched. `NBT_SETTINGS_RESTART=0` turns it off. App log: `settings changed (...) ->
 > restarting nbt-aad`. Confirmed on the J29: three restarts, phone back on wireless Android Auto in 4.5-6 s each.
 >
+> **v1.9.95-vin (test build): the Wi-Fi Direct group name from the VIN.** When neither the head unit nor the car's
+> connection manager has a group name (a car that never set one up), nbt-aad builds it the way the head unit does:
+> `DIRECT-03-` + brand + last 5 VIN characters. The VIN comes from the car's own coding through
+> `/opt/speech/lib/libPalCoding.so` (`get_long_vin`, the call the speech daemon uses; run in a one-shot
+> `nbt-aad --long-vin` child, `NBT_PALCODING` points elsewhere), the brand from `carplay.ini`, else from the VIN's
+> manufacturer code (WBA/WBS = BMW, WBY = BMWi, WMW = MINI, WZ1 = Toyota, SCA = Rolls-Royce). The log shows only the
+> manufacturer code and the last 5 (`[Vin]` lines). With `NBT_WFD_OWN_PASS=1` the built name is what nbt-aad passes
+> to `WFD_enable`; the car refuses a wrong name (result 2). The connection manager line now says whether it could
+> not be asked, or answered with Wi-Fi Direct off / on and no stored name.
+>
 > **v1.9.94-wfdssid: the Wi-Fi Direct group name from the car's connection manager.** In DIRECT mode, when the
 > head unit's files, `ifconfig` and mwud give no group name (Y24073J: no ssid line, mwud refuses with errno 261),
 > nbt-aad asks the car's connection manager for its stored group (`getPersistedGroupList`, `DIRECT-xx-<name>`) and

@@ -1146,8 +1146,14 @@ static void* wirelessThread(void*) {
             bool haveSsid = false;
             if (!ownUsed && havePass) {
                 const bool ladderOk = nbt::resolveWfdSsid(wfdIfn, ladderSsid);
-                if (!ladderOk) nbt::wfdSsidFromConnMngr(cmSsid);
-                haveSsid = nbt::wfdPickSsid(ladderOk, ladderSsid, cmSsid, wfdSsid, ssidFrom);
+                std::string vinSsid;
+                if (!ladderOk && !nbt::wfdSsidFromConnMngr(cmSsid)) nbt::wfdSsidFromVin(vinSsid);
+                haveSsid = nbt::wfdPickSsid(ladderOk, ladderSsid, cmSsid, wfdSsid, ssidFrom, vinSsid);
+                static std::string s_lastFrom;
+                if (haveSsid && ssidFrom != s_lastFrom) {
+                    s_lastFrom = ssidFrom;
+                    printf("[Wireless] Wi-Fi Direct group name '%s' (%s)\n", wfdSsid.c_str(), ssidFrom.c_str());
+                }
             }
             g_wfdMissing = ownUsed ? nbt::WFD_MISSING_NOTHING : nbt::wfdMissing(havePass, havePass && haveSsid);
             if (ownUsed) {
@@ -1946,7 +1952,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.94-wfdssid"
+#define NBT_AAD_BUILD "v1.9.95-vin"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -2090,6 +2096,7 @@ int main(int argc, char* argv[]) {
     // the car's connection manager. Started by the daemon with LD_LIBRARY_PATH=/opt/conn/lib; prints its own result.
     if (argc > 1 && !strcmp(argv[1], "--wfd-own")) return nbt::runWfdOwnCommand(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "--wfd-own-status")) return nbt::runWfdStatusCommand();
+    if (argc > 1 && !strcmp(argv[1], "--long-vin")) return nbt::runLongVinCommand();
     if (argc > 1 && (!strcmp(argv[1], "--license") || !strcmp(argv[1], "--licence"))) {
         nbt::printNbtAadLicense();
         return 0;
@@ -2356,6 +2363,11 @@ int main(int argc, char* argv[]) {
         if (pthread_create(&wt, NULL, &wirelessThread, NULL) == 0) {
             pthread_detach(wt);
             printf("[Main] Wireless bring-up thread started (port %u)\n", (unsigned)g_aaPort);
+        }
+        if (nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT) {
+            // Once per run: the VIN-built name, logged so a car that does have a name shows whether both agree.
+            std::string vinSsid;
+            nbt::wfdSsidFromVin(vinSsid);
         }
         if (wfdOwnMode() && nbt::wfdWatchSec() > 0) {
             pthread_t ww;

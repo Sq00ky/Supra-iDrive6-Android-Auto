@@ -6,6 +6,7 @@
 #include "gcf_client.hpp"
 #include "nbt_paths.hpp"
 
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -231,10 +232,99 @@ bool wfdSsidFromConnMngr(std::string& ssid) {
     }
     if (lastLogged != 0)
         printf("[Wireless] Wi-Fi Direct SSID: the car's connection manager %s (asked again every 30 s)\n",
-               !ran ? "could not be asked (the --wfd-own-status child did not answer)"
-                    : "has no stored group of the form DIRECT-xx-<name>");
+               !ran || st.on < 0 ? "could not be asked (no answer from it; the status child could not register or "
+                                   "isWFDEnable failed)"
+               : st.on == 0     ? "answered: Wi-Fi Direct is OFF and no group name is stored"
+                                : "answered: Wi-Fi Direct is on, but no group name is stored");
     lastLogged = 0;
     return false;
+}
+
+int runLongVinCommand() {
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    const char* lib = getenv("NBT_PALCODING");
+    if (!lib || !*lib) lib = "/opt/speech/lib/libPalCoding.so";
+    if (access(lib, R_OK) != 0) {
+        printf("long-vin: ok=0 vin= why=%s not on this head unit\n", lib);
+        return 1;
+    }
+    void* h = dlopen(lib, RTLD_NOW | RTLD_LOCAL);
+    if (!h) {
+        const char* e = dlerror();
+        printf("long-vin: ok=0 vin= why=dlopen %s failed: %s\n", lib, e ? e : "?");
+        return 1;
+    }
+    typedef unsigned char (*GetLongVin)(char*);
+    GetLongVin fn = (GetLongVin)dlsym(h, "get_long_vin");
+    if (!fn) {
+        printf("long-vin: ok=0 vin= why=%s has no get_long_vin\n", lib);
+        return 1;
+    }
+    // Writes exactly 17 bytes without a terminator (libPalCoding 18-03: getBuffer(key, out, 0x11, &len), len == 17).
+    char buf[64];
+    memset(buf, 0, sizeof(buf));
+    unsigned char ok = fn(buf);
+    buf[17] = 0;
+    std::string v(buf);
+    printf("long-vin: ok=%d vin=%s why=%s\n", ok && wfdVinValid(v) ? 1 : 0, wfdVinValid(v) ? v.c_str() : "",
+           !ok ? "get_long_vin returned 0 (coding page not attached or no long VIN coded)"
+               : wfdVinValid(v) ? "get_long_vin" : "get_long_vin returned no 17-character VIN");
+    fflush(stdout);
+    _exit(ok && wfdVinValid(v) ? 0 : 1);
+}
+
+static bool readLongVin(std::string& vin, std::string& why) {
+    const std::string self = selfExe();
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "'%s' --long-vin 2>&1", self.c_str());
+    FILE* p = popen(cmd, "r");
+    if (!p) { why = "cannot start the --long-vin child"; return false; }
+    std::string out;
+    char line[512];
+    while (fgets(line, sizeof(line), p)) out += line;
+    int st = pclose(p);
+    if (!wfdLongVinParse(out, vin, why)) {
+        char b[96];
+        snprintf(b, sizeof(b), "the --long-vin child printed no result (exit status 0x%x: crashed?)", st);
+        why = b;
+        return false;
+    }
+    return !vin.empty();
+}
+
+bool wfdSsidFromVin(std::string& ssid) {
+    static bool done = false, haveIt = false;
+    static std::string cached;
+    if (done) { ssid = cached; return haveIt; }
+    done = true;
+    std::string vin, why;
+    bool gotVin = readLongVin(vin, why);
+    std::string brand, brandFrom;
+    const char* inis[] = { "/var/opt/conn/carplay/carplay.ini", "/fs/sda1/opt/conn/carplay/carplay.ini" };
+    for (int i = 0; i < 2 && brand.empty(); ++i) {
+        std::string text;
+        if (readWholeFile(inis[i], text)) {
+            brand = wfdIniManufacturer(text);
+            if (!brand.empty()) brandFrom = inis[i];
+        }
+    }
+    if (brand.empty() && gotVin) {
+        brand = wfdBrandFromWmi(vin);
+        if (!brand.empty()) brandFrom = "the VIN's manufacturer code " + vin.substr(0, 3);
+    }
+    if (!gotVin) {
+        printf("[Vin] no VIN from the car's coding: %s\n", why.c_str());
+    } else {
+        printf("[Vin] VIN %s (17 characters, libPalCoding get_long_vin); brand %s\n", wfdVinShort(vin).c_str(),
+               brand.empty() ? "unknown (no carplay.ini, manufacturer code not in nbt-aad's list)"
+                             : ("'" + brand + "' from " + brandFrom).c_str());
+    }
+    cached = wfdSsidFromVinBrand(vin, brand);
+    haveIt = !cached.empty();
+    if (haveIt) printf("[Vin] Wi-Fi Direct group name built from them: '%s'\n", cached.c_str());
+    fflush(stdout);
+    ssid = cached;
+    return haveIt;
 }
 
 bool applyWfdOwnPass(ApInfo& ap, std::string& passPath) {
@@ -242,6 +332,9 @@ bool applyWfdOwnPass(ApInfo& ap, std::string& passPath) {
     makeOwnPass(pass, passPath);
     const char* pin = getenv("NBT_WFD_SSID");
     if (pin && strchr(pin, '\'')) pin = NULL;
+    // No pin: the name built from the VIN, used by the child only when the connection manager has no stored group.
+    std::string derived;
+    if ((!pin || !*pin) && wfdSsidFromVin(derived) && derived.find('\'') == std::string::npos) pin = derived.c_str();
     const std::string self = selfExe();
     char cmd[640];
     // The car's libraries resolve through /opt/conn/lib; LD_PRELOAD is already gone for children (main()).

@@ -76,12 +76,49 @@ static void testPickSsid() {
     CHECK(t.find("WFDPass.conf") != std::string::npos && t.find("own could not be set") == std::string::npos);
     t = nbt::wfdMissingText(nbt::WFD_MISSING_BOTH, false);
     CHECK(t.find("passphrase") != std::string::npos && t.find("group name") != std::string::npos);
+    // derived name as the last rung
+    CHECK(nbt::wfdPickSsid(false, "", "", s, from, "DIRECT-03-BMW12345") && s == "DIRECT-03-BMW12345" &&
+          from == "built from the VIN and brand");
+    CHECK(nbt::wfdPickSsid(false, "", "DIRECT-03-BMW99999", s, from, "DIRECT-03-BMW12345") && s == "DIRECT-03-BMW99999");
+    CHECK(!nbt::wfdPickSsid(false, "", "", s, from, ""));
     printf("pick ssid: ok\n");
+}
+
+static void testVin() {
+    // synthetic VINs (not real cars)
+    CHECK(nbt::wfdVinValid("WBA1A2B3C4D512345"));
+    CHECK(!nbt::wfdVinValid("WBA1A2B3C4D51234"));         // 16
+    CHECK(!nbt::wfdVinValid("WBA1A2B3C4D51234O"));        // O not allowed
+    CHECK(!nbt::wfdVinValid("wba1a2b3c4d512345"));        // lower case
+    CHECK(nbt::wfdVinShort("WBA1A2B3C4D512345") == "WBA...12345");
+    CHECK(nbt::wfdBrandFromWmi("WZ1DB0C0000012345") == "Toyota");
+    CHECK(nbt::wfdBrandFromWmi("WMW00000000012345") == "MINI");
+    CHECK(nbt::wfdBrandFromWmi("WBY00000000012345") == "BMWi");
+    CHECK(nbt::wfdBrandFromWmi("WBA00000000012345") == "BMW");
+    CHECK(nbt::wfdBrandFromWmi("SCA00000000012345") == "Rolls-Royce");
+    CHECK(nbt::wfdBrandFromWmi("JTD00000000012345").empty());
+    CHECK(nbt::wfdIniManufacturer("[General]\nModel=J29-NBTEvo-0319\nManufacturer=Toyota\n") == "Toyota");
+    CHECK(nbt::wfdIniManufacturer("[General]\r\nManufacturer= BMW \r\n") == "BMW");
+    CHECK(nbt::wfdIniManufacturer("[Screen]\nWidth=1280\n").empty());
+    CHECK(nbt::wfdSsidFromVinBrand("WBA00000000012345", "BMW") == "DIRECT-03-BMW12345");
+    CHECK(nbt::wfdSsidFromVinBrand("WZ1DB0C0000051807", "Toyota") == "DIRECT-03-Toyota51807");
+    CHECK(nbt::wfdSsidFromVinBrand("SCA00000000012345", "Rolls Royce") == "DIRECT-03-RollsRoyce12345");
+    CHECK(nbt::wfdSsidFromVinBrand("WBA0000000001234", "BMW").empty());
+    CHECK(nbt::wfdSsidFromVinBrand("WBA00000000012345", "").empty());
+    std::string v, why;
+    CHECK(nbt::wfdLongVinParse("x\nlong-vin: ok=1 vin=WBA00000000012345 why=get_long_vin\n", v, why) &&
+          v == "WBA00000000012345");
+    CHECK(nbt::wfdLongVinParse("long-vin: ok=0 vin= why=/opt/speech/lib/libPalCoding.so not on this head unit\n", v, why) &&
+          v.empty() && why.find("not on this head unit") != std::string::npos);
+    CHECK(nbt::wfdLongVinParse("long-vin: ok=1 vin=SHORT why=get_long_vin\n", v, why) && v.empty());
+    CHECK(!nbt::wfdLongVinParse("crashed\n", v, why));
+    printf("vin: ok\n");
 }
 
 int main() {
     testWatch();
     testPickSsid();
+    testVin();
     // ---- setting + decision ------------------------------------------------------------
     CHECK(nbt::wfdOwnPassSetting(NULL) == nbt::WFD_OWN_AUTO);
     CHECK(nbt::wfdOwnPassSetting("") == nbt::WFD_OWN_AUTO);
