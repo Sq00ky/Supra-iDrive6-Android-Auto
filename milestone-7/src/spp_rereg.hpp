@@ -15,6 +15,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include <string>
+
 namespace nbt {
 
 static const int kSppReregFastPhaseSec = 120;   // retry at the short interval for this long after a link went away
@@ -40,6 +42,11 @@ inline int sppReregBaseSec() {
     if (v <= 0) return 0;
     return v > 3600 ? 3600 : v;
 }
+
+// Which phone requests hold re-registration: only the serial-link (Android Auto) one. A2DP / HFP requests come
+// when the phone connects audio and say nothing about the Android Auto link (J29 log 2026-11-16: an A2DP request
+// held a round on its own); BMW logs show only 'SPP'.
+inline bool sppRequestHolds(const std::string& service) { return service == "SPP"; }
 
 // True while re-registration is held: a phone request was seen and the last one is less than holdSec old.
 inline bool sppReregHeld(bool asked, uint32_t lastAskSec, uint32_t nowSec, int holdSec = kSppReregHoldSec) {

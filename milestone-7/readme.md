@@ -29,7 +29,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > run - this removes the I/O, not the formatting - so it answers "does writing the log cost anything", not "are the
 > printf calls free".
 >
-> **v1.9.89-sppreq: no Bluetooth re-registration while the phone is asking for the link.** The periodic re-registration no longer runs then.
+> **v1.9.90-sppreq2 (v1.9.89-sppreq car-tested on the J29; v1.9.90 counts only the phone's SPP requests, keeps the schedule's short steps through a hold, and a handshake-failure bounce always registers again): no Bluetooth re-registration while the phone is asking for the link.** The periodic re-registration no longer runs then.
 > A phone that sent a ServiceRequest in the last 30 s is connected and already sees the service, and Android Auto
 > retries every ~5 s by itself; re-registering only removed the service under it. The request informs are now
 > watched on every car (Toyota too, also with `NBT_SPP_DIRECTION=0`), read-only. A deregister answered with

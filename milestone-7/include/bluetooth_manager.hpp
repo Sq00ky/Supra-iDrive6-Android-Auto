@@ -37,7 +37,7 @@ public:
     // SppUuidDeregister + SppUuidRegister in place (what a daemon Restart does on the Bluetooth side), for a phone
     // that is connected over Bluetooth but never opens the Android Auto link. Call from the wireless thread while
     // no link or session is up; skipped (false) while a registration is still in flight. `why` is only logged.
-    bool reregister(const char* why);
+    bool reregister(const char* why, bool bounce = false);   // bounce: from requestSppBounce(), always registers again
     // After a handshake that already had /dev/btspp open and the phone closed without accepting
     // the Wi-Fi start. Uses the same deregister-then-register path as reregister(), on the caller
     // (the wireless thread), and is skipped while a registration is already in flight.

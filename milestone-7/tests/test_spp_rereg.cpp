@@ -29,6 +29,9 @@ int main() {
     assert(!sppReregHeld(true, 100, 5000));
     assert(sppReregHeld(true, 0xFFFFFFF0u, 5));          // monotonic seconds wrapped
     assert(!sppReregHeld(true, 100, 105, 0));            // hold 0 = never held
+    // Only the serial-link request holds (A2DP / HFP come with every audio connect; J29 2026-11-16).
+    assert(sppRequestHolds("SPP"));
+    assert(!sppRequestHolds("A2DP_SOURCE") && !sppRequestHolds("HFPGW") && !sppRequestHolds(""));
     printf("test_spp_rereg OK\n");
     return 0;
 }

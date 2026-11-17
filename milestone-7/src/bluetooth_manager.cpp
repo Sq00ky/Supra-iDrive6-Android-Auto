@@ -40,6 +40,7 @@ const char* gapErrorName(uint32_t e) {
 enum SppState { SPP_IDLE, SPP_REG_SENT, SPP_DEREG_SENT, SPP_REREG_SENT, SPP_DONE };
 volatile SppState g_spp = SPP_IDLE;
 volatile bool g_periodic = false;      // current deregister/register pair was started by reregister()
+volatile bool g_bounce = false;        // ... and by requestSppBounce() (handshake failed), not the periodic loop
 volatile bool g_txBusy = false;        // reregister() is inside sendRequest on the wireless thread
 uint32_t g_stateSec = 0;               // when g_spp last changed (monotonic s)
 pthread_mutex_t g_stateMx = PTHREAD_MUTEX_INITIALIZER;
@@ -201,9 +202,12 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
                name.empty() ? "" : "'", name.c_str(), name.empty() ? addr.c_str() : ("' " + addr).c_str(), svc.c_str(),
                r.ok() ? "" : " (payload not fully parsed)");
         pthread_mutex_lock(&g_dirMx);
-        g_askSeen = true;
-        g_askAt = monoSec();
-        if (id != kInfServiceRequestError && g_dirMode != 0) g_dir.onPhoneRequest(svc, g_askAt);
+        const uint32_t nowSec = monoSec();
+        if (sppRequestHolds(svc)) {        // only the Android Auto serial link holds re-registration, not A2DP/HFP
+            g_askSeen = true;
+            g_askAt = nowSec;
+        }
+        if (id != kInfServiceRequestError && g_dirMode != 0) g_dir.onPhoneRequest(svc, nowSec);
         pthread_mutex_unlock(&g_dirMx);
         if (id == kInfServiceRequestComplete) g_reqErrRun = 0;
         if (id == kInfServiceRequestError && ++g_reqErrRun % 60 == 5) {
@@ -293,7 +297,7 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
     } else if (g_spp == SPP_DEREG_SENT && type == 0x200 && id != kRspDeviceListGet && id != kRspServiceListGet) {
         // Deregister response (0x80000044 on the car); take the first plain response after the request.
         uint32_t err = readErr(pl, len);
-        if (err == 5 && g_periodic) {
+        if (err == 5 && g_periodic && !g_bounce) {   // a bounce always registers again
             // Seen on P18362I and Y24073J (18 of 39 rounds on one car): the deregister answers DEFAULT and the register
             // after it always answers DEFAULT ("already registered") too, so the car kept the registration and
             // registering again changes nothing. Leave it registered, no "use Restart" warning.
@@ -404,7 +408,7 @@ bool BluetoothManager::registerAndroidAutoSdp() {
     return true;
 }
 
-bool BluetoothManager::reregister(const char* why) {
+bool BluetoothManager::reregister(const char* why, bool bounce) {
     if (!is_registered_ || !g_gap.attached()) {
         printf("[BluetoothManager] %s: Bluetooth service not attached, nothing to re-register\n", why);
         fflush(stdout);
@@ -425,6 +429,7 @@ bool BluetoothManager::reregister(const char* why) {
     g_spp = SPP_DEREG_SENT;
     g_stateSec = monoSec();
     g_periodic = true;
+    g_bounce = bounce;
     g_txBusy = true;
     pthread_mutex_unlock(&g_stateMx);
 
@@ -437,7 +442,7 @@ bool BluetoothManager::reregister(const char* why) {
 }
 
 void BluetoothManager::requestSppBounce() {
-    reregister("handshake failed before the phone accepted the Wi-Fi start");
+    reregister("handshake failed before the phone accepted the Wi-Fi start", true);
 }
 
 void BluetoothManager::stop() {

@@ -922,16 +922,22 @@ static void* wirelessThread(void*) {
                 printf("[Wireless] [%9.3f] waiting for %s (%s)\n", upSec(), dev, strerror(errno));
             uint32_t now = monoSecs();
             if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); }
-            else if (g_btMgr && rereg.due(now)) {
+            else if (g_btMgr && rereg.enabled()) {
+                // Held while the phone asks for the link: checked BEFORE due(), so held time does not use up the
+                // 5 s steps of the schedule (the next round after the hold is still a short one).
                 unsigned ago = 0;
                 if (nbt::sppPhoneAsking(&ago)) {
                     static unsigned held = 0;
-                    if ((held++ % 12) == 0)
+                    static uint32_t lastNote = 0;
+                    if (held++ == 0 || now - lastNote >= 30) {
+                        lastNote = now;
                         printf("[Wireless] [%9.3f] the phone asked for the Android Auto Bluetooth link %u s ago: not "
                                "re-registering the service under it (it retries by itself)\n", upSec(), ago);
+                    }
                     usleep(500000);
                     continue;
                 }
+                if (!rereg.due(now)) { usleep(500000); continue; }
                 char why[96];
                 snprintf(why, sizeof(why), "no Android Auto Bluetooth link for %u s (try %d)",
                          (unsigned)(now - idleStart), rereg.attempts());
@@ -1749,7 +1755,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.89-sppreq"
+#define NBT_AAD_BUILD "v1.9.90-sppreq2"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
