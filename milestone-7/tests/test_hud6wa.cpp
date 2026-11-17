@@ -596,6 +596,41 @@ static void testMapboxGlyphs() {
     printf("  Mapbox glyphs: opt-in, %d pictures valid\n", drawn);
 }
 
+// sabifa's test (#264), on a 6WA with a HUD (a 120 x 72 picture, the factory arrow box 37,23-82,68): the junction
+// view, laid out on the F20 and scaled onto it, keeps the route's arrowhead on the canvas, the ring and the roads
+// no wider than the factory's here (roads 11, the route 6), and every item a valid call.
+static void testJunctionScaled() {
+    HudProfile p = k6wa;
+    const Rect canvas = { 0, 0, 119, 71 }, glyph = { 37, 23, 82, 68 };
+    p.canvas = canvas;
+    p.glyph = glyph;
+    const JunctionColours c = { 7, 3, 4 };
+    for (int t = 0; t <= 60; ++t) {
+        Layout L;
+        if (!junctionLayout(t, true, 90, true, 2, k6wa.glyph, k6wa.canvas.y1, L)) continue;
+        Picture pic;
+        drawRoads(L, c, kJunctionStyle, pic);
+        drawRoute(L, L.maxTail, c, kJunctionStyle, pic);
+        fitPicture(pic, k6wa.glyph, k6wa.canvas.y1 + 1, p.glyph, p.canvas.y1 + 1);
+        for (size_t i = 0; i < pic.size(); ++i)
+            assert(payloadShapeOk(kAddPolygon, addPolygon(5, (uint16_t)i, pic[i].poly.type, pic[i].poly.pts)));
+        const Poly& route = pic.back().poly;
+        const Point& tip = route.pts[(route.pts.size() - 3) / 2 + 1];
+        if (tip.x < p.canvas.x0 || tip.x > p.canvas.x1 || tip.y < p.canvas.y0 || tip.y > p.canvas.y1) {
+            printf("type %d: route tip at %d,%d off the 120 x 72 canvas\n", t, tip.x, tip.y);
+            assert(false);
+        }
+    }
+    Picture one;
+    Item it;
+    it.colour = 4;
+    it.poly = shapes::bar(120, 129, 0, 100, kJunctionStyle.roadW);    // a road on the F20, 22 wide
+    one.push_back(it);
+    fitPicture(one, k6wa.glyph, k6wa.canvas.y1 + 1, p.glyph, p.canvas.y1 + 1);
+    int w = one[0].poly.pts[3].x - one[0].poly.pts[0].x;
+    assert(w >= 11 && w <= 13);                                     // 22 * 72 / 130
+}
+
 static void testDigits() {
     for (int n = 0; n <= 9; ++n) {
         Shape s;
@@ -683,7 +718,7 @@ static void testJunctionFits() {
     for (int t = 0; t <= 60; ++t)
         for (int a = 0; a <= 360; a += 45) {
             Layout L;
-            if (!junctionLayout(t, true, a, false, 0, small.glyph, small.canvas.y1, L)) continue;
+            if (!junctionLayout(t, true, a, false, 0, k6wa.glyph, k6wa.canvas.y1, L)) continue;   // as the display lays out
             if (junctionFits(L, small.canvas, Hud6waDisplay::kStages)) { ++fits; continue; }
             if (cutType < 0) { cutType = t; cutAngle = a; }
             ++cut;
@@ -1159,6 +1194,7 @@ int main() {
     testRemind();
     testJunctionGeometry();
     testMapboxGlyphs();
+    testJunctionScaled();
     testDigits();
     testLanes();
     testJunctionDriver();

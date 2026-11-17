@@ -302,6 +302,21 @@ inline int tailFor(const Layout& L, int stage, int stages) {
     return L.maxTail * stage / stages;
 }
 
+// The views are laid out on the F20's 6WA (box `from`, canvas `fromH` tall). A cluster with another picture area gets
+// them scaled by toH / fromH round the box centres, widths included, as fitShape does for the arrow.
+inline void fitPicture(Picture& pic, const Rect& from, int fromH, const Rect& to, int toH) {
+    long fx2 = from.x0 + from.x1, fy2 = from.y0 + from.y1, tx2 = to.x0 + to.x1, ty2 = to.y0 + to.y1;
+    if (fx2 == tx2 && fy2 == ty2 && fromH == toH) return;
+    long d = 2L * fromH;
+    for (size_t i = 0; i < pic.size(); ++i)
+        for (size_t k = 0; k < pic[i].poly.pts.size(); ++k) {
+            Point& p = pic[i].poly.pts[k];
+            long x = tx2 * fromH + (2L * p.x - fx2) * toH, y = ty2 * fromH + (2L * p.y - fy2) * toH;
+            p.x = (int16_t)(x >= 0 ? (x + d / 2) / d : -((-x + d / 2) / d));
+            p.y = (int16_t)(y >= 0 ? (y + d / 2) / d : -((-y + d / 2) / d));
+        }
+}
+
 // Does the junction view show its way on this canvas? The route's arrowhead (thickPath's outline runs left edge, wing,
 // tip, wing, right edge) must be on it at every stage: the rule test_hud6wa's testJunctionGeometry checks for the F20
 // profile. A smaller buffer (the F30's 126x77 HUD) fails it for some maneuvers, as the junction is drawn at the F20's

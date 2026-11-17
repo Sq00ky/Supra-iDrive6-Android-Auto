@@ -110,6 +110,9 @@ private:
     bool routeInOverlay() const { return p_.routeA && p_.routeB; }
     bool lanesOn() const { return s_.hud_lanes && p_.laneA && p_.laneB; }
     hudterm::JunctionColours colours() const;
+    void fitJunction(hudterm::Picture& pic) const {   // F20 layout -> this profile's picture area
+        hudterm::fitPicture(pic, hudterm::k6wa.glyph, hudterm::k6wa.canvas.y1 + 1, p_.glyph, p_.canvas.y1 + 1);
+    }
     Result sendRoute();
     Result sendLanes(const NavView& v);
 

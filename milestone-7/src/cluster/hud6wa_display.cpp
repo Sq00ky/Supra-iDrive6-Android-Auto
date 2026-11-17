@@ -249,7 +249,7 @@ bool Hud6waDisplay::nearDue(const NavView& v, double* m) const {
 
 void Hud6waDisplay::startManeuver(const NavView& v) {
     has_layout_ = s_.junction && junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
-                                                v.exit_number, p_.glyph, p_.canvas.y1, layout_);
+                                                v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
     if (has_layout_ && !junctionFits(layout_, p_.canvas, kStages)) {   // its way would be cut off on this buffer
         has_layout_ = false;
         log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
@@ -295,6 +295,7 @@ ClusterDisplay::Result Hud6waDisplay::sendRoute() {
     Picture pic;
     int tail = tailFor(layout_, stage_, kStages);
     drawRoute(layout_, tail, colours(), kJunctionStyle, pic);
+    fitJunction(pic);
     Batch b = routeBatch(pic);
     log("ROUTE stage %d/%d, tail %d | %u calls%s", stage_, (int)kStages, tail, (unsigned)b.calls.size(),
         shadow_ ? " (shadow: not sent)" : "");
@@ -380,6 +381,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     if (junction) {
         drawRoads(layout_, colours(), kJunctionStyle, pic);
         if (!routeInOverlay()) drawRoute(layout_, tailFor(layout_, stage_, kStages), colours(), kJunctionStyle, pic);
+        fitJunction(pic);
         what = "junction view, " + describeSpec(spec);
         if (layout_.exitNumber) {
             char n[24];
