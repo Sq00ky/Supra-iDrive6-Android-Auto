@@ -16,18 +16,19 @@ struct Bmw6wbProfile {
     enum { kPerspectiveHorizon = 70 };
     HudProfile base;
     Surface main, icons, lanes;
+    uint16_t iconHandle; // 0 alternates the pair, otherwise exactly 0x18 or 0x19
     uint16_t mainImageWidth, mainImageHeight; // measured C04 dimensions, not vector limits
     uint16_t bar, frameWidth, frameHeight, barWidth, barHeight;
     uint8_t lineWidth, laneLineWidth, textEncoding;
     uint32_t vectorTx, headerTag, barRangeMetres;
     size_t maxBitmapBytes;
-    bool roadShields,iconAntialias;
+    bool roadShields,iconAntialias,iconBitmaps;
     unsigned roundaboutSegments; // default preserves the hardware-tested geometry
     Rect nextGlyph;
     Bmw6wbProfile() : main(0x1f,0x20,233,206), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40),
-        mainImageWidth(221),mainImageHeight(158),bar(0x35), frameWidth(309), frameHeight(330), barWidth(28), barHeight(113),
+        iconHandle(0),mainImageWidth(221),mainImageHeight(158),bar(0x35), frameWidth(309), frameHeight(330), barWidth(28), barHeight(113),
         lineWidth(6), laneLineWidth(3), textEncoding(1), vectorTx(4), headerTag(0xffff),
-        barRangeMetres(1000), maxBitmapBytes(4096), roadShields(false), iconAntialias(false), roundaboutSegments(24) {
+        barRangeMetres(500), maxBitmapBytes(4096), roadShields(false), iconAntialias(false), iconBitmaps(false), roundaboutSegments(24) {
         Rect next={90,3,126,39};nextGlyph=next;
         base.name="6wb"; base.frame=0x17; base.street=0x1a; base.distance=0x1b; base.unit=0x1c;
         base.bufA=main.a; base.bufB=main.b; base.fill=2;
@@ -45,6 +46,7 @@ inline bool validProfile(const Bmw6wbProfile& p) {
         if(!h[i] || h[i]>255)return false;
         for(size_t j=0;j<i;++j)if(h[i]==h[j])return false;
     }
+    if(p.iconHandle!=0 && p.iconHandle!=p.icons.a && p.iconHandle!=p.icons.b)return false;
     // All central maneuvers share the verified double-buffered surface.
     if(p.main.a!=0x1f || p.main.b!=0x20 || p.main.width!=233 || p.main.height!=206)return false;
     if(p.mainImageWidth!=221||p.mainImageHeight!=158)return false;

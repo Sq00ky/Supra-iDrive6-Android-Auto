@@ -73,7 +73,7 @@ class KitStaticTests(unittest.TestCase):
     def test_single_pair_and_preserved_bar(self):
         self.assertIn('uint16_t target=other(mainVisible_,p_.main)',DISPLAY)
         self.assertIn('const Rect& useful=p_.base.glyph',DISPLAY)
-        self.assertIn('kit_.central(central,target,useful,drawing)',DISPLAY)
+        self.assertIn('kit_.central(v,target,useful,drawing)',DISPLAY)
         self.assertIn('setVisibility(p_.bar,bar.visible)',DISPLAY)
         for obsolete in ('kitPlane(', 'p_.flat', 'flat plane is not configured', 'bool perspective'):
             self.assertNotIn(obsolete,DISPLAY)

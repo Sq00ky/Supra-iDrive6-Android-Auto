@@ -23,9 +23,9 @@ class ExpandedGeometryChecks(unittest.TestCase):
     def test_c04_measurement_is_separate_and_not_fabricated(self):
         self.assertIn('mainImageWidth(221),mainImageHeight(158)',PROFILE)
         for h in ('a','b'):
-            self.assertIn('check(port,p_.main.'+h+',p_.mainImageWidth,p_.mainImageHeight)',RESOURCES)
-        # No protocol/correlation change: only which profile fields supply expected dimensions.
-        self.assertEqual(RESOURCES.replace('mainImageWidth','main.width').replace('mainImageHeight','main.height'),old('hud6wb_resources.hpp'))
+            self.assertIn('compatibleOrMissing(port,p_.main.'+h+',p_.mainImageWidth,p_.mainImageHeight)',RESOURCES)
+        self.assertIn('rw==w && rh==h',RESOURCES)
+        self.assertIn('port.imageSize(handle,rw,rh)',RESOURCES)
 
     def test_no_6wa_or_old_main_limits_are_used_to_fit_6wb(self):
         self.assertIn('const Rect& useful=p_.base.glyph',(ROOT/'src/cluster/hud6wb_display.cpp').read_text())
@@ -33,7 +33,8 @@ class ExpandedGeometryChecks(unittest.TestCase):
         self.assertNotIn('199, 129',PROFILE)
         self.assertIn('p.main.width',CONFIG);self.assertIn('p.main.height',CONFIG)
         self.assertNotIn('221',CONFIG);self.assertNotIn('158',CONFIG)
-        self.assertEqual(CONFIG,old('hud6wb_config.hpp').replace('p.base.streetChars,1,40','p.base.streetChars,1,kMaxLatinTextBytes'))
+        self.assertIn('p.base.streetChars,1,kMaxLatinTextBytes',CONFIG)
+        self.assertIn('NBT_6WB_TX',CONFIG)
 
     def test_most_and_reference_data_are_unchanged(self):
         paths=['src/cluster/grafite_oro/artwork_data.inc','src/cluster/grafite_oro/reference.json',

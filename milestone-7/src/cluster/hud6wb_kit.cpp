@@ -31,7 +31,13 @@ bool polygon(Batch& b,uint16_t h,const std::vector<Point>& p,const Rect& bounds,
         int x0=q[0].x,x1=x0,y0=q[0].y,y1=y0;
         for(size_t i=1;i<q.size();++i){x0=std::min(x0,(int)q[i].x);x1=std::max(x1,(int)q[i].x);
             y0=std::min(y0,(int)q[i].y);y1=std::max(y1,(int)q[i].y);}
-        return x1-x0<=1||y1-y0<=1; // reject a nontrivial zero-area/self-crossed figure
+        if(x1-x0<=1||y1-y0<=1)return true;
+        // Rounding a thin diagonal may leave several collinear points. Such
+        // a zero-pixel cell must not abort the entire navigation session.
+        const long dx=q[1].x-q[0].x,dy=q[1].y-q[0].y;
+        for(size_t i=2;i<q.size();++i)
+            if(dx*(q[i].y-q[0].y)-dy*(q[i].x-q[0].x))return false;
+        return true;
     }
     if(area<0)std::reverse(q.begin(),q.end()); // consistent winding for filled geometry
     b.add(kAddPolygon,addPolygon(h,(uint16_t)item++,kPolygon,q));return true;
@@ -123,7 +129,7 @@ GrafiteKit::GrafiteKit():main_(provisionalKitPalette()),lanes_(main_) {
     printf("[6wb kit] experimental flat colours: road=3, road edge=2, guidance=6, outline=5; physical colours unconfirmed\n");
 }
 KitBarState kitBarState(const kombinav::NavView& v,unsigned range) {
-    KitBarState s;double metres=0;s.visible=kombinav::distanceMetres(v,metres);
+    KitBarState s;double metres=0;s.visible=kombinav::distanceMetres(v,metres) && sixwbkit::finite(metres) && metres>=0 && metres<=500;
     s.value=metres<=0?0:metres>=range?255:(int)(metres*255/range);return s;
 }
 sixwbkit::Maneuver::Value GrafiteKit::maneuver(int aaType) {
@@ -232,18 +238,5 @@ bool GrafiteKit::lanes(const kombinav::NavView& v,uint16_t h,unsigned w,unsigned
     if(e.lanes.empty())return true; // empty means clear, not stale lanes
     Rect bounds={0,0,(int16_t)(w-1),(int16_t)(height-1)};
     return encode(sixwbkit::renderLanes(e.lanes,sixwbkit::Rect(0,0,w-1,height-1)),lanes_,h,bounds,out);
-}
-bool GrafiteKit::swatches(uint16_t h,const Rect& useful,unsigned columns,Batch& out)const {
-    sixwbkit::Rect area(useful.x0,useful.y0,useful.x1-useful.x0,useful.y1-useful.y0);
-    std::vector<sixwbkit::HudPaletteSwatch> cells=sixwbkit::hudPaletteSwatches(area,columns);
-    if(cells.size()!=20)return false;Batch b;unsigned item=0x80;
-    for(size_t i=0;i<cells.size();++i) {
-        b.add(kSetFillColor,setFillColor(h,cells[i].index));
-        if(!polygon(b,h,cells[i].fill.points,useful,item))return false;
-        // A 2px round-cap line expanded to filled contours uses the SAME 21B
-        // index and leaves no persistent line-colour changes in the terminal.
-        if(!stroke(b,h,cells[i].line,2,useful,item))return false;
-    }
-    out.calls.insert(out.calls.end(),b.calls.begin(),b.calls.end());return true;
 }
 } }

@@ -14,7 +14,6 @@ public:
         :main_(main),lanes_(lanes){}
     bool central(const kombinav::NavView& v,uint16_t handle,const Rect& useful,Batch& out)const;
     bool lanes(const kombinav::NavView& v,uint16_t handle,unsigned width,unsigned height,Batch& out)const;
-    bool swatches(uint16_t handle,const Rect& useful,unsigned columns,Batch& out)const;
     static sixwbkit::Maneuver::Value maneuver(int aaType);
     static bool laneEvent(const kombinav::NavView& v,sixwbkit::NavigationEvent& event);
     static bool encode(const sixwbkit::Scene& scene,const sixwbkit::HudTerminalPalette& palette,

@@ -2,6 +2,8 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "most/latency_diag.hpp"
 #include "cluster/hud_terminal.hpp"
+#include "nav_diag.hpp"
+#include "nbt_paths.hpp"
 
 #include <errno.h>
 #include <stdio.h>
@@ -74,6 +76,7 @@ void Core::dropWork(uint32_t now) {
     nextCall_ = 0;
     for (size_t i = 0; i < inFlight_.size(); ++i) {
         InFlight f = inFlight_[i];
+        if(f.fkt==kGetSize)surfaceRecord("cancelled",f.handle,now,now-f.sentMs,NULL);
         f.sentMs = now;
         dropped_.push_back(f);
     }
@@ -130,6 +133,7 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
     if (linkUp_ && self == self_) return;
     linkUp_ = true;
     self_ = self;
+    surfaceRecord("session-start",0,now,0,NULL);
     if (cfg_.pacedGraphics) ++epoch_; // invalidate the 6WB renderer even if no batch was active
     if (cfg_.initialNavActive) { navActive_=true; routeOn_=true; frameOff_=false; }
     sizes_.clear();
@@ -147,6 +151,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
     if (host) snprintf(why, sizeof(why), "82/00 host %04X%s", host, host_ ? " (changed)" : "");
     else snprintf(why, sizeof(why), "no 82/00 host on a ring node in the registry");
     host_ = host;
+    surfaceRecord("terminal-selected",0,now,0,NULL);
     if (cfg_.pacedGraphics) ++epoch_; // cached dimensions belong to this actual peer
     failed_ = false;
     navActive_ = cfg_.initialNavActive;
@@ -402,17 +407,24 @@ bool Core::next(uint32_t now, most::Msg& out) {
     out.txType = c.txType >= 0 ? (uint32_t)c.txType : cfg_.txType;
     if (cfg_.useFixedTag) out.hdrTag = cfg_.fixedTag;
     const uint32_t replyTag = cfg_.useFixedTag && cfg_.fixedTag == 0xffffu ? replyTag_ : out.hdrTag;
+    if(c.fkt==kGetSize)surfaceRecord("request",c.handle(),now,0,NULL,&c.payload);
     if (cfg_.strictAnswers && c.fkt == kGetSize) {
         if (replyTag == 0xffffu) { fail("no registered return tag for ImageGetSize", now); return false; }
         for (size_t i=0; i<sizeQueries_.size(); ++i) {
             const SizeQuery& q=sizeQueries_[i];
             if(q.host==host_ && q.self==self_ && q.tag==replyTag && q.handle==c.handle()) {
+                if(cfg_.surfaceDiagnostics && cfg_.pacedGraphics) {
+                    surfaceRecord("duplicate-suppressed",c.handle(),now,0,NULL);
+                    ++nextCall_;
+                    finishIfDone(now);
+                    return false;
+                }
                 fail("ImageGetSize already issued for this registration; refusing ambiguous retry", now);
                 return false;
             }
         }
         if (sizeQueries_.size() >= 128) { fail("ImageGetSize registration history full", now); return false; }
-        SizeQuery q; q.host=host_; q.self=self_; q.tag=replyTag; q.handle=c.handle();
+        SizeQuery q; q.host=host_; q.self=self_; q.tag=replyTag; q.handle=c.handle(); q.sentMs=now;
         sizeQueries_.push_back(q);
         printf("[HudTerm] +%u DISPATCH ImageGetSize host %04X self %04X tag %u handle %04X deadline +%u ms\n",
                now, host_, self_, replyTag, c.handle(), cfg_.sizeReplyMs ? cfg_.sizeReplyMs : cfg_.replyMs);
@@ -440,7 +452,53 @@ bool Core::next(uint32_t now, most::Msg& out) {
     return true;
 }
 
-void Core::sendFailed(uint32_t now) { fail("the MOST client did not send a call", now); }
+void Core::surfaceRecord(const char* outcome,uint16_t handle,uint32_t now,uint32_t elapsed,
+                         const most::View* response,const std::vector<uint8_t>* request) {
+    if(!cfg_.surfaceDiagnostics)return;
+    if(surfaceRecords_.size()>=64) {
+        fprintf(stderr,"[6wb surfaces] diagnostic queue full, dropped %s handle %04X\n",outcome,handle);
+        return;
+    }
+    time_t wall=time(NULL);
+    struct tm utc;
+    char stamp[40]="unavailable";
+    if(wall!=(time_t)-1 && gmtime_r(&wall,&utc))
+        strftime(stamp,sizeof(stamp),"%Y-%m-%dT%H:%M:%SZ",&utc);
+    char line[320];
+    const unsigned width=response && response->data && response->op==most::kOpResultAck && response->len==6?
+        rdBe16(response->data+2):0;
+    const unsigned height=response && response->data && response->op==most::kOpResultAck && response->len==6?
+        rdBe16(response->data+4):0;
+    snprintf(line,sizeof(line),
+        "%s mono_ms=%u terminal=82/%02X host=%04X self=%04X handle=%04X outcome=%s elapsed_ms=%u op=%02X tag=%u dst=%04X width=%u height=%u bytes=%u payload=",
+        stamp,now,kInst,host_,self_,handle,outcome,elapsed,response?response->op:0,
+        response?response->hdrTag:replyTag_,response?response->dst:0,width,height,
+        (unsigned)(response?response->len:request?request->size():0));
+    std::string record=line;
+    const uint8_t* data=response?response->data:request&&!request->empty()?&(*request)[0]:NULL;
+    const size_t size=response?response->len:request?request->size():0;
+    for(size_t j=0;data && j<size && j<4096;++j) {
+        char hex[4];snprintf(hex,sizeof(hex),"%02X ",data[j]);record+=hex;
+    }
+    if(size>4096)record+="[exceeds MOST reassembly limit]";
+    surfaceRecords_.push_back(record);
+}
+void Core::finishSizeQuery(size_t index,uint32_t now) {
+    inFlight_.erase(inFlight_.begin()+index);
+    finishIfDone(now);
+}
+
+void Core::sendFailed(uint32_t now) {
+    if(!inFlight_.empty() && inFlight_.back().fkt==kGetSize) {
+        const InFlight f=inFlight_.back();
+        surfaceRecord("send-error",f.handle,now,now-f.sentMs,NULL);
+        if(cfg_.surfaceDiagnostics && cfg_.pacedGraphics) {
+            finishSizeQuery(inFlight_.size()-1,now);
+            return;
+        }
+    }
+    fail("the MOST client did not send a call", now);
+}
 void Core::sent(uint32_t now) {
     if(cfg_.pacedGraphics) {
         // Space successful local sends even if the vendor send itself took time.
@@ -536,15 +594,31 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
         while(i<inFlight_.size() && !(inFlight_[i].fkt==m.fkt &&
               inFlight_[i].tag==m.hdrTag && m.data && m.len>=2 &&
               inFlight_[i].handle==rdBe16(m.data))) ++i;
-        if(status_!=kReady || i==inFlight_.size()) { ++stats_.strays; return; }
-        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing) return;
+        if(status_!=kReady || i==inFlight_.size()) {
+            const uint16_t handle=m.data && m.len>=2?rdBe16(m.data):0;
+            uint32_t elapsed=0;
+            for(size_t q=0;q<sizeQueries_.size();++q)
+                if(sizeQueries_[q].host==m.src && sizeQueries_[q].handle==handle &&
+                   sizeQueries_[q].tag==m.hdrTag && sizeQueries_[q].self==self_)
+                    elapsed=now-sizeQueries_[q].sentMs;
+            surfaceRecord("unmatched-or-late",handle,now,elapsed,&m);
+            ++stats_.strays; return;
+        }
+        if(m.op==most::kOpProcessingAck || m.op==most::kOpProcessing) {
+            surfaceRecord("processing",inFlight_[i].handle,now,now-inFlight_[i].sentMs,&m);
+            return; // retain the original diagnostic deadline
+        }
         if(m.op==most::kOpResultAck) {
             // F31 capture: handle BE16, width BE16, height BE16. No selector
             // byte in the result; the old seven-byte shape was synthetic only.
             if(m.len!=6 || !rdBe16(m.data+2) || !rdBe16(m.data+4)) {
-                ++stats_.strays; return;
+                surfaceRecord("invalid",inFlight_[i].handle,now,now-inFlight_[i].sentMs,&m);
+                ++stats_.strays;
+                if(cfg_.surfaceDiagnostics && cfg_.pacedGraphics)finishSizeQuery(i,now);
+                return;
             }
             const InFlight f=inFlight_[i];
+            surfaceRecord("OK",f.handle,now,now-f.sentMs,&m);
             Size sz; sz.handle=f.handle; sz.width=rdBe16(m.data+2); sz.height=rdBe16(m.data+4);
             size_t k=0; while(k<sizes_.size() && sizes_[k].handle!=sz.handle) ++k;
             if(k==sizes_.size()) sizes_.push_back(sz); else sizes_[k]=sz;
@@ -556,8 +630,19 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
             return;
         }
         // Unacknowledged Error has no proven handle correlation here.
-        if(m.op!=most::kOpErrorAck || m.len<3) { ++stats_.strays; return; }
-        // A correlated error still follows the existing fail-closed path.
+        if(m.op!=most::kOpErrorAck || m.len<3) {
+            surfaceRecord("invalid",inFlight_[i].handle,now,now-inFlight_[i].sentMs,&m);
+            ++stats_.strays;
+            if(cfg_.surfaceDiagnostics && cfg_.pacedGraphics)finishSizeQuery(i,now);
+            return;
+        }
+        surfaceRecord("error",inFlight_[i].handle,now,now-inFlight_[i].sentMs,&m);
+        if(cfg_.surfaceDiagnostics && cfg_.pacedGraphics) {
+            ++stats_.errors;
+            finishSizeQuery(i,now);
+            return;
+        }
+        // Other profiles retain the fail-closed path.
     }
     if (m.op == most::kOpProcessingAck || m.op == most::kOpProcessing) return;   // still working: the timeout stands
     if (cfg_.strictAnswers && (m.len < 2 || !m.data)) { ++stats_.strays; return; }
@@ -647,6 +732,13 @@ void Core::tick(uint32_t now) {
             latencydiag::record(latencydiag::Timeout,m,0,inFlight_[0].diagnosticId,this);
         }
         ++stats_.timeouts;
+        if(inFlight_[0].fkt==kGetSize) {
+            surfaceRecord("timeout",inFlight_[0].handle,now,now-inFlight_[0].sentMs,NULL);
+            if(cfg_.surfaceDiagnostics && cfg_.pacedGraphics) {
+                finishSizeQuery(0,now);
+                return;
+            }
+        }
         char why[96];
         snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms (sent +%u, now +%u)", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
                  inFlight_[0].handle, deadline(inFlight_[0]), inFlight_[0].sentMs, now);
@@ -902,6 +994,13 @@ void* HudTerminal::threadMain(void* self) {
 // Sends with the lock released, so the DSI callback thread never waits behind a send; the call is already in flight
 // when its answer can arrive.
 void HudTerminal::run() {
+    // The existing rotating writer appends and checks permissions at runtime.
+    // /opt/aa/logs persists across daemon restarts and head-unit reboots.
+    if(core_.surfaceDiagnosticsEnabled() && nbt::packaged())nbt::makeDataDir();
+    const nbt::FilePath surfacePath=nbt::packaged()?nbt::dataFile("logs/6wb-surfaces.log"):
+        nbt::appFile("logs/6wb-surfaces.log");
+    navdiag::FileLog surfaces(surfacePath.c_str(),768u*1024u);
+    bool surfaceLogFailed=false;
     pthread_mutex_lock(&lock_);
     while (!stop_) {
         uint32_t now = nowMs();
@@ -920,6 +1019,21 @@ void HudTerminal::run() {
             now = nowMs();
             if (!ok) core_.sendFailed(now);
             else core_.sent(now);
+        }
+        std::vector<std::string> records;
+        core_.takeSurfaceRecords(records);
+        if(!records.empty()) {
+            pthread_mutex_unlock(&lock_);
+            if(!surfaceLogFailed) {
+                try {
+                    for(size_t i=0;i<records.size();++i)
+                        if(!surfaces.write(records[i])) { surfaceLogFailed=true;break; }
+                } catch(...) { surfaceLogFailed=true; }
+                if(surfaceLogFailed)
+                    fprintf(stderr,"[6wb surfaces] cannot append %s; navigation continues\n",surfacePath.c_str());
+            }
+            pthread_mutex_lock(&lock_);
+            continue;
         }
         Status s;
         if (core_.takeStatusChange(s)) {

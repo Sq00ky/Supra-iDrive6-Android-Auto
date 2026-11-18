@@ -5,6 +5,8 @@
 #include "cluster/hud6wb_profile.hpp"
 #include <stdlib.h>
 #include <errno.h>
+#include <string.h>
+#include <stdio.h>
 namespace nbt { namespace hudterm {
 inline int sixwbNumber(const char* name,int fallback,int low,int high) {
     const char* value=getenv(name);if(!value || !*value)return fallback;
@@ -13,6 +15,19 @@ inline int sixwbNumber(const char* name,int fallback,int low,int high) {
     return (int)n;
 }
 inline void configure6wb(Bmw6wbProfile& p) {
+    const int tx=sixwbNumber("NBT_6WB_TX",p.vectorTx,0,4);
+    if(tx==0 || tx==4)p.vectorTx=(uint32_t)tx;
+    p.iconBitmaps=sixwbNumber("NBT_6WB_ICON_BITMAPS",0,0,1)==1;
+    p.iconHandle=0;
+    // An explicit surface choice overrides the legacy enable/disable setting.
+    const char* surface=getenv("NBT_6WB_ICON_SURFACE");
+    if(surface && *surface) {
+        if(!strcmp(surface,"off"))p.iconBitmaps=false;
+        else if(!strcmp(surface,"auto"))p.iconBitmaps=true;
+        else if(!strcmp(surface,"0x18")) {p.iconBitmaps=true;p.iconHandle=p.icons.a;}
+        else if(!strcmp(surface,"0x19")) {p.iconBitmaps=true;p.iconHandle=p.icons.b;}
+        else printf("[6wb] invalid NBT_6WB_ICON_SURFACE=%s; using NBT_6WB_ICON_BITMAPS\n",surface);
+    }
     p.base.streetChars=sixwbNumber("NBT_6WB_STREET_CHARS",p.base.streetChars,1,kMaxLatinTextBytes);
     p.base.distanceChars=sixwbNumber("NBT_6WB_DISTANCE_CHARS",p.base.distanceChars,1,8);
     p.lineWidth=sixwbNumber("NBT_6WB_LINE_WIDTH",p.lineWidth,1,22);

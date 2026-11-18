@@ -200,8 +200,6 @@ private:
     double last_msg_t_;          // guarded by mu_
     bool session_ended_;         // guarded by mu_
     bool quit_;                  // guarded by mu_
-    uint32_t navigation_epoch_;  // guarded by mu_: presentation-only route start generation
-    bool route_active_;          // guarded by mu_: REROUTING is not a new route
     bool started_;
     pthread_t thread_;
 
@@ -220,7 +218,6 @@ private:
     double backoff_until_;
     int link_failures_;
     bool marked_;
-    uint32_t presented_navigation_epoch_; // worker thread only
     bool fallback_noted_;        // the "no step seconds" line was printed this session
 
     // system-log watch

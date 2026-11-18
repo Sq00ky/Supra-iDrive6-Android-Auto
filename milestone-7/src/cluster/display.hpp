@@ -108,12 +108,6 @@ public:
     virtual bool useFullRoadName() const { return false; }
     virtual bool discardPreviousRoute() const { return false; }
     virtual bool suppressDepartureAtZero() const { return true; }
-    // Optional startup presentation.
-    virtual bool interceptNavigation(const NavView*,int,double) { return false; }
-    virtual double nextUpdateIn(double) const { return 0.25; }
-    virtual void navigationSessionEnded() {}
-    virtual void navigationRouteStarted() {}
-    virtual void navigationPresentationCancelled() {}
 };
 
 } // namespace kombinav

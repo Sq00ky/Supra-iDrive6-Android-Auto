@@ -68,6 +68,7 @@ struct Config {
     uint32_t txType, fixedTag;
     bool useFixedTag, initialNavActive, strictAnswers, acceptMirroredAnswers, extendedCalls;
     bool ignoreFactoryNav; // experimental 6WB only
+    bool surfaceDiagnostics; // bounded, recoverable C04 survey, selected by 6WB only
     bool pacedGraphics;     // opt-in experimental 6WB; information results still gate progress
     uint32_t graphicIntervalMs, graphicReplyMs; // cadence and telemetry window, not a transport timeout
     HandleSet handles;       // the only handles calls may use
@@ -79,7 +80,7 @@ struct Config {
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
     Config() : txType(0), fixedTag(0), useFixedTag(false), initialNavActive(false), strictAnswers(false),
-               acceptMirroredAnswers(false), extendedCalls(false), ignoreFactoryNav(false), pacedGraphics(false), graphicIntervalMs(15), graphicReplyMs(8000), navFrame(-1), replyMs(1500), sizeReplyMs(0), navQuietMs(5000),
+               acceptMirroredAnswers(false), extendedCalls(false), ignoreFactoryNav(false), surfaceDiagnostics(false), pacedGraphics(false), graphicIntervalMs(15), graphicReplyMs(8000), navFrame(-1), replyMs(1500), sizeReplyMs(0), navQuietMs(5000),
                maxInFlight(8), maxBatch(32), logBatches(false) {}
 };
 
@@ -138,6 +139,8 @@ public:
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
     bool imageSize(uint16_t handle, uint16_t& width, uint16_t& height) const;
     uint16_t host() const { return host_; }
+    bool surfaceDiagnosticsEnabled() const { return cfg_.surfaceDiagnostics; }
+    void takeSurfaceRecords(std::vector<std::string>& records) { surfaceRecords_.swap(records); }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
     // A status change since the last call, for the listener.
@@ -145,6 +148,10 @@ public:
     TerminalStats stats() const { return stats_; }
 
 private:
+    std::vector<std::string> surfaceRecords_;
+    void surfaceRecord(const char* outcome,uint16_t handle,uint32_t now,uint32_t elapsed,
+                       const most::View* response,const std::vector<uint8_t>* request = NULL);
+    void finishSizeQuery(size_t index,uint32_t now);
     struct Echo { uint16_t fkt; uint32_t ms, tag; std::vector<uint8_t> payload; };
     std::vector<Echo> echoes_;
     bool ownEcho(const most::View& m, uint32_t now) const;
@@ -173,7 +180,7 @@ private:
     struct InFlight { uint16_t fkt, handle; uint32_t sentMs, tag, diagnosticId; bool warned; };
     // Registered routing tags are not transaction IDs. Never repeat a size query
     // for the same peer/registration: an old reply could match the new query.
-    struct SizeQuery { uint16_t host, self, handle; uint32_t tag; };
+    struct SizeQuery { uint16_t host, self, handle; uint32_t tag, sentMs; };
     std::vector<SizeQuery> sizeQueries_;
     uint32_t replyTag_;
 

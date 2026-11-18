@@ -25,7 +25,7 @@ public:
             // An OEM yield drops drawing work, not the terminal's size cache.
             // Reuse already validated sizes instead of repeating same-tag calls.
             // Core clears this cache when the link or host changes.
-            if(matches(port)) {state_=kVerified;return true;}
+            if(allMeasured(port) && matches(port)) {state_=kVerified;return true;}
             if(port.submit(queries())==kQueued)state_=kQuerying;
             return false;
         }
@@ -33,13 +33,36 @@ public:
         bool ok=matches(port);
         state_=ok?kVerified:kIncompatible;return ok;
     }
+public:
+    bool iconsUsable(const Port& port) const {
+        if(p_.iconHandle)return check(port,p_.iconHandle,p_.icons.width,p_.icons.height);
+        return check(port,p_.icons.a,p_.icons.width,p_.icons.height) &&
+            check(port,p_.icons.b,p_.icons.width,p_.icons.height);
+    }
+    bool lanesUsable(const Port& port) const {
+        return check(port,p_.lanes.a,p_.lanes.width,p_.lanes.height) &&
+            check(port,p_.lanes.b,p_.lanes.width,p_.lanes.height);
+    }
+    bool barUsable(const Port& port) const { return compatibleOrMissing(port,p_.bar,p_.barWidth,p_.barHeight); }
 private:
+    bool allMeasured(const Port& port) const {
+        const Batch b=queries();
+        for(size_t i=0;i<b.calls.size();++i) {
+            uint16_t w=0,h=0;
+            if(!port.imageSize(b.calls[i].handle(),w,h))return false;
+        }
+        return true;
+    }
+    bool compatibleOrMissing(const Port& port,uint16_t handle,uint16_t w,uint16_t h) const {
+        uint16_t rw=0,rh=0;
+        // A missing diagnostic reply uses the established central reference.
+        // Only an actually received, incompatible central size blocks drawing.
+        return !port.imageSize(handle,rw,rh) || (rw==w && rh==h);
+    }
     bool matches(const Port& port) const {
-        return check(port,p_.base.frame,p_.frameWidth,p_.frameHeight) &&
-            check(port,p_.main.a,p_.mainImageWidth,p_.mainImageHeight) && check(port,p_.main.b,p_.mainImageWidth,p_.mainImageHeight) &&
-            check(port,p_.icons.a,p_.icons.width,p_.icons.height) && check(port,p_.icons.b,p_.icons.width,p_.icons.height) &&
-            check(port,p_.lanes.a,p_.lanes.width,p_.lanes.height) && check(port,p_.lanes.b,p_.lanes.width,p_.lanes.height) &&
-            check(port,p_.bar,p_.barWidth,p_.barHeight);
+        return compatibleOrMissing(port,p_.base.frame,p_.frameWidth,p_.frameHeight) &&
+            compatibleOrMissing(port,p_.main.a,p_.mainImageWidth,p_.mainImageHeight) &&
+            compatibleOrMissing(port,p_.main.b,p_.mainImageWidth,p_.mainImageHeight);
     }
     static void add(Batch& b,uint16_t h) {std::vector<uint8_t> p=getSize(h);p.push_back(1);b.add(kGetSize,p);}
     static bool check(const Port& port,uint16_t h,uint16_t w,uint16_t height) {

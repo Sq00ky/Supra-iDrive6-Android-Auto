@@ -13,8 +13,6 @@ std::vector<uint8_t> rle32(const std::vector<uint32_t>& argb);
 // Full surface bitmap, one application segment. Oversize streams are refused, not truncated.
 std::vector<uint8_t> bitmap(uint16_t handle, uint8_t id, const std::vector<uint32_t>& argb,
                             unsigned width, unsigned height, size_t maxBytes);
-// Bounded calibration pixels; bitmap() supplies the existing C05/RLE32 envelope.
-std::vector<uint32_t> calibrationPicture(unsigned test);
 struct RoadShield {
     char kind; std::string number;
     RoadShield() : kind(0) {}

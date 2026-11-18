@@ -82,7 +82,8 @@ int main() {
     }
     assert(expandedCoordinateSeen);
     kombinav::NavView v;hudterm::KitBarState bar=hudterm::kitBarState(v,1000);assert(!bar.visible);
-    v.has_step_m=true;v.step_m=1400;bar=hudterm::kitBarState(v,1000);assert(bar.visible&&bar.value==255);
+    v.has_step_m=true;v.step_m=1400;bar=hudterm::kitBarState(v,1000);assert(!bar.visible);
+    v.step_m=500;bar=hudterm::kitBarState(v,500);assert(bar.visible&&bar.value==255);
     HudTerminalPalette p;uint8_t index=255;assert(hudColorIndex(p,Color::Gold,index)==HudPaint::Unmapped);
     p.gold=0;assert(hudColorIndex(p,Color::Gold,index)==HudPaint::Mapped&&index==0);
     p.gold=20;assert(hudColorIndex(p,Color::Gold,index)==HudPaint::Unmapped);
