@@ -71,7 +71,8 @@ const HudProfile k6wa = {
                            // The F20's 199x129 overflowed it -> garbled arrow. Override at the car: NBT_HUD_CANVAS.
     { 31, 8, 94, 68 },     // glyph: ~0.5xW x 0.78xH centred, the F20's arrow proportions mapped onto 126x77.
                            // A starting box to tune on the car without a rebuild: NBT_HUD_GLYPH "x0 y0 x1 y1".
-    { 4, 22, 68, 48 },
+    { 0, 0, 183, 16 },     // lanes: the laneA/laneB handles (9/10) measured 184x17; override NBT_HUD_LANES_BOX.
+                           // Lanes draw only with NBT_HUD_LANES=1 (hud_lanes); this is a starting box to tune on the car.
     32,
     8,
     "-./",
@@ -112,6 +113,7 @@ inline void applyHudEnv(HudProfile& p) {
     Rect r;
     if (parseRect(getenv("NBT_HUD_CANVAS"), r)) p.canvas = r;
     if (parseRect(getenv("NBT_HUD_GLYPH"), r))  p.glyph = r;
+    if (parseRect(getenv("NBT_HUD_LANES_BOX"), r)) p.lanes = r;
     const char* f = getenv("NBT_HUD_FILL");
     if (f && *f) p.fill = (uint8_t)atoi(f);
 }
