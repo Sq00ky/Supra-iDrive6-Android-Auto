@@ -14,6 +14,28 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > hard key), the check happens the next time the main page shows. A running phone session drops and reconnects.
 > `nbt-aad.env` edits are not watched. `NBT_SETTINGS_RESTART=0` turns it off. App log: `settings changed (...) ->
 > restarting nbt-aad`. Confirmed on the J29: three restarts, phone back on wireless Android Auto in 4.5-6 s each.
+>
+> **v1.9.94-wfdssid: the Wi-Fi Direct group name from the car's connection manager.** In DIRECT mode, when the
+> head unit's files, `ifconfig` and mwud give no group name (Y24073J: no ssid line, mwud refuses with errno 261),
+> nbt-aad asks the car's connection manager for its stored group (`getPersistedGroupList`, `DIRECT-xx-<name>`) and
+> offers that, also with the car's own `WFDPass.conf` (before, only the own-passphrase path asked it). Asked again at
+> most every 30 s until it answers, then kept. The "wireless Android Auto is unavailable" line now says what is
+> missing: the passphrase, the group name, or both. `NBT_WFD_SSID` still pins a name.
+>
+> **v1.9.93-wfdpass3 / rhmiapp-69-wfdpass (test build): Use WiFi Direct Network (own password).** Not every car has
+> a usable `/var/opt/conn/WFDPass.conf`, and the group's passphrase cannot be read anywhere else. With **Use WiFi
+> Direct Network (own password)** ticked (or `NBT_ALT_WIFI=DIRECT`) and no usable `WFDPass.conf` (missing, empty or
+> not decodable), nbt-aad sets the passphrase itself through the car's own connection manager
+> (`Wlan_ConnMngr_WFD_disable`, then `Wlan_ConnMngr_WFD_enable` with the car's own group name and our passphrase) and
+> offers the phone exactly that. The group name stays the car's (`DIRECT-03-<brand><last5>`, read from the connection
+> manager; the car refuses any other name). The passphrase is random, generated once and kept in
+> `/var/opt/aa/wfd-own-pass` (`NBT_WFD_PASS` pins one; 8..63 characters, no quotes, `;`, `\` or braces). The car's
+> `WFDPass.conf` is left alone, and a reboot gives the car its own group back until nbt-aad starts again. A car with a
+> usable `WFDPass.conf` is left alone and offered that passphrase as before. `NBT_WFD_OWN_PASS`: unset/`auto` = only
+> without a usable file, `1` = always (to test it on a car that has the file; stops after 3 failed tries there),
+> `0` = never. A watch (`NBT_WFD_WATCH_S`, default 20 s, `0` = off) logs whether the car takes the group back
+> (Wi-Fi Direct off, the group set up again, another name, a rewritten `WFDPass.conf`) and then sets ours again before
+> the next phone link, never during a session. Log: `[WfdOwn] ...` lines.
 
 > **v1.9.64-navset: navigation settings on the Settings page.** The cluster/HUD checkbox is now **Show navigation in
 > HUD/gauge cluster** (same flag file, `/var/opt/aa/kombi-nav`). A new **Show directions at any distance** checkbox
@@ -38,6 +60,17 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > sets the hold (default 30 s, 0 = none); during a continuous hold one re-registration still runs every 60 s, so a
 > phone that keeps being refused does not switch the recovery off. The hint after refused links no longer blames Bluetooth audio (a Z Fold8 was refused
 > with A2DP connected and the security check passed): it points at the phone's functions in iDrive and re-pairing.
+>
+> **v1.9.92-usbfix: a phone nbt-aad switched to Android Auto itself is no longer reset at start-up.** With the phone
+> already plugged in when nbt-aad starts (boot, Restart, a settings change), nbt-aad switches it to accessory mode;
+> a fast phone (Samsung S25, 0.5 s) came back inside the 1 s start window and was taken for one left in accessory
+> mode by an earlier run and reset. The phone then attached twice and its Android Auto session never started, three
+> tries, then "unplug and replug". Present since v1.9.26 (the start-up reset). Now an accessory that appears after
+> nbt-aad's own switch is never reset; one that really was there before still is. Sessions on the same plug-in are
+> retried 5 s and then 10 s apart (was 3 s) and a reset is followed by 5 s of quiet (was 3 s), so the phone has
+> given up on the failed session first. Every `[UsbAccessory]` / `[UsbDirect]` line now carries the seconds since
+> boot, and the accessory line says why it is or is not reset.
+> Log: `accessory 18d1:2d00 at usb0.2.0 (interface 0): switched by nbt-aad 0.48 s ago: no reset`.
 > Log: `[Wireless] ... not re-registering the service under it`, `held for 60 s while the phone keeps asking: one
 > re-registration anyway`, `deregister answered 5 and register answered 5`.
 

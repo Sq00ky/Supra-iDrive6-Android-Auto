@@ -47,6 +47,8 @@ set(SOURCES
     src/aa_cryptor.cpp
     src/bluetooth_manager.cpp
     src/wireless_setup.cpp
+    src/wfd_own.cpp
+    src/gcf_client.cpp
     src/touch_probe.cpp
     src/dsi_client.cpp
     src/audio/voice_scenario.cpp

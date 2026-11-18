@@ -73,6 +73,10 @@ public:
     // before this daemon ran, so a session of an earlier one may still be running on it.
     bool takePresentAtStart(const std::string& key);
 
+    // nbt-aad is about to send an accessory switch (either path: /dev/android* or switchPhones): an accessory that
+    // appears after this is the phone we switched, not one left over from before, and is not reset.
+    void noteSwitchSent();
+
     // Devices other than accessories that have been plugged in for at least min_age_s: asks each one for its AOA
     // protocol (again every second while it does not answer, for up to 2 minutes) and switches the ones that answer to
     // accessory mode with `id`. Blocks for the control transfers (1 s timeout each). Returns how many it switched.
@@ -121,6 +125,7 @@ private:
     pthread_mutex_t mu_;
     struct usbd_connection* conn_;
     double connected_s_;                 // guarded by mu_: when usbd_connect returned, 0 until then
+    double switch_s_;                    // guarded by mu_: when nbt-aad last sent a switch, 0 = never
     std::vector<Accessory> accs_;
     std::vector<Candidate> cands_;
     std::vector<Signalled> signalled_;   // watch thread only

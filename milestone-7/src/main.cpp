@@ -101,6 +101,7 @@
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
+#include "wfd_own.hpp"     // DIRECT mode: nbt-aad's own passphrase on the car's Wi-Fi Direct group
 #include "keyframe_ask.hpp"
 #include "touch_probe.hpp"
 #include "aa_keys.hpp"
@@ -756,7 +757,158 @@ static int ifaceHasIpv4(const char* ifn) {
 // Wi-Fi access point off and on again under a daemon that keeps running. Car reports 2026-10-29 (F31, Supra): after
 // that the phone takes the Wi-Fi details over Bluetooth but never connects, until Force Stop + Start, i.e. until
 // a new process runs 'pfctl -d' and opens a new listening socket. Redo both here.
+// DIRECT mode, nbt-aad's own passphrase (wfd_own.hpp): set once per daemon start through the car's connection
+// manager, and again after the car switched its Wi-Fi off and on under us (it may then run its own group again).
+static volatile bool g_wfdOwnApplied = false;   // also read by wfdWatchThread
+static volatile uint32_t g_wfdOwnAt = 0;        // when it was applied (monoSecs)
+static volatile bool g_wfdOwnLost = false;      // wfdWatchThread: the car took the group back -> set ours again
+static const int kWfdOwnMaxFailsWithFile = 3;   // NBT_WFD_OWN_PASS=1 on a car whose WFDPass.conf works: then stop
+static uint32_t g_wfdOwnTried = 0;     // last attempt (monoSecs), 0 = never
+static int g_wfdOwnFails = 0;
+static nbt::ApInfo g_wfdOwnAp;
+static std::string g_wfdOwnPath;
+static const int kWfdOwnRetrySec = 30;
+static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
+
+static bool wfdOwnMode() {
+    return nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT && nbt::wfdOwnPassMode() != nbt::WFD_OWN_NEVER;
+}
+
+// True when the group runs with our passphrase (g_wfdOwnAp). Once set it is used for the rest of the run (the car's
+// group then runs on it). Before that, NBT_WFD_OWN_PASS=auto leaves a car with a usable WFDPass.conf alone. Tries at
+// most every kWfdOwnRetrySec.
+static bool ensureWfdOwn() {
+    if (!wfdOwnMode()) return false;
+    if (g_wfdOwnLost) {
+        // Never while a session runs: the wireless thread only calls this between sessions.
+        g_wfdOwnLost = false;
+        g_wfdOwnApplied = false;
+        g_wfdOwnTried = 0;
+        printf("[WfdOwn] the car took the Wi-Fi Direct group back (see the watch line above): setting nbt-aad's "
+               "passphrase again\n");
+    }
+    if (g_wfdOwnApplied) return true;
+    bool carUsable = false;
+    {
+        nbt::ApInfo carAp;
+        std::string carPath;
+        carUsable = nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), carAp, carPath, true);
+        const nbt::WfdOwnPassMode om = nbt::wfdOwnPassMode();
+        static int s_logged = -1;   // once per decision, not on every 10 s check
+        const int decision = nbt::wfdOwnPassDecide(om, carUsable) ? 1 : 0;
+        if (s_logged != decision) {
+            s_logged = decision;
+            printf("[WfdOwn] NBT_WFD_OWN_PASS=%s, car's WFDPass.conf %s: %s\n", nbt::wfdOwnPassModeName(om),
+                   carUsable ? ("usable (" + carPath + ")").c_str() : "missing or unusable",
+                   decision ? "setting nbt-aad's own passphrase on the group"
+                            : "using the car's passphrase, the group is left alone");
+        }
+        if (!decision) return false;
+    }
+    if (carUsable && g_wfdOwnFails >= kWfdOwnMaxFailsWithFile) {
+        // Each try switches the car's working group off and on: with a usable file, stop after a few.
+        static bool s_capped = false;
+        if (!s_capped) {
+            s_capped = true;
+            printf("[WfdOwn] %d tries failed and the car's WFDPass.conf works: not trying again this run, the car's "
+                   "passphrase is used\n", g_wfdOwnFails);
+        }
+        return false;
+    }
+    uint32_t now = monoSecs();
+    if (g_wfdOwnTried && now - g_wfdOwnTried < (uint32_t)kWfdOwnRetrySec) return false;
+    g_wfdOwnTried = now ? now : 1;
+    nbt::ApInfo ap;
+    std::string path;
+    if (nbt::applyWfdOwnPass(ap, path)) {
+        g_wfdOwnAp = ap;
+        g_wfdOwnPath = "nbt-aad's own passphrase (" + path + ")";
+        g_wfdOwnApplied = true;
+        g_wfdOwnAt = monoSecs();
+        g_wfdOwnFails = 0;
+        printf("[WfdOwn] Wi-Fi Direct group '%s' runs with nbt-aad's passphrase: the phone is offered that\n",
+               ap.ssid.c_str());
+    } else {
+        ++g_wfdOwnFails;
+        printf("[WfdOwn] could not set nbt-aad's passphrase (try %d): %s, trying again in %d s "
+               "(NBT_WFD_OWN_PASS=0 = never)\n", g_wfdOwnFails,
+               nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), ap, path, true)
+                   ? "using the car's WFDPass.conf meanwhile" : "no usable WFDPass.conf either",
+               kWfdOwnRetrySec);
+    }
+    fflush(stdout);
+    return g_wfdOwnApplied;
+}
+
+// Does the car take nbt-aad's Wi-Fi Direct group back (CarPlay start, Wi-Fi off/on in the iDrive menu, its own timers)?
+// Runs beside everything else, also during a session: logs a baseline once the group is ours, then every change
+// (wfd_own.hpp wfdWatchVerdict), and a "still ours" line every 5 minutes. A change marks the group lost; the wireless
+// thread sets our passphrase again before the next phone link (never in the middle of a session).
+static void* wfdWatchThread(void*) {
+    const int every = nbt::wfdWatchSec();
+    printf("[WfdOwn] watching the Wi-Fi Direct group every %d s once nbt-aad's passphrase is set (NBT_WFD_WATCH_S, 0 = "
+           "off)\n", every);
+    nbt::WfdWatchState base;
+    bool haveBase = false;
+    uint32_t baseFor = 0, baseAt = 0, lastStill = 0;
+    bool failLogged = false;
+    unsigned tick = 0;
+    const unsigned kGcfEvery = 6;   // the connection manager every 6th check (~2 min at 20 s), pidin + stat every check
+    while (g_running) {
+        for (int i = 0; i < every && g_running; ++i) sleep(1);
+        if (!g_running) break;
+        if (!g_wfdOwnApplied) { haveBase = false; continue; }
+        const uint32_t appliedAt = g_wfdOwnAt;
+        if (monoSecs() - appliedAt < 15) continue;   // our own enable: dhcpd still settling
+        nbt::WfdWatchState st;
+        bool gcf = !haveBase || baseFor != appliedAt || (++tick % kGcfEvery) == 0;
+        if (!gcf && nbt::wfdOwnStatus(st, false) && !nbt::wfdWatchVerdict(base, st).empty())
+            gcf = true;   // something changed: ask the connection manager too, for the log line
+        if (gcf && !nbt::wfdOwnStatus(st, true)) {
+            if (!failLogged) printf("[WfdOwn] watch: the status check could not run (skipped until it does)\n");
+            failLogged = true;
+            continue;
+        }
+        failLogged = false;
+        const uint32_t now = monoSecs();
+        if (!haveBase || baseFor != appliedAt) {
+            base = st;
+            haveBase = true;
+            baseFor = appliedAt;
+            baseAt = lastStill = now;
+            printf("[WfdOwn] [%9.3f] watch: baseline: Wi-Fi Direct %s, group '%s', dhcpd on wfd0 pid %ld, %s\n", upSec(),
+                   st.on == 1 ? "on" : st.on == 0 ? "OFF" : "unknown", st.ssid.c_str(), st.dhcpdPid,
+                   st.carFile.empty() ? "no WFDPass.conf" : ("WFDPass.conf " + st.carFile).c_str());
+            fflush(stdout);
+            continue;
+        }
+        std::string why = nbt::wfdWatchVerdict(base, st);
+        if (!why.empty()) {
+            printf("[WfdOwn] [%9.3f] watch: %s, %u s after nbt-aad set its passphrase (session %s): the car may be "
+                   "running its own passphrase again%s\n", upSec(), why.c_str(), (unsigned)(now - appliedAt),
+                   g_sessionActive ? "running" : "not running",
+                   g_sessionActive ? "; ours is set again after this session" : "; ours is set again before the next link");
+            g_wfdOwnLost = true;
+            haveBase = false;
+        } else if (now - lastStill >= 300) {
+            lastStill = now;
+            printf("[WfdOwn] [%9.3f] watch: still nbt-aad's group for %u s (Wi-Fi Direct on, dhcpd pid %ld unchanged, "
+                   "session %s)\n", upSec(), (unsigned)(now - baseAt), st.dhcpdPid,
+                   g_sessionActive ? "running" : "not running");
+        }
+        fflush(stdout);
+    }
+    return NULL;
+}
+
 static void recoverWifiPath(const char* why) {
+    // The car may have started its own Wi-Fi Direct group again: set ours again at the next link. Not within 60 s of
+    // our own WFD_disable/enable, which can make wfd0 look switched off and on.
+    if (g_wfdOwnApplied && monoSecs() - g_wfdOwnAt > 60) {
+        g_wfdOwnApplied = false;
+        g_wfdOwnTried = 0;
+        printf("[WfdOwn] %s: nbt-aad's passphrase is set again before the next phone link\n", why);
+    }
     if (nbt::envFlag("NBT_KEEP_PF") != 1) {
         int rc = system("pfctl -d");
         printf("[Wireless] %s: 'pfctl -d' returned %d (%s)\n", why, rc,
@@ -775,6 +927,8 @@ static bool apConfigPresent(const char* cfg) {
     // hotspot config at all (cars without the CarPlay licence). Quiet: this runs every kApCfgRecheckSec.
     nbt::AltWifiMode m = nbt::altWifiMode();
     if (m != nbt::ALT_WIFI_CARPLAY) {
+        // nbt-aad's own passphrase needs no WFDPass.conf at all (cars that never wrote one).
+        if (ensureWfdOwn()) return true;
         nbt::ApInfo wfd;
         std::string used;
         if (nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true)) return true;
@@ -788,11 +942,12 @@ static bool apConfigPresent(const char* cfg) {
 }
 
 static void logNoApConfig(const char* cfg) {
-    if (nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT)
-        printf("[Wireless] no usable Wi-Fi Direct passphrase (/var/opt/conn/WFDPass.conf, then "
-               "/fs/sda1/opt/conn/WFDPass.conf): NBT_ALT_WIFI=DIRECT has no CarPlay fallback, so wireless Android "
-               "Auto is unavailable, Bluetooth links are left alone; checking again every %d s\n", kApCfgRecheckSec);
-    else
+    if (nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT) {
+        nbt::WfdMissing m = g_wfdMissing ? (nbt::WfdMissing)g_wfdMissing : nbt::WFD_MISSING_PASS;
+        printf("[Wireless] %s: NBT_ALT_WIFI=DIRECT has no CarPlay fallback, so wireless Android Auto is unavailable, "
+               "Bluetooth links are left alone; checking again every %d s\n",
+               nbt::wfdMissingText(m, g_wfdOwnFails > 0).c_str(), kApCfgRecheckSec);
+    } else
         printf("[Wireless] no Wi-Fi hotspot config (%s): wireless Android Auto is unavailable, Bluetooth links are "
                "left alone; checking again every %d s. A car without the CarPlay hotspot (no CarPlay licence) can use "
                "its Wi-Fi Direct group: tick \"Use WiFi Direct Network\" in Settings\n",
@@ -976,10 +1131,29 @@ static void* wirelessThread(void*) {
         if (altMode != nbt::ALT_WIFI_CARPLAY) {
             nbt::ApInfo wfd;
             std::string used;
+            // DIRECT: nbt-aad's own passphrase first (wfd_own.hpp); the car's WFDPass.conf only when that failed.
+            bool ownUsed = altMode == nbt::ALT_WIFI_DIRECT && ensureWfdOwn();
+            if (ownUsed) {
+                ApChoice c;
+                c.ap = g_wfdOwnAp;
+                c.path = g_wfdOwnPath;
+                c.ifn = wfdIfn;
+                c.direct = true;
+                directChoices.push_back(c);
+            }
             // Quiet here: logWfdAp() prints the passphrase once per value, not on every link attempt.
-            bool havePass = nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true);
-            std::string wfdSsid;
-            if (havePass && nbt::resolveWfdSsid(wfdIfn, wfdSsid)) {
+            bool havePass = !ownUsed && nbt::loadWfdAp(nbt::wfdPassPaths(), nbt::wfdPassPathCount(), wfd, used, true);
+            std::string wfdSsid, ladderSsid, cmSsid, ssidFrom;
+            bool haveSsid = false;
+            if (!ownUsed && havePass) {
+                const bool ladderOk = nbt::resolveWfdSsid(wfdIfn, ladderSsid);
+                if (!ladderOk) nbt::wfdSsidFromConnMngr(cmSsid);
+                haveSsid = nbt::wfdPickSsid(ladderOk, ladderSsid, cmSsid, wfdSsid, ssidFrom);
+            }
+            g_wfdMissing = ownUsed ? nbt::WFD_MISSING_NOTHING : nbt::wfdMissing(havePass, havePass && haveSsid);
+            if (ownUsed) {
+                // the group is in directChoices already
+            } else if (havePass && haveSsid) {
                 wfd.ssid = wfdSsid;
                 ApChoice c;
                 c.ap = wfd;
@@ -988,8 +1162,8 @@ static void* wirelessThread(void*) {
                 c.direct = true;
                 directChoices.push_back(c);
             } else if (havePass) {
-                printf("[Wireless] Wi-Fi Direct: no SSID for %s, skipping the DIRECT group on this link (NBT_WFD_SSID "
-                       "pins one)\n", wfdIfn);
+                printf("[Wireless] Wi-Fi Direct: no SSID for %s (head unit and the car's connection manager), skipping "
+                       "the DIRECT group on this link (NBT_WFD_SSID pins one)\n", wfdIfn);
             } else {
                 printf("[Wireless] Wi-Fi Direct: no usable passphrase file (%s), skipping the DIRECT group on this "
                        "link\n", nbt::wfdPassPaths()[0]);
@@ -1773,7 +1947,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.91-sppreq3"
+#define NBT_AAD_BUILD "v1.9.94-wfdssid"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -1913,6 +2087,10 @@ int main(int argc, char* argv[]) {
         fflush(stdout);
         return rc;
     }
+    // One-shot child of DIRECT mode (wfd_own.cpp): sets nbt-aad's passphrase on the car's Wi-Fi Direct group through
+    // the car's connection manager. Started by the daemon with LD_LIBRARY_PATH=/opt/conn/lib; prints its own result.
+    if (argc > 1 && !strcmp(argv[1], "--wfd-own")) return nbt::runWfdOwnCommand(argc, argv);
+    if (argc > 1 && !strcmp(argv[1], "--wfd-own-status")) return nbt::runWfdStatusCommand();
     if (argc > 1 && (!strcmp(argv[1], "--license") || !strcmp(argv[1], "--licence"))) {
         nbt::printNbtAadLicense();
         return 0;
@@ -2183,6 +2361,10 @@ int main(int argc, char* argv[]) {
         if (pthread_create(&wt, NULL, &wirelessThread, NULL) == 0) {
             pthread_detach(wt);
             printf("[Main] Wireless bring-up thread started (port %u)\n", (unsigned)g_aaPort);
+        }
+        if (wfdOwnMode() && nbt::wfdWatchSec() > 0) {
+            pthread_t ww;
+            if (pthread_create(&ww, NULL, &wfdWatchThread, NULL) == 0) pthread_detach(ww);
         }
     } else {
         printf("[Main] Wireless off (%s): outbound phone scanner mode.\n",
