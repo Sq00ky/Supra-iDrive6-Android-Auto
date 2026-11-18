@@ -22,6 +22,8 @@
 #include "cluster/hudterm_shapes.hpp"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 namespace nbt {
 namespace hudterm {
@@ -65,8 +67,10 @@ const HudProfile k6wa = {
     9, 10,
     4,
     7, 3, 4,
-    { 0, 0, 199, 129 },
-    { 70, 20, 170, 120 },
+    { 0, 0, 125, 76 },     // canvas: our F30 cluster's picture buffer, measured 126x77 (hud_probe, 17.11.2026).
+                           // The F20's 199x129 overflowed it -> garbled arrow. Override at the car: NBT_HUD_CANVAS.
+    { 31, 8, 94, 68 },     // glyph: ~0.5xW x 0.78xH centred, the F20's arrow proportions mapped onto 126x77.
+                           // A starting box to tune on the car without a rebuild: NBT_HUD_GLYPH "x0 y0 x1 y1".
     { 4, 22, 68, 48 },
     32,
     8,
@@ -91,6 +95,25 @@ inline HandleSet handlesOf(const HudProfile& p) {
         h.allow(p.laneB);
     }
     return h;
+}
+
+// On-car tuning without a rebuild: the cluster's exact buffer and the arrow's box are hardware, found by eye on the
+// car. NBT_HUD_CANVAS / NBT_HUD_GLYPH = "x0 y0 x1 y1" (inclusive); NBT_HUD_FILL = colour index. Unset -> the measured
+// defaults above. Same idea as the carplay-advanced hud_box switch that fixed CarPlay on this cluster.
+inline bool parseRect(const char* s, Rect& r) {
+    if (!s || !*s) return false;
+    int a, b, c, d;
+    if (sscanf(s, "%d %d %d %d", &a, &b, &c, &d) != 4) return false;
+    r.x0 = (int16_t)a; r.y0 = (int16_t)b; r.x1 = (int16_t)c; r.y1 = (int16_t)d;
+    return true;
+}
+
+inline void applyHudEnv(HudProfile& p) {
+    Rect r;
+    if (parseRect(getenv("NBT_HUD_CANVAS"), r)) p.canvas = r;
+    if (parseRect(getenv("NBT_HUD_GLYPH"), r))  p.glyph = r;
+    const char* f = getenv("NBT_HUD_FILL");
+    if (f && *f) p.fill = (uint8_t)atoi(f);
 }
 
 } // namespace hudterm

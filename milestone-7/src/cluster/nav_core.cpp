@@ -425,7 +425,11 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         shadow_ = h && *h && strcmp(h, "on") != 0;
         if (shadow_ && strcmp(h, "log") != 0)
             printf("[KombiNav] NBT_HUDTERM=%s unknown (log, on): shadow mode, nothing is sent\n", h);
-        const hudterm::HudProfile& p = hudterm::k6wa;
+        hudterm::HudProfile p = hudterm::k6wa;   // a copy: env can retune the box on the car without a rebuild
+        hudterm::applyHudEnv(p);
+        printf("[KombiNav] HUD 6wa: canvas %d,%d-%d,%d glyph %d,%d-%d,%d fill %u (NBT_HUD_CANVAS/GLYPH/FILL to tune)\n",
+               p.canvas.x0, p.canvas.y0, p.canvas.x1, p.canvas.y1,
+               p.glyph.x0, p.glyph.y0, p.glyph.x1, p.glyph.y1, (unsigned)p.fill);
         hudterm::Config c;
         c.handles = hudterm::handlesOf(p);
         c.navFrame = p.frame;
