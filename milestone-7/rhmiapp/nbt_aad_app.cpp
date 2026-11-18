@@ -73,7 +73,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-69-wfdpass (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-85-cluster (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -290,6 +290,12 @@ const long        kAutostartDelayS = 15;
 // ActiveSeating intro (libActiveSeating StateTutorial::startWidgetInit: DataTableBase(&map, 1), map[0] = TextID(0x58),
 // updateModel(274, table); state property 24 = 3). Plain labels / Richtext labels are one row, cut at ~34 characters.
 const unsigned    kAboutModel      = 37;
+// Gauge cluster type (rhmiapp-82): three radio buttons, BMW's own pattern (SecurityMenu.xml:1159). The
+// choice is one word in /var/opt/aa/cluster; nbt-aad reads it when NBT_CLUSTER is unset. 6WB has no display
+// driver yet, so it is offered with that stated and the daemon says so rather than quietly doing 6WA's job.
+const char* const kClusterFlag       = "cluster";
+const unsigned    kClusterModels[3]  = { 401, 402, 403 };
+const char* const kClusterValues[3]  = { "j29", "6wa", "6wb" };
 const unsigned    kAboutText       = 17;
 // "Save logs to USB" checkbox (rhmiapp-10): <checkbox action="26" model="38"> in hmiState 14, flag
 // usblog (nbt::usblog). Off = no log files at all; on = both logs on the first /mnt/umass* stick.
@@ -1737,6 +1743,38 @@ bool g_autostartShown = false;
 
 bool autostartOn() { return nbt::flagSet(kAutostartFlag); }
 
+extern bmw::PluginApp* g_app;      // defined further down the file
+void writeClusterChoice(const char* value) {
+    nbt::makeDataDir();
+    FILE* f = fopen(nbt::dataFile(kClusterFlag).c_str(), "w");
+    if (!f) { alog("cluster: cannot write %s", nbt::dataFile(kClusterFlag).c_str()); return; }
+    fprintf(f, "%s\n", value);
+    fclose(f);
+    alog("cluster: chose %s (applies at the next Start / Restart)", value);
+}
+
+int clusterChoice() {
+    char v[24];
+    if (!nbt::flagText(kClusterFlag, v, sizeof(v))) return -1;
+    for (int i = 0; i < 3; ++i) if (!strcmp(v, kClusterValues[i])) return i;
+    return -1;
+}
+
+void showClusterType(bmw::PluginApp* app) {
+    const int sel = clusterChoice();
+    for (int i = 0; i < 3; ++i) app->updateModel(kClusterModels[i], i == sel);
+    alog("settings: cluster type %s", sel < 0 ? "(unset: NBT_CLUSTER or j29)" : kClusterValues[sel]);
+}
+
+bool onClusterPick(int which) {
+    writeClusterChoice(kClusterValues[which]);
+    if (g_app) showClusterType(g_app);      // the tick must move on the press, not on re-entry
+    return true;
+}
+bool onClusterJ29(void*, const bmw::Parcel&) { return onClusterPick(0); }
+bool onCluster6wa(void*, const bmw::Parcel&) { return onClusterPick(1); }
+bool onCluster6wb(void*, const bmw::Parcel&) { return onClusterPick(2); }
+
 void showAutostart(bmw::PluginApp* app) {
     bool on = autostartOn();
     app->updateModel(kAutostartModel, on);
@@ -2544,6 +2582,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showMenuIdrive(g_app);
         showDriveMode(g_app);
         showKombiNav(g_app);
+        showClusterType(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
         showPhoneGps(g_app);
@@ -2586,6 +2625,9 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActMenuIdrive, &onMenuIdriveToggle);
     addAction(self, kActDriveMode, &onDriveModeToggle);
     addAction(self, kActKombiNav, &onKombiNavToggle);
+    addAction(self, 411, &onClusterJ29);
+    addAction(self, 412, &onCluster6wa);
+    addAction(self, 413, &onCluster6wb);
     addAction(self, kActWarnings, &onWarningsToggle);
     addAction(self, kActUsbAa, &onUsbAaToggle);
     addAction(self, kActPhoneGps, &onPhoneGpsToggle);

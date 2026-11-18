@@ -5,7 +5,7 @@
 import os, zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 LANGS = {"de": "Deutsch", "en-UK": "English (UK)", "en-US": "English (US)", "es-ES": "Espanol", "es-US": "Espanol (US)",
-         "fr-FR": "Francais", "fr-CA": "Francais (CA)", "it": "Italiano", "pt": "Portugues", "ru": "Russian", "pl": "Polski"}}
+         "fr-FR": "Francais", "fr-CA": "Francais (CA)", "it": "Italiano", "pt": "Portugues", "ru": "Russian", "pl": "Polski"}
 ABOUT = ("NBT-AAD: native wireless Android Auto\\nDeveloped by nanaisu\\n"
          "Contributors: @houssems, @tom-pryor, @dn00, @sabifa,\\n"
          "@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft\\n"
@@ -25,6 +25,11 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          46: "Show directions at any distance",       # 45 = Version row/page title, 46 = the "at any distance" box
          47: "Disable logging (performance test)",     # 47 = no-log checkbox (rhmiapp-56); env NBT_NO_LOG wins
          48: "Prompts on car radio (BT, beta)",     # 48 = BT speech checkbox (rhmiapp-66)
+         # 400 / 404-406 = the gauge cluster type row, page title and its three choices.
+         400: "Gauge cluster type",
+         404: "Supra (J29)",
+         405: "F-series (6WA)",
+         406: "6WB (no driver yet)",
          22: "Show iDrive warnings",   # 22 = iDrive warnings checkbox (rhmiapp-32)
          23: "Settings",   # 23 = Settings row (hmiState 10) / page title (hmiState 14), rhmiapp-39
          24: "Android Auto over USB (beta)",   # 24 = USB checkbox on the Settings page (rhmiapp-40)

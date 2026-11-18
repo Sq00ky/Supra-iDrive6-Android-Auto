@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/nav_core.hpp"
 #include "nbt_env.hpp"
+#include "nbt_paths.hpp"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -545,7 +546,9 @@ void KombiNav::start(most::Client* most) {
     if (envFlag("NBT_HUD_LANES") == 1) settings_.hud_lanes = true;
     e = getenv("NBT_KOMBI_NAV_INPLACE");
     if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
-    e = getenv("NBT_CLUSTER");
+    e = getenv("NBT_CLUSTER");                       // the env wins, like every other setting here
+    char clusterFlag[24];
+    if (!(e && *e) && nbt::flagText("cluster", clusterFlag, sizeof(clusterFlag))) e = clusterFlag;
     if (!createDisplay(e && *e ? e : "j29", most)) return;
     core_ = new Core(*display_, settings_, &KombiNav::logLine, this);
     if (client_)
