@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/hud6wa_display.hpp"
+#include "cluster/mapbox_hud.hpp"   // Mapbox maneuver glyphs (NBT_HUD_GLYPHS); falls back to the parametric shapes
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -124,6 +125,7 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
 
 namespace {
 void arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic) {
+    if (mbxManeuver(spec.aa_type, p, pic)) return;   // Mapbox glyph (NBT_HUD_GLYPHS); else the parametric shape below
     Shape design, fitted;
     drawShape(spec, design);
     fitShape(design, p.glyph, fitted);
