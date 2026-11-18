@@ -5,7 +5,7 @@
 import os, zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 LANGS = {"de": "Deutsch", "en-UK": "English (UK)", "en-US": "English (US)", "es-ES": "Espanol", "es-US": "Espanol (US)",
-         "fr-FR": "Francais", "fr-CA": "Francais (CA)", "it": "Italiano", "pt": "Portugues", "ru": "Russian", "pl": "Polski"}}
+         "fr-FR": "Francais", "fr-CA": "Francais (CA)", "it": "Italiano", "pt": "Portugues", "ru": "Russian", "pl": "Polski"}
 ABOUT = ("NBT-AAD: native wireless Android Auto\\nDeveloped by nanaisu\\n"
          "Contributors: @houssems, @tom-pryor, @dn00, @sabifa,\\n"
          "@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft\\n"
