@@ -125,7 +125,7 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
 
 namespace {
 void arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic) {
-    if (mbxManeuver(spec.aa_type, p, pic)) return;   // Mapbox glyph (NBT_HUD_GLYPHS); else the parametric shape below
+    if (mbxManeuver(spec, p, pic)) return;   // Mapbox glyph/roundabout (NBT_HUD_GLYPHS); else the parametric shape below
     Shape design, fitted;
     drawShape(spec, design);
     fitShape(design, p.glyph, fitted);

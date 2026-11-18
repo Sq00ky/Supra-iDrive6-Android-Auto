@@ -73,17 +73,86 @@ inline bool mbxGlyphForFamily(int fam, const mbx::Piece*& g, unsigned& n, bool& 
     }
 }
 
+// ---- Mapbox roundabout -----------------------------------------------------------------------------------------------
+// A reduced port of the CarPlay plugin's roundabout (hudshapes.h): the ring, the entry stem and the kRbArrow exit arrow
+// turned to the exit angle. No junction roads, no exit number. Maths in Mapbox's 512-unit canvas -> the 6WA box
+// (boxX/boxY) -> the profile glyph box (mbxPoint). isin/icos here are x4096 (CarPlay's were x1024) and the fixed size is
+// k=16, so the divisors fold both in: /4096.
+namespace rb {
+const int kRadius = 104, kWidth = 64;   // Mapbox: radius 6.5, line 4
+struct P16 { int x, y; };
+inline int boxX(int v) { return 70 + ((v * 25 + 64) >> 7); }
+inline int boxY(int v) { return 20 + ((v * 25 + 64) >> 7); }
+inline P16 polar(P16 c, int deg, int r, int w) {
+    return { c.x + (r * isin(deg) + w * isin(deg + 90)) / 4096,
+             c.y - (r * icos(deg) + w * icos(deg + 90)) / 4096 };
+}
+inline int arcDeg(int e) { int A = 180 - e; while (A <= 0) A += 360; while (A > 360) A -= 360; return A < 60 ? 60 : A > 300 ? 300 : A; }
+inline P16 centre(int A) { return { 256 + 96 * isin(A - 180) / 4096, 256 + 80 * icos(A - 180) / 4096 }; }
+
+// one convex piece (Mapbox-512 points) -> an Item in the glyph box
+inline void piece(const P16* p, unsigned n, uint8_t colour, bool mir, const Rect& box, Picture& pic) {
+    std::vector<Point> q;
+    for (unsigned j = 0; j < n; j++) q.push_back(mbxPoint(boxX(p[j].x), boxY(p[j].y), mir, box));
+    Item it; it.colour = colour; it.poly = shapes::poly(q); pic.push_back(it);
+}
+inline void rect(int x0, int y0, int x1, int y1, uint8_t col, bool mir, const Rect& box, Picture& pic) {
+    P16 p[4] = { {x0, y0}, {x1, y0}, {x1, y1}, {x0, y1} }; piece(p, 4, col, mir, box, pic);
+}
+// a band of the circle (radius r, width w) from a0 to a1, convex pieces of at most 40 degrees
+inline void arc(P16 c, int r, int w, int a0, int a1, uint8_t col, bool mir, const Rect& box, Picture& pic) {
+    int span = a1 > a0 ? a1 - a0 : a0 - a1, dir = a1 > a0 ? 1 : -1;
+    if (!span) return;
+    int steps = (span + 39) / 40, step = span / steps, rem = span - step * steps, b0 = a0, ro = r + w / 2, ri = r - w / 2;
+    for (int i = 1; i <= steps; i++) {
+        int b1 = a0 + dir * (i * step + (i < rem ? i : rem)), d = b1 - b0;
+        P16 qp[5] = { polar(c, b0, ro, 0), polar(c, b0 + d / 2, ro, 0), polar(c, b1, ro, 0), polar(c, b1, ri, 0), polar(c, b0, ri, 0) };
+        P16 o[5]; unsigned k = 0;
+        for (unsigned j = 0; j < 5; j++) if (j != 1 || d > 20 || d < -20) o[k++] = qp[j];
+        piece(o, k, col, mir, box, pic);
+        b0 = b1;
+    }
+}
+}  // namespace rb
+
+// Ring (not driven -> context tone, driven -> route/fill), entry stem, and the kRbArrow exit arrow turned to the exit
+// angle. clockwise (left-hand-traffic roundabout) mirrors the whole thing.
+inline void mbxRoundabout(int exit, bool clockwise, const HudProfile& prof, Picture& pic) {
+    bool mir = clockwise;
+    int A = rb::arcDeg(exit), out = 180 - A;
+    rb::P16 c = rb::centre(A);
+    rb::arc(c, rb::kRadius, rb::kWidth, out, -180, prof.road, mir, prof.glyph, pic);   // the part not driven
+    rb::arc(c, rb::kRadius, rb::kWidth, 180, out, prof.fill, mir, prof.glyph, pic);    // the way round
+    int bottom = c.y + 264 > 512 ? 512 : c.y + 264;
+    rb::rect(c.x - 32, c.y + 72, c.x + 32, bottom, prof.fill, mir, prof.glyph, pic);   // the entry stem
+    int th = -(A + 90), co = icos(th), si = isin(th);                                  // the exit arrow, out of the ring
+    for (unsigned i = 0; i < mbx::kRbArrowN; i++) {
+        const mbx::Piece& g = mbx::kRbArrow[i];
+        rb::P16 o[8];
+        for (unsigned j = 0; j < g.n && j < 8; j++) {
+            int x = g.p[j][0], y = g.p[j][1];
+            o[j] = { c.x + (x * co - y * si) / 4096, c.y + (x * si + y * co) / 4096 };
+        }
+        rb::piece(o, g.n, g.tone ? prof.road : prof.fill, mir, prof.glyph, pic);
+    }
+}
+
 inline bool mbxEnabled() {
     const char* e = getenv("NBT_HUD_GLYPHS");
     return !(e && e[0] == '0');   // on by default
 }
 
-// Draw the maneuver as a Mapbox glyph. Returns false (nothing appended) when there is no glyph for it, so the caller
-// draws the parametric shape.
-inline bool mbxManeuver(int aa_type, const HudProfile& prof, Picture& pic) {
+// Draw the maneuver as a Mapbox picture (static glyph or the roundabout). Returns false (nothing appended) when there is
+// none for it, so the caller draws the parametric shape.
+inline bool mbxManeuver(const ShapeSpec& spec, const HudProfile& prof, Picture& pic) {
     if (!mbxEnabled()) return false;
+    int fam = kombinav::kombiDirection(spec.aa_type);
+    if (fam == 14 || fam == 15) {   // roundabout: 14 = clockwise (left-hand traffic)
+        mbxRoundabout(spec.exit, spec.clockwise, prof, pic);
+        return true;
+    }
     const mbx::Piece* g; unsigned n; bool mir;
-    if (!mbxGlyphForFamily(kombinav::kombiDirection(aa_type), g, n, mir)) return false;
+    if (!mbxGlyphForFamily(fam, g, n, mir)) return false;
     mbxGlyph(g, n, mir, prof, pic);
     return true;
 }
