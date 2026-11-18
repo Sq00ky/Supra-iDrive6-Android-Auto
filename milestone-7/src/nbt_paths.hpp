@@ -104,6 +104,23 @@ inline bool flagSet(const char* name) {
     return access(dataFile(name).c_str(), F_OK) == 0 || access(appFile(name).c_str(), F_OK) == 0;
 }
 
+// Text of a setting file: <data dir>/<name> or <app dir>/<name>, trailing newline/space trimmed;
+// false when the file is missing or empty.
+inline bool flagText(const char* name, char* out, size_t n) {
+    out[0] = 0;
+    const char* dirs[2] = { dataDir(), appDir() };
+    for (int i = 0; i < 2; ++i) {
+        FILE* f = fopen(FilePath(dirs[i], name).c_str(), "r");
+        if (!f) continue;
+        size_t k = fread(out, 1, n - 1, f);
+        fclose(f);
+        out[k] = 0;
+        while (k && (out[k - 1] == 10 || out[k - 1] == 13 || out[k - 1] == 32)) out[--k] = 0;
+        if (out[0]) return true;
+    }
+    return false;
+}
+
 // Make the data dir before writing into it (EEXIST is fine). For a package its parents too, in case the agent has not
 // made them yet; a hand install only ever made /var/opt/aa itself.
 inline void makeDataDir() {
