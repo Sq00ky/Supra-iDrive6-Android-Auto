@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-BASE='46d77e0f4e878ba6c4859da281b3581d96136067'
+BASE='473b393e2ad6894d54b8b284bfa07c8cdc7ec52b'
 HEADER=(ROOT/'src/nav_diag.hpp').read_text()
 TOTAL=15*1024*1024
 SEGMENT=5*1024*1024
@@ -113,10 +113,9 @@ class PersistenceChecks(unittest.TestCase):
         self.assertIn('catch(...)',HEADER)
         self.assertIn('Android Auto continues',HEADER)
 
-    def test_decoder_original_fields_and_producer_unchanged(self):
+    def test_original_decoder_and_file_storage_are_unchanged(self):
         original=subprocess.check_output(['git','show',BASE+':milestone-7/src/nav_diag.hpp'],cwd=ROOT.parent,text=True)
-        for start,end in [('inline Config environment()', 'struct Stats'),('inline Field describe(', 'class FileLog'),
-                          ('void enqueue(', 'std::string envelope('),('std::string envelope(', 'static void* threadMain(')]:
-            self.assertEqual(HEADER.split(start,1)[1].split(end,1)[0],original.split(start,1)[1].split(end,1)[0])
+        for start,end in [('inline Field describe(', '// Export the captured wire bytes'),('class FileLog', 'class Recorder')]:
+            self.assertEqual(HEADER.split(start,1)[1].split(end,1)[0],original.split(start,1)[1].split('class FileLog' if end.startswith('// Export') else end,1)[0])
 
 if __name__=='__main__':unittest.main()

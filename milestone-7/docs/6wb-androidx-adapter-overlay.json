@@ -1,0 +1,17 @@
+{
+  "description": "AndroidX 47..50 adapter only. Work graphic generation remains unchanged.",
+  "replacements": [
+    [
+      "// AndroidX Maneuver constants; existing types 0..46 retain their exact mapping.\n    // Types 47..50 select the ferry artwork already supplied by Work.",
+      "// Explicit AA mapping: 0..46 are the model families already used by nav_msg.hpp.\n    // Do not assign the extra ferry variants 47..50 without a protocol capture."
+    ],
+    [
+      "    case 47:return sixwbkit::Maneuver::FerryLeft;\n    case 48:return sixwbkit::Maneuver::FerryRight;\n    case 49:return sixwbkit::Maneuver::TrainFerryLeft;\n    case 50:return sixwbkit::Maneuver::TrainFerryRight;\n",
+      ""
+    ],
+    [
+      "if(v.aa_type<0||v.aa_type>50)",
+      "if(v.aa_type<0||v.aa_type>46)"
+    ]
+  ]
+}

@@ -5,6 +5,7 @@
 #ifndef CLUSTER_HUD6WB_PROFILE_HPP
 #define CLUSTER_HUD6WB_PROFILE_HPP
 #include "cluster/hud6wa_profile.hpp"
+#include "cluster/hud6wb_road_sign.hpp"
 namespace nbt { namespace hudterm {
 struct Surface {
     uint16_t a, b, width, height;
@@ -25,16 +26,16 @@ struct Bmw6wbProfile {
     bool roadShields,iconAntialias,iconBitmaps;
     unsigned roundaboutSegments; // default preserves the hardware-tested geometry
     Rect nextGlyph;
-    Bmw6wbProfile() : main(0x1f,0x20,233,206), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40),
+    road_sign::Layout signLayout;
+    Bmw6wbProfile() : main(0x1f,0x20,221,158), icons(0x18,0x19,305,44), lanes(0x23,0x24,283,40),
         iconHandle(0),mainImageWidth(221),mainImageHeight(158),bar(0x35), frameWidth(309), frameHeight(330), barWidth(28), barHeight(113),
         lineWidth(6), laneLineWidth(3), textEncoding(1), vectorTx(4), headerTag(0xffff),
         barRangeMetres(500), maxBitmapBytes(4096), roadShields(false), iconAntialias(false), iconBitmaps(false), roundaboutSegments(24) {
-        Rect next={90,3,126,39};nextGlyph=next;
+        Rect next={0,0,304,43};nextGlyph=next;
         base.name="6wb"; base.frame=0x17; base.street=0x1a; base.distance=0x1b; base.unit=0x1c;
         base.bufA=main.a; base.bufB=main.b; base.fill=2;
-        Rect c={0,0,232,205}; base.canvas=c;
-        // Full experimental vector input. No preemptive clipping or horizon margin
-        // for maneuvers: actual visibility is to be established on the F31.
+        Rect c={0,0,220,157}; base.canvas=c;
+        // Use the measured image coordinate range for newly fitted artwork.
         base.glyph=c;
         base.streetChars=kMaxLatinTextBytes; base.distanceChars=5; base.streetPunct="-./";
     }
@@ -48,9 +49,9 @@ inline bool validProfile(const Bmw6wbProfile& p) {
     }
     if(p.iconHandle!=0 && p.iconHandle!=p.icons.a && p.iconHandle!=p.icons.b)return false;
     // All central maneuvers share the verified double-buffered surface.
-    if(p.main.a!=0x1f || p.main.b!=0x20 || p.main.width!=233 || p.main.height!=206)return false;
+    if(p.main.a!=0x1f || p.main.b!=0x20 || p.main.width!=221 || p.main.height!=158)return false;
     if(p.mainImageWidth!=221||p.mainImageHeight!=158)return false;
-    if(p.base.canvas.x0!=0||p.base.canvas.y0!=0||p.base.canvas.x1!=232||p.base.canvas.y1!=205)return false;
+    if(p.base.canvas.x0!=0||p.base.canvas.y0!=0||p.base.canvas.x1!=220||p.base.canvas.y1!=157)return false;
     const Surface s[]={p.main,p.icons,p.lanes};
     for(size_t i=0;i<3;++i)if(!s[i].width||!s[i].height||s[i].width>1024||s[i].height>1024)return false;
     return p.base.bufA==p.main.a && p.base.bufB==p.main.b && p.textEncoding==1 &&

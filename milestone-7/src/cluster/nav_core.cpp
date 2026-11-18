@@ -232,7 +232,9 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     bool new_man = !isShown(v);
     bool redraw = !new_man && d_.sameManeuver(v, now);
     if (new_man || redraw) {
+        navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
         ClusterDisplay::Result r = d_.showManeuver(v, now, new_man, !has_shown_);
+        navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
         if (r != ClusterDisplay::kOk) {
             fail(r);
             return;
@@ -248,14 +250,18 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         double m;
         log("MAIN type %d: %lld s, %.0f m", v.aa_type, (long long)(v.has_step_s ? v.step_s : -1),
             distanceMetres(v, m) ? m : -1.0);
+        navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
         ClusterDisplay::Result r = d_.remind(v, now);
+        navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
         if (r != ClusterDisplay::kOk) {
             fail(r);
             return;
         }
     }
     if (!v.sameDistance(last_dist_) && now - last_dist_t_ >= s_.min_update_s) {
+        navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
         ClusterDisplay::Result r = d_.updateDistance(v, now);
+        navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
         if (r != ClusterDisplay::kOk) {
             fail(r);
             return;
@@ -263,7 +269,9 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         last_dist_ = v;
         last_dist_t_ = now;
     }
+    navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
     ClusterDisplay::Result r = d_.keepUp(v, now);
+    navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
     if (r != ClusterDisplay::kOk) {
         fail(r);
         return;
@@ -467,9 +475,9 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         settings_.approach=kApproachOff; // 6WB bar carries distance; keep the full AA distance text.
         settings_.approach_mi=0;
         target_="experimental BMW 6WB HUDTerminal (registry host)";
-        stopHint_="6WB: matching ImageGetSize results required; never reset after errors";
-        printf("[KombiNav] 6wb %s: F31 profile unverified; %s\n",shadow_?"SHADOW":"LIVE OPT-IN",
-            shadow_?"no HUDTerminal commands sent":"checking surfaces when AA guidance arrives; no OEM prerequisite");
+        stopHint_="6WB: known surfaces; wait only for HUDTerminal communication; never reset after errors";
+        printf("[KombiNav] 6wb %s: measured F31 surfaces, C04 probing disabled; %s\n",shadow_?"SHADOW":"LIVE OPT-IN",
+            shadow_?"no HUDTerminal commands sent":"drawing when HUDTerminal is ready; no OEM prerequisite");
         return true;
     }
     printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa, 6wb): cluster arrows disabled\n", id);
@@ -614,10 +622,14 @@ void KombiNav::stop() {
 void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t len, void* user) {
     KombiNav* self = static_cast<KombiNav*>(user);
     if (!self) return;
+    const navtrace::Token diagnostic=navtrace::latest(msg_id);
+    navtrace::event(navtrace::ParserEnter,diagnostic);
     pthread_mutex_lock(&self->mu_);
     const bool discard = msg_id == 0x8003 && self->display_ && self->display_->discardPreviousRoute();
     const bool wasActive = discard && self->msgs_.guidanceActive();
-    if (self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0)) {
+    const bool recognized=self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0);
+    if (recognized) {
+        self->diagnostic_rx_=diagnostic;
         self->last_msg_t_ = monoS();
         // Presentation bookkeeping only: don't lose a quick INACTIVE/ACTIVE
         // transition between worker snapshots or reuse data from an ended route.
@@ -629,12 +641,13 @@ void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t le
             }
         }
     }
+    navtrace::event(navtrace::StateStored,diagnostic,recognized?1:0);
     pthread_mutex_unlock(&self->mu_);
 }
 
 void KombiNav::onSessionEnded() {
     pthread_mutex_lock(&mu_);
-    msgs_.clear();
+    msgs_.clear();diagnostic_rx_=navtrace::Token();
     session_ended_ = true;
     pthread_mutex_unlock(&mu_);
 }
@@ -725,11 +738,11 @@ void KombiNav::tick(double now) {
     if (!enabled_) return;
     if (yield_enabled_) startWatch(now);
 
-    NavMessages m;
+    NavMessages m;navtrace::Token diagnostic;
     double last_msg;
     bool ended;
     pthread_mutex_lock(&mu_);
-    m = msgs_;
+    m = msgs_;diagnostic=diagnostic_rx_;
     last_msg = last_msg_t_;
     ended = session_ended_;
     session_ended_ = false;
@@ -772,7 +785,17 @@ void KombiNav::tick(double now) {
     NavView v;
     const NavView* pv = NULL;
     const char* why = "guidance ended";
-    if (guidance && viewFromMessages(m, v)) {
+    const bool traceSnapshot=diagnostic.sequence && (diagnostic.sequence!=diagnostic_decoded_.sequence || diagnostic.connection!=diagnostic_decoded_.connection);
+    if(traceSnapshot)navtrace::event(navtrace::SnapshotBegin,diagnostic);
+    const bool decoded=guidance && viewFromMessages(m, v);
+    if(traceSnapshot) {
+        double metres=-1;if(decoded)distanceMetres(v,metres);
+        navtrace::event(navtrace::SnapshotDecoded,diagnostic,decoded?1:0,decoded?v.aa_type:-1,
+            decoded&&v.has_exit_number?v.exit_number:-1,decoded&&v.has_exit_angle?v.exit_angle:-1,metres);
+        diagnostic_decoded_=diagnostic;
+    }
+    core_->diagnosticToken(diagnostic);
+    if (decoded) {
         if (now - last_msg > settings_.nav_stale_s) why = "navigation status frozen";
         else pv = &v;
     }

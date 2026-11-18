@@ -1361,12 +1361,14 @@ void AASession::sessionLoop() {
                 reassembly_total_.erase(channel);
                 reassembly_wire_.erase(channel);
                 if (!had_first) {
+                    if(channel==AA_CH_NAV_STATUS && nav_diag_)navtrace::fragmentDrop(channel,1);
                     printf("[AASession] LAST fragment on channel %u with no FIRST: dropping\n", channel);
                     continue;
                 }
                 // total_size is the size the phone announced. The length fields are the bytes on the
                 // wire (larger once encrypted). A shortfall means this LAST closed an incomplete message.
                 if (expect != 0 && wire < expect) {
+                    if(channel==AA_CH_NAV_STATUS && nav_diag_)navtrace::fragmentDrop(channel,2);
                     printf("[AASession] channel %u reassembled %u wire bytes, phone announced %u: dropping\n",
                            channel, wire, expect);
                     continue;
@@ -1390,11 +1392,11 @@ void AASession::sessionLoop() {
 
             // Universal Message Dispatcher based on protocol wire captures
             uint16_t msg_id = frame_data.size() >= 2 ? ((static_cast<uint16_t>(frame_data[0]) << 8) | frame_data[1]) : 0;
-            // Observe ONLY channel 10 after decrypt/reassembly, including IDs
+            // Observe only the NAV service channel after decrypt/reassembly, including IDs
             // not understood by NavMessages. No parsing or file I/O on RX.
             if(channel==AA_CH_NAV_STATUS && nav_diag_)
                 nav_diag_->capture(msg_id,frame_data.size()>2?&frame_data[2]:NULL,
-                                   frame_data.size()>2?frame_data.size()-2:0);
+                                   frame_data.size()>2?frame_data.size()-2:0,channel);
             noteRxMsg(msg_id);
             g_crumb_stage = 3;
             g_crumb_msg = msg_id;

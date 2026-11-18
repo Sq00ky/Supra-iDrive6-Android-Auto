@@ -68,7 +68,6 @@ set(SOURCES
     src/cluster/hud6wa_display.cpp
     src/cluster/hud6wb_display.cpp
     src/cluster/hud6wb_codec.cpp
-    src/cluster/hud6wb_artwork.cpp
     src/cluster/hud6wb_kit.cpp
     src/cluster/grafite_oro/artwork6wb.cpp
     src/cluster/grafite_oro/hudterminal_palette.cpp

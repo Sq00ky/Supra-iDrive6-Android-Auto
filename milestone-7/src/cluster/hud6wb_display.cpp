@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/hud6wb_display.hpp"
 #include "cluster/hud6wb_codec.hpp"
+#include "cluster/grafite_oro/miniature_raster.hpp"
 #include "cluster/hud6wa_display.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,33 +12,6 @@ namespace nbt { namespace kombinav {
 using namespace hudterm;
 namespace {
 uint16_t other(uint16_t v,const Surface& s) {return v==s.a?s.b:s.a;}
-uint32_t kitColor(sixwbkit::Color::Value c) {
-    switch(c){case sixwbkit::Color::Graphite:return 0xff303030;case sixwbkit::Color::Gold:return 0xff858585;
-    case sixwbkit::Color::White:return 0xffffffff;case sixwbkit::Color::Gray:return 0xff858d98;case sixwbkit::Color::Black:return 0xff303030;case sixwbkit::Color::Red:return 0xffff0000;default:return 0;}
-}
-bool inside(const sixwbkit::Shape& s,double x,double y) {
-    bool hit=false;for(size_t c=0;c<s.contours.size();++c){const std::vector<sixwbkit::Point>& ps=s.contours[c].points;
-        for(size_t i=0,j=ps.size()?ps.size()-1:0;i<ps.size();j=i++)if((ps[i].y>y)!=(ps[j].y>y)&&
-            x<(ps[j].x-ps[i].x)*(y-ps[i].y)/(ps[j].y-ps[i].y)+ps[i].x)hit=!hit;}
-    return hit;
-}
-bool onStroke(const sixwbkit::Shape& s,double x,double y) {
-    double radius=s.strokeWidth/2;
-    for(size_t c=0;c<s.contours.size();++c){const sixwbkit::Contour& ct=s.contours[c];size_t n=ct.points.size();
-        size_t count=ct.closed?n:n?n-1:0;
-        for(size_t i=0;i<count;++i){const sixwbkit::Point& a=ct.points[i];const sixwbkit::Point& b=ct.points[(i+1)%n];
-            double dx=b.x-a.x,dy=b.y-a.y,d=dx*dx+dy*dy,t=d?((x-a.x)*dx+(y-a.y)*dy)/d:0;
-            if(t<0)t=0;if(t>1)t=1;double xx=x-a.x-t*dx,yy=y-a.y-t*dy;
-            if(xx*xx+yy*yy<=radius*radius)return true;}
-    }return false;
-}
-void rasterKit(std::vector<uint32_t>& pixels,unsigned w,unsigned h,const sixwbkit::Scene& scene) {
-    for(size_t i=0;i<scene.size();++i)for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){
-        const sixwbkit::Shape& s=scene[i];
-        if(s.fill!=sixwbkit::Color::None&&inside(s,x+.5,y+.5))pixels[(size_t)y*w+x]=kitColor(s.fill);
-        if(s.stroke!=sixwbkit::Color::None&&onStroke(s,x+.5,y+.5))pixels[(size_t)y*w+x]=kitColor(s.stroke);
-    }
-}
 Batch errorBatch(const char* why){Batch b(why,true);return b;}
 
 }
@@ -95,14 +69,13 @@ bool Hud6wbDisplay::iconChanged(const NavView& v) const {
     if(v.has_next && (v.next_type!=shown_.next_type || v.next_has_angle!=shown_.next_has_angle ||
        (v.next_has_angle && v.next_angle!=shown_.next_angle) || v.next_exit_number!=shown_.next_exit_number))return true;
     if(p_.roadShields) {
-        RoadShield a=roadShield(v.road),b=roadShield(shown_.road);
-        if(a.kind!=b.kind || a.number!=b.number)return true;
+        if(road_sign::route(v.road)!=road_sign::route(shown_.road))return true;
     }
     return false;
 }
 bool Hud6wbDisplay::sameManeuver(const NavView& v,double) {
     health();
-    return !queuedPicture_.calls.empty() || dirty_ || mainChanged(v) || iconChanged(v) || (settings_.lanes && v.lanes!=shown_.lanes) || shownLanes_!=settings_.lanes;
+    return !queuedPicture_.calls.empty() || dirty_ || (p_.roadShields && v.road!=shown_.road) || mainChanged(v) || iconChanged(v) || (settings_.lanes && v.lanes!=shown_.lanes) || shownLanes_!=settings_.lanes;
 }
 Batch Hud6wbDisplay::render(const NavView& v) const {
     Batch b("6wb-guidance",false);
@@ -140,29 +113,33 @@ Batch Hud6wbDisplay::render(const NavView& v) const {
         b.add(kSwitchVisibility,switchVisibility(laneVisible_,lane));
         b.add(kSetVisibility,setVisibility(lane,visible));
     }
-    if(iconChanged(v)) {
-        RoadShield shield;if(p_.roadShields)shield=roadShield(v.road);
+    std::vector<uint8_t> signPayload;
+    const bool iconSizeReady=shadow_||resources_.iconsUsable(port_);
+    if(p_.roadShields && p_.iconBitmaps && iconSizeReady) {
+        std::vector<uint32_t> pixels;
+        if(road_sign::draw(road_sign::route(v.road),p_.icons.width,p_.icons.height,p_.signLayout,pixels))
+            signPayload=bitmap(icon,0,pixels,p_.icons.width,p_.icons.height,p_.maxBitmapBytes);
+    }
+    const bool signVisible=!signPayload.empty();
+    const bool refreshIcon=iconChanged(v) || (p_.roadShields && dirty_);
+    if(refreshIcon) {
         const sixwbkit::Maneuver::Value nextType=GrafiteKit::maneuver(v.next_type);
         const bool nextDrawable=v.has_next && sixwbkit::describe(nextType).policy!=sixwbkit::PlanePolicy::Hidden;
-        const bool iconSizeReady=shadow_||resources_.iconsUsable(port_);
-        bool picture=p_.iconBitmaps && iconSizeReady && (shield.kind || nextDrawable);
-        if(p_.iconBitmaps) {
-            char message[192];
-            snprintf(message,sizeof(message),"6wb icons: mode=%s draw=%04X other=%04X size=%s next=%s shield=%s requested_visible=%s",
-                p_.iconHandle?"fixed":"auto",icon,otherIcon,iconSizeReady?"ready":"unavailable",
-                nextDrawable?"present":"absent",shield.kind?"present":"absent",picture?"yes":"no");
-            log(message);
-        }
+        bool picture=p_.iconBitmaps && iconSizeReady && (signVisible || nextDrawable);
         if(picture) {
-            std::vector<uint32_t> px=shieldPicture(p_.icons.width,p_.icons.height,shield);
-            if(nextDrawable) {
-                Rect r=p_.nextGlyph;
+            std::vector<uint8_t> payload;
+            payload.swap(signPayload);
+            // Both images use the same bitmap surface. A road sign takes precedence.
+            if(!signVisible && nextDrawable) {
+                const Rect& r=p_.nextGlyph;
+                std::vector<uint32_t> px((size_t)p_.icons.width*p_.icons.height,0);
                 sixwbkit::NavigationEvent next;next.maneuver=nextType;
                 next.hasExitAngle=v.next_has_angle;next.exitAngle=(double)v.next_angle;
                 next.hasExitNumber=v.next_exit_number>0;next.exitNumber=(unsigned)v.next_exit_number;
-                rasterKit(px,p_.icons.width,p_.icons.height,sixwbkit::renderManeuver(next,sixwbkit::Rect(r.x0,r.y0,r.x1-r.x0,r.y1-r.y0)));
+                sixwbkit::rasterKit(px,p_.icons.width,p_.icons.height,
+                    sixwbkit::renderMiniature(next,sixwbkit::Rect(r.x0,r.y0,r.x1-r.x0+1,r.y1-r.y0+1)));
+                payload=bitmap(icon,0,px,p_.icons.width,p_.icons.height,p_.maxBitmapBytes);
             }
-            std::vector<uint8_t> payload=bitmap(icon,0,px,p_.icons.width,p_.icons.height,p_.maxBitmapBytes);
             if(!payload.empty()) {
                 // A fixed handle may already be visible. Hide it before replacing
                 // its contents, keeping the other handle out of this draw path.
@@ -179,8 +156,10 @@ Batch Hud6wbDisplay::render(const NavView& v) const {
         b.add(kSetVisibility,setVisibility(otherIcon,false));
         b.add(kSetVisibility,setVisibility(icon,picture));
     }
-    std::vector<uint8_t> street=latinText(p_.base.street,v.road,p_.base.streetChars);
-    if(fresh_ || street!=latinText(p_.base.street,shown_.road,p_.base.streetChars))b.add(kTextareaSetText,street);
+    if(fresh_ || v.road!=shown_.road || (p_.roadShields && refreshIcon)) {
+        const std::string text=road_sign::street(v.road,signVisible,p_.signLayout,p_.base.streetChars);
+        b.add(kTextareaSetText,latinText(p_.base.street,text,p_.base.streetChars));
+    }
     std::string dist=v.dist_text=="-"?"":v.dist_text,oldDist=shown_.dist_text=="-"?"":shown_.dist_text;
     for(size_t i=0;i<dist.size();++i)if(dist[i]==',')dist[i]='.';
     for(size_t i=0;i<oldDist.size();++i)if(oldDist[i]==',')oldDist[i]='.';

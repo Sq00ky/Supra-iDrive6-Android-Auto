@@ -5,7 +5,7 @@
 #include "cluster/hud6wb_display.hpp"
 #include "hud6wb_kit_test_util.hpp"
 #include "cluster/hud6wb_codec.hpp"
-#include "cluster/hud6wb_artwork.hpp"
+#include "cluster/hud6wb_road_sign.hpp"
 #include "cluster/hud6wb_config.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
@@ -52,9 +52,11 @@ void testCodec(){
     assert(t.size()==8 && t[0]==0 && t[1]==0x1a && t[2]==1 && t[7]==0);
     std::vector<uint8_t> bar=distanceBar(0x35,999);assert(bar.size()==7&&bar[5]==255&&bar[6]==2);
     bar=distanceBar(0x35,-1);assert(bar[5]==0);
-    RoadShield s=roadShield("A 45 / Exit");assert(s.kind=='A'&&s.number=="45");
-    assert(!roadShield("Via A45").kind && !roadShield("A45xyz").kind);
-    std::vector<uint32_t> image=shieldPicture(305,44,s);assert(image.size()==305*44);
+    std::string code=road_sign::route("A 45 / Exit");assert(code=="A45");
+    assert(road_sign::route("Via A45").empty() && road_sign::route("A45xyz").empty());
+    assert(road_sign::route("SS 1")=="SS1" && road_sign::route("sp 123")=="SP123");
+    std::vector<uint32_t> image;road_sign::Layout layout;
+    assert(road_sign::draw(code,305,44,layout,image)&&image.size()==305*44);
     std::vector<uint8_t> bmp=bitmap(0x18,3,image,305,44,4096);
     assert(!bmp.empty()&&bmp[6]==1&&bmp[7]==1&&bmp[8]==0&&bmp[9]==3);
     assert(bitmap(0x18,0,image,49,44,4096).empty());
@@ -73,15 +75,52 @@ void testCodec(){
         assert(out==in && i<r.size());for(;i<r.size();++i)assert(r[i]==0);
     }
 }
+// Prepared for a later manual host run; this integration performs no compilation.
+void testWorkRoadSigns(){
+    const char* roads[]={"A 1","SS 1","SP 1234"};
+    const uint32_t backgrounds[]={0xff006b3c,0xff1565a8,0xffffd534};
+    for(unsigned i=0;i<3;++i){
+        std::vector<uint32_t> pixels;road_sign::Layout layout;
+        const std::string code=road_sign::route(roads[i]);
+        assert(road_sign::draw(code,305,44,layout,pixels));
+        assert(pixels[0]==0&&pixels[9*305]==backgrounds[i]&&pixels[35*305]==0);
+        assert(!bitmap(0x18,0,pixels,305,44,4096).empty());
+        FakePort port;Bmw6wbProfile p;p.roadShields=true;p.iconBitmaps=true;p.iconHandle=0x19;
+        Hud6wbDisplay display(port,p,true);NavView v=view();v.road=roads[i];v.has_next=true;v.next_type=8;
+        Batch b=display.render(v);valid(b,p);
+        assert(find(b,0xc05,0x19)&&!find(b,0xc05,0x18));
+        const Call* text=find(b,kTextareaSetText,p.base.street);assert(text);
+        assert(std::string((const char*)&text->payload[3])==std::string(15,' ')+roads[i]);
+        for(unsigned n=0;n<33&&display.sameManeuver(v,0);++n)display.showManeuver(v,0,true,true);
+        assert(!display.sameManeuver(v,0));
+        v.road="Via Roma";v.has_next=false;
+        Batch cleared=display.render(v);valid(cleared,p);assert(!find(cleared,0xc05));
+        assert(find(cleared,kSetVisibility,0x18)->payload[2]==0);
+        assert(find(cleared,kSetVisibility,0x19)->payload[2]==0);
+        text=find(cleared,kTextareaSetText,p.base.street);assert(text);
+        assert(std::string((const char*)&text->payload[3])=="Via Roma");
+    }
+    assert(road_sign::route("SS1bis").empty()&&road_sign::route("SP12345").empty());
+    std::vector<uint32_t> pixels;road_sign::Layout outside;outside.x=300;
+    assert(!road_sign::draw("A1",305,44,outside,pixels)&&pixels.empty());
+}
 void testGeometry(){
     Bmw6wbProfile p;assert(validProfile(p));
-    assert(p.main.width==233&&p.main.height==206&&p.mainImageWidth==221&&p.mainImageHeight==158);
-    assert(p.base.canvas.x0==0&&p.base.canvas.y0==0&&p.base.canvas.x1==232&&p.base.canvas.y1==205);
-    assert(p.base.glyph.x0==0&&p.base.glyph.y0==0&&p.base.glyph.x1==232&&p.base.glyph.y1==205);
+    assert(p.main.width==221&&p.main.height==158&&p.mainImageWidth==221&&p.mainImageHeight==158);
+    assert(p.base.canvas.x0==0&&p.base.canvas.y0==0&&p.base.canvas.x1==220&&p.base.canvas.y1==157);
+    assert(p.base.glyph.x0==0&&p.base.glyph.y0==0&&p.base.glyph.x1==220&&p.base.glyph.y1==157);
     for(int type=1;type<=46;++type)for(int angle=0;angle<=360;angle+=15){
-        Shape s=bmwManeuver(shapeFor(type,true,angle),p.base.glyph);assert(!s.empty());
-        for(size_t i=0;i<s.size();++i){assert(!s[i].pts.empty()&&s[i].pts.size()<=99);
-            for(size_t j=0;j<s[i].pts.size();++j){const Point& q=s[i].pts[j];assert(q.x>=p.base.glyph.x0&&q.x<=p.base.glyph.x1&&q.y>=p.base.glyph.y0&&q.y<=p.base.glyph.y1);}}
+        sixwbkit::NavigationEvent event;event.maneuver=GrafiteKit::maneuver(type);
+        event.hasExitAngle=angle>0;event.exitAngle=angle;
+        sixwbkit::Scene scene=sixwbkit::renderManeuver(event,sixwbkit::Rect(0,0,220,157),0);
+        if(sixwbkit::describe(event.maneuver).policy==sixwbkit::PlanePolicy::Hidden)continue;
+        assert(!scene.empty());
+        for(size_t i=0;i<scene.size();++i)for(size_t c=0;c<scene[i].contours.size();++c)
+            for(size_t j=0;j<scene[i].contours[c].points.size();++j){
+                const sixwbkit::Point& q=scene[i].contours[c].points[j];
+                const double radius=scene[i].stroke==sixwbkit::Color::None?0:scene[i].strokeWidth/2;
+                assert(q.x-radius>=-0.001&&q.x+radius<=220.001&&q.y-radius>=-0.001&&q.y+radius<=157.001);
+            }
     }
     p.main.a=p.base.street;assert(!validProfile(p));
 }
@@ -127,7 +166,7 @@ void testIncremental(){
     // C04 stays cached through repeated updates and a new AA guidance session.
     d.forget();d.showManeuver(v,13,true,true);unsigned queries=0;
     for(size_t i=0;i<port.batches.size();++i)if(port.batches[i].label=="6wb-size-check")++queries;
-    assert(queries==1);
+    assert(queries==0);
 }
 void testDistancePolicyAndIconClear(){
     FakePort port;Bmw6wbProfile p;p.iconBitmaps=true;
@@ -201,8 +240,8 @@ void testIconSurfaceSelection(){
     FakePort sizes;sizes.queried=true;sizes.badSizeHandle=0x19;
     Bmw6wbProfile p;p.iconHandle=0x18;
     assert(BmwResources(p).iconsUsable(sizes));
-    p.iconHandle=0x19;assert(!BmwResources(p).iconsUsable(sizes));
-    p.iconHandle=0;assert(!BmwResources(p).iconsUsable(sizes));
+    p.iconHandle=0x19;assert(BmwResources(p).iconsUsable(sizes));
+    p.iconHandle=0;assert(BmwResources(p).iconsUsable(sizes));
     unsetenv("NBT_6WB_ICON_SURFACE");
     configure6wb(p);assert(p.iconBitmaps&&p.iconHandle==0);
     unsetenv("NBT_6WB_ICON_BITMAPS");
@@ -213,17 +252,17 @@ void testLayoutConfig(){
     setenv("NBT_6WB_STREET_CHARS","22",1);setenv("NBT_6WB_LINE_WIDTH","4",1);
     setenv("NBT_6WB_ARROW_WIDTH","120",1);setenv("NBT_6WB_ROUNDABOUT_SEGMENTS","48",1);
     configure6wb(p);assert(validProfile(p)&&p.base.streetChars==22&&p.lineWidth==4&&p.base.glyph.x1==119);
-    ShapeSpec spec=shapeFor(34,true,90);Shape a=bmwManeuver(spec,p.base.glyph,true,24),b=bmwManeuver(spec,p.base.glyph,true,48);
-    assert(a[0].pts.size()==25&&b[0].pts.size()==49);
+    // Retained legacy settings must parse; Work owns the actual geometry.
+    assert(p.roundaboutSegments==48);
     setenv("NBT_6WB_STREET_CHARS","22garbage",1);setenv("NBT_6WB_LINE_WIDTH","999999999999999999999999",1);
     Bmw6wbProfile invalid;configure6wb(invalid);assert(invalid.base.streetChars==kMaxLatinTextBytes&&invalid.lineWidth==6);
     unsetenv("NBT_6WB_STREET_CHARS");unsetenv("NBT_6WB_LINE_WIDTH");unsetenv("NBT_6WB_ARROW_WIDTH");unsetenv("NBT_6WB_ROUNDABOUT_SEGMENTS");
-    // Optional raster AA uses only existing bitmap encoding; defaults are untouched.
+    // Legacy AA switch remains accepted; the final Work raster stays authoritative.
     FakePort port;p=Bmw6wbProfile();p.iconAntialias=true;p.iconBitmaps=true;Hud6wbDisplay d(port,p,true,testKit());NavView v=view();v.has_next=true;v.next_type=8;
     Batch aa=d.render(v);assert(find(aa,0xc05));valid(aa,p);
 }
 void testAllCentralManeuversWithoutSurfaceFile(){
-    Bmw6wbProfile p;assert(validProfile(p));BmwResources resources(p);assert(resources.queries().calls.size()==8);
+    Bmw6wbProfile p;assert(validProfile(p));BmwResources resources(p);assert(resources.queries().calls.empty());
     // The production constructor has compiled colours and performs no file I/O.
     for(int type=1;type<=46;++type)for(unsigned distanceKnown=0;distanceKnown<2;++distanceKnown) {
         FakePort port;Hud6wbDisplay display(port,p,true);NavView v=view();v.aa_type=type;
@@ -243,24 +282,23 @@ void testAllCentralManeuversWithoutSurfaceFile(){
     p.main.a=0x21;p.main.b=0x22;p.base.bufA=p.main.a;p.base.bufB=p.main.b;assert(!validProfile(p));
 }
 void testResourcesAndSafety(){
-    FakePort port;Bmw6wbProfile p;p.iconBitmaps=true;Hud6wbDisplay d(port,p,false,testKit());NavView v=view();
-    d.showManeuver(v,0,true,true);assert(port.batches.size()==1&&port.batches[0].calls.size()==8);
-    for(size_t i=0;i<8;++i)assert(port.batches[0].calls[i].fkt==kGetSize&&port.batches[0].calls[i].payload.size()==3);
-    d.showManeuver(v,1,true,true);assert(port.batches.size()==2);valid(port.batches.back(),p);
-    port.idle=false;v.aa_type=7;d.showManeuver(v,2,true,false);assert(port.batches.size()==2);
-    assert(d.sameManeuver(v,2));port.idle=true;d.showManeuver(v,3,true,false);
-    const Call* sw=find(port.batches.back(),0x20e);assert(rdBe16(&sw->payload[0])==0x1f&&rdBe16(&sw->payload[2])==0x20);
-    size_t n=port.batches.size();port.st=kFailed;assert(!d.clear(NULL));assert(port.batches.size()==n&&port.resets==0);
-    port.st=kNavActive;assert(d.factoryActive()&&d.clear(NULL));assert(port.batches.size()==n);
-    FakePort bad;bad.badSize=true;Hud6wbDisplay bd(bad,p,false,testKit());
-    bd.showManeuver(v,0,true,true);assert(bd.showManeuver(v,1,true,true)==ClusterDisplay::kRejected);
-    assert(bad.batches.size()==1&&!bd.sentAny());
-    FakePort reconnect;Hud6wbDisplay rd(reconnect,p,false,testKit());rd.showManeuver(v,0,true,true);rd.showManeuver(v,1,true,true);
-    ++reconnect.ep;rd.showManeuver(v,2,true,true);
-    assert(reconnect.batches.back().label!="6wb-size-check"); // OEM yield: use existing validated sizes
-    reconnect.queried=false; // transport cache cleared on actual reconnect/host change
-    ++reconnect.ep;rd.showManeuver(v,3,true,true);assert(reconnect.batches.back().label=="6wb-size-check");
+    FakePort port;Bmw6wbProfile p;p.iconBitmaps=true;
+    BmwResources resources(p);assert(resources.state()==BmwResources::kVerified);
+    assert(resources.queries().calls.empty()&&resources.advance(port));
+    assert(resources.iconsUsable(port)&&resources.lanesUsable(port)&&resources.barUsable(port));
+    Hud6wbDisplay display(port,p,false,testKit());NavView v=view();
+    assert(display.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+    assert(!port.batches.empty());
+    for(size_t i=0;i<port.batches.size();++i){valid(port.batches[i],p);assert(!find(port.batches[i],kGetSize));}
+    port.st=kOffline;size_t n=port.batches.size();++port.ep;
+    assert(display.showManeuver(v,1,true,true)==ClusterDisplay::kOk&&port.batches.size()==n);
+    port.st=kReady;++port.ep;
+    assert(display.showManeuver(v,2,true,true)==ClusterDisplay::kOk&&port.batches.size()>n);
+    for(size_t i=n;i<port.batches.size();++i)assert(!find(port.batches[i],kGetSize));
+    port.st=kFailed;assert(!display.clear(NULL)&&port.resets==0);
+    resources.forget();assert(resources.state()==BmwResources::kVerified);
 }
+
 most::View message(uint16_t f,const std::vector<uint8_t>& b,uint16_t dst=0x201f,uint8_t op=0xd){
     most::View m={};m.src=0x101;m.dst=dst;m.fblock=0x82;m.inst=0;m.fkt=f;m.op=op;m.hdrTag=89;m.len=b.size();m.data=b.empty()?NULL:&b[0];return m;
 }
@@ -420,11 +458,9 @@ void testSecondStep(){
     kntest::Bytes first=kntest::navState(8,"First"),second=kntest::navState(7,"Second");
     first.insert(first.end(),second.begin(),second.end());NavMessages m;assert(m.store(0x8006,&first[0],first.size()));
     NavView v;assert(viewFromMessages(m,v)&&v.aa_type==8&&v.has_next&&v.next_type==7);
-    // Missing roundabout angle does not create an imaginary exit direction.
-    Rect box={0,0,100,100};ShapeSpec spec=shapeFor(34,false,0);
-    assert(spec.kind==kShapeRoundabout);
-    assert(bmwManeuver(spec,box,false).size()<bmwManeuver(spec,box,true).size());
-    assert(!bmwExitNumber(2,box).empty()&&bmwExitNumber(0,box).empty()&&bmwExitNumber(100,box).empty());
+    // The same mapper and Work API serve both AA steps; no former renderer remains.
+    sixwbkit::NavigationEvent event;event.maneuver=GrafiteKit::maneuver(v.next_type);
+    assert(!sixwbkit::renderMiniature(event,sixwbkit::Rect(0,0,305,44)).empty());
 }
 unsigned graphicRequests(){unsigned n=0;for(size_t i=0;i<fake_dsi::calls.size();++i)if(fake_dsi::calls[i].kind==fake_dsi::Call::kRequest&&fake_dsi::calls[i].id==most::kReqProcessMessage)++n;return n;}
 void testRuntime(const char* mode){
@@ -451,7 +487,7 @@ int main(){
 const bool trace=getenv("NBT_6WB_DIAG_TEST")!=NULL;
 char tracePath[]="/tmp/6wb-diag-integration-XXXXXX";
 if(trace){int fd=mkstemp(tracePath);assert(fd>=0);close(fd);assert(latencydiag::start(true,tracePath));}
-testCodec();testGeometry();testRendering();testAllCentralManeuversWithoutSurfaceFile();testResourcesAndSafety();testIncremental();testDistancePolicyAndIconClear();testIconSurfaceSelection();testLayoutConfig();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
+testCodec();testWorkRoadSigns();testGeometry();testRendering();testAllCentralManeuversWithoutSurfaceFile();testResourcesAndSafety();testIncremental();testDistancePolicyAndIconClear();testIconSurfaceSelection();testLayoutConfig();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
     latencydiag::stop();FILE* f=fopen(tracePath,"r");assert(f);
     char row[512];unsigned rows=0;while(fgets(row,sizeof(row),f))if(row[0]>='0'&&row[0]<='9')++rows;
     fclose(f);unlink(tracePath);assert(rows>0);

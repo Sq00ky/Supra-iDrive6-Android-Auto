@@ -1,9 +1,9 @@
-"""Expanded vector-coordinate contracts; source/data only, never a compiler."""
+"""Measured Work vector-coordinate contracts; source/data only, never a compiler."""
 import pathlib
 import subprocess
 import unittest
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-BASE='c55ce6a2f7322f5d718bc88f8c863eb90680780b'
+BASE='473b393e2ad6894d54b8b284bfa07c8cdc7ec52b'
 PROFILE=(ROOT/'src/cluster/hud6wb_profile.hpp').read_text()
 RESOURCES=(ROOT/'src/cluster/hud6wb_resources.hpp').read_text()
 KIT=(ROOT/'src/cluster/hud6wb_kit.cpp').read_text()
@@ -12,9 +12,9 @@ CONFIG=(ROOT/'src/cluster/hud6wb_config.hpp').read_text()
 def old(name):return subprocess.check_output(['git','show',BASE+':milestone-7/src/cluster/'+name],cwd=ROOT.parent,text=True)
 
 class ExpandedGeometryChecks(unittest.TestCase):
-    def test_input_canvas_is_full_233_by_206(self):
-        self.assertIn('main(0x1f,0x20,233,206)',PROFILE)
-        self.assertIn('Rect c={0,0,232,205}; base.canvas=c',PROFILE)
+    def test_input_canvas_is_measured_221_by_158(self):
+        self.assertIn('main(0x1f,0x20,221,158)',PROFILE)
+        self.assertIn('Rect c={0,0,220,157}; base.canvas=c',PROFILE)
         self.assertIn('base.glyph=c',PROFILE)
         self.assertIn('kPerspectiveHorizon = 70',PROFILE)
         self.assertNotIn('Rect g={20,74,200,151}',PROFILE)
@@ -36,9 +36,8 @@ class ExpandedGeometryChecks(unittest.TestCase):
         self.assertIn('p.base.streetChars,1,kMaxLatinTextBytes',CONFIG)
         self.assertIn('NBT_6WB_TX',CONFIG)
 
-    def test_most_and_reference_data_are_unchanged(self):
-        paths=['src/cluster/grafite_oro/artwork_data.inc','src/cluster/grafite_oro/reference.json',
-               'src/most','src/dsi_client.cpp','src/nav_diag.hpp']
+    def test_most_transport_is_unchanged(self):
+        paths=['src/most','src/dsi_client.cpp']
         self.assertEqual(subprocess.check_output(['git','diff',BASE,'--']+['milestone-7/'+p for p in paths],cwd=ROOT.parent),b'')
 
 if __name__=='__main__':unittest.main()

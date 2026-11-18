@@ -31,6 +31,7 @@
 #include <sys/types.h>
 
 #include "cluster/display.hpp"
+#include "nav_diag_trace.hpp"
 #include "cluster/hud6wa_display.hpp"
 #include "cluster/hud_terminal.hpp"
 #include "cluster/j29_display.hpp"
@@ -62,6 +63,7 @@ public:
     Stop stopped() const { return stop_; }
     void resetStop() { stop_ = kRunning; }
     const NavView& current() const { return shown_; }
+    void diagnosticToken(const navtrace::Token& t) { diagnostic_token_=t; }
     const Settings& settings() const { return s_; }
     void setSettings(const Settings& s) { s_ = s; d_.setSettings(s); }
     // kApproachTime had to use the distance rule since the last call (a view with no seconds): once per session in
@@ -113,6 +115,7 @@ private:
     bool has_min_m_;
     double min_m_;              // the nearest the maneuver shown got since it was drawn
     bool renew_;
+    navtrace::Token diagnostic_token_; // worker-owned diagnostic metadata only
     bool depart_;               // the last step was a DEPART at 0 m (logged once per run of them)
 };
 
@@ -196,6 +199,7 @@ private:
     void markShown(bool on, bool force = false);
 
     pthread_mutex_t mu_;
+    navtrace::Token diagnostic_rx_,diagnostic_decoded_; // guarded by mu_ / worker respectively
     NavMessages msgs_;           // guarded by mu_
     double last_msg_t_;          // guarded by mu_
     bool session_ended_;         // guarded by mu_

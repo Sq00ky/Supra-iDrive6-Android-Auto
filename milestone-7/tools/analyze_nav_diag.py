@@ -8,6 +8,8 @@ import sys
 
 def summarize(paths):
     sessions = {}
+    navigation_sessions = {}
+    timing = {}
     invalid = 0
     duplicate = 0
     seen_records = set()
@@ -27,6 +29,38 @@ def summarize(paths):
                     duplicate += 1
                     continue
                 seen_records.add(identity)
+                navigation_id = row.get('navigation_session_id')
+                if navigation_id:
+                    route = navigation_sessions.setdefault(navigation_id, {
+                        'navigation_session_id': navigation_id, 'source_label': row.get('source', 'unspecified'),
+                        'source_kind': row.get('source_kind', 'legacy_manual_label'), 'application_id': row.get('application_id'),
+                        'wall_time': None, 'wall_time_valid': False, 'start_mono_ns': None,
+                        'messages': collections.Counter(), 'roundabout_updates': []})
+                    if row['record'] == 'navigation_session_start':
+                        route.update(wall_time=row.get('wall_time'), wall_time_valid=row.get('wall_time_valid', False),
+                                     wall_time_quality=row.get('wall_time_quality'), start_mono_ns=row.get('mono_ns'))
+                    if row['record'] == 'navigation':
+                        route['messages']['0x%04x' % row['message_id']] += 1
+                        values = {f['path']: f['value'] for f in row.get('fields', [])
+                                  if isinstance(f.get('value'), (int, float)) and not isinstance(f.get('value'), bool)}
+                        maneuver = values.get('steps[0].maneuver.type')
+                        if maneuver in (30, 31, 32, 33, 34, 35, 43, 44, 45, 46):
+                            # Numeric wire fields only. Never infer actual intersection geometry or app identity.
+                            if len(route['roundabout_updates']) < 2000:
+                                route['roundabout_updates'].append({'mono_ns': row.get('mono_ns'),
+                                    'sequence': row['sequence'], 'type': maneuver,
+                                    'exit_number': values.get('steps[0].maneuver.exit_number'),
+                                    'exit_angle': values.get('steps[0].maneuver.exit_angle')})
+                if row['record'] == 'navigation_timing':
+                    stage = row.get('stage', 'unknown')
+                    stats = timing.setdefault(stage, {'records': 0, 'rx_correlated': 0, 'max_since_rx_ms': None})
+                    stats['records'] += 1
+                    rx = row.get('rx_mono_ns', 0)
+                    now = row.get('mono_ns', 0)
+                    if rx and now >= rx:
+                        stats['rx_correlated'] += 1
+                        delay = (now-rx)/1000000.0
+                        stats['max_since_rx_ms'] = max(stats['max_since_rx_ms'] or 0, delay)
                 if key not in sessions:
                     sessions[key] = {'pid': key[0], 'run_mono_ns': key[1], 'session': key[2],
                                      'source_label': row.get('source', 'unspecified'),
@@ -52,6 +86,9 @@ def summarize(paths):
                         name = '%s / wire=%s / size=%s' % (field['path'], field.get('wire'), field.get('size'))
                         result['unknown_fields'][name] += 1
     return {'format': 1, 'invalid_lines': invalid, 'duplicate_records': duplicate,
+            'application_identity': 'source is a manual label; application_id is not inferred',
+            'navigation_sessions': [navigation_sessions[k] for k in sorted(navigation_sessions)],
+            'timing': timing,
             'counter_scope': 'Recorder/run cumulative; not per-session totals; loss is diagnostic queue loss, not AA packet loss',
             'sessions': [sessions[k] for k in sorted(sessions)]}
 

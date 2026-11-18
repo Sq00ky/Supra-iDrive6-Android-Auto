@@ -116,25 +116,26 @@ namespace {
 static const uint8_t COLOR_ROAD_FILL = 3;
 static const uint8_t COLOR_ROAD_EDGE = 2;
 static const uint8_t COLOR_GUIDANCE_FILL = 6;
-static const uint8_t COLOR_GUIDANCE_EDGE = 5;
+static const uint8_t COLOR_GUIDANCE_EDGE = 11;
 }
 
 sixwbkit::HudTerminalPalette provisionalKitPalette() {
     sixwbkit::HudTerminalPalette p;
-    p.graphite=COLOR_ROAD_FILL;p.black=COLOR_ROAD_FILL;
+    p.graphite=COLOR_ROAD_FILL;p.black=9;
     p.gold=COLOR_ROAD_EDGE;p.gray=COLOR_ROAD_EDGE;
     p.white=COLOR_GUIDANCE_FILL;p.red=COLOR_GUIDANCE_EDGE;return p;
 }
 GrafiteKit::GrafiteKit():main_(provisionalKitPalette()),lanes_(main_) {
-    printf("[6wb kit] experimental flat colours: road=3, road edge=2, guidance=6, outline=5; physical colours unconfirmed\n");
+    lanes_.white=4;
+    printf("[6wb kit] experimental flat colours: road=3, road edge=2, guidance=6, outline=11; physical colours unconfirmed\n");
 }
 KitBarState kitBarState(const kombinav::NavView& v,unsigned range) {
-    KitBarState s;double metres=0;s.visible=kombinav::distanceMetres(v,metres) && sixwbkit::finite(metres) && metres>=0 && metres<=500;
+    KitBarState s;double metres=0;s.visible=kombinav::distanceMetres(v,metres) && sixwbkit::finite(metres) && metres>=0 && metres<=range;
     s.value=metres<=0?0:metres>=range?255:(int)(metres*255/range);return s;
 }
 sixwbkit::Maneuver::Value GrafiteKit::maneuver(int aaType) {
-    // Explicit AA mapping: 0..46 are the model families already used by nav_msg.hpp.
-    // Do not assign the extra ferry variants 47..50 without a protocol capture.
+    // AndroidX Maneuver constants; existing types 0..46 retain their exact mapping.
+    // Types 47..50 select the ferry artwork already supplied by Work.
     switch(aaType) {
     case 0:return sixwbkit::Maneuver::Unknown;
     case 1:return sixwbkit::Maneuver::Start;
@@ -183,6 +184,10 @@ sixwbkit::Maneuver::Value GrafiteKit::maneuver(int aaType) {
     case 44:return sixwbkit::Maneuver::RoundaboutExitCW;
     case 45:return sixwbkit::Maneuver::RoundaboutEnterCCW;
     case 46:return sixwbkit::Maneuver::RoundaboutExitCCW;
+    case 47:return sixwbkit::Maneuver::FerryLeft;
+    case 48:return sixwbkit::Maneuver::FerryRight;
+    case 49:return sixwbkit::Maneuver::TrainFerryLeft;
+    case 50:return sixwbkit::Maneuver::TrainFerryRight;
     default:return sixwbkit::Maneuver::Unknown;
     }
 }
@@ -224,7 +229,7 @@ bool GrafiteKit::encode(const sixwbkit::Scene& scene,const sixwbkit::HudTerminal
 }
 bool GrafiteKit::central(const kombinav::NavView& v,uint16_t h,const Rect& r,Batch& out)const {
     if(h!=0x1f && h!=0x20)return false;
-    if(v.aa_type<0||v.aa_type>46)return false; // report an unsupported code, never substitute straight-on
+    if(v.aa_type<0||v.aa_type>50)return false; // report an unsupported code, never substitute straight-on
     sixwbkit::NavigationEvent e;e.maneuver=maneuver(v.aa_type);
     e.hasExitAngle=v.has_exit_angle && v.exit_angle>=1 && v.exit_angle<=360;
     e.exitAngle=(double)v.exit_angle;

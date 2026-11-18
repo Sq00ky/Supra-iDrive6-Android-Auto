@@ -70,32 +70,4 @@ std::vector<uint8_t> bitmap(uint16_t h,uint8_t id,const std::vector<uint32_t>& p
     p.push_back(1);p.push_back(1);p.push_back(0);p.push_back(id);
     p.insert(p.end(),r.begin(),r.end());return p;
 }
-RoadShield roadShield(const std::string& s) {
-    RoadShield r;if(s.size()<2 || (s[0]!='A' && s[0]!='B'))return r;
-    size_t i=1;while(i<s.size() && s[i]==' ')++i;
-    size_t start=i;while(i<s.size() && s[i]>='0' && s[i]<='9' && i-start<4)++i;
-    if(i==start || (i<s.size() && s[i]!=' ' && s[i]!='/' && s[i]!='-'))return r;
-    r.kind=s[0];r.number=s.substr(start,i-start);return r;
-}
-std::vector<uint32_t> shieldPicture(unsigned w,unsigned h,const RoadShield& s) {
-    if(!w || !h || w>1024 || h>1024)return std::vector<uint32_t>();
-    std::vector<uint32_t> p((size_t)w*h,0);
-    if(!s.kind || s.number.empty() || s.number.size()>4 || h<16 || w<80)return p;
-    const uint32_t fill=s.kind=='A'?0xff00579c:0xffffc000;
-    const uint32_t ink=s.kind=='A'?0xffffffff:0xff000000;
-    unsigned left=4,right=76,top=3,bottom=h-4;
-    for(unsigned y=top;y<=bottom;++y)for(unsigned x=left;x<=right;++x)
-        p[y*w+x]=(x==left||x==right||y==top||y==bottom)?ink:fill;
-    static const uint8_t digits[10][5]={{7,5,5,5,7},{2,6,2,2,7},{7,1,7,4,7},{7,1,7,1,7},{5,5,7,1,1},
-        {7,4,7,1,7},{7,4,7,5,7},{7,1,1,1,1},{7,5,7,5,7},{7,5,7,1,7}};
-    unsigned scale=(h-10)/5;if(scale>3)scale=3;if(!scale)scale=1;
-    unsigned x0=left+(right-left+1-(unsigned)s.number.size()*4*scale+scale)/2,y0=(h-5*scale)/2;
-    for(size_t k=0;k<s.number.size();++k) {
-        unsigned d=(unsigned)(s.number[k]-'0');if(d>9)continue;
-        for(unsigned y=0;y<5;++y)for(unsigned x=0;x<3;++x)if(digits[d][y]&(1<<(2-x)))
-            for(unsigned yy=0;yy<scale;++yy)for(unsigned xx=0;xx<scale;++xx)
-                p[(y0+y*scale+yy)*w+x0+(unsigned)k*4*scale+x*scale+xx]=ink;
-    }
-    return p;
-}
 } }

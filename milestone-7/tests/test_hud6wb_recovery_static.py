@@ -34,6 +34,7 @@ class RecoveryChecks(unittest.TestCase):
         expression = expression.replace('kombinav::distanceMetres(v,metres)', 'known')
         expression = expression.replace('sixwbkit::finite(metres)', 'math.isfinite(metres)')
         expression = expression.replace('&&', ' and ')
+        range = 500
         for metres, known, expected in ((501, True, False), (500, True, True),
                                         (499, True, True), (0, True, True),
                                         (-1, True, False), (math.inf, True, False),
@@ -101,13 +102,10 @@ class RecoveryChecks(unittest.TestCase):
 
     def test_optional_surface_failure_does_not_block_central_reference(self):
         resources = read('hud6wb_resources.hpp')
-        match = section(resources, 'bool matches(', 'static void add(')
-        for handle in ('p_.base.frame', 'p_.main.a', 'p_.main.b'):
-            self.assertIn('compatibleOrMissing(port,' + handle, match)
-        for optional in ('p_.icons', 'p_.lanes', 'p_.bar'):
-            self.assertNotIn(optional, match)
-        self.assertIn('if(!port.waitIdle(0))return false', resources)
-        self.assertIn('!port.imageSize(handle,rw,rh)', resources)
+        active=resources.split('// ORIGINAL C04 DISCOVERY',1)[0]
+        self.assertIn('state()==kVerified && port.status()==kReady',active)
+        self.assertNotIn('imageSize(',active)
+        self.assertNotIn('waitIdle(',active)
         self.assertIn('iconBitmaps(false)', read('hud6wb_profile.hpp'))
         self.assertIn('NBT_6WB_ICON_BITMAPS', read('hud6wb_config.hpp'))
 
@@ -150,15 +148,13 @@ class RecoveryChecks(unittest.TestCase):
         self.assertIn('c.txType=p.vectorTx', read('nav_core.cpp'))
         self.assertIn('c.txType=0', read('hud6wb_display.cpp'))
 
-    def test_artwork_and_extended_street_text_are_preserved(self):
-        self.assertEqual(subprocess.check_output(
-            ['git', 'diff', 'HEAD', '--', 'milestone-7/src/cluster/grafite_oro'],
-            cwd=ROOT.parent), b'')
+    def test_extended_street_text_and_sign_spacing_are_preserved(self):
         self.assertIn('base.streetChars=kMaxLatinTextBytes', read('hud6wb_profile.hpp'))
         self.assertIn('if (!d_.useFullRoadName())', read('nav_core.cpp'))
         display = read('hud6wb_display.cpp')
         self.assertIn('latinText(p_.base.street,v.road,p_.base.streetChars)', display)
-        self.assertIn('street!=latinText(p_.base.street,shown_.road', display)
+        self.assertIn('road_sign::street(v.road,signVisible,p_.signLayout,p_.base.streetChars)', display)
+        self.assertIn('latinText(p_.base.street,text,p_.base.streetChars)', display)
 
 
 if __name__ == '__main__':

@@ -1011,7 +1011,14 @@ void HudTerminal::run() {
             void* user = sendUser_;
             pthread_mutex_unlock(&lock_);
             const uint32_t dispatchMs = nowMs();
+            // Metadata only, selected 6WB presentation commands. ACK/state logic below is unchanged.
+            const bool trace=core_.pacedSurfaceDiagnosticsEnabled()&&
+                (m.fkt==kSwitchVisibility||m.fkt==kTextareaSetText||m.fkt==0x227);
+            navtrace::Token token;
+            if(trace){token=navtrace::latest(0);token.sequence=token.rx_ns=0;
+                navtrace::event(navtrace::MostBegin,token,0,m.fkt,-1,-1,-1,m.data.size()>=2?rdBe16(&m.data[0]):0);}
             bool ok = fn && fn(m, user);
+            if(trace)navtrace::event(navtrace::MostSend,token,ok?1:0,m.fkt,-1,-1,-1,m.data.size()>=2?rdBe16(&m.data[0]):0);
             if (registeredTag_ && m.fkt == kGetSize)
                 printf("[HudTerm] +%u ImageGetSize send returned %s after %u ms\n",
                        nowMs(), ok ? "OK" : "FAILED", nowMs()-dispatchMs);

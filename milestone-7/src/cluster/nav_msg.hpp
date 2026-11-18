@@ -182,7 +182,7 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         PbReader steps(ns.data,ns.len); PbField sf; unsigned stepIndex=0;
         while(steps.next(sf)) if(sf.num==1 && sf.wire==2 && ++stepIndex==2) {
             PbSpan next(sf.data,sf.len), nm=pbMsg(next,1); int64_t nt;
-            if(pbInt(nm,1,nt) && nt>0 && nt<=46) {
+            if(pbInt(nm,1,nt) && nt>0 && nt<=50) {
                 v.has_next=true; v.next_type=(int)nt;
                 v.next_has_angle=pbInt(nm,3,v.next_angle) && v.next_angle>=1 && v.next_angle<=360;
                 pbInt(nm,2,v.next_exit_number);

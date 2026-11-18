@@ -4,7 +4,7 @@ HudPaint::Value hudColorIndex(const HudTerminalPalette& p,Color::Value c,uint8_t
     int index=-1;switch(c) {
     case Color::None:return HudPaint::Skip;case Color::Graphite:index=p.graphite;break;
     case Color::Gold:index=p.gold;break;case Color::White:index=p.white;break;
-    case Color::Gray:index=p.gray;break;case Color::Black:index=p.black;break;case Color::Red:index=p.red;break;
+    case Color::Gray:index=p.gray;break;case Color::Black:index=p.black;break;case Color::Red:index=p.red;break;case Color::ExitWhite:index=p.exitWhite;break;
     }
     if(index<0||index>=HudColorCount)return HudPaint::Unmapped;
     out=(uint8_t)index;return HudPaint::Mapped;

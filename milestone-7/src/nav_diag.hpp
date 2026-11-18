@@ -20,6 +20,8 @@
 #include <string>
 #include <sstream>
 #include <map>
+#include <vector>
+#include "nav_diag_trace.hpp"
 namespace nbt { namespace navdiag {
 enum { Capacity=32, MaxBody=8192, MaxFields=512, MaxDepth=8, MaxText=256 };
 inline uint64_t stamp(){timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;return (uint64_t)t.tv_sec*1000000000ull+t.tv_nsec;}
@@ -28,8 +30,9 @@ struct Config {
     bool enabled,text;const char* path;const char* source;size_t maxTotalBytes;
     Config():enabled(false),text(false),path("/opt/aa/logs/nbt-aad-nav-diag.jsonl"),source("unspecified"),maxTotalBytes(15u*1024u*1024u){}
 };
+inline bool sourceLabel(const char* s){return s && (!strcmp(s,"maps")||!strcmp(s,"waze")||!strcmp(s,"amigo")||!strcmp(s,"tomtom_amigo"));}
 inline Config environment(){Config c;c.enabled=flag("NBT_NAV_DIAG");c.text=flag("NBT_NAV_DIAG_TEXT");
-    const char* s=getenv("NBT_NAV_DIAG_SOURCE");if(s && (!strcmp(s,"maps")||!strcmp(s,"waze")))c.source=s;return c;}
+    const char* s=getenv("NBT_NAV_DIAG_SOURCE");if(sourceLabel(s))c.source=s;return c;}
 struct Stats {uint64_t seen,captured,lost,truncated;Stats():seen(0),captured(0),lost(0),truncated(0){} };
 enum Node { Unknown,Status,State,Step,Maneuver,Road,Lane,Direction,Cue,Destination,Position,StepDistance,Distance,DestinationDistance,LegacyTurn,LegacyDistance };
 enum Value { Nested,Integer,Boolean,Text,Display,TimeText };
@@ -129,6 +132,58 @@ private:
         }
     }
 };
+// Export the captured wire bytes without interpreting them as a different app.
+// Keep scalar wire data exactly; mask text/opaque length-delimited values in
+// place. Offsets and lengths remain those of the original protobuf message.
+class RawWire {
+public:
+    RawWire(const uint8_t* p,size_t n,bool text):text_(text),complete_(true),fields_(0) {
+        if(p&&n)bytes_.assign(p,p+n);
+    }
+    std::string json(uint16_t id) {
+        walk(schema(id),0,bytes_.size(),0);std::ostringstream o;
+        o<<"\"raw_body_hex\":\"";const char* hex="0123456789abcdef";
+        for(size_t i=0;i<bytes_.size();++i)o<<hex[bytes_[i]>>4]<<hex[bytes_[i]&15];
+        o<<"\",\"raw_exact\":"<<(masks_.empty()?"true":"false")
+         <<",\"wire_valid\":"<<(complete_?"true":"false")<<",\"redacted_ranges\":["<<masks_<<']';return o.str();
+    }
+    static bool varint(const std::vector<uint8_t>& b,size_t& i,size_t end,uint64_t& v) {
+        v=0;for(unsigned j=0;j<10&&i<end;++j){unsigned c=b[i++];if(j==9&&c>1)return false;
+            v|=(uint64_t)(c&127)<<(7*j);if(!(c&128))return true;}return false;
+    }
+    static int status(const uint8_t* p,size_t n) {
+        if(!p||!n||n>MaxBody)return -1;std::vector<uint8_t> b(p,p+n);size_t i=0;int result=-1;
+        while(i<n){uint64_t tag=0,v=0;if(!varint(b,i,n,tag)||!(tag>>3))return -1;
+            unsigned wire=(unsigned)(tag&7);
+            if(wire==0){if(!varint(b,i,n,v))return -1;if((tag>>3)==1)result=v<=3?(int)v:-1;}
+            else if(wire==2){if(!varint(b,i,n,v)||v>n-i)return -1;i+=(size_t)v;}
+            else if(wire==1||wire==5){size_t k=wire==1?8:4;if(k>n-i)return -1;i+=k;}
+            else return -1;
+        }return result;
+    }
+private:
+    std::vector<uint8_t> bytes_;bool text_,complete_;unsigned fields_;std::string masks_;
+    void mask(size_t i,size_t n) {if(!n)return;std::ostringstream o;if(!masks_.empty())o<<',';
+        o<<"{\"offset\":"<<i<<",\"bytes\":"<<n<<'}';masks_+=o.str();
+        for(size_t j=0;j<n;++j)bytes_[i+j]=0;}
+    void walk(Node node,size_t start,size_t end,unsigned depth) {
+        size_t i=start;
+        while(i<end){size_t begin=i;uint64_t tag=0,n=0;
+            if(++fields_>MaxFields||!varint(bytes_,i,end,tag)||!(tag>>3)||(tag>>3)>0x1fffffffu){complete_=false;mask(begin,end-begin);return;}
+            unsigned wire=(unsigned)(tag&7);Field f=describe(node,(unsigned)(tag>>3));
+            if(wire==0){uint64_t value;if(!varint(bytes_,i,end,value)){complete_=false;mask(begin,end-begin);return;}}
+            else if(wire==1||wire==5){size_t k=wire==1?8:4;if(k>end-i){complete_=false;mask(begin,end-begin);return;}i+=k;}
+            else if(wire==2){
+                if(!varint(bytes_,i,end,n)||n>end-i){complete_=false;mask(begin,end-begin);return;}
+                size_t size=(size_t)n;
+                if(f.name&&f.value==Nested&&depth<MaxDepth)walk(f.child,i,i+size,depth+1);
+                else if(!f.name||f.value==Nested||f.value==Integer||f.value==Boolean||
+                        !(text_||safeText(size?&bytes_[i]:NULL,size,f.value)))mask(i,size);
+                i+=size;
+            }else {complete_=false;mask(begin,end-begin);return;}
+        }
+    }
+};
 class FileLog {
 public:
     // maximum is the TOTAL budget: current + .1 + .2, including newlines.
@@ -196,16 +251,19 @@ private:
 };
 class Recorder {
 public:
-    explicit Recorder(const Config& c):config_(c),records_(NULL),read_(0),write_(0),active_(false),threaded_(false),stop_(false),failed_(false),lockReady_(false),session_(0),sequence_(0),run_(stamp()){
+    explicit Recorder(const Config& c):config_(c),records_(NULL),read_(0),write_(0),active_(false),threaded_(false),stop_(false),failed_(false),lockReady_(false),session_(0),sequence_(0),run_(stamp()),navigation_(false),navigationSerial_(0){
         lockReady_=pthread_mutex_init(&lock_,NULL)==0;path_[0]=source_[0]=0;
         if(c.path&&strlen(c.path)<sizeof(path_))strcpy(path_,c.path);
-        const char* s=c.source&&(!strcmp(c.source,"maps")||!strcmp(c.source,"waze"))?c.source:"unspecified";strcpy(source_,s);
+        const char* s=sourceLabel(c.source)?c.source:"unspecified";strcpy(source_,s);
     }
     ~Recorder(){stop();if(lockReady_)pthread_mutex_destroy(&lock_);}
     bool start(){return begin(true);}
     uint32_t newSession(){if(!active_)return 0;++session_;enqueue(1,0,NULL,0);return session_;}
     void endSession(){if(active_)enqueue(2,0,NULL,0);}
-    void capture(uint16_t id,const uint8_t* p,size_t n){if(!active_)return;enqueue(0,id,p,n);}
+    void capture(uint16_t id,const uint8_t* p,size_t n,uint16_t channel=10){if(!active_)return;
+        const uint64_t ns=stamp();navtrace::Token token;token.sequence=sequence_+1;token.rx_ns=ns;
+        token.connection=session_;token.channel=channel;token.id=id;navtrace::event(navtrace::Receive,token);
+        enqueue(0,id,p,n,channel,ns);}
     // Producer-only snapshot; the writer never reads these mutable counters.
     Stats stats()const{return stats_;}
     void stop(){
@@ -213,16 +271,16 @@ public:
         // Owner calls only after the AASession producer has joined.
         pthread_mutex_lock(&lock_);final_=stats_;stop_=true;pthread_mutex_unlock(&lock_);
         if(threaded_)pthread_join(thread_,NULL);else run();
-        active_=false;delete[] records_;records_=NULL;
+        active_=false;navtrace::enable(false);delete[] records_;records_=NULL;
     }
 #ifdef NBT_HOST_TEST
     bool startPausedForTest(){return begin(false);}
     void lockForTest(){pthread_mutex_lock(&lock_);}void unlockForTest(){pthread_mutex_unlock(&lock_);}
 #endif
 private:
-    struct Record {uint64_t ns,sequence;uint32_t session;uint16_t id;unsigned kind;size_t original,size;Stats stats;uint8_t body[MaxBody];};
+    struct Record {uint64_t ns,sequence;uint32_t session;uint16_t id,channel;unsigned kind;size_t original,size;time_t realSeconds;long realNanos;bool realValid;Stats stats;uint8_t body[MaxBody];};
     Config config_;char path_[512],source_[16];Record* records_;unsigned read_,write_;bool active_,threaded_,stop_,failed_,lockReady_;
-    uint32_t session_;uint64_t sequence_,run_;Stats stats_,final_;pthread_mutex_t lock_;pthread_t thread_;
+    uint32_t session_;uint64_t sequence_,run_;bool navigation_;uint64_t navigationSerial_;std::string navigationId_;Stats stats_,final_;pthread_mutex_t lock_;pthread_t thread_;
     bool begin(bool threaded){
         if(active_||!lockReady_||!config_.enabled||!path_[0]||config_.maxTotalBytes<1024)return false;
         // Record contains Stats, so use proper construction rather than calloc.
@@ -231,31 +289,100 @@ private:
         if(threaded && pthread_create(&thread_,NULL,&Recorder::threadMain,this)){
             active_=false;delete[] records_;records_=NULL;return false;
         }
-        threaded_=threaded;return true;
+        threaded_=threaded;navtrace::enable(true);return true;
     }
-    void enqueue(unsigned kind,uint16_t id,const uint8_t* p,size_t n){
+    void enqueue(unsigned kind,uint16_t id,const uint8_t* p,size_t n,uint16_t channel=10,uint64_t ns=0){
         if(!kind){++stats_.seen;++sequence_;if(n>MaxBody || (n && !p))++stats_.truncated;}
         if(pthread_mutex_trylock(&lock_)) {if(!kind)++stats_.lost;return;}
-        if(failed_||write_-read_==Capacity){pthread_mutex_unlock(&lock_);if(!kind)++stats_.lost;return;}
-        Record& r=records_[write_%Capacity];r.ns=stamp();r.kind=kind;r.id=id;r.session=session_;r.sequence=sequence_;
+        if(failed_||write_-read_==Capacity||(!kind&&id!=0x8003&&write_-read_>=Capacity-4)){pthread_mutex_unlock(&lock_);if(!kind)++stats_.lost;return;}
+        Record& r=records_[write_%Capacity];r.ns=ns?ns:stamp();r.kind=kind;r.id=id;r.channel=channel;
+        timespec wall;r.realValid=clock_gettime(CLOCK_REALTIME,&wall)==0;
+        r.realSeconds=r.realValid?wall.tv_sec:0;r.realNanos=r.realValid?wall.tv_nsec:0;r.session=session_;r.sequence=sequence_;
         r.original=n;r.size=n<MaxBody?n:MaxBody;
         if(r.size && !p)r.size=0;
         if(r.size)memcpy(r.body,p,r.size);
         if(!kind)++stats_.captured;
         r.stats=stats_;++write_;pthread_mutex_unlock(&lock_);
     }
-    std::string envelope(const Record& r,const char* type){std::ostringstream o;
+    std::string envelope(const Record& r,const char* type,bool navigationContext=true){std::ostringstream o;
         o<<"{\"version\":1,\"record\":"<<quote(type)<<",\"pid\":"<<getpid()<<",\"run_mono_ns\":"<<run_
          <<",\"session\":"<<r.session<<",\"sequence\":"<<r.sequence<<",\"mono_ns\":"<<r.ns
-         <<",\"source\":"<<quote(source_)<<",\"seen\":"<<r.stats.seen<<",\"captured\":"<<r.stats.captured
+         <<",\"navigation_session_id\":"<<(navigationContext&&!navigationId_.empty()?quote(navigationId_):"null")
+         <<",\"application_id\":null,\"source_kind\":\"manual_label\",\"source\":"<<quote(source_)<<",\"seen\":"<<r.stats.seen<<",\"captured\":"<<r.stats.captured
          <<",\"lost\":"<<r.stats.lost<<",\"truncated\":"<<r.stats.truncated;return o.str();}
     std::string render(const Record& r){
         if(r.kind)return envelope(r,r.kind==1?"session_start":"session_end")+"}";
         Decoder d(config_.text);std::string fields=d.fields(r.id,r.body,r.size);std::ostringstream o,hex;hex<<"0x"<<std::hex<<r.id;
-        o<<envelope(r,"navigation")<<",\"channel\":10,\"message_id\":"<<r.id<<",\"message_id_hex\":"<<quote(hex.str())<<",\"known_message\":"<<(schema(r.id)!=Unknown?"true":"false")
+        o<<envelope(r,"navigation")<<",\"channel\":"<<r.channel<<",\"message_id\":"<<r.id<<",\"message_id_hex\":"<<quote(hex.str())<<",\"known_message\":"<<(schema(r.id)!=Unknown?"true":"false")
          <<",\"original_bytes\":"<<r.original<<",\"captured_bytes\":"<<r.size<<",\"body_truncated\":"<<(r.size<r.original?"true":"false")
          <<",\"malformed\":"<<(d.malformed()?"true":"false")<<",\"field_limit\":"<<(d.limited()?"true":"false")<<",\"fields\":["<<fields<<"]}";
         return o.str();
+    }
+    std::string wallFields(const Record& r) {
+        struct tm utc;char date[32];
+        // Plausibility, not an assertion of NTP/GPS synchronization. QNX time_t is 32 bit.
+        const bool valid=r.realValid&&(int64_t)r.realSeconds>=1577836800ll&&
+            (int64_t)r.realSeconds<4102444800ll&&gmtime_r(&r.realSeconds,&utc)&&
+            strftime(date,sizeof(date),"%Y-%m-%dT%H:%M:%SZ",&utc);
+        std::ostringstream o;o<<",\"wall_time_valid\":"<<(valid?"true":"false")
+            <<",\"wall_time\":"<<(valid?quote(date):"null")
+            <<",\"wall_time_quality\":"<<quote(valid?"system_clock_plausible_unverified":"unavailable_or_implausible")
+            <<",\"wall_time_nsec\":"<<(valid?r.realNanos:0);return o.str();
+    }
+    void refreshManualLabel() {
+        strcpy(source_,sourceLabel(config_.source)?config_.source:"unspecified");
+        // Optional operator label, read only by the writer at navigation start.
+        // This is never an application identifier obtained from Android Auto.
+        std::string path(path_);size_t slash=path.find_last_of('/');
+        path=slash==std::string::npos?"nav-diag-source":path.substr(0,slash+1)+"nav-diag-source";
+        int fd=open(path.c_str(),O_RDONLY|O_NONBLOCK);if(fd<0)return;
+        struct stat st;char label[32];ssize_t n=0;
+        if(!fstat(fd,&st)&&S_ISREG(st.st_mode)&&st.st_size>0&&st.st_size<(off_t)sizeof(label))
+            n=read(fd,label,sizeof(label)-1);
+        close(fd);if(n<=0)return;
+        label[n]=0;while(n>0&&(label[n-1]=='\n'||label[n-1]=='\r'))label[--n]=0;
+        if(sourceLabel(label))strcpy(source_,label);
+    }
+    bool process(FileLog& file,const Record& r) {
+        if(r.kind==1){navigation_=false;navigationId_.clear();}
+        const int status=!r.kind&&r.id==0x8003&&r.size==r.original?RawWire::status(r.body,r.size):-1;
+        if(status==1&&!navigation_) {
+            refreshManualLabel();
+            navigation_=true;std::ostringstream id;
+            id<<getpid()<<'-'<<run_<<'-'<<r.realSeconds<<'-'<<r.realNanos<<'-'<<r.session<<'-'<<++navigationSerial_;
+            navigationId_=id.str();
+            if(!file.write(envelope(r,"navigation_session_start")+wallFields(r)+",\"trigger\":\"navigation_status_active\"}"))return false;
+        }
+        if(!r.kind) {
+            RawWire wire(r.body,r.size,config_.text);std::ostringstream raw;
+            raw<<envelope(r,"navigation_raw")<<",\"channel\":"<<r.channel<<",\"message_id\":"<<r.id
+               <<",\"known_message\":"<<(schema(r.id)!=Unknown?"true":"false")
+               <<",\"original_bytes\":"<<r.original<<",\"captured_bytes\":"<<r.size
+               <<",\"body_truncated\":"<<(r.size<r.original?"true":"false")<<','<<wire.json(r.id)<<'}';
+            if(!file.write(raw.str()))return false;
+        }
+        if(!file.write(render(r)))return false;
+        if(navigation_&&(r.kind==2||status==0||status==2)) {
+            if(!file.write(envelope(r,"navigation_session_end")+"}"))return false;
+            navigation_=false;navigationId_.clear();
+        }
+        return true;
+    }
+    bool drainTrace(FileLog& file) {
+        navtrace::Event e;unsigned dropped=0;
+        for(unsigned i=0;i<16&&navtrace::take(e,dropped);++i) {
+            Record r;r.ns=e.ns;r.sequence=e.serial;r.session=e.token.connection;r.stats=Stats();
+            std::ostringstream o;o<<envelope(r,"navigation_timing",false)
+                <<",\"stage\":"<<quote(navtrace::name(e.stage))<<",\"rx_sequence\":"<<e.token.sequence
+                <<",\"rx_mono_ns\":"<<e.token.rx_ns<<",\"channel\":"<<e.token.channel
+                <<",\"message_id\":"<<e.token.id<<",\"result\":"<<e.result
+                <<",\"maneuver_type\":"<<(e.stage==navtrace::MostSend||e.stage==navtrace::MostBegin?-1:e.type)
+                <<",\"most_function\":"<<(e.stage==navtrace::MostSend||e.stage==navtrace::MostBegin?e.type:0)<<",\"exit_number\":"<<e.exit<<",\"exit_angle\":"<<e.angle
+                <<",\"distance_m\":"<<(e.metres==e.metres&&e.metres>-1e100&&e.metres<1e100?e.metres:-1)<<",\"handle\":"<<e.handle
+                <<",\"trace_queue_full_drops\":"<<dropped
+                <<",\"correlation\":"<<quote(e.token.sequence?"rx_sequence":"timeline_only")<<'}';
+            if(!file.write(o.str()))return false;
+        }return true;
     }
     static void* threadMain(void* p){static_cast<Recorder*>(p)->run();return NULL;}
     void run(){
@@ -266,9 +393,15 @@ private:
                 if(read_!=write_){r=records_[read_%Capacity];++read_;have=true;}
                 else if(stop_){r.stats=final_;r.ns=stamp();r.session=session_;r.sequence=sequence_;finish=true;}
                 pthread_mutex_unlock(&lock_);
-                if(have){if(!file.write(render(r)))break;}
-                else if(finish){std::ostringstream o;o<<envelope(r,"shutdown")<<",\"rotations\":"<<file.rotations()<<'}';if(!file.write(o.str()))break;return;}
-                else usleep(100000);
+                if(have&&!process(file,r))break;
+                if(!drainTrace(file))break;
+                if(finish){
+                    // Bounded final drain; producers never wait for the exporter.
+                    for(unsigned i=0;i<8;++i)if(!drainTrace(file))return;
+                    std::ostringstream o;o<<envelope(r,"shutdown")<<",\"rotations\":"<<file.rotations()<<'}';
+                    if(!file.write(o.str()))break;return;
+                }
+                if(!have)usleep(100000);
             }
         }catch(...){ /* diagnostic failure must not terminate Android Auto */ }
         pthread_mutex_lock(&lock_);failed_=true;pthread_mutex_unlock(&lock_);

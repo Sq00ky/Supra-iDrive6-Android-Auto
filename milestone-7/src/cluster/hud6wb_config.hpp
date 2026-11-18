@@ -28,6 +28,11 @@ inline void configure6wb(Bmw6wbProfile& p) {
         else if(!strcmp(surface,"0x19")) {p.iconBitmaps=true;p.iconHandle=p.icons.b;}
         else printf("[6wb] invalid NBT_6WB_ICON_SURFACE=%s; using NBT_6WB_ICON_BITMAPS\n",surface);
     }
+    p.signLayout.x=sixwbNumber("NBT_6WB_SHIELD_X",p.signLayout.x,0,p.icons.width-1);
+    p.signLayout.y=sixwbNumber("NBT_6WB_SHIELD_Y",p.signLayout.y,0,p.icons.height-1);
+    p.signLayout.width=sixwbNumber("NBT_6WB_SHIELD_WIDTH",p.signLayout.width,5,p.icons.width);
+    p.signLayout.height=sixwbNumber("NBT_6WB_SHIELD_HEIGHT",p.signLayout.height,7,p.icons.height);
+    p.signLayout.spaces=sixwbNumber("NBT_6WB_SHIELD_SPACES",p.signLayout.spaces,0,40);
     p.base.streetChars=sixwbNumber("NBT_6WB_STREET_CHARS",p.base.streetChars,1,kMaxLatinTextBytes);
     p.base.distanceChars=sixwbNumber("NBT_6WB_DISTANCE_CHARS",p.base.distanceChars,1,8);
     p.lineWidth=sixwbNumber("NBT_6WB_LINE_WIDTH",p.lineWidth,1,22);

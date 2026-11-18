@@ -13,13 +13,5 @@ std::vector<uint8_t> rle32(const std::vector<uint32_t>& argb);
 // Full surface bitmap, one application segment. Oversize streams are refused, not truncated.
 std::vector<uint8_t> bitmap(uint16_t handle, uint8_t id, const std::vector<uint32_t>& argb,
                             unsigned width, unsigned height, size_t maxBytes);
-struct RoadShield {
-    char kind; std::string number;
-    RoadShield() : kind(0) {}
-};
-// Opt-in heuristic: only an explicit A/B route token at the beginning of road text.
-// B style is German; do not enable this heuristic for an unverified market/profile.
-RoadShield roadShield(const std::string& road);
-std::vector<uint32_t> shieldPicture(unsigned width, unsigned height, const RoadShield& shield);
 } }
 #endif

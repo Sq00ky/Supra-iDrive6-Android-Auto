@@ -29,13 +29,13 @@ class KitStaticTests(unittest.TestCase):
 
     def test_explicit_mapping_and_no_example_selection(self):
         mapping = dict((int(n),name) for n,name in re.findall(r'case (\d+):return sixwbkit::Maneuver::(\w+);',ADAPTER))
-        self.assertEqual(set(mapping), set(range(47)))
+        self.assertEqual(set(mapping), set(range(51)))
         for number,name in ((7,'Left'),(8,'Right'),(35,'RoundaboutCCWAngle'),(37,'Ferry'),(38,'TrainFerry'),(42,'DestinationRight'),(46,'RoundaboutExitCCW')):
             self.assertEqual(mapping[number],name)
         self.assertNotIn('exitExample', SOURCE)
         self.assertNotIn('variant(', SOURCE)
         self.assertIn('sign=cw?1:-1', SOURCE)
-        self.assertIn('exit=180+sign*e.exitAngle', SOURCE)
+        self.assertIn('end=start+sign*sweep', SOURCE)
         self.assertIn('e.hasExitNumber', SOURCE)
 
     def test_angle_convention_and_uniform_fit_data(self):
@@ -66,9 +66,10 @@ class KitStaticTests(unittest.TestCase):
         self.assertIn('for(size_t j=0;j<v.lanes[i].size();++j)',body)
         self.assertIn('Direction(d.shape,d.highlighted)',body)
         self.assertNotIn('mask',body)
-        self.assertIn('laneTip(d.shape,d.highlighted)',SOURCE)
-        self.assertIn('-45,45,-90,90,-135,135,180,180',SOURCE)
-        self.assertIn('area.y-top*scale',SOURCE)
+        self.assertIn('laneTip(shape,highlighted,tipArea,outline)',SOURCE)
+        self.assertIn('order[]={8,6,4,2,1,3,5,7,9}',SOURCE)
+        self.assertIn('top=area.y+4',SOURCE)
+        self.assertIn('highlighted=highlighted||directions[j].highlighted',SOURCE)
 
     def test_single_pair_and_preserved_bar(self):
         self.assertIn('uint16_t target=other(mainVisible_,p_.main)',DISPLAY)
@@ -86,8 +87,10 @@ class KitStaticTests(unittest.TestCase):
         for build in ('Makefile','CMakeLists.txt','tests/Makefile'):
             text=(ROOT/build).read_text()
             for name in files:self.assertIn(name,text)
-        for file in list(KIT.glob('*.hpp'))+list(KIT.glob('*.cpp'))+[ROOT/'src/cluster/hud6wb_kit.cpp']:
-            text=file.read_text()
+        for file in list(KIT.glob('*.hpp'))+list(KIT.glob('*.cpp'))+[ROOT/'src/cluster/hud6wb_kit.cpp',ROOT/'src/cluster/hud6wb_road_sign.hpp',ROOT/'src/cluster/hud6wb_config.hpp']:
+            text=file.read_text(encoding='utf-8')
+            # Configuration strings such as "auto" are not C++11 tokens.
+            text=re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"', '', text, flags=re.S)
             for unsupported in (r'\benum class\b',r'\bauto\b',r'\bnullptr\b',r'\bstd::move\b',r'\bu8"',r'\bstatic_assert\b'):
                 self.assertIsNone(re.search(unsupported,text),file.name)
 

@@ -42,6 +42,33 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(module.summarize([path])['invalid_lines'], 1)
             self.assertEqual(path.read_bytes(), content)
 
+    def test_multiple_navigation_sessions_and_timing_in_one_connection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = {'version': 1, 'pid': 12, 'run_mono_ns': 100, 'session': 1,
+                    'source_kind': 'manual_label', 'application_id': None}
+            rows = []
+            for number, label in enumerate(('maps', 'amigo'), 1):
+                uid = 'route-' + str(number)
+                rows.append(dict(base, record='navigation_session_start', sequence=number*2,
+                                 mono_ns=number*1000000000, source=label, navigation_session_id=uid,
+                                 wall_time='2026-11-18T09:15:32Z', wall_time_valid=True))
+                rows.append(dict(base, record='navigation', sequence=number*2+1,
+                                 mono_ns=number*1000000000+5000000, source=label, navigation_session_id=uid,
+                                 message_id=0x8006, fields=[{'path': 'steps[0].maneuver.type', 'value': 34},
+                                                          {'path': 'steps[0].maneuver.exit_number', 'value': 2},
+                                                          {'path': 'steps[0].maneuver.exit_angle', 'value': 180}]))
+            rows.append(dict(base, record='navigation_timing', sequence=1, mono_ns=1010000000,
+                             rx_mono_ns=1000000000, rx_sequence=2, stage='snapshot_decoded'))
+            path = pathlib.Path(folder)/'nav.jsonl'
+            path.write_text(''.join(json.dumps(row)+'\n' for row in rows), encoding='utf-8')
+            result = module.summarize([path])
+            self.assertEqual(result['invalid_lines'], 0)
+            self.assertEqual(len(result['navigation_sessions']), 2)
+            self.assertEqual([r['source_label'] for r in result['navigation_sessions']], ['maps', 'amigo'])
+            self.assertTrue(all(r['application_id'] is None for r in result['navigation_sessions']))
+            self.assertEqual(result['navigation_sessions'][1]['roundabout_updates'][0]['exit_angle'], 180)
+            self.assertEqual(result['timing']['snapshot_decoded']['max_since_rx_ms'], 10)
+
 
 if __name__ == '__main__':
     unittest.main()

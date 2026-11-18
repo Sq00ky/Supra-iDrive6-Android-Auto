@@ -140,6 +140,7 @@ public:
     bool imageSize(uint16_t handle, uint16_t& width, uint16_t& height) const;
     uint16_t host() const { return host_; }
     bool surfaceDiagnosticsEnabled() const { return cfg_.surfaceDiagnostics; }
+    bool pacedSurfaceDiagnosticsEnabled() const { return cfg_.pacedGraphics && cfg_.surfaceDiagnostics; }
     void takeSurfaceRecords(std::vector<std::string>& records) { surfaceRecords_.swap(records); }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;

@@ -7,7 +7,7 @@ struct Maneuver { enum Value {
 #include "maneuvers.inc"
 }; };
 struct PlanePolicy { enum Value { Hidden, DistanceBased, FlatOnly }; };
-struct Color { enum Value { None, Graphite, Gold, White, Gray, Black, Red }; };
+struct Color { enum Value { None, Graphite, Gold, White, Gray, Black, Red, ExitWhite }; };
 struct Point { double x,y; };
 struct Rect { double x,y,width,height; Rect(double a=0,double b=0,double w=0,double h=0):x(a),y(b),width(w),height(h){} };
 struct Contour { bool closed; std::vector<Point> points; Contour():closed(false){} };
@@ -22,6 +22,7 @@ struct NavigationEvent {Maneuver::Value maneuver;bool hasExitAngle,hasExitNumber
     NavigationEvent():maneuver(Maneuver::Unknown),hasExitAngle(false),hasExitNumber(false),exitAngle(0),exitNumber(0){} };
 const ManeuverInfo& describe(Maneuver::Value maneuver);
 const char* rgb(Color::Value color);
+Scene renderMiniature(const NavigationEvent& event,Rect area);
 Scene renderManeuver(const NavigationEvent& event,Rect area,double margin=2.0);
 Scene renderLanes(const std::vector<Lane>& lanes,Rect area=Rect(0,0,283,40));
 bool finite(double value);

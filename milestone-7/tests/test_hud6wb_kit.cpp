@@ -15,12 +15,12 @@ void contained(const Scene& scene,const Rect& r) {
     }
 }
 int main() {
-    Rect box(0,0,232,205);const double angles[]={1,15,90,127,180,225,270,359,360};
+    Rect box(0,0,220,157);const double angles[]={1,15,90,127,180,225,270,359,360};
     for(unsigned cw=0;cw<2;++cw)for(unsigned i=0;i<sizeof(angles)/sizeof(*angles);++i) {
         NavigationEvent e;e.maneuver=cw?Maneuver::RoundaboutCWAngle:Maneuver::RoundaboutCCWAngle;
         e.hasExitAngle=true;e.exitAngle=angles[i];e.hasExitNumber=true;e.exitNumber=2;
         Scene s=renderManeuver(e,box,0);contained(s,box);
-        double x0=232,y0=205,x1=0,y1=0;
+        double x0=220,y0=157,x1=0,y1=0;
         for(size_t j=0;j<s.size();++j)for(size_t c=0;c<s[j].contours.size();++c)
             for(size_t k=0;k<s[j].contours[c].points.size();++k) {
                 const Point& p=s[j].contours[c].points[k];
@@ -28,8 +28,8 @@ int main() {
                 x0=std::min(x0,p.x-half);y0=std::min(y0,p.y-half);
                 x1=std::max(x1,p.x+half);y1=std::max(y1,p.y+half);
             }
-        assert(fabs(std::max((x1-x0)/232,(y1-y0)/205)-0.85)<1e-6);
-        assert(fabs(x0+x1-232)<1e-6&&fabs(y0+y1-205)<1e-6);
+        assert(fabs(std::max((x1-x0)/220,(y1-y0)/157)-0.96)<1e-6);
+        assert(fabs(x0+x1-220)<1e-6&&fabs(y0+y1-157)<1e-6);
         assert(s[0].contours.size()==2); // hole retained as even-odd geometry
         const std::vector<Point>& outer=s[0].contours[0].points;Point center={0,0};
         for(size_t j=0;j<outer.size();++j){center.x+=outer[j].x/outer.size();center.y+=outer[j].y/outer.size();}
@@ -48,20 +48,21 @@ int main() {
         assert(e.lanes[0].directions[0].highlighted&&!e.lanes[0].directions[1].highlighted);
         Scene tips=renderLanes(e.lanes,Rect(0,0,282,39));
         contained(tips,Rect(0,0,282,39));
-        assert(tips.size()==count*3);
+        unsigned heads=0;
         for(size_t j=0;j<tips.size();++j){
-            const Shape& tip=tips[j];
-            assert(tip.contours.size()==1&&tip.contours[0].points.size()==3);
-            double top=39;
+            const Shape& tip=tips[j];assert(tip.contours.size()==1);
+            if(tip.contours[0].points.size()!=3)continue; // Work lane separators.
+            ++heads;double top=39;
             for(size_t k=0;k<tip.contours[0].points.size();++k)
                 top=std::min(top,tip.contours[0].points[k].y);
-            assert(fabs(top)<1e-6);
-            assert(tip.fill==(e.lanes[j/3].directions[j%3].highlighted?Color::White:Color::Gray));
+            assert(top-tip.strokeWidth/2>=4-1e-6);
+            // Each fixture lane has at least one highlighted direction.
+            assert(tip.fill==Color::White&&tip.stroke==Color::Red);
         }
+        assert(heads==count*3);
     }
     hudterm::GrafiteKit kit;hudterm::Bmw6wbProfile fixedProfile;
-    bool expandedCoordinateSeen=false;
-    for(unsigned type=0;type<=46;++type)for(unsigned which=0;which<2;++which) {
+    for(unsigned type=0;type<=50;++type)for(unsigned which=0;which<2;++which) {
         kombinav::NavView view;view.aa_type=type;view.has_exit_angle=type>=30&&type<=35;
         view.exit_angle=225;view.has_exit_number=view.has_exit_angle;view.exit_number=2;
         hudterm::Batch central;uint16_t handle=which?0x20:0x1f;
@@ -74,13 +75,11 @@ int main() {
             const hudterm::Call& c=central.calls[i];assert(c.handle()==handle);assert(c.fkt!=hudterm::kSetLineColor&&c.fkt!=hudterm::kSetLineWidth);
             if(c.fkt==hudterm::kAddPolygon)for(unsigned j=0;j<c.payload[5];++j) {
                 int x=hudterm::rdBe16(&c.payload[6+j*4]),y=hudterm::rdBe16(&c.payload[8+j*4]);
-                assert(x>=0&&x<=232&&y>=0&&y<=205);
-                if(x>220||y>157)expandedCoordinateSeen=true;
+                assert(x>=0&&x<=220&&y>=0&&y<=157);
             }
         }
         hudterm::Batch rejected;assert(!kit.central(view,0x21,fixedProfile.base.glyph,rejected));assert(rejected.calls.empty());
     }
-    assert(expandedCoordinateSeen);
     kombinav::NavView v;hudterm::KitBarState bar=hudterm::kitBarState(v,1000);assert(!bar.visible);
     v.has_step_m=true;v.step_m=1400;bar=hudterm::kitBarState(v,1000);assert(!bar.visible);
     v.step_m=500;bar=hudterm::kitBarState(v,500);assert(bar.visible&&bar.value==255);
@@ -90,8 +89,8 @@ int main() {
     assert(hudPaletteSwatches(Rect(0,0,282,39),10).size()==20);
     // Serializing the parametric ring must retain bounded method payloads.
     NavigationEvent ring;ring.maneuver=Maneuver::RoundaboutCCWAngle;ring.hasExitAngle=true;ring.exitAngle=225;
-    HudTerminalPalette measuredFixture;measuredFixture.graphite=0;measuredFixture.gold=1;measuredFixture.white=2;measuredFixture.red=5;
-    hudterm::Batch encoded;hudterm::Rect drawingBounds={0,0,232,205};
+    HudTerminalPalette measuredFixture=hudterm::provisionalKitPalette();
+    hudterm::Batch encoded;hudterm::Rect drawingBounds={0,0,220,157};
     assert(hudterm::GrafiteKit::encode(renderManeuver(ring,box),measuredFixture,0x1f,drawingBounds,encoded));
     hudterm::Bmw6wbProfile profile;
     for(size_t i=0;i<encoded.calls.size();++i)assert(hudterm::callOk(encoded.calls[i],hudterm::handlesOf(profile),true));

@@ -22,6 +22,7 @@ CAPTURE = r"""
 
 using namespace nbt::hudterm;
 using namespace nbt::kombinav;
+namespace sixwbkit = nbt::sixwbkit;
 
 class PreviewPort : public Port {
 public:
@@ -50,10 +51,22 @@ int main() {
     Bmw6wbProfile p;
     if (!validProfile(p)) throw std::runtime_error("Invalid 6WB profile");
     PreviewPort port;
-    sixwbkit::HudTerminalPalette colors;colors.graphite=0;colors.gold=1;colors.white=2;colors.gray=3;colors.black=4;
-    GrafiteKit kit(colors,colors);
+    sixwbkit::HudTerminalPalette colors=provisionalKitPalette(),laneColors=colors;
+    laneColors.white=4; // Work's production GrafiteKit lane role.
+    GrafiteKit kit(colors,laneColors); // No constructor diagnostic mixed into JSON.
     Hud6wbDisplay display(port, p, true,kit);
-    std::cout << "{\"handles\":[" << p.base.street << ',' << p.base.distance << ','
+    std::cout << "{\"palette\":{";
+    const sixwbkit::Color::Value roles[]={sixwbkit::Color::Graphite,sixwbkit::Color::Gold,
+        sixwbkit::Color::White,sixwbkit::Color::Red,sixwbkit::Color::ExitWhite};
+    for(unsigned i=0;i<sizeof(roles)/sizeof(*roles);++i) {
+        uint8_t index=0;
+        if(sixwbkit::hudColorIndex(colors,roles[i],index)!=sixwbkit::HudPaint::Mapped)
+            throw std::runtime_error("Unmapped Work colour");
+        if(i)std::cout << ',';
+        std::cout << '\"' << (unsigned)index << "\":\"" << sixwbkit::rgb(roles[i]) << '\"';
+    }
+    std::cout << "},";
+    std::cout << "\"handles\":[" << p.base.street << ',' << p.base.distance << ','
               << p.base.unit << ',' << p.bar << "],\"surfaces\":[";
     size(p.main); std::cout << ','; size(p.lanes); std::cout << ','; size(p.icons);
     std::cout << "],\"scenes\":[";
@@ -247,8 +260,8 @@ function drawSurface(state, spec, x, y) {
     for (const poly of s.polygons) {
         element(poly.filled ? 'polygon' : 'polyline', {
             points:poly.points.map(point => point.join(',')).join(' '),
-            fill:poly.filled ? ['#353b43','#c4a36a','#ffffff','#858d98','#000000'][poly.fill] : 'none',
-            stroke:poly.filled ? 'none' : ['#353b43','#c4a36a','#ffffff','#858d98','#000000'][poly.line],
+            fill:poly.filled ? data.palette[poly.fill] : 'none',
+            stroke:poly.filled ? 'none' : data.palette[poly.line],
             'stroke-width':poly.width, 'stroke-linejoin':'round', 'stroke-linecap':'round'
         }, layer);
     }
@@ -299,7 +312,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     cluster = root / "src" / "cluster"
     sources = [cluster / name for name in (
-        "hud6wb_display.cpp", "hud6wb_artwork.cpp", "hud6wb_codec.cpp", "hud6wa_display.cpp",
+        "hud6wb_display.cpp", "hud6wb_codec.cpp", "hud6wa_display.cpp",
         "hud6wb_kit.cpp", "grafite_oro/artwork6wb.cpp", "grafite_oro/hudterminal_palette.cpp"
     )]
     with tempfile.TemporaryDirectory(prefix="6wb-preview-") as tmp:
