@@ -35,6 +35,10 @@ COMMIT = "0123456789abcdef0123456789abcdef01234567"
 TAG = "test-release"
 VERSION = "2.3.4"
 PUBLISHED = "2030-01-02T23:59:58Z"
+SETTING_KEYS = ["NBT_KOMBI_NAV", "NBT_KOMBI_NAV_APPROACH", "NBT_NO_LOG", "NBT_SPEECH_BT", "NBT_USB", "NBT_PHONE_GPS",
+                "NBT_ALT_WIFI", "NBT_AUDIO_MODE", "NBT_LCI_MEDIA", "NBT_CP_COMPAT"]
+# The iDrive app reads nbt-aad.env a line at a time into 160 bytes: 159 characters and the newline.
+ENV_LINE_MAX = 159
 
 
 def setUpModule():
@@ -196,6 +200,11 @@ class HappyPath(Base):
                       {"src": "payload/plugin/", "dest": "${plugins}/NbtAad/", "mode": "0644"}],
             "serialServices": [{"name": "AndroidAuto", "program": "nbt-aad"}],
             "reboot": "hmi-restart"})
+        self.assertEqual(manifest["logs"], [{"path": "/dev/shmem/nbt-aad.log"}, {"path": "/dev/shmem/nbt-aad-app.log"},
+                                            {"path": "/dev/shmem/nbt-aad-pf_aa.out"}])
+        self.assertEqual(manifest["requires"], {"agent": ">1.4.1"})
+        self.assertEqual(manifest["settings"]["file"], "${data}/nbt-aad.env")
+        self.assertEqual([o["key"] for o in manifest["settings"]["options"]], SETTING_KEYS)
         self.assertEqual(sorted(c["path"] for c in manifest["contents"]),
                          sorted(["LICENSE.md", "payload/nbt-aad"] + ["payload/plugin/" + n for n in mk.PLUGIN_FILES]))
 
@@ -668,6 +677,31 @@ class Parts(Base):
         with open(path, "w") as f:
             f.write('{"id": "a", "id": "b"}')
         self.refuses("twice", mk.package_manifest, nbt, VERSION, path)
+
+    def test_settings(self):
+        """Every line NBTApps can write to nbt-aad.env fits the iDrive app's reader, and names a setting it reads."""
+        with open(mk.TEMPLATE, "rb") as f:
+            settings = json.loads(f.read())["settings"]
+        sources = []
+        for folder in ("src", "rhmiapp"):
+            for d, _, names in os.walk(os.path.join(mk.REPO_ROOT, "milestone-7", folder)):
+                for n in names:
+                    if n.endswith((".cpp", ".hpp", ".h")):
+                        with open(os.path.join(d, n), encoding="utf-8", errors="replace") as f:
+                            sources.append(f.read())
+        sources = "\n".join(sources)
+        for option in settings["options"]:
+            key = option["key"]
+            if option["type"] == "bool":
+                longest = 1
+            elif option["type"] == "int":
+                longest = max(len(str(option["min"])), len(str(option["max"])))
+            elif option["type"] == "select":
+                longest = max(len(v["value"].encode("utf-8")) for v in option["values"])
+            else:
+                longest = option["maxLength"]
+            self.assertLessEqual(len(key) + 1 + longest, ENV_LINE_MAX, key)
+            self.assertTrue('"%s"' % key in sources or '"%s=' % key in sources, key + " is read nowhere")
 
     def test_released_date(self):
         self.assertEqual(mk.released_date("2030-12-31T23:59:59Z"), "2030-12-31")
