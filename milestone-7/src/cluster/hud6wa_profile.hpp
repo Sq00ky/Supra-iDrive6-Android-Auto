@@ -118,6 +118,26 @@ inline void applyHudEnv(HudProfile& p) {
     if (f && *f) p.fill = (uint8_t)atoi(f);
 }
 
+// The cluster's own picture-buffer size (ImageGetSize on bufA, asked at the HUD's start) -> canvas and glyph box, so a
+// cluster with another buffer needs no hand-measured profile. canvas = the whole buffer; glyph = a box centred in it,
+// half the width and 0.78 the height (the arrow proportions the F20 showed). The arithmetic reproduces the k6wa
+// defaults exactly at the measured 126x77 (glyph 31,8-94,68), and scales for any other buffer. A field pinned by env
+// (NBT_HUD_CANVAS / NBT_HUD_GLYPH) is left as applyHudEnv set it; a size of 0 (an instance not created yet) changes
+// nothing. Same idea as the carplay-advanced measureBox that fits that plugin's box on any cluster.
+inline void fitMeasured(int w, int h, HudProfile& p) {
+    if (w <= 0 || h <= 0) return;
+    if (!getenv("NBT_HUD_CANVAS")) {
+        p.canvas.x0 = 0; p.canvas.y0 = 0;
+        p.canvas.x1 = (int16_t)(w - 1); p.canvas.y1 = (int16_t)(h - 1);
+    }
+    if (!getenv("NBT_HUD_GLYPH")) {
+        int gw = w / 2, gh = h * 78 / 100;
+        int x0 = (w - gw) / 2, y0 = (h - gh) / 2;
+        p.glyph.x0 = (int16_t)x0;        p.glyph.y0 = (int16_t)y0;
+        p.glyph.x1 = (int16_t)(x0 + gw); p.glyph.y1 = (int16_t)(y0 + gh);
+    }
+}
+
 } // namespace hudterm
 } // namespace nbt
 

@@ -58,9 +58,9 @@ void addItems(Batch& b, uint16_t h, const Picture& pic) {
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
     : port_(port), p_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
-      redraw_(false), held_(false), visible_(p.bufB), epoch_(0), has_layout_(false), near_(false), near_shown_(false),
-      near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB), route_dirty_(false), lane_visible_(p.laneB),
-      lanes_dirty_(false) {}
+      redraw_(false), held_(false), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), has_layout_(false),
+      near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
+      route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false) {}
 
 void Hud6waDisplay::log(const char* fmt, ...) {
     char buf[320];
@@ -78,6 +78,22 @@ ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
     Status st = port_.status();
     if (st == kFailed) return kRejected;
     if (st == kOffline) return kLink;
+    // The cluster's own picture-buffer size, once the terminal has it: fit canvas and glyph to it (env pins still win),
+    // so no cluster needs a hand-measured profile. On our F30 the fit equals the k6wa defaults, so nothing moves.
+    int mw, mh;
+    if (port_.measuredSize(mw, mh) && (mw != measured_w_ || mh != measured_h_)) {
+        fitMeasured(mw, mh, p_);
+        measured_w_ = mw;
+        measured_h_ = mh;
+        log("HUD picture buffer measured %dx%d: canvas %d,%d-%d,%d glyph %d,%d-%d,%d", mw, mh, p_.canvas.x0, p_.canvas.y0,
+            p_.canvas.x1, p_.canvas.y1, p_.glyph.x0, p_.glyph.y0, p_.glyph.x1, p_.glyph.y1);
+        if (sent_any_ && !shadow_ && !redraw_) {   // something is up at the old geometry: draw it again, fitted
+            redraw_ = true;
+            fresh_ = true;
+            stage_shown_ = 0;
+            if (lanes_dirty_ || !lanes_shown_.empty()) { lanes_shown_.clear(); lanes_dirty_ = true; }
+        }
+    }
     if (st == kReady && sent_any_ && !shadow_ && e != epoch_ && !redraw_) {
         log("the cluster may have lost what we drew: drawing it again");
         redraw_ = true;

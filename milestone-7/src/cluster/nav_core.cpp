@@ -427,13 +427,15 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
             printf("[KombiNav] NBT_HUDTERM=%s unknown (log, on): shadow mode, nothing is sent\n", h);
         hudterm::HudProfile p = hudterm::k6wa;   // a copy: env can retune the box on the car without a rebuild
         hudterm::applyHudEnv(p);
-        printf("[KombiNav] HUD 6wa: canvas %d,%d-%d,%d glyph %d,%d-%d,%d fill %u (NBT_HUD_CANVAS/GLYPH/FILL to tune)\n",
+        printf("[KombiNav] HUD 6wa: start canvas %d,%d-%d,%d glyph %d,%d-%d,%d fill %u (fitted to the cluster's own "
+               "picture buffer at start; NBT_HUD_CANVAS/GLYPH/FILL pin it)\n",
                p.canvas.x0, p.canvas.y0, p.canvas.x1, p.canvas.y1,
                p.glyph.x0, p.glyph.y0, p.glyph.x1, p.glyph.y1, (unsigned)p.fill);
         hudterm::Config c;
         c.handles = hudterm::handlesOf(p);
         c.navFrame = p.frame;
         c.logBatches = !shadow_;
+        c.measureHandle = shadow_ ? 0 : p.bufA;   // ask the buffer's real size once ready; the display fits the box to it
         terminal_ = new hudterm::HudTerminal(c);   // never deleted before exit once attached: the client calls it
         if (!terminal_->attach(*most, !shadow_) || !terminal_->start()) {
             printf("[KombiNav] cannot attach the HUDTerminal to the MOST client: cluster arrows disabled\n");

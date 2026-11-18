@@ -71,7 +71,10 @@ struct Config {
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false) {}
+    uint16_t measureHandle;  // ImageGetSize is asked for this handle once the terminal is ready, for the driver to fit
+                             // its box to the cluster's real buffer (0 = don't; the shadow mode leaves it 0)
+    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false),
+               measureHandle(0) {}
 };
 
 // What a batch draws: its own slot's waiting batch is the only one it may take the place of or merge into.
@@ -124,6 +127,8 @@ public:
     bool waiting(int slot) const;
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
     uint16_t host() const { return host_; }
+    // The cluster's answer to the measureHandle ImageGetSize, once it has arrived; false until then.
+    bool measuredSize(int& w, int& h) const;
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
     // A status change since the last call, for the listener.
@@ -162,6 +167,14 @@ private:
     uint32_t tag_;
     uint32_t epoch_;
     TerminalStats stats_;
+
+    // The one-shot picture-buffer measurement (cfg_.measureHandle). Sent outside the batch queue and not tracked in
+    // inFlight_, so no answer keeps the defaults instead of failing the terminal.
+    bool measureDue_;        // ready, not yet asked this ready-session
+    bool measureInFlight_;   // asked, waiting for the answer
+    uint32_t measureSentMs_;
+    bool haveSize_;
+    int sizeW_, sizeH_;
 };
 
 // What a HUDTerminal cluster driver needs from the transport: HudTerminal, or a test's fake.
@@ -177,6 +190,9 @@ public:
     virtual void reset() = 0;                     // leave kFailed
     // Until everything submitted is answered: true then; false on the timeout or once the status leaves kReady.
     virtual bool waitIdle(uint32_t ms) = 0;
+    // The cluster's picture-buffer size (ImageGetSize), once it has arrived; false until then, or when the transport
+    // does not measure. A driver fits its box to it. Default false: a test fake need not implement it.
+    virtual bool measuredSize(int& w, int& h) const { (void)w; (void)h; return false; }
 };
 
 // A Core on its own thread. attach() before the client's start(). The listener runs on the terminal's thread with no
@@ -203,6 +219,7 @@ public:
     uint32_t epoch() const;
     bool waiting(int slot) const;
     bool waitIdle(uint32_t ms);
+    bool measuredSize(int& w, int& h) const;
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop
 

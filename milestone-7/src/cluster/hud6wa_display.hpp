@@ -125,6 +125,7 @@ private:
     bool held_;              // a maneuver waits for the transport's queue: draw it on the next step
     uint16_t visible_;       // the buffer on show
     uint32_t epoch_;         // the terminal's epoch when our last picture was queued
+    int measured_w_, measured_h_;   // the picture-buffer size last fitted into p_ (0 = still on the profile defaults)
     HudTexts shown_;         // the texts last queued
 
     // the junction view of the maneuver shown
