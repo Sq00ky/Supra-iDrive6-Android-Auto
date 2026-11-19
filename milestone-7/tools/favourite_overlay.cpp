@@ -115,12 +115,26 @@ int favouriteOverlayRun(int argc,char** argv) {
  printf("[Favourites] reading surface %d\n", aa);
  int arc=lmCapture(aaArgs,"/dev/shmem/nbt-aa-lm-aa.txt",grey,sizeof(grey));
  printf("[Favourites] surface %d read rc=%d\n", aa, arc);
+ // Any "x=N, y=N" pair will do, and the largest one wins: `get surface` does not necessarily label it
+ // "original size" the way `get layer` does, and a strict label match left the thread dead in setup.
  for(char* sp=grey; sp&&*sp; ) {
   char* nl=strchr(sp,'\n'); if(nl)*nl=0;
-  char* k=strstr(sp,"original size:"); if(k)sscanf(k,"original size: x=%d, y=%d",&w,&h);
+  int px=0,py=0;
+  if(sscanf(sp,"%*[^x]x=%d, y=%d",&px,&py)==2 || (strstr(sp,"x=")&&sscanf(strstr(sp,"x="),"x=%d, y=%d",&px,&py)==2)) {
+   if(px>w&&px<=4096&&py>0&&py<=2048){w=px;h=py;}
+  }
   sp = nl ? nl+1 : NULL;
  }
- if(w<=0||h<=0||w>4096||h>2048) {printf("[Favourites] no valid panel size from surface %d\n", aa);return 1;}
+ if(w<=0||h<=0) {
+  const char* pv=getenv("NBT_FAVOURITE_PANEL");
+  if(pv&&sscanf(pv,"%dx%d",&w,&h)==2) printf("[Favourites] panel from NBT_FAVOURITE_PANEL: %dx%d\n",w,h);
+ }
+ if(w<=0||h<=0) {
+  printf("[Favourites] no panel size parsed; using 1280x480. lm output was [%s]\n",
+         grey[0]?grey:"(empty)");
+  w=1280;h=480;
+ }
+ if(w>4096||h>2048||h<240) {printf("[Favourites] panel %dx%d is not sane; staying out\n",w,h);return 1;}
  const char* ownArgs[]={L,"get","surface","1283",NULL};
  if(lmCapture(ownArgs,"/dev/shmem/nbt-aa-lm-1283.txt",grey,sizeof(grey))==0) {
   for(char* sp=grey; sp&&*sp; ) {
