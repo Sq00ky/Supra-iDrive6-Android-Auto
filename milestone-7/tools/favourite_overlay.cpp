@@ -103,9 +103,9 @@ int favouriteOverlayRun(int argc,char** argv) {
   printf("strip dimensions failed errno=%d\n",errno);screen_destroy_window(win);screen_destroy_context(ctx);return 1;
  }
  screen_set_window_property_iv(win,SCREEN_PROPERTY_POSITION,pos);
- // Two buffers: a swipe between keys repaints into the back buffer and posts it, so the surface never has to
- // be hidden and shown again (that hide/show was the flash between presses).
- if(screen_create_window_buffers(win,2)) {printf("buffers failed %d\n",errno);screen_destroy_context(ctx);return 1;}
+ // One buffer, as in the build that displayed: the flash is fixed by not hiding between keys, not by
+ // double buffering (the second buffer was NULL on this unit, which made every post fail silently).
+ if(screen_create_window_buffers(win,1)) {printf("buffers failed %d\n",errno);screen_destroy_context(ctx);return 1;}
  int bs[2]={0,0},ws[2]={0,0},ss[2]={0,0};
  int br=screen_get_window_property_iv(win,bufferSize,bs);
  int wr=screen_get_window_property_iv(win,windowSize,ws);
@@ -119,11 +119,8 @@ int favouriteOverlayRun(int argc,char** argv) {
  if(buffers[0])screen_get_buffer_property_pv(buffers[0],SCREEN_PROPERTY_POINTER,&pixels[0]);
  if(buffers[1])screen_get_buffer_property_pv(buffers[1],SCREEN_PROPERTY_POINTER,&pixels[1]);
  if(!pixels[0]) {puts("no buffer pointers");screen_destroy_context(ctx);return 1;}
- // Only alternate between buffers when the hardware actually gave us a second one. Posting to a NULL
- // buffer fails silently, which is exactly how the previous build showed nothing at all.
- const bool dual = (buffers[1] != 0 && pixels[1] != 0);
  if(!pixels[1]) pixels[1]=pixels[0];
- printf("strip buffers: dual=%d (%p, %p)\n", (int)dual, buffers[0], buffers[1]);
+ printf("strip buffers: single (%p), strip %dx%d top=%d\n", buffers[0], w, h, bar);
  int cur=0;
  int rect[4]={0,0,w,h};memset(pixels[0],0,(size_t)w*h*4);
  screen_post_window(win,buffers[0],1,rect,0);usleep(150000);
@@ -180,7 +177,7 @@ int favouriteOverlayRun(int argc,char** argv) {
   if(shown&&requested>0&&shownButton!=requested) {
    // Swipe to another key: paint the next strip into the back buffer and post it, keeping the surface visible.
    if(!buttonCache[requested-1].empty()) {
-    const int n=dual?1-cur:0;
+    const int n=0;
     nbt::renderFavouriteColour((uint32_t*)pixels[n],&buttonCache[requested-1][0],(size_t)w*bar,rgb);
     if(screen_post_window(win,buffers[n],1,rect,0)==0) {
      cur=n;shownButton=requested;lastNative=buttonCache[requested-1];paintedRGB=rgb;
@@ -194,7 +191,7 @@ int favouriteOverlayRun(int argc,char** argv) {
    printf("[Colour] mode=%d RGB=%06X ambient scheme=%u hue=%u\n",colourMode,(unsigned)rgb,ambientColour.scheme,ambientColour.hue);
   }
   if(!shown&&requested>0&&!buttonCache[requested-1].empty()&&!compatibility) {
-   const int n=dual?1-cur:0;
+   const int n=0;
    nbt::renderFavouriteColour((uint32_t*)pixels[n],&buttonCache[requested-1][0],(size_t)w*bar,rgb);
    State latest=state();
    if(armed(latest)&&barEnabled&&screen_post_window(win,buffers[n],1,rect,0)==0) {
@@ -230,7 +227,7 @@ int favouriteOverlayRun(int argc,char** argv) {
   unlink(capture);
   const char* captureArgs[]={L,"dump","surface","256","to",capture,NULL};
   unsigned long ct=ms(); int result=lmCommand(captureArgs); printf("TIMING %lu capture rc=%d duration=%lu\n",ms(),result,ms()-ct);FILE* bmp=result==0?fopen(capture,"rb"):NULL;
-  const int n=dual?1-cur:0;bool ok=bmp&&nbt::favouriteBitmap(bmp,&decoded[0],w,h,bar,w,bar);if(bmp)fclose(bmp);
+  const int n=0;bool ok=bmp&&nbt::favouriteBitmap(bmp,&decoded[0],w,h,bar,w,bar);if(bmp)fclose(bmp);
   bool pressCapture=pressBudget!=0;
   if(pressBudget&&--pressBudget==0){refreshDone=true;puts("press capture budget exhausted; valid cache retained until next press/touch");}
   // Recheck after capture: never show stale labels over a camera or after release.
@@ -247,7 +244,9 @@ int favouriteOverlayRun(int argc,char** argv) {
    // Validate in CPU memory before touching the sole displayed buffer. In
    // particular, a rejected app-header capture cannot overwrite a cached label.
    nbt::renderFavouriteColour((uint32_t*)pixels[n],&decoded[0],(size_t)w*bar,rgb);
-   if(screen_post_window(win,buffers[n],1,rect,0)==0) {cur=n;if(!shown) {if(compatibility)order(true,aa);else ownVisibility(true);puts("live native strip shown");}shown=true;shownButton=requested;cached=true;
+   int prc=screen_post_window(win,buffers[n],1,rect,0);
+   if(prc) printf("[Favourites] strip post failed rc=%d errno=%d\n", prc, errno);
+   if(prc==0) {if(!shown) {if(compatibility)order(true,aa);else ownVisibility(true);puts("live native strip shown");}shown=true;shownButton=requested;cached=true;
     lastNative=decoded;paintedRGB=rgb;
     // A validated post-press snapshot replaces the cached checkmark immediately;
     // this path deliberately takes only one capture, not a settling pair.
