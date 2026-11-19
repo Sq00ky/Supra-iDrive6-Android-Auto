@@ -51,14 +51,14 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          324: "Android Auto: no Wi-Fi Direct, use USB",
          325: "Android Auto: no CarPlay network, using Wi-Fi Direct",
          326: "Waiting for phone on CarPlay Wi-Fi",
-         327: "Waiting for phone on Wi-Fi Direct",
+         327: "No CarPlay: use Wi-Fi Direct",
          328: "No CarPlay or Wi-Fi Direct: use USB",
          329: "Connected over Wi-Fi",
          330: "Connected over USB",
          331: "Connecting to the phone...",
          332: "Waiting for phone over USB",
          333: "Waiting for phone on CarPlay Wi-Fi",
-         334: "Waiting for phone on Wi-Fi Direct",
+         334: "No CarPlay: use Wi-Fi Direct",
 
 
          44: "CarPlay compatibility",   # 44 = CarPlay compatibility checkbox (rhmiapp-54-cpcompat)
