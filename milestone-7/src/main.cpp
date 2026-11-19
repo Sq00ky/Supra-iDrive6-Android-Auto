@@ -169,7 +169,7 @@ static nbt::car::FavouritePreview g_favouritePreview;
 static volatile sig_atomic_t g_favouritePeek = 0;
 static volatile sig_atomic_t g_favouriteTouchMask = 0;
 static volatile sig_atomic_t g_favouriteInputSerial = 0;
-static volatile sig_atomic_t g_mainWake = 0;
+static volatile sig_atomic_t g_mainWake = 0;   // cuts the main loop's 250 ms sleep short
 // The Settings toggle (rhmiapp-87): the plugin writes /var/opt/aa/favourite-bar.disabled. Checked here, per
 // frame, so the switch works without restarting the daemon (the env only forces the capturer off).
 static const char* const kFavouriteOffFile = "/var/opt/aa/favourite-bar.disabled";
@@ -264,7 +264,6 @@ static volatile int g_driveMode = -1;              // last valid mode (-1 = none
 static volatile uint32_t g_dmPeekUntil = 0;        // upMs() until which iDrive keeps the screen (0 = never set)
 static volatile uint32_t g_dmPeekFrom = 0;         // upMs() from which it does (change + NBT_DRIVEMODE_DELAY_MS)
 static volatile sig_atomic_t g_dmShown = 0;        // main loop: currently stepped aside for it
-static volatile sig_atomic_t g_mainWake = 0;       // cuts the main loop's 250 ms sleep short (driving-mode change)
 static bool showDriveModeOn() { return nbt::flagSet(kDriveModeFlag); }
 static int driveModeShowMs() {
     const char* e = getenv("NBT_DRIVEMODE_SHOW_MS");
