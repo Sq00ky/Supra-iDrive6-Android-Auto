@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-95-favourite (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-96-radio (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
