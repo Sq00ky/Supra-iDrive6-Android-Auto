@@ -43,7 +43,9 @@ struct FakePort : public Port {
     int resets;
     Status afterReset;
     std::vector<Batch> batches;
-    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady) {}
+    int mw, mh;              // the picture buffer's size once "measured" (ImageGetSize); 0 = no answer
+    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady), mw(0),
+                 mh(0) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
         for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(k6wa)));
@@ -56,6 +58,7 @@ struct FakePort : public Port {
     bool waiting(int) const { return wait; }
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
+    bool measuredSize(int& w, int& h) const { if (!mw) return false; w = mw; h = mh; return true; }
 };
 
 static std::vector<std::string> g_log;
@@ -518,6 +521,7 @@ static void testJunctionGeometry() {
                     continue;
                 }
                 assert(has && L.maxTail >= 8 && !L.roads.empty());
+                assert(junctionFits(L, k6wa.canvas, Hud6waDisplay::kStages));   // the display's guard agrees
                 ++views;
                 Picture roads;
                 drawRoads(L, c, kJunctionStyle, roads);
@@ -667,6 +671,49 @@ static size_t fills(const Batch& b) {
 // The near stage through the driver: the arrow first, the junction view (roads in 5/6, route in 7/8) at the main
 // prompt, the route's stages on the way in, held while a route waits, all drawn again after lost work, the route
 // emptied for the next maneuver's arrow, and the clear putting 7/8 back.
+// The display's guard (cluster/hudterm_junction.hpp junctionFits) where the junction, drawn at the F20's size, does not
+// fit: the F30's 126x77 HUD buffer. Near a maneuver whose arrowhead would leave it the display keeps the plain arrow
+// (and says so) instead of a junction view with its way cut off; and a buffer measured while a junction view is up
+// drops that view, laid out for the old field, rather than drawing it into the new one. On the F20 profile every view
+// fits (testJunctionGeometry).
+static void testJunctionFits() {
+    HudProfile small = k6wa;
+    fitMeasured(126, 77, small);
+    int fits = 0, cut = 0, cutType = -1, cutAngle = 0;
+    for (int t = 0; t <= 60; ++t)
+        for (int a = 0; a <= 360; a += 45) {
+            Layout L;
+            if (!junctionLayout(t, true, a, false, 0, small.glyph, small.canvas.y1, L)) continue;
+            if (junctionFits(L, small.canvas, Hud6waDisplay::kStages)) { ++fits; continue; }
+            if (cutType < 0) { cutType = t; cutAngle = a; }
+            ++cut;
+        }
+    assert(cut > 0);
+
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, small, false);
+    d.setLog(&logFn, NULL);
+    NavView v = timed(cutType, "Testroad", "300", 7, 280, 19);    // near: the junction view would be due
+    v.has_exit_angle = true;
+    v.exit_angle = cutAngle;
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(!d.nearShown() && logged("junction view would leave the 126x77 picture buffer"));
+
+    g_log.clear();
+    FakePort port2;
+    Hud6waDisplay d2(port2, k6wa, false);
+    d2.setLog(&logFn, NULL);
+    NavView w = timed(8, "Testroad", "300", 7, 280, 19);
+    assert(d2.showManeuver(w, 0, true, true) == ClusterDisplay::kOk && d2.nearShown());   // the F20 field: it fits
+    port2.mw = 126;                                                         // the terminal answers ImageGetSize
+    port2.mh = 77;
+    assert(d2.showManeuver(w, 1, false, false) == ClusterDisplay::kOk);   // whose health check takes the measure
+    assert(logged("HUD picture buffer measured 126x77") && !d2.nearShown());
+    printf("  junctionFits on 126x77: %d fit, %d plain arrow (first type %d angle %d); a re-measure drops the view\n",
+           fits, cut, cutType, cutAngle);
+}
+
 static void testJunctionDriver() {
     g_log.clear();
     FakePort port;
@@ -1115,6 +1162,7 @@ int main() {
     testDigits();
     testLanes();
     testJunctionDriver();
+    testJunctionFits();
     testJunctionNoOverlay();
     testJunctionLanes();
     testJunctionCore();

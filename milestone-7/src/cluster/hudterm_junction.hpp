@@ -302,6 +302,22 @@ inline int tailFor(const Layout& L, int stage, int stages) {
     return L.maxTail * stage / stages;
 }
 
+// Does the junction view show its way on this canvas? The route's arrowhead (thickPath's outline runs left edge, wing,
+// tip, wing, right edge) must be on it at every stage: the rule test_hud6wa's testJunctionGeometry checks for the F20
+// profile. A smaller buffer (the F30's 126x77 HUD) fails it for some maneuvers, as the junction is drawn at the F20's
+// size; the display then draws the plain arrow, so a view with its way cut off never reaches the cluster.
+inline bool junctionFits(const Layout& L, const Rect& canvas, int stages) {
+    const JunctionColours c = { 0, 0, 0 };
+    for (int st = 1; st <= stages; ++st) {
+        Picture r;
+        drawRoute(L, tailFor(L, st, stages), c, kJunctionStyle, r);
+        if (r.size() < 2 || r[1].poly.pts.size() < 3) return false;
+        const Point& tip = r[1].poly.pts[(r[1].poly.pts.size() - 3) / 2 + 1];
+        if (tip.x < canvas.x0 || tip.x > canvas.x1 || tip.y < canvas.y0 || tip.y > canvas.y1) return false;
+    }
+    return true;
+}
+
 // ---- lanes ----------------------------------------------------------------------------------------------------------
 
 enum { kLaneStroke = 6, kLaneHeadL = 8, kLaneHeadW = 6, kLanePitch = 18, kLaneMargin = 10, kLaneMaxArrows = 24 };

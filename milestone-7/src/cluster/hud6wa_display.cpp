@@ -89,6 +89,7 @@ ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
     int mw, mh;
     if (port_.measuredSize(mw, mh) && (mw != measured_w_ || mh != measured_h_)) {
         fitMeasured(mw, mh, p_);
+        has_layout_ = false;   // laid out for the old buffer: the next maneuver lays out (and checks) on this one
         measured_w_ = mw;
         measured_h_ = mh;
         log("HUD picture buffer measured %dx%d: canvas %d,%d-%d,%d glyph %d,%d-%d,%d", mw, mh, p_.canvas.x0, p_.canvas.y0,
@@ -249,6 +250,11 @@ bool Hud6waDisplay::nearDue(const NavView& v, double* m) const {
 void Hud6waDisplay::startManeuver(const NavView& v) {
     has_layout_ = s_.junction && junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
                                                 v.exit_number, p_.glyph, p_.canvas.y1, layout_);
+    if (has_layout_ && !junctionFits(layout_, p_.canvas, kStages)) {   // its way would be cut off on this buffer
+        has_layout_ = false;
+        log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
+            p_.canvas.x1 - p_.canvas.x0 + 1, p_.canvas.y1 - p_.canvas.y0 + 1);
+    }
     near_ = false;
     near_m_ = 0;
     stage_ = 0;
