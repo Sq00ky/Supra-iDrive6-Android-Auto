@@ -1,8 +1,9 @@
 # Mapbox maneuver glyphs on the 6WA HUD
 
 Draw the polished Mapbox maneuver glyphs on the cluster HUD instead of the parametric shapes
-(`hudterm_shapes.hpp` `drawShape`). On by default; `NBT_HUD_GLYPHS=0` in `nbt-aad.env` falls back
-to the parametric shapes (to compare on the car). Car-verified on the F30 6WA cluster, 18.11.2026.
+(`hudterm_shapes.hpp` `drawShape`). Opt-in: `NBT_HUD_GLYPHS=1` (or `on` / `yes` / `true`) in `nbt-aad.env`
+draws them; unset or `0` / `off` keeps the parametric shapes, the default look. Car-verified on the F30 6WA cluster,
+18.11.2026.
 
 ## Files
 

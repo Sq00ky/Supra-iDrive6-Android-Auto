@@ -11,6 +11,7 @@
 //     sends to 82/00
 // Every road name and distance here is invented.
 #include "cluster/nav_core.hpp"
+#include "cluster/mapbox_hud.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <algorithm>
@@ -567,6 +568,30 @@ static void testJunctionGeometry() {
     }
 }
 
+// Mapbox glyphs (cluster/mapbox_hud.hpp) are opt-in: unset or off draws the parametric shapes the tests above count;
+// on, every maneuver they have a picture for comes as valid convex pieces near the canvas.
+static void testMapboxGlyphs() {
+    Picture none;
+    unsetenv("NBT_HUD_GLYPHS");
+    assert(!mbxManeuver(shapeFor(8, false, 0), k6wa, none) && none.empty());   // default: the parametric shape
+    setenv("NBT_HUD_GLYPHS", "off", 1);
+    assert(!mbxManeuver(shapeFor(8, false, 0), k6wa, none) && none.empty());
+    setenv("NBT_HUD_GLYPHS", "1", 1);
+    int drawn = 0;
+    for (int t = 0; t <= 60; ++t)
+        for (int a = 0; a <= 360; a += 90) {
+            Picture pic;
+            if (!mbxManeuver(shapeFor(t, true, a), k6wa, pic)) continue;
+            char what[48];
+            snprintf(what, sizeof(what), "glyph type %d angle %d", t, a);
+            checkPicture(pic, what);
+            ++drawn;
+        }
+    unsetenv("NBT_HUD_GLYPHS");
+    assert(drawn > 0);
+    printf("  Mapbox glyphs: opt-in, %d pictures valid\n", drawn);
+}
+
 static void testDigits() {
     for (int n = 0; n <= 9; ++n) {
         Shape s;
@@ -1086,6 +1111,7 @@ int main() {
     testHold();
     testRemind();
     testJunctionGeometry();
+    testMapboxGlyphs();
     testDigits();
     testLanes();
     testJunctionDriver();

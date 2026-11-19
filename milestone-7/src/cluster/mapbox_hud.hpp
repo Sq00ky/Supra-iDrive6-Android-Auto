@@ -9,10 +9,12 @@
 // one (left variants are the right glyph mirrored). Families with no static glyph (roundabouts) return false and the
 // caller falls back to the parametric shape; ferry/unknown fold to the straight glyph via kombiDirection.
 //
-// On by default; NBT_HUD_GLYPHS=0 in nbt-aad.env falls back to the parametric shapes (to compare on the car).
+// Opt-in: NBT_HUD_GLYPHS=1 (on / yes / true) in nbt-aad.env draws these; unset or off keeps the parametric shapes, the
+// default look on every 6WA.
 #ifndef CLUSTER_MAPBOX_HUD_HPP
 #define CLUSTER_MAPBOX_HUD_HPP
 
+#include "nbt_env.hpp"                    // envFlag
 #include "cluster/mapbox_glyphs.hpp"      // mbx::Piece + the glyph tables
 #include "cluster/hudterm_junction.hpp"   // Item, Picture
 #include "cluster/hud6wa_profile.hpp"     // HudProfile (fill, road, glyph)
@@ -138,8 +140,7 @@ inline void mbxRoundabout(int exit, bool clockwise, const HudProfile& prof, Pict
 }
 
 inline bool mbxEnabled() {
-    const char* e = getenv("NBT_HUD_GLYPHS");
-    return !(e && e[0] == '0');   // on by default
+    return nbt::envFlag("NBT_HUD_GLYPHS") == 1;   // opt-in: unset, off / no / false keep the parametric shapes
 }
 
 // Draw the maneuver as a Mapbox picture (static glyph or the roundabout). Returns false (nothing appended) when there is
