@@ -43,8 +43,12 @@ with tempfile.TemporaryDirectory(prefix='nbt-update-test-') as tmp:
         return p
     update = 'favourites-update.sh'
     run(update, '--check')
+    # 1280x480 is the Supra panel and is supported (rhmiapp-98); an unknown panel is still refused and the
+    # message names the sizes that do work.
     lm.write_text('#!/bin/sh\necho "original size: x=1280, y=480"\n')
-    assert '1440x540' in run(update, '--check', ok=False).stderr
+    run(update, '--check')
+    lm.write_text('#!/bin/sh\necho "original size: x=1024, y=600"\n')
+    assert '1280x480' in run(update, '--check', ok=False).stderr
     lm.write_text('#!/bin/sh\necho "original size: x=1440, y=540"\n')
     (package / 'nbt-aad').write_text('corrupt')
     assert 'Checksum mismatch' in run(update, '--check', ok=False).stderr
