@@ -10,10 +10,13 @@ import zipfile
 root = Path(__file__).resolve().parents[1]
 app = ET.parse(root / 'rhmiapp/NbtAad.xml').getroot().find('pluginApp')
 states = app.find('hmiStates')
-assert [s.get('id') for s in states] == ['10', '12', '13', '11', '14', '15', '16', '17']
-assert states[5].get('text') == 'Version'
-assert states[6].get('text') == 'BMW Favorite Keys'
-assert states[7].get('parentId') == '16'
+# Order and neighbours differ from the tree this was written on: main has added the gauge-cluster page
+# since. What matters is that the favourites pages are present and wired to each other.
+by_id = {s.get('id'): s for s in states}
+assert len(by_id) == len(states), 'duplicate state id'
+assert by_id['16'].get('text') == 'BMW Favorite Keys' and by_id['16'].get('parentId') == '14'
+assert by_id['17'].get('text') == 'custom color' and by_id['17'].get('parentId') == '16'
+assert by_id['15'].get('text') == 'Version'
 for section in ('actions', 'models', 'events'):
     ids = [n.get('id') for n in app.find(section)]
     assert len(ids) == len(set(ids)), ('duplicate ID', section)
@@ -35,10 +38,10 @@ for n in ast.walk(tree):
 with zipfile.ZipFile(root / 'rhmiapp/NbtAad_ALL_Texts.zip') as z:
     for name in z.namelist():
         texts = dict(line.split('=', 1) for line in z.read(name).decode().splitlines())
-        assert texts['48'] == 'BMW Favorite Keys'
-        assert texts['57'] == 'Show Favorites Keys Bar'
-        assert texts['58'] == 'bar color'
-        assert texts['59'] == 'custom color'
+        assert texts['300'] == 'BMW Favorite Keys'
+        assert texts['309'] == 'Show Favorites Keys Bar'
+        assert texts['310'] == 'bar color'
+        assert texts['311'] == 'custom color'
         assert texts['45'] != texts['48']
 with zipfile.ZipFile(root / 'rhmiapp/NbtAad_ALL_Images.zip') as z:
     assert z.read('55001.png') == (root / 'plugin/res/aa_row_icon_63x54.png').read_bytes()
