@@ -46,7 +46,7 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          44: "CarPlay compatibility",   # 44 = CarPlay compatibility checkbox (rhmiapp-54-cpcompat)
          300: "BMW Favorite Keys", 301: "BMW default orange", 302: "Match ambient lighting",
          303: "Bronze", 304: "White", 305: "Orange", 306: "Blue", 307: "Green", 308: "Lilac",
-         309: "Show Favorites Keys Bar", 310: "bar color", 311: "custom color",
+         309: "Show Favorites Keys Bar", 310: "bar color",
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).
 LANG_TEXTS = {

@@ -11,7 +11,6 @@
 #include "screen_video.h"
 #include "volume.hpp"
 #include "volume_glyphs.hpp"
-#include "favourite_colour.hpp"
 
 #include <errno.h>
 #include <stdio.h>
@@ -47,11 +46,10 @@ inline uint32_t rgba(int r, int g, int b, int a) {
     return ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
 }
 
-// Shared colour preference; volume percentage controls length only.
+// The volume percentage controls length only. The colour is fixed BMW orange and deliberately NOT tied to
+// the BMW Favorite Keys colour: changing the favourite bar must not repaint the volume knob (rhmiapp-94).
 inline void ramp(int /*pct*/, int* r, int* g, int* b) {
-    // The level still controls bar length; its colour follows BMW Favorite Keys.
-    uint32_t colour=nbt::favouriteColourRGB(nbt::loadFavouriteColour(),nbt::loadFavouriteAmbient());
-    if(!colour)colour=0xf83a01u;
+    const uint32_t colour=0xf83a01u;
     *r=(colour>>16)&255;*g=(colour>>8)&255;*b=colour&255;
 }
 

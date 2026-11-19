@@ -68,7 +68,6 @@
 #include "entry_key.hpp"
 #include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
 #include "../src/favourite_colour.hpp"
-#include "../src/favourite_picker.hpp"
 #include <vector>
 #ifdef __QNX__
 #include <sys/slog.h>
@@ -1012,12 +1011,10 @@ bool g_focusKnown = false;     // a focus notification for our menu arrived at l
 bool g_menuFocused = false;    // focus notification of hmiState 10 (the menu itself)
 bool g_settingsFocused = false; // focus notification of hmiState 14 (the Settings page under it, rhmiapp-39)
 bool g_colourFocused = false;
-bool g_pickerFocused = false;
-pid_t g_pickerPid = 0;
 // "The driver is in our own UI" (menu or its Settings page). Used by the hold: coming back to either is not a car
 // screen taking over. g_menuFocused alone stays the answer to "is the menu itself on top", which is what the
 // connected-after-Start return to the main menu tests (a driver reading Settings must not be pulled out of it).
-bool inOurMenu() { return g_menuFocused || g_settingsFocused || g_colourFocused || g_pickerFocused; }
+bool inOurMenu() { return g_menuFocused || g_settingsFocused || g_colourFocused; }
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
 bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
 pid_t g_autostartPid = 0;     // automatic launch waiting for its first projection handoff
@@ -2355,11 +2352,6 @@ void statusRun(void* /*self*/) {
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_noLogShown) showNoLog(app);
-    if(g_pickerPid>0){int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;}
-    if(g_pickerFocused && (fileExists(nbt::kPickerDonePath)||(g_pickerPid>0&&!pidAlive(g_pickerPid))||
-                           (g_pickerPid==-1&&!fileExists(nbt::kPickerActivePath)))){
-        unlink(nbt::kPickerDonePath);unlink(nbt::kPickerActivePath);app->triggerEvent(54);
-    }
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
     if (!g_menuIdriveShown) showMenuIdrive(app);
@@ -2622,41 +2614,6 @@ bool onFavouriteColourFocus(void*,const bmw::Parcel& p) {
     if(f){g_ow.onOwnState(nbt::OverlayWatch::kColourState,nowMs());if(g_app)showFavouriteColours(g_app);}
     return true;
 }
-bool onFavouritePickerFocus(void*,const bmw::Parcel& p){
-    bool f=false;p.readBool(f);g_pickerFocused=f;g_focusKnown=true;
-    if(!f){unlink(nbt::kPickerActivePath);return true;}
-    g_ow.onOwnState(nbt::OverlayWatch::kPickerState,nowMs());
-    if(g_pickerPid){
-        int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;
-        else if(pidAlive(g_pickerPid)){
-            // A quick BACK/reopen renews the focus lease of the existing picker.
-            int marker=open(nbt::kPickerActivePath,O_WRONLY|O_CREAT|O_TRUNC,0600);if(marker>=0)close(marker);return true;
-        }
-    }
-    unlink(nbt::kPickerDonePath);
-    int marker=open(nbt::kPickerActivePath,O_WRONLY|O_CREAT|O_TRUNC,0600);if(marker<0)return true;close(marker);
-    if(fileExists(nbt::kInProcMarkerPath)){
-        // The daemon owns the picker now (single binary). Ask it, and mark the pid as "not ours" so the
-        // poll below waits for the picker's own done file instead of reaping a child that does not exist.
-        int rq=open(nbt::kPickerRequestPath,O_WRONLY|O_CREAT|O_TRUNC,0600);
-        if(rq>=0){close(rq);g_pickerPid=-1;alog("favourites picker: asked the daemon (in-process)");return true;}
-    }
-    const char* path="/opt/aa/nbt-aa-favourites";
-    char* argv[]={const_cast<char*>(path),const_cast<char*>("picker"),NULL};
-    std::vector<char*> env;for(char** e=environ;e&&*e;++e)if(strncmp(*e,"LD_PRELOAD=",11))env.push_back(*e);env.push_back(NULL);
-    int nul=open("/dev/null",O_RDWR),out=open("/dev/shmem/nbt-aa-colour-picker.log",O_WRONLY|O_CREAT|O_TRUNC,0600);
-    if(nul<0||out<0){if(nul>=0)close(nul);if(out>=0)close(out);unlink(nbt::kPickerActivePath);return true;}
-#ifdef __QNX__
-    int fdmap[3]={nul,out,out};struct inheritance inh;memset(&inh,0,sizeof(inh));inh.flags=SPAWN_SETSIGDEF;sigfillset(&inh.sigdefault);
-    g_pickerPid=spawn(path,3,fdmap,&inh,argv,&env[0]);
-#else
-    posix_spawn_file_actions_t actions;posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions,nul,0);posix_spawn_file_actions_adddup2(&actions,out,1);posix_spawn_file_actions_adddup2(&actions,out,2);
-    if(posix_spawn(&g_pickerPid,path,&actions,NULL,argv,&env[0]))g_pickerPid=0;posix_spawn_file_actions_destroy(&actions);
-#endif
-    close(nul);close(out);if(g_pickerPid<=0){g_pickerPid=0;unlink(nbt::kPickerActivePath);}
-    return true;
-}
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
     bool f = false;
     p.readBool(f);
@@ -2753,8 +2710,6 @@ bool appOnInit(bmw::PluginApp* self) {
         self->addHandler(kVersionState, kHandlerFocus, vp);
         bmw::ActionDelegate colour;colour.object=self;colour.stub=&onFavouriteColourFocus;
         self->addHandler(16,kHandlerFocus,colour);
-        bmw::ActionDelegate picker;picker.object=self;picker.stub=&onFavouritePickerFocus;
-        self->addHandler(17,kHandlerFocus,picker);
         bmw::ActionDelegate f;
         f.object = self;
         f.stub = &onAaFocus;
@@ -2782,7 +2737,6 @@ void appOnError(bmw::PluginApp* /*self*/, unsigned code, const bmw::BasicString<
 }
 
 void appOnFinalize(bmw::PluginApp* self) {
-    unlink(nbt::kPickerActivePath);
     alog("onFinalize");
     g_runApp = NULL;
     self->onFinalize();

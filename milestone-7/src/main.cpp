@@ -174,8 +174,6 @@ static volatile sig_atomic_t g_mainWake = 0;   // cuts the main loop's 250 ms sl
 // frame, so the switch works without restarting the daemon (the env only forces the capturer off).
 static const char* const kFavouriteOffFile = "/var/opt/aa/favourite-bar.disabled";
 static bool favouriteBarOff() { return access(kFavouriteOffFile, F_OK) == 0; }
-#include "favourite_picker.hpp"
-
 namespace nbt { int favouriteOverlayRun(int argc, char** argv); void favouriteOverlayStop(); }
 
 // The favourite strip used to be a second process (nbt-aa-favourites, spawned through TileProcess). It is
@@ -188,11 +186,6 @@ static void* favouriteOverlayThreadFn(void*) {
     snprintf(a3, sizeof(a3), "%d", (int)getpid());
     char* argv[] = { a0, a1, a2, a3, NULL };          // follow + owner pid: the thread ends with this process
     nbt::favouriteOverlayRun(4, argv);
-    return NULL;
-}
-static void* favouritePickerThreadFn(void*) {
-    nbt::favouritePickerMain();                        // writes kPickerDonePath itself before returning
-    unlink(nbt::kPickerRequestPath);
     return NULL;
 }
 
@@ -2564,12 +2557,6 @@ int main(int argc, char* argv[]) {
             }
             if (!g_favInProc)
                 favouriteProcess.service(act, "/opt/aa/nbt-aa-favourites", "/dev/shmem/nbt-aa-favourites.log",(unsigned)g_favouriteInputSerial);
-            if (g_favInProc && access(nbt::kPickerRequestPath, F_OK) == 0) {
-                unlink(nbt::kPickerRequestPath);                    // claim it before the thread starts
-                pthread_t th;
-                if (pthread_create(&th, NULL, favouritePickerThreadFn, NULL) == 0) pthread_detach(th);
-                else printf("[Favourites] picker thread failed to start\n");
-            }
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
         // while the phone has the mic closed the session simply drops the PCM. Opening/closing the endpoint per
