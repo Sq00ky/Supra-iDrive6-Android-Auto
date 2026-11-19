@@ -75,13 +75,21 @@ A test is `milestone-7/tests/test_<topic>.cpp` with a `main()` that returns 0 on
   or test order. Set and restore environment variables you use.
 - **Test behaviour, not implementation.** Assert on what leaves the code (frames sent, text shown, state reached),
   not on private members. A refactor that keeps behaviour must not break a test.
-- **Real data where it exists.** Decoders are tested against captures in `tests/fixtures/`. Add a fixture rather than
-  hand-typing bytes you invented, and say where the capture came from (car, date, build).
+- **Real structure, invented values.** Base a test on what a real car or phone actually sends (field order, lengths,
+  message types), so decoders are tested against the real shape. Fill every value that could identify a person or a
+  place with an invented one (see "Fixtures and golden transcripts"). Never commit a raw capture, and do not hand-type
+  a layout you guessed: say which capture the shape was taken from (car, date, build), not what was in it.
 
 ## Fixtures and golden transcripts
 
-- Fixtures come from real cars, stripped before commit of positions, street names, phone MACs, VINs, Wi-Fi names and
-  passphrases. If you cannot strip it, do not commit it.
+- A fixture is modelled on a real capture but holds **invented values only**. Real car data can carry personal
+  information that is not obvious (positions, street names, phone MACs, VINs, Wi-Fi names and passphrases, timestamps,
+  device identifiers, free text), and stripping known fields by hand will miss some. So do not "clean" a capture and
+  commit it: rebuild the message with made-up values (fake coordinates, a placeholder street, an obviously fake MAC)
+  and keep only the structure. If a test needs a byte-exact value that you cannot invent, ask the maintainer rather
+  than committing it.
+- Fixtures already in the tree predate this rule. Do not copy values out of them into new places. If you find a real
+  value in one, tell the maintainer rather than quietly editing it.
 - `test_j29_golden` pins every byte the daemon sends for a scripted drive. A change that alters the transcript is a
   behaviour change: update the transcript on purpose, in its own commit, and explain in the PR what changed on the
   wire and why it is safe on the cluster. Never regenerate a golden file just to make a failure go away.

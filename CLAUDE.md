@@ -33,7 +33,8 @@ Details live in two files. Read them before writing code:
    explicit opt-in env var, a loud log line when it is on, and a note that it is for a parked car only.
 7. **Keep private data out of the repo and out of logs.** No GPS positions, phone MACs, VINs, Wi-Fi names or
    passphrases, route street names, tokens or keys in code, fixtures, tests, commit messages, issues or PRs. Never
-   log a passphrase. Captures used as fixtures are stripped first.
+   log a passphrase. Never commit a raw or "cleaned" capture: personal data in car frames is not always obvious.
+   Fixtures follow the real structure but contain only invented values.
 8. **Do not commit proprietary material**: QNX SDK or licence files, firmware dumps, BMW binaries, libraries copied
    from a car. Do not help anyone obtain unlicensed toolchains.
 9. **New files carry the licence header** (see `docs/CODING-STANDARDS.md`). Do not add third-party code unless its

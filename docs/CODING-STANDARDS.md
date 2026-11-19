@@ -131,15 +131,16 @@ Comments explain **why**, and record facts the code cannot show. The code says w
 - Where the code replays a capture (the J29 route graph template, lane models), change only the fields that are
   proven on a car, and keep the rest byte for byte. The golden transcript test (`test_j29_golden`) must stay green; a
   deliberate change to it is explained in the PR.
-- Decoders are written against real captures in `tests/fixtures/` and fail closed on anything they do not recognise.
+- Decoders follow the structure of real captures and are tested with fixtures that copy that structure but contain
+  only invented values (section 10 and docs/TESTING.md). They fail closed on anything they do not recognise.
 - Do not copy enum values from another project into the code as facts. Cite them as "from <project>, not car-verified"
   until a car confirms them.
 
 ## 10. Security and privacy
 
 - No credentials, keys or tokens in the repo. Test values are obviously fake.
-- Fixtures taken from a car are stripped of positions, street names, MACs, VINs, Wi-Fi names and passphrases before
-  they are committed.
+- Real car data can hold personal information that is not obvious, so raw or "cleaned" captures are not committed.
+  Fixtures keep the real structure and use invented values (fake positions, street names, MACs, VINs, Wi-Fi names).
 - The daemon has wide access to the head unit and the cluster network: do not add network listeners, shell-outs with
   user-influenced strings, or writes outside the paths the feature documents. Build commands from fixed strings and
   check every path component you take from outside.
