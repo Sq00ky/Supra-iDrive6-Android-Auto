@@ -43,6 +43,35 @@ static int lmCommand(const char* const* input) {
  int status=0;while(waitpid(pid,&status,0)<0){if(errno!=EINTR)return -1;}
  return WIFEXITED(status)?WEXITSTATUS(status):-1;
 }
+// popen() forks, and forking this daemon from a worker thread can deadlock (the thread simply never returns:
+// that is why the overlay printed its start line and then nothing at all). Ask LayerManagerControl the same way
+// lmCommand() does - posix_spawn - but let it write to a file we read afterwards.
+static int lmCapture(const char* const* input, const char* outPath, char* buf, size_t bufsz) {
+ if (buf && bufsz) buf[0] = 0;
+ std::vector<char*> args, env;
+ for (int i = 0; input[i]; i++) args.push_back(const_cast<char*>(input[i]));
+ args.push_back(NULL);
+ for (char** e = environ; e && *e; e++) if (strncmp(*e, "LD_PRELOAD=", 11)) env.push_back(*e);
+ env.push_back(NULL);
+ posix_spawn_file_actions_t actions;
+ if (posix_spawn_file_actions_init(&actions)) return -1;
+ int fd = open(outPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+ if (fd < 0) { posix_spawn_file_actions_destroy(&actions); return -1; }
+ posix_spawn_file_actions_adddup2(&actions, fd, 1);
+ posix_spawn_file_actions_adddup2(&actions, fd, 2);
+ pid_t pid = -1;
+ int rc = posix_spawn(&pid, input[0], &actions, NULL, &args[0], &env[0]);
+ posix_spawn_file_actions_destroy(&actions);
+ close(fd);
+ if (rc) { printf("[Favourites] spawn %s failed rc=%d\n", input[0], rc); return -1; }
+ int status = 0;
+ while (waitpid(pid, &status, 0) < 0) if (errno != EINTR) return -1;
+ if (buf && bufsz) {
+  FILE* f = fopen(outPath, "r");
+  if (f) { size_t n = fread(buf, 1, bufsz - 1, f); buf[n] = 0; fclose(f); }
+ }
+ return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
 static void ownVisibility(bool visible) {
  unsigned long t=ms(); const char* args[]={L,"set","surface","1283","visibility",visible?"1":"0",NULL}; int rc=lmCommand(args); printf("TIMING %lu visibility=%d rc=%d duration=%lu\n",ms(),visible,rc,ms()-t);
 }
@@ -80,11 +109,26 @@ int favouriteOverlayRun(int argc,char** argv) {
  // return cost a whole debugging round when the file said 1280 on this unit.
  if(aa<1280||aa>65535||aa==1283) { printf("[Favourites] refusing aa surface %d (need 1280..65535, not 1283)\n", aa); return 1; }
  char cmd[1024],line[256];int w=0,h=0;long long existing=0;
- snprintf(cmd,sizeof(cmd),"%s get surface %d 2>/dev/null",L,aa);
- FILE* p=popen(cmd,"r"); if(p){while(fgets(line,sizeof(line),p)) { char* k=strstr(line,"original size:");if(k)sscanf(k,"original size: x=%d, y=%d",&w,&h);}pclose(p);}
+ char ask[16], grey[8192];
+ snprintf(ask,sizeof(ask),"%d",aa);
+ const char* aaArgs[]={L,"get","surface",ask,NULL};
+ printf("[Favourites] reading surface %d\n", aa);
+ int arc=lmCapture(aaArgs,"/dev/shmem/nbt-aa-lm-aa.txt",grey,sizeof(grey));
+ printf("[Favourites] surface %d read rc=%d\n", aa, arc);
+ for(char* sp=grey; sp&&*sp; ) {
+  char* nl=strchr(sp,'\n'); if(nl)*nl=0;
+  char* k=strstr(sp,"original size:"); if(k)sscanf(k,"original size: x=%d, y=%d",&w,&h);
+  sp = nl ? nl+1 : NULL;
+ }
  if(w<=0||h<=0||w>4096||h>2048) {printf("[Favourites] no valid panel size from surface %d\n", aa);return 1;}
- snprintf(cmd,sizeof(cmd),"%s get surface 1283 2>/dev/null",L);
- p=popen(cmd,"r");if(p){while(fgets(line,sizeof(line),p)){char* k=strstr(line,"native surface:");if(k)existing=strtoll(k+15,NULL,10);}pclose(p);}
+ const char* ownArgs[]={L,"get","surface","1283",NULL};
+ if(lmCapture(ownArgs,"/dev/shmem/nbt-aa-lm-1283.txt",grey,sizeof(grey))==0) {
+  for(char* sp=grey; sp&&*sp; ) {
+   char* nl=strchr(sp,'\n'); if(nl)*nl=0;
+   char* k=strstr(sp,"native surface:"); if(k)existing=strtoll(k+15,NULL,10);
+   sp = nl ? nl+1 : NULL;
+  }
+ }
  if(existing>0&&existing!=4294967295LL){printf("[Favourites] surface 1283 already owned (%lld); refusing\n", existing);return 1;}
  printf("[Favourites] panel %dx%d\n", w, h);
  int bar=nbt::favouriteStripRegion(w,h,true).y;
