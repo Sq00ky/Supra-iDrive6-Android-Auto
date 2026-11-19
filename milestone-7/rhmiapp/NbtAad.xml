@@ -36,7 +36,6 @@
       <raAction id="136"/>
       <raAction id="137"/>
       <raAction id="159"/>
-      <hmiAction id="200" target="16"/>
       <hmiAction id="420" target="18"/>
       <raAction id="421"/>
       <raAction id="422"/>
@@ -44,14 +43,6 @@
       <raAction id="424"/>
       <raAction id="425"/>
       <raAction id="248"/>
-      <raAction id="210"/>
-      <raAction id="211"/>
-      <raAction id="212"/>
-      <raAction id="213"/>
-      <raAction id="214"/>
-      <raAction id="215"/>
-      <raAction id="216"/>
-      <raAction id="217"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -213,26 +204,15 @@
       <textIdModel id="161" textId="44">
         <synonyms/>
       </textIdModel>
-      <textIdModel id="202" textId="300"><synonyms/></textIdModel>
       <raBoolModel id="250"/>
-      <textIdModel id="251" textId="309"><synonyms/></textIdModel>
-      <raBoolModel id="220"/>
       <textIdModel id="230" textId="301"><synonyms/></textIdModel>
-      <raBoolModel id="221"/>
       <textIdModel id="231" textId="302"><synonyms/></textIdModel>
-      <raBoolModel id="222"/>
       <textIdModel id="232" textId="303"><synonyms/></textIdModel>
-      <raBoolModel id="223"/>
       <textIdModel id="233" textId="304"><synonyms/></textIdModel>
-      <raBoolModel id="224"/>
       <textIdModel id="234" textId="305"><synonyms/></textIdModel>
-      <raBoolModel id="225"/>
       <textIdModel id="235" textId="306"><synonyms/></textIdModel>
-      <raBoolModel id="226"/>
       <textIdModel id="236" textId="307"><synonyms/></textIdModel>
-      <raBoolModel id="227"/>
       <textIdModel id="237" textId="308"><synonyms/></textIdModel>
-      <textIdModel id="261" textId="310"><synonyms/></textIdModel>
     </models>
     <events>
       <focusEvent id="54" target="16"/>
@@ -320,7 +300,7 @@
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
           <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
           <checkbox action="159" id="162" model="160" text="CarPlay compatibility" textModel="161"/>
-          <button action="200" id="201" model="202" text="BMW Favorite Keys"/>
+          <checkbox action="248" id="249" model="250" text="Disable Favorites Bar"/>
           <button action="414" id="407" model="400" text="Gauge cluster type"/>
           <separator id="142"/>
           <button action="132" id="135" model="134" text="Install PF Rules"/>
@@ -350,26 +330,6 @@
           <radiobutton action="411" id="408" model="401" text="..." textModel="404"/>
           <radiobutton action="412" id="409" model="402" text="..." textModel="405"/>
           <radiobutton action="413" id="410" model="403" text="..." textModel="406"/>
-        </components>
-      </hmiState>
-      <hmiState id="16" parentId="14" text="BMW Favorite Keys" textModel="202">
-        <properties><property id="24" value="3"/></properties>
-        <components>
-          <label id="460" model="430" text="Status">
-            <properties><property id="2" value="false"/></properties>
-          </label>
-          <button action="420" id="461" model="430" text="Car manufacturer"/>
-          <checkbox action="248" id="249" model="250" text="Show Favorites Keys Bar" textModel="251"/>
-          <separator id="252"/>
-          <label id="264" model="261"><properties><property id="2" value="false"/></properties></label>
-          <radiobutton action="210" id="240" model="220" text="BMW default orange" textModel="230"/>
-          <radiobutton action="211" id="241" model="221" text="Match ambient lighting" textModel="231"/>
-          <radiobutton action="212" id="242" model="222" text="Bronze" textModel="232"/>
-          <radiobutton action="213" id="243" model="223" text="White" textModel="233"/>
-          <radiobutton action="214" id="244" model="224" text="Orange" textModel="234"/>
-          <radiobutton action="215" id="245" model="225" text="Blue" textModel="235"/>
-          <radiobutton action="216" id="246" model="226" text="Green" textModel="236"/>
-          <radiobutton action="217" id="247" model="227" text="Lilac" textModel="237"/>
         </components>
       </hmiState>
     

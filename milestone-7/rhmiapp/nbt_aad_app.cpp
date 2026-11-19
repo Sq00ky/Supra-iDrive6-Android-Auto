@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-97-settings (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-98-simple (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -2669,31 +2669,20 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 // focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
-void showFavouriteColours(bmw::PluginApp* app) {
-    int selected=nbt::loadFavouriteColour();
-    for(int i=0;i<8;++i)app->updateModel(220+i,i==selected);
-    app->updateModel(250,!fileExists(nbt::kFavouriteDisabledPath));
-}
-template<int Mode> bool onFavouriteColour(void*,const bmw::Parcel&) {
-    nbt::makeDataDir();
-    const char* next="/var/opt/aa/favourite-bar-colour.next";
-    FILE* f=fopen(next,"w");if(!f){alog("favourites colour: cannot save errno=%d",errno);return true;}
-    bool ok=fprintf(f,"%d\n",Mode)>0; if(fclose(f)!=0)ok=false;
-    if(ok&&rename(next,nbt::kFavouriteColourPath)==0)alog("favourites colour selected mode=%d",Mode);
-    else {unlink(next);alog("favourites colour: save failed errno=%d",errno);}
-    if(g_app)showFavouriteColours(g_app);return true;
+// Favourites bar switch (rhmiapp-98): one checkbox on the Settings page, no submenu. It reads
+// "Disable Favorites Bar" and is ticked exactly when the disabled marker exists - the file is the state, the tick
+// only reflects it, the same rule every other row on this page follows.
+void showFavouriteBar(bmw::PluginApp* app) {
+    if (app) app->updateModel(250, fileExists(nbt::kFavouriteDisabledPath));
 }
 bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
-    if(fileExists(nbt::kFavouriteDisabledPath))unlink(nbt::kFavouriteDisabledPath);
+    if(fileExists(nbt::kFavouriteDisabledPath))unlink(nbt::kFavouriteDisabledPath);   // unticked: bar back on
     else {
         nbt::makeDataDir();int fd=open(nbt::kFavouriteDisabledPath,O_WRONLY|O_CREAT|O_TRUNC,0666);
         if(fd>=0)close(fd);else alog("favourites bar: cannot save switch errno=%d",errno);
     }
-    if(g_app)showFavouriteColours(g_app);return true;
-}
-bool onFavouriteColourFocus(void*,const bmw::Parcel& p) {
-    bool f=false;p.readBool(f);g_colourFocused=f;g_focusKnown=true;
-    if(f){g_ow.onOwnState(nbt::OverlayWatch::kColourState,nowMs());if(g_app)showFavouriteColours(g_app);}
+    alog("favourites bar %s", fileExists(nbt::kFavouriteDisabledPath) ? "disabled" : "enabled");
+    if(g_app)showFavouriteBar(g_app);
     return true;
 }
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2779,10 +2768,6 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
     addAction(self,248,&onFavouriteBarToggle);
-    addAction(self,210,&onFavouriteColour<0>);addAction(self,211,&onFavouriteColour<1>);
-    addAction(self,212,&onFavouriteColour<2>);addAction(self,213,&onFavouriteColour<3>);
-    addAction(self,214,&onFavouriteColour<4>);addAction(self,215,&onFavouriteColour<5>);
-    addAction(self,216,&onFavouriteColour<6>);addAction(self,217,&onFavouriteColour<7>);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
@@ -2797,7 +2782,6 @@ bool appOnInit(bmw::PluginApp* self) {
         vp.object = self;
         vp.stub = &onVersionFocus;
         self->addHandler(kVersionState, kHandlerFocus, vp);
-        bmw::ActionDelegate colour;colour.object=self;colour.stub=&onFavouriteColourFocus;
         self->addHandler(16,kHandlerFocus,colour);
         bmw::ActionDelegate f;
         f.object = self;
@@ -2810,7 +2794,6 @@ bool appOnInit(bmw::PluginApp* self) {
     }
     bool ok = self->onInit();
     showAbout(self);
-    showFavouriteColours(self);
     alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u + menu focus handler + settings focus handler registered, base onInit -> %d, start with the car %s, "
          "save logs to USB %s, MENU opens iDrive %s", kEntryAction, kActStart, kActStop, kActRestart, kActAutostart,
          kActUsbLog, kActMenuIdrive, (int)ok, autostartOn() ? "on" : "off", nbt::usblog::enabled() ? "on" : "off",
