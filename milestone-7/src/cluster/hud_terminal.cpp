@@ -54,7 +54,7 @@ Core::Core(const Config& cfg)
       frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0),
-      measureDue_(false), measureInFlight_(false), measureSentMs_(0), haveSize_(false), sizeW_(0), sizeH_(0) {
+      measureDue_(false), measureInFlight_(false), measureLate_(false), measureSentMs_(0), haveSize_(false), sizeW_(0), sizeH_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
 }
@@ -103,7 +103,7 @@ void Core::refresh(const char* why, uint32_t now) {
     if (status_ == kReady) ++epoch_;          // what we drew may be gone or overdrawn: the driver redraws
     if (s != kReady) dropWork(now);
     if (s == kReady && cfg_.measureHandle && !haveSize_) measureDue_ = true;   // ask the buffer size once we can send
-    if (status_ == kReady && s != kReady) measureInFlight_ = false;            // a pending measure is dropped; re-ask later
+    if (status_ == kReady && s != kReady) measureInFlight_ = measureLate_ = false;   // a pending measure is dropped; re-ask later
     status_ = s;
     changed_ = true;
 }
@@ -154,7 +154,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
     dropWork(now);
     dropped_.clear();                          // answers from the old host are not ours to match
     haveSize_ = false;                         // a new host's buffer is measured afresh
-    measureInFlight_ = false;
+    measureInFlight_ = measureLate_ = false;
     measureDue_ = false;                        // refresh() re-arms it if the new host is ready
     refresh(why, now);
 }
@@ -250,8 +250,8 @@ bool Core::next(uint32_t now, most::Msg& out) {
     if (status_ != kReady) return false;
     if (inFlight_.size() >= cfg_.maxInFlight) return false;
     // The one-shot buffer measurement goes first, ahead of any drawing and outside inFlight_: its answer is captured in
-    // onAnswer, and no answer is let go in tick() rather than failing the terminal. recent_.add so the cluster's copy to
-    // the navigation is known as ours.
+    // onAnswer, also a late one (tick() only notes the timeout), and no answer never fails the terminal. recent_.add so
+    // the cluster's copy to the navigation is known as ours.
     if (cfg_.measureHandle && measureDue_ && !measureInFlight_) {
         Call mc(kGetSize, getSize(cfg_.measureHandle));
         if (buildCall(host_, mc, tag_, cfg_.handles, out)) {
@@ -311,7 +311,10 @@ void Core::onMessage(const most::View& m, uint32_t now) {
         return;
     }
     if (m.src != host_ && m.dst != host_) return;             // not this terminal
-    if (m.src == host_ && recent_.isCopy(m.fkt, m.data, m.len, now)) {
+    // The cluster's copy of an answer to us. A late answer to the measurement is past recent_'s window, and its copy
+    // may come before our own: while it is awaited, a size for the measured handle is ours too, not the navigation.
+    bool measureCopy = measureInFlight_ && m.fkt == kGetSize && m.len >= 2 && rdBe16(m.data) == cfg_.measureHandle;
+    if (m.src == host_ && (measureCopy || recent_.isCopy(m.fkt, m.data, m.len, now))) {
         ++stats_.copies;
         return;
     }
@@ -323,13 +326,19 @@ void Core::onMessage(const most::View& m, uint32_t now) {
 // an answer to a call we dropped a moment ago is let go (see the header).
 void Core::onAnswer(const most::View& m, uint32_t now) {
     if (m.op == most::kOpProcessingAck || m.op == most::kOpProcessing) return;   // still working: the timeout stands
-    if (m.fkt == kGetSize && measureInFlight_) {        // the buffer measurement, outside inFlight_
-        if ((m.op == most::kOpResultAck || m.op == most::kOpStatus) && (m.len == 6 || m.len == 7)) {
+    bool sized = (m.op == most::kOpResultAck || m.op == most::kOpStatus) && (m.len == 6 || m.len == 7);
+    if (m.fkt == kGetSize && measureInFlight_ && (!sized || rdBe16(m.data) == cfg_.measureHandle)) {
+        // The buffer measurement, outside inFlight_ (a size for another handle is not it: matched below, a stray).
+        if (sized) {
             const uint8_t* a = m.data + (m.len == 7 ? 3 : 2);   // skip the handle, and the 6WB form's 01 byte
             int w = (a[0] << 8) | a[1], h = (a[2] << 8) | a[3];
             if (w > 0 && h > 0) { sizeW_ = w; sizeH_ = h; haveSize_ = true; }
+            if (measureLate_)
+                printf("[HudTerm] ImageGetSize answered late, after %u ms: %dx%d\n", (unsigned)(now - measureSentMs_), w,
+                       h);
         }
-        measureInFlight_ = false;                       // answered (or a form we don't read): keep the defaults, don't fail
+        measureInFlight_ = measureLate_ = false;        // answered (or a form we don't read): keep the defaults, don't fail
+        recent_.add(kGetSize, cfg_.measureHandle, now);  // its copy to the navigation may follow: ours
         ++stats_.answers;
         return;
     }
@@ -398,8 +407,13 @@ void Core::onNav(const most::View& m, uint32_t now) {
 }
 
 void Core::tick(uint32_t now) {
-    if (measureInFlight_ && left(measureSentMs_, cfg_.replyMs, now) == 0)
-        measureInFlight_ = false;              // no answer to ImageGetSize: keep the defaults, don't fail or re-ask
+    // No answer to ImageGetSize in time. A cold cluster answers it later (after an iDrive restart, #264), so keep
+    // listening and take it then; meanwhile the defaults stand. Never a failure, never asked again.
+    if (measureInFlight_ && !measureLate_ && left(measureSentMs_, cfg_.replyMs, now) == 0) {
+        measureLate_ = true;
+        printf("[HudTerm] no answer to ImageGetSize in %u ms: still listening, the defaults meanwhile\n",
+               (unsigned)cfg_.replyMs);
+    }
     if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
         ++stats_.timeouts;
         char why[96];

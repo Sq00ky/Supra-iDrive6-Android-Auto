@@ -169,9 +169,10 @@ private:
     TerminalStats stats_;
 
     // The one-shot picture-buffer measurement (cfg_.measureHandle). Sent outside the batch queue and not tracked in
-    // inFlight_, so no answer keeps the defaults instead of failing the terminal.
+    // inFlight_, so no answer keeps the defaults instead of failing the terminal; a late one is still taken.
     bool measureDue_;        // ready, not yet asked this ready-session
     bool measureInFlight_;   // asked, waiting for the answer
+    bool measureLate_;       // past the reply timeout, and still listening
     uint32_t measureSentMs_;
     bool haveSize_;
     int sizeW_, sizeH_;

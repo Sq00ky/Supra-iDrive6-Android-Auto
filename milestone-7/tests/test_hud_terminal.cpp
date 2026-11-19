@@ -86,6 +86,60 @@ static int pumpAnswered(Core& k, uint32_t now) {
 
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
+// The cluster's answer to ImageGetSize for handle h: [handle][w][h], to us or (its copy) to the navigation.
+static Wire sizeAnswer(uint16_t dst, uint16_t h, int w, int ht) {
+    std::vector<uint8_t> p;
+    p.push_back((uint8_t)(h >> 8)); p.push_back((uint8_t)h);
+    p.push_back((uint8_t)(w >> 8)); p.push_back((uint8_t)w);
+    p.push_back((uint8_t)(ht >> 8)); p.push_back((uint8_t)ht);
+    return Wire(kHost, dst, kGetSize, most::kOpResultAck, p);
+}
+
+// The picture-buffer measurement (Config::measureHandle), asked once ready, outside the batches. A cold cluster answers
+// it only after the reply timeout (#264): the core keeps listening and takes the late answer, and the copy to the
+// navigation - before or after ours - is known as ours, not taken for the factory navigation. A size for another
+// handle is not the measurement; an error answer lets it go without failing the terminal.
+static void testMeasure() {
+    Config c = config();
+    c.measureHandle = 5;
+    int w, h;
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5);
+        k.tick(c.replyMs + 1);                                   // no answer in time: still listening, not failed
+        assert(k.status() == kReady && !k.measuredSize(w, h));
+        Wire early = sizeAnswer(kNav, 5, 126, 77), ours = sizeAnswer(kSelf, 5, 126, 77), after = sizeAnswer(kNav, 5, 126, 77);
+        k.onMessage(early.v, c.replyMs + 900);                  // the copy first: ours, not the factory navigation
+        assert(k.status() == kReady);
+        k.onMessage(ours.v, c.replyMs + 900);
+        assert(k.measuredSize(w, h) && w == 126 && h == 77);
+        k.onMessage(after.v, c.replyMs + 950);                  // and a copy right after ours
+        assert(k.status() == kReady);
+    }
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize);
+        Wire other = sizeAnswer(kSelf, 6, 99, 99), ours = sizeAnswer(kSelf, 5, 176, 126);
+        k.onMessage(other.v, 10);                               // not the measured handle: still waiting
+        assert(!k.measuredSize(w, h) && k.status() == kReady);
+        k.onMessage(ours.v, 20);
+        assert(k.measuredSize(w, h) && w == 176 && h == 126);
+    }
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize);
+        std::vector<uint8_t> e;
+        e.push_back(0x05); e.push_back(0x00);
+        Wire err(kHost, kSelf, kGetSize, most::kOpError, e);
+        k.onMessage(err.v, 10);                                 // refused: the defaults stay, the terminal too
+        assert(!k.measuredSize(w, h) && k.status() == kReady);
+    }
+    printf("  measure: a late answer taken, its copies ours, another handle and an error let go\n");
+}
+
 static void testStatusAndOffline() {
     Core k(config());
     Status s;
@@ -813,6 +867,7 @@ static void testWatchOnly() {
 
 int main() {
     testStatusAndOffline();
+    testMeasure();
     testRequestBytes();
     testRefusals();
     testBackToBackAndWindow();
