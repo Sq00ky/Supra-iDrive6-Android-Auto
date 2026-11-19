@@ -75,14 +75,18 @@ int favouriteOverlayRun(int argc,char** argv) {
  int seconds=follow?0:90,owner=follow&&argc>3?atoi(argv[3]):0;
  bool compatibility=argc>1&&!strcmp(argv[1],"probe-v3");
  int aa=1282; FILE* af=fopen("/dev/shmem/nbt-aad-surface","r");if(af){fscanf(af,"%d",&aa);fclose(af);}
- if(aa<1282||aa>65535||aa==1283) return 1;
+ printf("[Favourites] overlay start: aa surface=%d follow=%d owner=%d\n", aa, (int)follow, owner);
+ // 1280 is CarPlay's window and 1281 the volume pill, so only refuse the impossible values here: a silent
+ // return cost a whole debugging round when the file said 1280 on this unit.
+ if(aa<1280||aa>65535||aa==1283) { printf("[Favourites] refusing aa surface %d (need 1280..65535, not 1283)\n", aa); return 1; }
  char cmd[1024],line[256];int w=0,h=0;long long existing=0;
  snprintf(cmd,sizeof(cmd),"%s get surface %d 2>/dev/null",L,aa);
  FILE* p=popen(cmd,"r"); if(p){while(fgets(line,sizeof(line),p)) { char* k=strstr(line,"original size:");if(k)sscanf(k,"original size: x=%d, y=%d",&w,&h);}pclose(p);}
- if(w<=0||h<=0||w>4096||h>2048) {puts("no valid panel size");return 1;}
+ if(w<=0||h<=0||w>4096||h>2048) {printf("[Favourites] no valid panel size from surface %d\n", aa);return 1;}
  snprintf(cmd,sizeof(cmd),"%s get surface 1283 2>/dev/null",L);
  p=popen(cmd,"r");if(p){while(fgets(line,sizeof(line),p)){char* k=strstr(line,"native surface:");if(k)existing=strtoll(k+15,NULL,10);}pclose(p);}
- if(existing>0&&existing!=4294967295LL){puts("surface 1283 already owned; refusing");return 1;}
+ if(existing>0&&existing!=4294967295LL){printf("[Favourites] surface 1283 already owned (%lld); refusing\n", existing);return 1;}
+ printf("[Favourites] panel %dx%d, strip top=%d\n", w, h, bar);
  int bar=nbt::favouriteStripRegion(w,h,true).y;
  screen_context_t ctx=0;screen_window_t win=0;
  if(screen_create_context(&ctx,0)||screen_create_window_type(&win,ctx,0)) {printf("Screen creation failed %d\n",errno);return 1;}
@@ -140,7 +144,7 @@ int favouriteOverlayRun(int argc,char** argv) {
  uint32_t seenPress=0,releasedAt=0;unsigned pressBudget=0;
  uint32_t seenContact=0;
  time_t started=time(NULL);
- printf("live favourite overlay ready %dx%d top=%d\n",w,h,bar);
+ printf("[Favourites] overlay live: %dx%d strip top=%d, entering loop\n",w,h,bar);
  while(running&&(!seconds||time(NULL)-started<seconds)) {
   State s=state();if(owner&&(s.pid!=owner||kill(owner,0)))break;
   uint32_t now=(uint32_t)ms();
