@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-101-fade (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-102-wait (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -258,6 +258,9 @@ const unsigned    kTextAaUsbOnly     = 328;
 const unsigned    kTextAaWifiOk      = 329;
 const unsigned    kTextAaUsbOk       = 330;
 const unsigned    kTextAaConnecting2 = 331;
+const unsigned    kTextAaWaitUsb     = 332;
+const unsigned    kTextAaWaitCarplay = 333;
+const unsigned    kTextAaWaitWfd     = 334;
 const unsigned    kTextStart      = 10;      // "Start Android Auto"
 const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
@@ -2451,9 +2454,12 @@ void statusRun(void* /*self*/) {
     if (!strcmp(st, "connected"))       statusText = !strcmp(tr, "usb") ? kTextAaUsbOk : kTextAaWifiOk;
     else if (!strcmp(st, "connecting")) statusText = kTextAaConnecting2;
     else if (d.pid > 0) {
-        if (hasIni)      statusText = kTextAaCarplayWifi;
-        else if (hasWfd) statusText = kTextAaWfd;
-        else             statusText = kTextAaUsbOnly;
+        // Which link the driver should use: the USB-only setting wins, then carplay.ini, then Wi-Fi Direct.
+        // usbAaOn() is the same flag file the daemon reads, so both sides agree without a second channel.
+        if (usbAaOn())        statusText = kTextAaWaitUsb;
+        else if (hasIni)      statusText = kTextAaWaitCarplay;
+        else if (hasWfd)      statusText = kTextAaWaitWfd;
+        else                  statusText = kTextAaUsbOnly;
     }
     unsigned want = statusText;                                          // the Media/Radio entry row
     if (want != g_shownText) {

@@ -56,6 +56,10 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          329: "Android Auto: connected over Wi-Fi.",
          330: "Android Auto: connected over USB.",
          331: "Android Auto: connecting...",
+         332: "Android Auto: waiting for the phone to connect via USB.",
+         333: "Android Auto: waiting for the phone to connect over CarPlay Wi-Fi.",
+         334: "Android Auto: waiting for the phone to connect over Wi-Fi Direct.",
+
 
          44: "CarPlay compatibility",   # 44 = CarPlay compatibility checkbox (rhmiapp-54-cpcompat)
          17: ABOUT}
