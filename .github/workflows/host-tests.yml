@@ -1,0 +1,37 @@
+# Runs the host tests on every pull request and every push to main: milestone-7's `make check`, i.e. every test in
+# milestone-7/tests plus the ThreadSanitizer run of test_session_lifecycle - the same command a contributor runs before
+# sending a change. It needs only g++ and the OpenSSL headers: no head unit, no QNX SDP and no secrets.
+name: host tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev
+
+      # Ubuntu 24.04 runners randomise mmap with 32 bits, which makes ThreadSanitizer abort with "unexpected memory
+      # mapping"; 28 bits is the usual setting for it.
+      - name: Let ThreadSanitizer run
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: make check
+        run: make -k -C milestone-7 check
