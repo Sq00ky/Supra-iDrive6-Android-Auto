@@ -50,6 +50,13 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          323: "Android Auto: waiting for phone",
          324: "Android Auto: no Wi-Fi Direct, use USB",
          325: "Android Auto: no CarPlay network, using Wi-Fi Direct",
+         326: "Android Auto: waiting. Join the car\'s CarPlay Wi-Fi network.",
+         327: "Android Auto: waiting. No carplay.ini: using Wi-Fi Direct.",
+         328: "Android Auto: no CarPlay network and no Wi-Fi Direct: connect the phone by USB.",
+         329: "Android Auto: connected over Wi-Fi.",
+         330: "Android Auto: connected over USB.",
+         331: "Android Auto: connecting...",
+
          44: "CarPlay compatibility",   # 44 = CarPlay compatibility checkbox (rhmiapp-54-cpcompat)
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).

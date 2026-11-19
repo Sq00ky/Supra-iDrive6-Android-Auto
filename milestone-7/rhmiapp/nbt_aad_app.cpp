@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-99a-status (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-100-chain (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -251,6 +251,13 @@ const unsigned    kTextAaConnected  = 322;
 const unsigned    kTextAaWaiting    = 323;
 const unsigned    kTextAaNoWfd      = 324;
 const unsigned    kTextAaNoCarplay  = 325;
+// 326-331: the measured chain (carplay.ini -> wfd0 -> USB), emitted by the daemon as "state|carplay|wfd|usb|transport"
+const unsigned    kTextAaCarplayWifi = 326;
+const unsigned    kTextAaWfd         = 327;
+const unsigned    kTextAaUsbOnly     = 328;
+const unsigned    kTextAaWifiOk      = 329;
+const unsigned    kTextAaUsbOk       = 330;
+const unsigned    kTextAaConnecting2 = 331;
 const unsigned    kTextStart      = 10;      // "Start Android Auto"
 const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
@@ -2432,15 +2439,22 @@ void statusRun(void* /*self*/) {
     DaemonState d = readDaemonState();
     bool connecting = !strcmp(d.state, "connecting"), connected = !strcmp(d.state, "connected");
 
-    char tok[32] = {0};
+    // "state|carplay|wfd|usb|transport", written by the daemon from measured facts. The chain is
+    // carplay.ini -> wfd0 -> USB, so the row names the link that is missing and the setting that fixes it.
+    char rec[72] = {0};
     { FILE* sf = fopen("/dev/shmem/nbt-aad-status", "r");
-      if (sf) { if (fscanf(sf, "%31s", tok) != 1) tok[0] = 0; fclose(sf); } }
+      if (sf) { if (fscanf(sf, "%71s", rec) != 1) rec[0] = 0; fclose(sf); } }
+    char st[24] = {0}, tr[8] = {0};
+    int hasIni = 0, hasWfd = 0, hasUsb = 0;
+    sscanf(rec, "%23[^|]|%d|%d|%d|%7s", st, &hasIni, &hasWfd, &hasUsb, tr);
     unsigned statusText = kTextAaDefault;
-    if (connected) statusText = kTextAaConnected;
-    else if (connecting) statusText = kTextAaConnecting;
-    else if (!strcmp(tok, "wfd-missing")) statusText = kTextAaNoWfd;
-    else if (!strcmp(tok, "cp-ini-missing")) statusText = kTextAaNoCarplay;
-    else if (d.pid > 0) statusText = kTextAaWaiting;
+    if (!strcmp(st, "connected"))       statusText = !strcmp(tr, "usb") ? kTextAaUsbOk : kTextAaWifiOk;
+    else if (!strcmp(st, "connecting")) statusText = kTextAaConnecting2;
+    else if (d.pid > 0) {
+        if (hasIni)      statusText = kTextAaCarplayWifi;
+        else if (hasWfd) statusText = kTextAaWfd;
+        else             statusText = kTextAaUsbOnly;
+    }
     unsigned want = statusText;                                          // the Media/Radio entry row
     if (want != g_shownText) {
         bmw::TextID text(want);
