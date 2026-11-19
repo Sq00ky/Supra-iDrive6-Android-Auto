@@ -43,6 +43,13 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          35: "Checking rules...", 36: "Rules in place", 37: "Rules in place, not active", 38: "Rules not in place",
          39: "Removing rules...", 40: "Rules successfully removed", 41: "Packet filter off, as before",
          42: "Done, not active - see log", 43: "Failed - see log",
+         # 320-325 = the entry row and the Start row carry the daemon state (rhmiapp-98).
+         320: "Android Auto",
+         321: "Android Auto: connecting...",
+         322: "Android Auto: connected",
+         323: "Android Auto: waiting for phone",
+         324: "Android Auto: no Wi-Fi Direct, use USB",
+         325: "Android Auto: no CarPlay network, using Wi-Fi Direct",
          44: "CarPlay compatibility",   # 44 = CarPlay compatibility checkbox (rhmiapp-54-cpcompat)
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).

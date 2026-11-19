@@ -285,10 +285,6 @@
           <property id="24" value="3"/>
         </properties>
         <components>
-          <label id="460" model="430" text="Status">
-            <properties><property id="2" value="false"/></properties>
-          </label>
-          <button action="420" id="461" text="Car manufacturer"/>
           <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
           <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
           <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
@@ -310,6 +306,7 @@
           <button action="132" id="135" model="134" text="Install PF Rules"/>
           <button action="136" id="140" model="138" text="Check PF Rules"/>
           <button action="137" id="141" model="139" text="Uninstall PF Rules"/>
+          <button action="420" id="461" text="Car manufacturer"/>
         </components>
       </hmiState>
       <!-- Build versions, filled when the page is shown (BasicString into two Richtext labels): the daemon build
@@ -378,7 +375,7 @@
       <hmiState id="18" parentId="14" text="Car manufacturer">
         <properties><property id="24" value="3"/></properties>
         <components>
-          <radiobutton action="421" id="462" model="450" text="Auto (carplay.ini)"/>
+          <radiobutton action="421" id="462" model="450" text="Auto"/>
           <radiobutton action="422" id="463" model="451" text="BMW"/>
           <radiobutton action="423" id="464" model="452" text="Toyota"/>
           <radiobutton action="424" id="465" model="453" text="MINI"/>

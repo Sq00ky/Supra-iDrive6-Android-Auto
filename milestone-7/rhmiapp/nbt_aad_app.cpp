@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-98-simple (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-99-status (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -243,6 +243,14 @@ const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start A
 const unsigned    kActStop        = 22;      // <raAction id="22"/> row "Force Stop"
 const unsigned    kActRestart     = 23;      // <raAction id="23"/> row "Restart"
 const unsigned    kStartRowModel  = 31;      // textIdModel of the Start row
+// Status wording (rhmiapp-98): the entry row and the Start row say what nbt-aad is doing. Static text ids, because
+// those rows are textIdModels; the daemon's status token picks which one.
+const unsigned    kTextAaDefault    = 320;
+const unsigned    kTextAaConnecting = 321;
+const unsigned    kTextAaConnected  = 322;
+const unsigned    kTextAaWaiting    = 323;
+const unsigned    kTextAaNoWfd      = 324;
+const unsigned    kTextAaNoCarplay  = 325;
 const unsigned    kTextStart      = 10;      // "Start Android Auto"
 const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
@@ -1847,29 +1855,6 @@ bool onVehicleFocus(void*, const bmw::Parcel& p) {
 
 // Live status line: the daemon writes a short token with every UI-state record, and this turns it into a sentence.
 // The daemon's own state file decides "not running", so the line cannot claim a session that is not there.
-std::string g_statusShown;
-std::string statusSentence() {
-    DaemonState d = readDaemonState();
-    if (d.pid <= 0) return "Not running. Press Start Android Auto.";
-    FILE* f = fopen("/dev/shmem/nbt-aad-status", "r");
-    char tok[32] = {0};
-    if (f) { if (fscanf(f, "%31s", tok) != 1) tok[0] = 0; fclose(f); }
-    const std::string t(tok);
-    if (t == "connected")      return "Running, phone connected.";
-    if (t == "connecting")     return "Running, connecting to the phone...";
-    if (t == "wfd-missing")    return "Running, no Wi-Fi Direct (wfd0): wireless unavailable, use USB.";
-    if (t == "cp-ini-missing") return "Running, no carplay.ini: using Wi-Fi Direct instead.";
-    if (d.state && !strcmp(d.state, "idle")) return "Running, waiting for the phone to connect.";
-    return "Running.";
-}
-void showStatus(bmw::PluginApp* app) {
-    if (!app) return;
-    const std::string line = statusSentence();
-    if (line == g_statusShown) return;
-    g_statusShown = line;
-    app->updateModel(kStatusModel, bmw::BasicString<char>(line.c_str()));
-}
-
 void showAutostart(bmw::PluginApp* app) {
     bool on = autostartOn();
     app->updateModel(kAutostartModel, on);
@@ -2425,7 +2410,6 @@ bool onVersionFocus(void* /*app*/, const bmw::Parcel& /*p*/) { showVersions(g_ru
 void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
-    showStatus(app);                                    // live status: cheap, and only updates when the line changes
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
@@ -2448,7 +2432,16 @@ void statusRun(void* /*self*/) {
     DaemonState d = readDaemonState();
     bool connecting = !strcmp(d.state, "connecting"), connected = !strcmp(d.state, "connected");
 
-    unsigned want = connecting ? kTextConnecting : kTextDefault;          // the Media/Radio entry row
+    char tok[32] = {0};
+    { FILE* sf = fopen("/dev/shmem/nbt-aad-status", "r");
+      if (sf) { if (fscanf(sf, "%31s", tok) != 1) tok[0] = 0; fclose(sf); } }
+    unsigned statusText = kTextAaDefault;
+    if (connected) statusText = kTextAaConnected;
+    else if (connecting) statusText = kTextAaConnecting;
+    else if (!strcmp(tok, "wfd-missing")) statusText = kTextAaNoWfd;
+    else if (!strcmp(tok, "cp-ini-missing")) statusText = kTextAaNoCarplay;
+    else if (d.pid > 0) statusText = kTextAaWaiting;
+    unsigned want = statusText;                                          // the Media/Radio entry row
     if (want != g_shownText) {
         bmw::TextID text(want);
         app->updateModel(kEntryTextModel, text);
@@ -2457,6 +2450,7 @@ void statusRun(void* /*self*/) {
     }
     if (!fileExists(nbt::appFile("spinner.disable").c_str())) setConnectingAnimation(app, connecting);
     unsigned row = connected ? kTextRowOpen : connecting ? kTextRowConnecting : kTextStart;   // our menu's Start row
+    if (!connected && !connecting && statusText != kTextAaDefault) row = statusText;   // waiting or missing link: say why
     if (row != g_shownRow) {
         bmw::TextID text(row);
         app->updateModel(kStartRowModel, text);
