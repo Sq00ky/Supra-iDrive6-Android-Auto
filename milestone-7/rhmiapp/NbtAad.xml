@@ -37,6 +37,12 @@
       <raAction id="137"/>
       <raAction id="159"/>
       <hmiAction id="200" target="16"/>
+      <hmiAction id="420" target="18"/>
+      <raAction id="421"/>
+      <raAction id="422"/>
+      <raAction id="423"/>
+      <raAction id="424"/>
+      <raAction id="425"/>
       <raAction id="248"/>
       <raAction id="210"/>
       <raAction id="211"/>
@@ -104,6 +110,14 @@
       </textIdModel>
       <raDataModel id="163" modelType="Richtext"/>
       <raDataModel id="164" modelType="Richtext"/>
+
+      <!-- rhmiapp-96: live nbt-aad status on the Settings page, and the car manufacturer choice. -->
+      <raDataModel id="430" modelType="Richtext"/>
+      <raBoolModel id="450"/>
+      <raBoolModel id="451"/>
+      <raBoolModel id="452"/>
+      <raBoolModel id="453"/>
+      <raBoolModel id="454"/>
       <textIdModel id="165" textId="45">
         <synonyms/>
       </textIdModel>
@@ -341,6 +355,10 @@
       <hmiState id="16" parentId="14" text="BMW Favorite Keys" textModel="202">
         <properties><property id="24" value="3"/></properties>
         <components>
+          <label id="460" model="430" text="Status">
+            <properties><property id="2" value="false"/></properties>
+          </label>
+          <button action="420" id="461" model="430" text="Car manufacturer"/>
           <checkbox action="248" id="249" model="250" text="Show Favorites Keys Bar" textModel="251"/>
           <separator id="252"/>
           <label id="264" model="261"><properties><property id="2" value="false"/></properties></label>
@@ -391,6 +409,16 @@
               <property id="21" value="0"/>
             </properties>
           </image>
+        </components>
+      </hmiState>
+      <hmiState id="18" parentId="14" text="Car manufacturer">
+        <properties><property id="24" value="3"/></properties>
+        <components>
+          <radiobutton action="421" id="462" model="450" text="Auto (carplay.ini)"/>
+          <radiobutton action="422" id="463" model="451" text="BMW"/>
+          <radiobutton action="423" id="464" model="452" text="Toyota"/>
+          <radiobutton action="424" id="465" model="453" text="MINI"/>
+          <radiobutton action="425" id="466" model="454" text="Rolls-Royce"/>
         </components>
       </hmiState>
     </hmiStates>

@@ -534,6 +534,42 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
+// Car manufacturer (rhmiapp-96): the Settings page writes /var/opt/aa/vehicle (auto|bmw|toyota|mini|rollsroyce).
+// "auto" means: say nothing and let car_config.hpp read the car's carplay.ini, which is what it already does when
+// NBT_VEHICLE is unset. An explicit NBT_VEHICLE in nbt-aad.env still wins over the file.
+static const char* const kVehicleChoiceFile = "/var/opt/aa/vehicle";
+static const char* const kStatusFile = "/dev/shmem/nbt-aad-status";
+static void applyVehicleChoice() {
+    if (getenv("NBT_VEHICLE")) { printf("[Car] NBT_VEHICLE from the environment: %s\n", getenv("NBT_VEHICLE")); return; }
+    FILE* f = fopen(kVehicleChoiceFile, "r");
+    if (!f) return;
+    char v[24] = {0};
+    if (fscanf(f, "%23s", v) != 1) v[0] = 0;
+    fclose(f);
+    if (!v[0] || !strcmp(v, "auto")) { printf("[Car] vehicle: auto (carplay.ini decides)\n"); return; }
+    if (strcmp(v,"bmw") && strcmp(v,"toyota") && strcmp(v,"mini") && strcmp(v,"rollsroyce")) {
+        printf("[Car] %s says '%s', which is not a vehicle; ignoring\n", kVehicleChoiceFile, v);
+        return;
+    }
+    setenv("NBT_VEHICLE", v, 1);
+    printf("[Car] vehicle from %s: %s\n", kVehicleChoiceFile, v);
+}
+
+// A short machine token for the iDrive Settings page: the plugin turns it into a sentence. Written with the same
+// record as the UI state, so the two never disagree about whether nbt-aad is running.
+static void writeStatus(const char* state) {
+    const char* tok = "waiting-phone";
+    if (!strcmp(state, "connected")) tok = "connected";
+    else if (!strcmp(state, "connecting")) tok = "connecting";
+    else if (access("/dev/wfd0", F_OK) != 0 && access("/dev/wfd0", R_OK) != 0) tok = "wfd-missing";
+    else if (access("/var/opt/conn/carplay/iap2.cfg", F_OK) != 0 &&
+             access("/fs/sda1/opt/conn/carplay/iap2.cfg", F_OK) != 0) tok = "cp-ini-missing";
+    int fd = open(kStatusFile, O_WRONLY | O_CREAT, 0666);
+    if (fd < 0) return;
+    fchmod(fd, 0666);
+    if (write(fd, tok, strlen(tok)) == (ssize_t)strlen(tok)) ftruncate(fd, (off_t)strlen(tok));
+    close(fd);
+}
 // The iDrive app's "Start automatically" bootloop guard (rhmiapp-20): it records each autostart here and skips the
 // autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
 // <data dir>/bootguard (nbt_paths.hpp).
@@ -564,6 +600,7 @@ static void writeUiState(const char* state, int overlay, bool favouritePeek) {
     }
     ssize_t w = write(fd, rec, (size_t)n);
     if (w == n) ftruncate(fd, n);   // drop a longer old record only after the new line is in place
+    writeStatus(state);
     else if (!s_warned) { printf("[UiState] short write to %s\n", kUiStateFile); s_warned = true; }
     close(fd);
 }
@@ -2196,6 +2233,7 @@ int main(int argc, char* argv[]) {
     signal(SIGINT,  signalHandler);
     signal(SIGTERM, signalHandler);
 
+    applyVehicleChoice();
     // Vehicle + panel profile (NBT_VEHICLE / NBT_SCREEN, else the car's carplay.ini, else the display's own size for
     // the screen, else Toyota 1280x480).
     // Parsed here, before any thread starts.

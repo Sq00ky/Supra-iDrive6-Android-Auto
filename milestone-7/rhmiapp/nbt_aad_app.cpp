@@ -296,6 +296,16 @@ const unsigned    kAboutModel      = 37;
 // choice is one word in /var/opt/aa/cluster; nbt-aad reads it when NBT_CLUSTER is unset. 6WB has no display
 // driver yet, so it is offered with that stated and the daemon says so rather than quietly doing 6WA's job.
 const char* const kClusterFlag       = "cluster";
+// Car manufacturer choice (rhmiapp-96): /var/opt/aa/vehicle -> the daemon exports NBT_VEHICLE at start, and
+// car_config.hpp then skips carplay.ini. "auto" keeps today's behaviour (carplay.ini decides).
+const char* const kVehicleChoiceFile = "/var/opt/aa/vehicle";
+const char* const kVehicleNames[5]   = { "auto", "bmw", "toyota", "mini", "rollsroyce" };
+const char* const kVehicleLabels[5]  = { "Auto (carplay.ini)", "BMW", "Toyota", "MINI", "Rolls-Royce" };
+const unsigned    kVehicleActions[5] = { 421, 422, 423, 424, 425 };
+const unsigned    kVehicleModels[5]  = { 450, 451, 452, 453, 454 };
+const unsigned    kVehicleState      = 18;
+const unsigned    kStatusModel       = 430;
+std::string g_vehicleAtEntry;
 const unsigned    kClusterModels[3]  = { 401, 402, 403 };
 const char* const kClusterValues[3]  = { "j29", "6wa", "6wb" };
 const unsigned    kAboutText       = 17;
@@ -1795,6 +1805,71 @@ bool onClusterJ29(void*, const bmw::Parcel&) { return onClusterPick(0); }
 bool onCluster6wa(void*, const bmw::Parcel&) { return onClusterPick(1); }
 bool onCluster6wb(void*, const bmw::Parcel&) { return onClusterPick(2); }
 
+// The stored choice, always a known value ("auto" when the file is missing or odd).
+std::string readVehicleChoice() {
+    FILE* f = fopen(kVehicleChoiceFile, "r");
+    if (!f) return "auto";
+    char v[24] = {0};
+    if (fscanf(f, "%23s", v) != 1) v[0] = 0;
+    fclose(f);
+    for (int i = 0; i < 5; ++i) if (!strcmp(v, kVehicleNames[i])) return std::string(v);
+    return "auto";
+}
+bool writeVehicleChoice(const char* v) {
+    nbt::makeDataDir();
+    const char* next = "/var/opt/aa/vehicle.next";
+    FILE* f = fopen(next, "w");
+    if (!f) { alog("vehicle: cannot save errno=%d", errno); return false; }
+    bool ok = fprintf(f, "%s\n", v) > 0;
+    if (fclose(f) != 0) ok = false;
+    if (ok && rename(next, kVehicleChoiceFile) == 0) return true;
+    unlink(next); alog("vehicle: save failed errno=%d", errno);
+    return false;
+}
+void showVehicleChoice(bmw::PluginApp* app) {
+    if (!app) return;
+    const std::string cur = readVehicleChoice();
+    for (int i = 0; i < 5; ++i) app->updateModel(kVehicleModels[i], cur == kVehicleNames[i]);
+    g_vehicleAtEntry = cur;
+}
+template <int Mode> bool onVehiclePick(void*, const bmw::Parcel&) {
+    if (writeVehicleChoice(kVehicleNames[Mode])) {
+        alog("vehicle choice -> %s (nbt-aad reads it at its next start)", kVehicleNames[Mode]);
+        if (g_app) showVehicleChoice(g_app);
+    }
+    return true;
+}
+bool onVehicleFocus(void*, const bmw::Parcel& p) {
+    bool f = false; p.readBool(f);
+    if (f && g_app) showVehicleChoice(g_app);
+    return true;
+}
+
+// Live status line: the daemon writes a short token with every UI-state record, and this turns it into a sentence.
+// The daemon's own state file decides "not running", so the line cannot claim a session that is not there.
+std::string g_statusShown;
+std::string statusSentence() {
+    DaemonState d = readDaemonState();
+    if (d.pid <= 0) return "Not running. Press Start Android Auto.";
+    FILE* f = fopen("/dev/shmem/nbt-aad-status", "r");
+    char tok[32] = {0};
+    if (f) { if (fscanf(f, "%31s", tok) != 1) tok[0] = 0; fclose(f); }
+    const std::string t(tok);
+    if (t == "connected")      return "Running, phone connected.";
+    if (t == "connecting")     return "Running, connecting to the phone...";
+    if (t == "wfd-missing")    return "Running, no Wi-Fi Direct (wfd0): wireless unavailable, use USB.";
+    if (t == "cp-ini-missing") return "Running, no carplay.ini: using Wi-Fi Direct instead.";
+    if (d.state && !strcmp(d.state, "idle")) return "Running, waiting for the phone to connect.";
+    return "Running.";
+}
+void showStatus(bmw::PluginApp* app) {
+    if (!app) return;
+    const std::string line = statusSentence();
+    if (line == g_statusShown) return;
+    g_statusShown = line;
+    app->updateModel(kStatusModel, bmw::BasicString<char>(line.c_str()));
+}
+
 void showAutostart(bmw::PluginApp* app) {
     bool on = autostartOn();
     app->updateModel(kAutostartModel, on);
@@ -2350,6 +2425,7 @@ bool onVersionFocus(void* /*app*/, const bmw::Parcel& /*p*/) { showVersions(g_ru
 void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
+    showStatus(app);                                    // live status: cheap, and only updates when the line changes
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
@@ -2521,6 +2597,7 @@ time_t g_setSnapTime = 0;
 void settingsPageEntered() {
     if (g_setSnapPending) return;                        // keep the snapshot of the first visit since the last check
     g_setSnap = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
+    if (g_app) showVehicleChoice(g_app);              // remember the manufacturer too, for the restart decision
     g_setSnapPending = true;
     g_setSnapTime = time(NULL);
 }
@@ -2529,7 +2606,12 @@ void settingsBackOnMainPage() {
     if (!g_setSnapPending) return;
     g_setSnapPending = false;
     const std::string now = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
-    const std::string diff = nbt::settingsDiff(kSettingsFlags, kSettingsFlagCount, g_setSnap, now);
+    std::string diff = nbt::settingsDiff(kSettingsFlags, kSettingsFlagCount, g_setSnap, now);
+    const std::string vehicleNow = readVehicleChoice();
+    if (!g_vehicleAtEntry.empty() && vehicleNow != g_vehicleAtEntry) {
+        if (!diff.empty()) diff += ", ";
+        diff += "car manufacturer " + g_vehicleAtEntry + " -> " + vehicleNow;
+    }
     DaemonState d = readDaemonState();
     nbt::SettingsRestart r = nbt::settingsRestartDecide(
         !diff.empty(), envFlagOn("NBT_SETTINGS_RESTART", true), d.pid != 0,
@@ -2676,6 +2758,13 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, 411, &onClusterJ29);
     addAction(self, 412, &onCluster6wa);
     addAction(self, 413, &onCluster6wb);
+    addAction(self, 421, &onVehiclePick<0>); addAction(self, 422, &onVehiclePick<1>);
+    addAction(self, 423, &onVehiclePick<2>); addAction(self, 424, &onVehiclePick<3>);
+    addAction(self, 425, &onVehiclePick<4>);
+    {
+        bmw::ActionDelegate veh; veh.object = self; veh.stub = &onVehicleFocus;
+        self->addHandler(kVehicleState, kHandlerFocus, veh);
+    }
     addAction(self, kActWarnings, &onWarningsToggle);
     addAction(self, kActUsbAa, &onUsbAaToggle);
     addAction(self, kActPhoneGps, &onPhoneGpsToggle);
