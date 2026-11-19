@@ -102,6 +102,7 @@ const char* submitResultName(SubmitResult r);
 struct TerminalStats {
     uint32_t batches, batchesDone, batchesDropped, replaced, merged, refused;
     uint32_t calls, answers, copies, strays, navMsgs, timeouts, errors, lateErrors;
+    uint32_t remeasures;     // the guidance moved (kGuidanceMovedFkt): the picture buffer asked again
 };
 
 class Core {
@@ -113,6 +114,7 @@ public:
     void setHost(uint16_t host, uint32_t now);
     void onMessage(const most::View& m, uint32_t now);
     void tick(uint32_t now);                  // timeouts and the end of the navigation's route
+    void remeasure();                         // the guidance moved: ask the picture buffer's size again
     void reset(uint32_t now);                 // leave kFailed
 
     SubmitResult submit(const Batch& b, uint32_t now);
@@ -228,12 +230,14 @@ public:
     void onMessage(const most::View& m);
     void onLink(bool up, uint16_t self);
     void onRegistry(const std::vector<most::RegistryEntry>& reg);
+    void onGuidanceMoved();                       // the cluster's kGuidanceMovedFkt to the navigation
 
 private:
     static void* threadMain(void* self);
     static void msgTramp(const most::View& m, void* self);
     static void linkTramp(most::LinkState s, void* self);
     static void regTramp(const std::vector<most::RegistryEntry>& reg, void* self);
+    static void movedTramp(const most::View& m, void* self);
     static bool clientSend(const most::Msg& m, void* self);
     void run();
     void wake();

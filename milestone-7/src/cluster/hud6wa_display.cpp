@@ -62,7 +62,7 @@ void addHides(Batch& b, const HudProfile& p) {
 }
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
-    : port_(port), p_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
+    : port_(port), p_(p), base_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
       redraw_(false), held_(false), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), has_layout_(false),
       near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
       route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false) {}
@@ -88,6 +88,8 @@ ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
     // F20-sized defaults to the factory arrow's place; on a buffer they fit, nothing moves.
     int mw, mh;
     if (port_.measuredSize(mw, mh) && (mw != measured_w_ || mh != measured_h_)) {
+        p_.canvas = base_.canvas;   // from the profile as given: the HUD's box must not stay in the cluster's field
+        p_.glyph = base_.glyph;
         fitMeasured(mw, mh, p_);
         has_layout_ = false;   // laid out for the old buffer: the next maneuver lays out (and checks) on this one
         measured_w_ = mw;

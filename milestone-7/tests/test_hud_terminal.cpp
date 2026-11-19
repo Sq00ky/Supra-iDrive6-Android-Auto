@@ -137,7 +137,20 @@ static void testMeasure() {
         k.onMessage(err.v, 10);                                 // refused: the defaults stay, the terminal too
         assert(!k.measuredSize(w, h) && k.status() == kReady);
     }
-    printf("  measure: a late answer taken, its copies ours, another handle and an error let go\n");
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize);
+        Wire hud = sizeAnswer(kSelf, 5, 126, 77), cluster = sizeAnswer(kSelf, 5, 176, 126);
+        k.onMessage(hud.v, 10);
+        assert(k.measuredSize(w, h) && w == 126 && h == 77 && !k.next(20, m));
+        k.remeasure();                                          // the guidance moved to the cluster
+        assert(k.measuredSize(w, h) && w == 126);               // the last size stands until the answer
+        assert(k.next(30, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5);
+        k.onMessage(cluster.v, 40);
+        assert(k.measuredSize(w, h) && w == 176 && h == 126 && k.stats().remeasures == 1);
+    }
+    printf("  measure: a late answer taken, its copies ours, another handle and an error let go, asked again on a move\n");
 }
 
 static void testStatusAndOffline() {
@@ -832,6 +845,38 @@ static void testOnClient() {
     assert(t.status() == kOffline);
 }
 
+// The cluster telling the navigation that the guidance moved (0x52/00 0xCFF) reaches the terminal through the client.
+static void testGuidanceMovedOnClient() {
+    fake_dsi::reset();
+    most::Client client;
+    Config c = config();
+    c.measureHandle = 5;
+    HudTerminal t(c);
+    assert(t.attach(client));
+    assert(client.start("T"));
+    fake_dsi::attach();
+    std::vector<uint8_t> resp;
+    most::putLe32(resp, 77);
+    most::putLe16(resp, kSelf);
+    fake_dsi::data(most::kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+    std::vector<uint8_t> reg;
+    most::putLe32(reg, 2);
+    most::putLe16(reg, 0x0140); most::putLe16(reg, most::registryKey(0x52, 0));
+    most::putLe16(reg, kHost); most::putLe16(reg, most::registryKey(0x82, 0));
+    fake_dsi::data(most::kAttrRegistry, &reg[0], (uint32_t)reg.size());
+    assert(t.status() == kReady && t.stats().remeasures == 0);
+
+    most::Msg moved;
+    moved.txType = 0; moved.varTag = 2; moved.varVal = 0; moved.dst = 0x0140; moved.src = kHost;
+    moved.fblock = kGuidanceFBlock; moved.inst = kGuidanceInst; moved.fkt = kGuidanceMovedFkt; moved.opType = 0x2;
+    moved.hdrTag = 0;
+    const uint8_t toCluster[] = { 0x01, 0x00, 0xa0, 0x00, 0xe2, 0x02 };   // as sabifa captured it (#255)
+    moved.data.assign(toCluster, toCluster + sizeof(toCluster));
+    deliver(moved);
+    assert(t.stats().remeasures == 1 && t.status() == kReady);   // asked again, not taken for the navigation
+    fake_dsi::detach();
+}
+
 // Attached without sending (the shadow mode): the terminal watches, and the client refuses any call to 82/00.
 static void testWatchOnly() {
     fake_dsi::reset();
@@ -889,6 +934,7 @@ int main() {
     testThreaded();
     testOnClient();
     testWatchOnly();
+    testGuidanceMovedOnClient();
     printf("test_hud_terminal: all passed\n");
     return 0;
 }

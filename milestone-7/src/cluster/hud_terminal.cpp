@@ -406,6 +406,15 @@ void Core::onNav(const most::View& m, uint32_t now) {
     refresh(why, now);
 }
 
+// The guidance moved between the HUD and the cluster, whose picture buffers differ: ask ImageGetSize again, ahead of
+// the next drawing. The last size stands until the answer (a driver refits only on a change).
+void Core::remeasure() {
+    if (!cfg_.measureHandle || !host_) return;
+    measureInFlight_ = measureLate_ = false;
+    measureDue_ = true;
+    ++stats_.remeasures;
+}
+
 void Core::tick(uint32_t now) {
     // No answer to ImageGetSize in time. A cold cluster answers it later (after an iDrive restart, #264), so keep
     // listening and take it then; meanwhile the defaults stand. Never a failure, never asked again.
@@ -476,6 +485,7 @@ bool HudTerminal::attach(most::Client& c, bool sending) {
     }
     if (sending && !c.allowSend(kFBlock, kInst)) return false;
     return c.addRoute(kFBlock, kInst, most::kAny, most::kAny, &HudTerminal::msgTramp, this) &&
+           c.addRoute(kGuidanceFBlock, kGuidanceInst, kGuidanceMovedFkt, most::kAny, &HudTerminal::movedTramp, this) &&
            c.addLinkListener(&HudTerminal::linkTramp, this) && c.addRegistryListener(&HudTerminal::regTramp, this);
 }
 
@@ -586,16 +596,23 @@ void HudTerminal::logHealth() {
     uint16_t host = core_.host();
     pthread_mutex_unlock(&lock_);
     printf("[HudTerm] %s, host %04X: batches %u (done %u, dropped %u, replaced %u, merged %u, refused %u), calls %u, "
-           "answers %u, copies %u, strays %u, nav msgs %u, timeouts %u, errors %u (late %u)\n",
+           "answers %u, copies %u, strays %u, nav msgs %u, timeouts %u, errors %u (late %u), remeasures %u\n",
            statusName(s), host, t.batches - l.batches, t.batchesDone - l.batchesDone, t.batchesDropped - l.batchesDropped,
            t.replaced - l.replaced, t.merged - l.merged, t.refused - l.refused, t.calls - l.calls, t.answers - l.answers, t.copies - l.copies,
            t.strays - l.strays, t.navMsgs - l.navMsgs, t.timeouts - l.timeouts, t.errors - l.errors,
-           t.lateErrors - l.lateErrors);
+           t.lateErrors - l.lateErrors, t.remeasures - l.remeasures);
 }
 
 void HudTerminal::onMessage(const most::View& m) {
     pthread_mutex_lock(&lock_);
     core_.onMessage(m, nowMs());
+    wake();
+    pthread_mutex_unlock(&lock_);
+}
+
+void HudTerminal::onGuidanceMoved() {
+    pthread_mutex_lock(&lock_);
+    core_.remeasure();
     wake();
     pthread_mutex_unlock(&lock_);
 }
@@ -616,6 +633,7 @@ void HudTerminal::onRegistry(const std::vector<most::RegistryEntry>& reg) {
 }
 
 void HudTerminal::msgTramp(const most::View& m, void* self) { static_cast<HudTerminal*>(self)->onMessage(m); }
+void HudTerminal::movedTramp(const most::View&, void* self) { static_cast<HudTerminal*>(self)->onGuidanceMoved(); }
 
 // On the DSI callback thread, after the client released its lock, so selfAddress() is safe here.
 void HudTerminal::linkTramp(most::LinkState s, void* self) {

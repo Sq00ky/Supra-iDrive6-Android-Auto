@@ -43,6 +43,13 @@ namespace hudterm {
 const uint8_t kFBlock = 0x82;
 const uint8_t kInst = 0x00;
 
+// Each time the iDrive setting moves the guidance between the HUD and the cluster, the cluster tells the navigation on
+// FBlock 0x52 inst 00, function 0xCFF (sabifa's capture, #255); the HUDTerminal itself reports nothing. The picture
+// buffer differs between the two (126 x 77 and 176 x 126 on an F30 with a HUD), so it is measured again then.
+const uint8_t kGuidanceFBlock = 0x52;
+const uint8_t kGuidanceInst = 0x00;
+const uint16_t kGuidanceMovedFkt = 0xCFF;
+
 enum Fkt {
     kSetVisibility = 0x204, kIsVisible = 0x205, kSwitchVisibility = 0x20E, kTextareaSetText = 0x210,
     kSetLineColor = 0x218, kSetLineWidth = 0x219, kSetFillColor = 0x21B, kSetFillMode = 0x21C, kAddPolygon = 0x21D,

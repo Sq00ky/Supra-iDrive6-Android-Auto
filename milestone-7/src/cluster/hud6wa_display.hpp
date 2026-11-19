@@ -122,6 +122,7 @@ private:
 
     hudterm::Port& port_;
     hudterm::HudProfile p_;
+    hudterm::HudProfile base_;   // as given: each measurement is fitted from it, not from the last fit
     bool shadow_;
     Settings s_;
     LogFn log_fn_;

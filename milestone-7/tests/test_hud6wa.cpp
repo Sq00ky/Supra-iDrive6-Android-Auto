@@ -758,6 +758,31 @@ static void testJunctionFits() {
            " angle %d); a re-measure drops the view\n", fits, cut, edgeCut, cutType, cutAngle);
 }
 
+// The guidance moves between the HUD (126 x 77) and the cluster (176 x 126) with the iDrive setting, and each
+// measurement is fitted from the profile as given: in the cluster the F20 box comes back (it fits there), in the HUD the
+// factory box again - not the HUD's small box kept in the cluster's bigger field.
+static void testRefitFromProfile() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    NavView v = view(8, "Testroad", "300", 7, 300);
+    port.mw = 126;
+    port.mh = 77;
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(logged("HUD picture buffer measured 126x77: canvas 0,0-125,76 glyph 37,23-82,68"));
+    port.mw = 176;
+    port.mh = 126;
+    assert(d.showManeuver(v, 1, false, false) == ClusterDisplay::kOk);
+    assert(logged("HUD picture buffer measured 176x126: canvas 0,0-175,125 glyph 70,20-170,120"));
+    g_log.clear();
+    port.mw = 126;
+    port.mh = 77;
+    assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+    assert(logged("HUD picture buffer measured 126x77: canvas 0,0-125,76 glyph 37,23-82,68"));
+    printf("  refit from the profile: HUD 126x77 (factory box), cluster 176x126 (F20 box), HUD again\n");
+}
+
 static void testJunctionDriver() {
     g_log.clear();
     FakePort port;
@@ -1208,6 +1233,7 @@ int main() {
     testLanes();
     testJunctionDriver();
     testJunctionFits();
+    testRefitFromProfile();
     testJunctionNoOverlay();
     testJunctionLanes();
     testJunctionCore();
