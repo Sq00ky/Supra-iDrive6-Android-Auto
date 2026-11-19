@@ -43,6 +43,18 @@ with zipfile.ZipFile(root / 'rhmiapp/NbtAad_ALL_Texts.zip') as z:
         assert texts['310'] == 'bar color'
         assert texts['311'] == 'custom color'
         assert texts['45'] != texts['48']
+# Every text id the XML references must exist in every language file, or the HMI refuses the plugin.
+import re as _re
+_xml = (root / 'rhmiapp/NbtAad.xml').read_text()
+_tmodels = dict(_re.findall(r'<textIdModel id="(\d+)" textId="(\d+)"', _xml))
+_used = sorted({int(_tmodels[m]) for m in _re.findall(r'\b(?:textModel|model)="(\d+)"', _xml) if m in _tmodels})
+with zipfile.ZipFile(root / 'rhmiapp/NbtAad_ALL_Texts.zip') as z:
+    for name in z.namelist():
+        have = {int(l.split('=', 1)[0]) for l in z.read(name).decode().splitlines()
+                if l.split('=', 1)[0].strip().isdigit()}
+        missing = [i for i in _used if i not in have]
+        assert not missing, (name, 'text ids missing', missing)
+
 with zipfile.ZipFile(root / 'rhmiapp/NbtAad_ALL_Images.zip') as z:
     assert z.read('55001.png') == (root / 'plugin/res/aa_row_icon_63x54.png').read_bytes()
 print('test_favourite_resources: all passed')
