@@ -106,6 +106,7 @@
 #include "aa_keys.hpp"
 #include "car/ccs_config.hpp"
 #include "car/ccs_input.hpp"
+#include "car/favourite_preview.hpp"
 #include "car/volume_input.hpp"
 #include "car/input_activity.hpp"
 #include "car/gps.hpp"
@@ -123,6 +124,7 @@
 #include "../tools/pf_aa.hpp"
 #include "spp_direction.hpp"
 #include "neutral_resume.hpp"
+#include "tile_process.hpp"
 #include "cluster/nav_core.hpp"
 #include <termios.h>
 
@@ -163,6 +165,38 @@ static nbt::car::InputActivity g_carInput;   // any car control the driver touch
 static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
 static nbt::car::CarVehicle g_vehicle;       // the car's wheel speed, gear and parking brake: a consumer of g_most
 static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
+static nbt::car::FavouritePreview g_favouritePreview;
+static volatile sig_atomic_t g_favouritePeek = 0;
+static volatile sig_atomic_t g_favouriteTouchMask = 0;
+static volatile sig_atomic_t g_favouriteInputSerial = 0;
+static volatile sig_atomic_t g_mainWake = 0;
+// The Settings toggle (rhmiapp-87): the plugin writes /var/opt/aa/favourite-bar.disabled. Checked here, per
+// frame, so the switch works without restarting the daemon (the env only forces the capturer off).
+static const char* const kFavouriteOffFile = "/var/opt/aa/favourite-bar.disabled";
+static bool favouriteBarOff() { return access(kFavouriteOffFile, F_OK) == 0; }
+// NBT_FAVOURITE_PROBE=1: log every status frame from function block 0x15, whatever its function code.
+// The point is to find out whether this car publishes the 8 favourite keys at all, and under which fkt.
+static void onFavouriteProbe(const nbt::most::View& m, nbt::most::MsgClass, void*) {
+    if (m.fblock != 0x15) return;
+    char buf[64]; int n = 0;
+    for (unsigned i = 0; i < m.len && i < 8; ++i) n += snprintf(buf + n, sizeof(buf) - n, "%02x", m.data[i]);
+    if (n == 0) snprintf(buf, sizeof(buf), "-");
+    printf("[FavProbe] inst=0x%02x fkt=0x%03x op=0x%x len=%u data=%s\n",
+           (unsigned)m.inst, (unsigned)m.fkt, (unsigned)m.op, (unsigned)m.len, buf);
+}
+static void onFavouriteTouch(const nbt::most::View& m, void*) {
+    if (favouriteBarOff()) return;
+    if (g_favouritePreview.feed(m.fblock, m.inst, m.fkt, m.op, m.data, m.len, m.rxMs)) {
+        unsigned mask=0;
+        for(unsigned i=0;i<8;++i) if(m.data[i]) mask|=1u<<i;
+        if(mask&&!g_favouriteTouchMask)g_favouriteInputSerial=(sig_atomic_t)(((unsigned)g_favouriteInputSerial+1u)&0x7fffffffu);
+        g_favouriteTouchMask=(sig_atomic_t)mask;
+        g_mainWake = 1;
+        printf("[Favourites] touch rx=%u handled=%u mask=%u%u%u%u%u%u%u%u\n", m.rxMs, upMs(),
+               (unsigned)m.data[0], (unsigned)m.data[1], (unsigned)m.data[2], (unsigned)m.data[3],
+               (unsigned)m.data[4], (unsigned)m.data[5], (unsigned)m.data[6], (unsigned)m.data[7]);
+    }
+}
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -490,15 +524,18 @@ static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
 // autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
 // <data dir>/bootguard (nbt_paths.hpp).
 static const char* const kBootGuardName = "bootguard";
-static void writeUiState(const char* state, int overlay) {
+static void writeUiState(const char* state, int overlay, bool favouritePeek) {
     // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
     // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
     // tried to bind the control port itself.
-    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key, 4 car
+    // The fourth field marks a temporary favourite preview. Older readers ignore it. A paired plugin must
+    // understand it before enabling this feature, or it may treat a preview as an ordinary exit.
+    // The overlay is 0 hidden, 1 on screen, 2 BACK held, 3 menu key, 4 car
     // control, 5 knob turn / push only).
     // fscanf("%23s %d %d") still matches.
-    char rec[32];
-    int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d\n", state ? state : "idle", (int)getpid(), overlay);
+    char rec[48];
+    int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d %d %u\n", state ? state : "idle", (int)getpid(), overlay,
+                     favouritePeek ? 1 : 0, (unsigned)g_favouriteTouchMask);
     if (n < 0) return;
     int fd = open(kUiStateFile, O_WRONLY | O_CREAT, 0666);
     static bool s_warned = false;
@@ -1946,7 +1983,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.111-cluster"
+#define NBT_AAD_BUILD "v1.9.112-favourite"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -2112,6 +2149,7 @@ int main(int argc, char* argv[]) {
            nbt::confDir());
     if (g_ramLog) printf("  Log: RAM %s (fresh per run, 5 MB cap; NBT_RAM_LOG=0 = off)\n", nbt::ramlog::kDaemonPath);
     nbt::printNbtAadBannerNotice();
+    printf("[Favourites] native key previews, colour settings and release refresh enabled\n");
     printf("====================================================\n");
     printf("----------------------------------------------------\n");
 
@@ -2315,6 +2353,22 @@ int main(int argc, char* argv[]) {
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
     }
+    // Registered unless NBT_FAVOURITE_PREVIEW=0. The Settings toggle is checked per frame instead
+    // (favouriteBarOff), so switching it does not need a daemon restart.
+    const bool favouritePreviewEnabled = nbt::envFlag("NBT_FAVOURITE_PREVIEW") != 0;
+    if (nbt::envFlag("NBT_FAVOURITE_PROBE") != 0) {
+        if (g_most.setTap(&onFavouriteProbe, NULL))
+            printf("[FavProbe] on: every fb=0x15 MOST frame is logged. Touch the favourite keys now.\n");
+        else
+            printf("[FavProbe] the message tap is already taken\n");
+    }
+    if (favouritePreviewEnabled) {
+        if (!g_most.addRoute(0x15, 0x0c, 0xc02, nbt::most::kOpStatus, &onFavouriteTouch, NULL))
+            printf("[Favourites] no room for touch route; preview disabled\n");
+        else
+            printf("[Favourites] capture route 15/0C/0C02 registered (preview %s)\n",
+                   favouriteBarOff() ? "off: Settings toggle" : "on");
+    }
     // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
     if (!g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL))
         printf("[Main] driver input tracking failed to start: the iDrive app treats every iDrive screen as the car's.\n");
@@ -2420,6 +2474,9 @@ int main(int argc, char* argv[]) {
     if (mic_on) voice.init();
     const char* ui_state = "";
     int ui_overlay = -1;
+    int ui_favouritePeek = -1;
+    int ui_favouriteMask = -1;
+    nbt::TileProcess favouriteProcess;
     int night_posted = -1;
     // CarPlay hand-off: 2.5 s without an Android Auto session -> decoder context gets CarPlay's settings (an iPhone
     // taking over right away gets an unzoomed picture). Any later Android Auto connection rebuilds the Android Auto
@@ -2461,12 +2518,16 @@ int main(int argc, char* argv[]) {
             if (ki && !knobRecent) g_knobInputMs = 0;
             int ov = g_inputToPhone
                          ? (g_backState == 1 ? 2 : (menuRecent ? 3 : (inputRecent ? 4 : (knobRecent ? 5 : 1)))) : 0;
-            if (strcmp(st, ui_state) != 0 || ov != ui_overlay) {
-                writeUiState(st, ov);
+            if (strcmp(st, ui_state) != 0 || ov != ui_overlay || ui_favouritePeek != (int)g_favouritePeek ||
+                ui_favouriteMask != (int)g_favouriteTouchMask) {
+                writeUiState(st, ov, g_favouritePeek != 0);
                 if (strcmp(st, ui_state) != 0) printf("[UiState] iDrive menu entry: %s\n", st);
                 ui_state = st;
                 ui_overlay = ov;
+                ui_favouritePeek = (int)g_favouritePeek;
+                ui_favouriteMask = (int)g_favouriteTouchMask;
             }
+            favouriteProcess.service(act, "/opt/aa/nbt-aa-favourites", "/dev/shmem/nbt-aa-favourites.log",(unsigned)g_favouriteInputSerial);
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
         // while the phone has the mic closed the session simply drops the PCM. Opening/closing the endpoint per
@@ -2527,6 +2588,7 @@ int main(int argc, char* argv[]) {
             printf("[Focus] iDrive left the Android Auto screen (hard key): minimizing Android Auto\n");
         }
         if (g_showReq) {                                 // iDrive Android Auto entry selected
+            g_favouritePreview.cancel();
             g_showReq = 0;
             g_userExit = 0;
             g_carExit = 0;
@@ -2589,7 +2651,7 @@ int main(int argc, char* argv[]) {
         // session: only a change from hidden to visible while Android Auto is minimized counts there.
         // NBT_CP_LIVE_RETUNE=0 disables. Not car-verified.
         bool cp_shows = false;
-        if (overlay_on || !act) cp_1280_last = -1;
+        if (overlay_on || !act || g_favouritePeek) cp_1280_last = -1;
         else if (cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 && !video.decoderInCarPlayMode()) {
             int v = nbt::VideoManager::surface1280Visible();
             cp_shows = v == 1 && (nbt::VideoManager::sharesCarPlaySurface() || cp_1280_last == 0);
@@ -2644,6 +2706,11 @@ int main(int argc, char* argv[]) {
             }
         }
         bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !camera && !dm_peek;
+        bool favouritePeek = favouritePreviewEnabled &&
+            g_favouritePreview.step(monoMs(), want && act, overlay_on, g_most.state() == nbt::most::kUp);
+        if (favouritePeek != (g_favouritePeek != 0))
+            printf("[Favourites] native preview %s\n", favouritePeek ? "shown (touch)" : "finished");
+        g_favouritePeek = favouritePeek ? 1 : 0;
         if (want && act && !overlay_on && (video.decoderInCarPlayMode() || video.decoderParked())) {
             printf("[Main] back to Android Auto after %s: rebuilding the decoder context\n",
                    video.decoderParked() ? "iDrive (overlay had surface 1280)" : "CarPlay");
@@ -2669,6 +2736,12 @@ int main(int argc, char* argv[]) {
         }
         g_inputToPhone = (want && act) ? 1 : 0;
         nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen
+        const bool previewGeometryChanged = video.setFavouritePreview(want && favouritePeek);
+        if (previewGeometryChanged && !favouritePeek) {
+            // Invalidate captures before removing their composition, so a completing capture
+            // cannot see the old touch state and post the strip again during release.
+            writeUiState(act ? "connected" : ui_state, g_inputToPhone ? 1 : 0, false);
+        }
         if (want != overlay_on || (force_show && want)) {
             // The pill's surface 1281 leaves with the picture (the hide order holds neither), so the decoder stays
             // open: no close/rebuild, no keyframe wait, no grey picture (v1.9.15-v1.9.17 needed those only because the
@@ -2677,6 +2750,15 @@ int main(int argc, char* argv[]) {
             g_volumeOsd.setShown(want);
             overlay_on = want;
             reassert_ticks = want ? 0 : -1;
+        } else if (want && previewGeometryChanged) {
+            video.refreshFavouritePreview();
+        }
+        if (previewGeometryChanged) {
+            // Publish the completed composition now, not on the following 250 ms tick.
+            writeUiState(act ? "connected" : ui_state, g_inputToPhone ? 1 : 0, g_favouritePeek != 0);
+            ui_overlay = g_inputToPhone ? 1 : 0;
+            ui_favouritePeek = (int)g_favouritePeek;
+            ui_favouriteMask = (int)g_favouriteTouchMask;
         }
         force_show = false;
         // Coming back mid-session (iDrive entry, end of park assist / reverse), the iDrive app puts iDrive on its blank
@@ -2726,6 +2808,7 @@ int main(int argc, char* argv[]) {
     // the tester logs (2026-10-29) needed SIGTERM on every Force Stop, so the slow step has to show in the log.
     const double t0 = upSec();
     printf("[Main] [%9.3f] Shutdown requested, stopping subsystems...\n", t0);
+    favouriteProcess.stop();
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
     g_audioBackend->cancelPending();   // no queued audioconn starts while we tear down
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block

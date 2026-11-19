@@ -67,13 +67,16 @@
 #include "overlay_watch.hpp"
 #include "entry_key.hpp"
 #include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
+#include "../src/favourite_colour.hpp"
+#include "../src/favourite_picker.hpp"
+#include <vector>
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-85-cluster (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-87-favourite (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -936,6 +939,7 @@ struct DaemonState {
     int overlay;        // 1 = Android Auto on screen, knob goes to the phone; 2 = same, BACK held (v1.8.26+);
                         // 3 = same, MENU / COM / MEDIA / NAV / MAP just went to the phone (v1.8.29+ / v1.8.34+): re-hold;
                         // 4 = same, another car control in the last 3 s; 5 = same, only the knob turned / pushed (v1.9.19+)
+    bool favouritePeek; // optional fourth field: temporarily reveal the native favourite preview
 };
 
 bool pidAlive(int pid) {
@@ -980,16 +984,18 @@ DaemonState readDaemonState() {
     strcpy(d.state, "idle");
     d.pid = 0;
     d.overlay = 0;
+    d.favouritePeek = false;
     FILE* f = fopen(kStateFile, "r");
     if (f) {
         char st[24] = "";
-        int pid = 0, ov = 0;
-        int n = fscanf(f, "%23s %d %d", st, &pid, &ov);
+        int pid = 0, ov = 0, favourite = 0;
+        int n = fscanf(f, "%23s %d %d %d", st, &pid, &ov, &favourite);
         fclose(f);
         if (n >= 2 && pidAlive(pid)) {
             strcpy(d.state, st);
             d.pid = pid;
             d.overlay = (n >= 3) ? ov : 0;
+            d.favouritePeek = n >= 4 && favourite == 1;
             return d;
         }
     }
@@ -1005,10 +1011,13 @@ DaemonState readDaemonState() {
 bool g_focusKnown = false;     // a focus notification for our menu arrived at least once
 bool g_menuFocused = false;    // focus notification of hmiState 10 (the menu itself)
 bool g_settingsFocused = false; // focus notification of hmiState 14 (the Settings page under it, rhmiapp-39)
+bool g_colourFocused = false;
+bool g_pickerFocused = false;
+pid_t g_pickerPid = 0;
 // "The driver is in our own UI" (menu or its Settings page). Used by the hold: coming back to either is not a car
 // screen taking over. g_menuFocused alone stays the answer to "is the menu itself on top", which is what the
 // connected-after-Start return to the main menu tests (a driver reading Settings must not be pulled out of it).
-bool inOurMenu() { return g_menuFocused || g_settingsFocused; }
+bool inOurMenu() { return g_menuFocused || g_settingsFocused || g_colourFocused || g_pickerFocused; }
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
 bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
 pid_t g_autostartPid = 0;     // automatic launch waiting for its first projection handoff
@@ -1227,7 +1236,7 @@ bool onAaFocus(void*, const bmw::Parcel& p) {
     // knob does not drive iDrive's main menu under the picture until the next poll.
     if (!f && g_runApp && holdEnabled() && g_holding && !callActive()) {
         DaemonState d = readDaemonState();
-        if (d.pid > 0 && d.overlay == 3) fireHold(g_runApp, "a hard key went to Android Auto (immediate)");
+        if (d.pid > 0 && d.overlay == 3 && !d.favouritePeek) fireHold(g_runApp, "a hard key went to Android Auto (immediate)");
     }
     return true;
 }
@@ -1243,7 +1252,7 @@ bool onAaVisible(void*, const bmw::Parcel& p) {
     // Auto, as with CarPlay: bring it to the front. Not in reverse / park assist / a call.
     if (v && !g_holding && holdEnabled() && !callActive() && g_lastGear != kReverseGear && !pdcOwnsScreen()) {
         DaemonState d = readDaemonState();
-        if (d.pid > 0 && !d.overlay && !strcmp(d.state, "connected")) {
+        if (d.pid > 0 && !d.overlay && !d.favouritePeek && !strcmp(d.state, "connected")) {
             alog("hold: iDrive went back to the Android Auto screen: asking nbt-aad to come to the front");
             g_ow.reset(nowMs());
             sendShow();
@@ -1323,6 +1332,20 @@ void stepAsideForOverlay() {
 
 void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
     if (!holdEnabled()) return;
+    static bool favouriteAside = false;
+    if (d.pid > 0 && d.favouritePeek && !strcmp(d.state, "connected")) {
+        // Suspend focus enforcement while the native strip is shown. v2 keeps AA visible;
+        // remember its actual logical visibility so a genuine exit/camera transition is still handled.
+        g_prevOverlay = d.overlay ? 1 : 0;
+        favouriteAside = true;
+        return;
+    }
+    if (favouriteAside) {
+        favouriteAside = false;
+        // Driver navigation or another owner cancelled the peek: remain native, but let BACK/history
+        // re-enter AA through the normal onAaVisible path later. Do not issue a spurious Go Home event.
+        if (!d.overlay) g_holding = false;
+    }
     bool overlay = d.pid > 0 && d.overlay;
     bool rose = overlay && !g_prevOverlay, fell = !overlay && g_prevOverlay;
     g_prevOverlay = overlay ? 1 : 0;
@@ -2332,6 +2355,10 @@ void statusRun(void* /*self*/) {
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_noLogShown) showNoLog(app);
+    if(g_pickerPid){int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;}
+    if(g_pickerFocused && (fileExists(nbt::kPickerDonePath)||!g_pickerPid)){
+        unlink(nbt::kPickerDonePath);unlink(nbt::kPickerActivePath);app->triggerEvent(54);
+    }
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
     if (!g_menuIdriveShown) showMenuIdrive(app);
@@ -2540,7 +2567,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
     p.readBool(f);
     g_focusKnown = true;
     g_menuFocused = f;
-    if (f) g_settingsFocused = false;   // the menu itself is on top: the Settings page is not (see onSettingsFocus)
+    if (f) { g_settingsFocused = false; g_colourFocused = false; }
     alog("menu state %u focus -> %d", kMenuState, (int)f);
     if (f) g_ow.onOwnState(nbt::OverlayWatch::kMenuState, nowMs());   // iDrive is on our menu (CDS: 50000)
     if (f) settingsBackOnMainPage();                     // back from Settings: restart if a checkbox changed
@@ -2567,6 +2594,62 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 // focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
+void showFavouriteColours(bmw::PluginApp* app) {
+    int selected=nbt::loadFavouriteColour();
+    for(int i=0;i<8;++i)app->updateModel(220+i,i==selected);
+    app->updateModel(250,!fileExists(nbt::kFavouriteDisabledPath));
+}
+template<int Mode> bool onFavouriteColour(void*,const bmw::Parcel&) {
+    mkdir(kAutostartDir,0755);
+    const char* next="/var/opt/aa/favourite-bar-colour.next";
+    FILE* f=fopen(next,"w");if(!f){alog("favourites colour: cannot save errno=%d",errno);return true;}
+    bool ok=fprintf(f,"%d\n",Mode)>0; if(fclose(f)!=0)ok=false;
+    if(ok&&rename(next,nbt::kFavouriteColourPath)==0)alog("favourites colour selected mode=%d",Mode);
+    else {unlink(next);alog("favourites colour: save failed errno=%d",errno);}
+    if(g_app)showFavouriteColours(g_app);return true;
+}
+bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
+    if(fileExists(nbt::kFavouriteDisabledPath))unlink(nbt::kFavouriteDisabledPath);
+    else {
+        mkdir(kAutostartDir,0755);int fd=open(nbt::kFavouriteDisabledPath,O_WRONLY|O_CREAT|O_TRUNC,0666);
+        if(fd>=0)close(fd);else alog("favourites bar: cannot save switch errno=%d",errno);
+    }
+    if(g_app)showFavouriteColours(g_app);return true;
+}
+bool onFavouriteColourFocus(void*,const bmw::Parcel& p) {
+    bool f=false;p.readBool(f);g_colourFocused=f;g_focusKnown=true;
+    if(f){g_ow.onOwnState(nbt::OverlayWatch::kColourState,nowMs());if(g_app)showFavouriteColours(g_app);}
+    return true;
+}
+bool onFavouritePickerFocus(void*,const bmw::Parcel& p){
+    bool f=false;p.readBool(f);g_pickerFocused=f;g_focusKnown=true;
+    if(!f){unlink(nbt::kPickerActivePath);return true;}
+    g_ow.onOwnState(nbt::OverlayWatch::kPickerState,nowMs());
+    if(g_pickerPid){
+        int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;
+        else if(pidAlive(g_pickerPid)){
+            // A quick BACK/reopen renews the focus lease of the existing picker.
+            int marker=open(nbt::kPickerActivePath,O_WRONLY|O_CREAT|O_TRUNC,0600);if(marker>=0)close(marker);return true;
+        }
+    }
+    unlink(nbt::kPickerDonePath);
+    int marker=open(nbt::kPickerActivePath,O_WRONLY|O_CREAT|O_TRUNC,0600);if(marker<0)return true;close(marker);
+    const char* path="/opt/aa/nbt-aa-favourites";
+    char* argv[]={const_cast<char*>(path),const_cast<char*>("picker"),NULL};
+    std::vector<char*> env;for(char** e=environ;e&&*e;++e)if(strncmp(*e,"LD_PRELOAD=",11))env.push_back(*e);env.push_back(NULL);
+    int nul=open("/dev/null",O_RDWR),out=open("/dev/shmem/nbt-aa-colour-picker.log",O_WRONLY|O_CREAT|O_TRUNC,0600);
+    if(nul<0||out<0){if(nul>=0)close(nul);if(out>=0)close(out);unlink(nbt::kPickerActivePath);return true;}
+#ifdef __QNX__
+    int fdmap[3]={nul,out,out};struct inheritance inh;memset(&inh,0,sizeof(inh));inh.flags=SPAWN_SETSIGDEF;sigfillset(&inh.sigdefault);
+    g_pickerPid=spawn(path,3,fdmap,&inh,argv,&env[0]);
+#else
+    posix_spawn_file_actions_t actions;posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_adddup2(&actions,nul,0);posix_spawn_file_actions_adddup2(&actions,out,1);posix_spawn_file_actions_adddup2(&actions,out,2);
+    if(posix_spawn(&g_pickerPid,path,&actions,NULL,argv,&env[0]))g_pickerPid=0;posix_spawn_file_actions_destroy(&actions);
+#endif
+    close(nul);close(out);if(g_pickerPid<=0){g_pickerPid=0;unlink(nbt::kPickerActivePath);}
+    return true;
+}
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
     bool f = false;
     p.readBool(f);
@@ -2574,6 +2657,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
     g_settingsFocused = f;
     alog("settings state %u focus -> %d", kSettingsState, (int)f);
     if (!f) return true;
+    g_colourFocused=false;
     g_ow.onOwnState(nbt::OverlayWatch::kSettingsState, nowMs());   // iDrive is in our menu, not on a car screen
     settingsPageEntered();                               // checkbox snapshot for the restart on leaving
     if (g_app) {
@@ -2641,6 +2725,11 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
+    addAction(self,248,&onFavouriteBarToggle);
+    addAction(self,210,&onFavouriteColour<0>);addAction(self,211,&onFavouriteColour<1>);
+    addAction(self,212,&onFavouriteColour<2>);addAction(self,213,&onFavouriteColour<3>);
+    addAction(self,214,&onFavouriteColour<4>);addAction(self,215,&onFavouriteColour<5>);
+    addAction(self,216,&onFavouriteColour<6>);addAction(self,217,&onFavouriteColour<7>);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
@@ -2655,6 +2744,10 @@ bool appOnInit(bmw::PluginApp* self) {
         vp.object = self;
         vp.stub = &onVersionFocus;
         self->addHandler(kVersionState, kHandlerFocus, vp);
+        bmw::ActionDelegate colour;colour.object=self;colour.stub=&onFavouriteColourFocus;
+        self->addHandler(16,kHandlerFocus,colour);
+        bmw::ActionDelegate picker;picker.object=self;picker.stub=&onFavouritePickerFocus;
+        self->addHandler(17,kHandlerFocus,picker);
         bmw::ActionDelegate f;
         f.object = self;
         f.stub = &onAaFocus;
@@ -2666,6 +2759,7 @@ bool appOnInit(bmw::PluginApp* self) {
     }
     bool ok = self->onInit();
     showAbout(self);
+    showFavouriteColours(self);
     alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u + menu focus handler + settings focus handler registered, base onInit -> %d, start with the car %s, "
          "save logs to USB %s, MENU opens iDrive %s", kEntryAction, kActStart, kActStop, kActRestart, kActAutostart,
          kActUsbLog, kActMenuIdrive, (int)ok, autostartOn() ? "on" : "off", nbt::usblog::enabled() ? "on" : "off",
@@ -2681,6 +2775,7 @@ void appOnError(bmw::PluginApp* /*self*/, unsigned code, const bmw::BasicString<
 }
 
 void appOnFinalize(bmw::PluginApp* self) {
+    unlink(nbt::kPickerActivePath);
     alog("onFinalize");
     g_runApp = NULL;
     self->onFinalize();
