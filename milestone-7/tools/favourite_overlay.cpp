@@ -86,7 +86,7 @@ int favouriteOverlayRun(int argc,char** argv) {
  snprintf(cmd,sizeof(cmd),"%s get surface 1283 2>/dev/null",L);
  p=popen(cmd,"r");if(p){while(fgets(line,sizeof(line),p)){char* k=strstr(line,"native surface:");if(k)existing=strtoll(k+15,NULL,10);}pclose(p);}
  if(existing>0&&existing!=4294967295LL){printf("[Favourites] surface 1283 already owned (%lld); refusing\n", existing);return 1;}
- printf("[Favourites] panel %dx%d, strip top=%d\n", w, h, bar);
+ printf("[Favourites] panel %dx%d\n", w, h);
  int bar=nbt::favouriteStripRegion(w,h,true).y;
  screen_context_t ctx=0;screen_window_t win=0;
  if(screen_create_context(&ctx,0)||screen_create_window_type(&win,ctx,0)) {printf("Screen creation failed %d\n",errno);return 1;}
