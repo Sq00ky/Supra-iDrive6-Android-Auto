@@ -250,7 +250,7 @@ bool Hud6waDisplay::nearDue(const NavView& v, double* m) const {
 void Hud6waDisplay::startManeuver(const NavView& v) {
     has_layout_ = s_.junction && junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
                                                 v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
-    if (has_layout_ && !junctionFits(layout_, p_.canvas, kStages)) {   // its way would be cut off on this buffer
+    if (has_layout_ && !junctionShows()) {   // drawn scaled onto this buffer, its way would still be cut off
         has_layout_ = false;
         log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
             p_.canvas.x1 - p_.canvas.x0 + 1, p_.canvas.y1 - p_.canvas.y0 + 1);

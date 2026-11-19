@@ -521,7 +521,8 @@ static void testJunctionGeometry() {
                     continue;
                 }
                 assert(has && L.maxTail >= 8 && !L.roads.empty());
-                assert(junctionFits(L, k6wa.canvas, Hud6waDisplay::kStages));   // the display's guard agrees
+                assert(junctionFits(L, Hud6waDisplay::kStages, k6wa.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, k6wa.glyph,
+                                    k6wa.canvas.y1 + 1));   // the display's guard agrees (the F20: no scaling)
                 ++views;
                 Picture roads;
                 drawRoads(L, c, kJunctionStyle, roads);
@@ -706,28 +707,36 @@ static size_t fills(const Batch& b) {
 // The near stage through the driver: the arrow first, the junction view (roads in 5/6, route in 7/8) at the main
 // prompt, the route's stages on the way in, held while a route waits, all drawn again after lost work, the route
 // emptied for the next maneuver's arrow, and the clear putting 7/8 back.
-// The display's guard (cluster/hudterm_junction.hpp junctionFits) where the junction, drawn at the F20's size, does not
-// fit: the F30's 126x77 HUD buffer. Near a maneuver whose arrowhead would leave it the display keeps the plain arrow
-// (and says so) instead of a junction view with its way cut off; and a buffer measured while a junction view is up
-// drops that view, laid out for the old field, rather than drawing it into the new one. On the F20 profile every view
-// fits (testJunctionGeometry).
+// The display's guard (cluster/hudterm_junction.hpp junctionFits) checks what is drawn: the junction laid out on the
+// F20 and scaled onto the picture area (fitPicture). Counted below on the F30's 126x77 HUD. With the glyph box against
+// the canvas's edge some arrowheads leave it, and near those the display keeps the plain arrow (and says so) instead of
+// a junction view with its way cut off. A buffer measured while a view is up drops that view, laid out for the old one.
 static void testJunctionFits() {
-    HudProfile small = k6wa;
-    fitMeasured(126, 77, small);
-    int fits = 0, cut = 0, cutType = -1, cutAngle = 0;
+    const int st = Hud6waDisplay::kStages;
+    HudProfile hud = k6wa;
+    fitMeasured(126, 77, hud);
+    HudProfile edge = hud;
+    const Rect corner = { 95, 46, 125, 76 };                     // the glyph box in the canvas's bottom-right corner
+    edge.glyph = corner;
+    int fits = 0, cut = 0, edgeCut = 0, cutType = -1, cutAngle = 0;
     for (int t = 0; t <= 60; ++t)
         for (int a = 0; a <= 360; a += 45) {
             Layout L;
-            if (!junctionLayout(t, true, a, false, 0, k6wa.glyph, k6wa.canvas.y1, L)) continue;   // as the display lays out
-            if (junctionFits(L, small.canvas, Hud6waDisplay::kStages)) { ++fits; continue; }
-            if (cutType < 0) { cutType = t; cutAngle = a; }
-            ++cut;
+            if (!junctionLayout(t, true, a, false, 0, k6wa.glyph, k6wa.canvas.y1, L)) continue;   // as the display does
+            if (junctionFits(L, st, hud.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, hud.glyph, hud.canvas.y1 + 1))
+                ++fits;
+            else
+                ++cut;
+            if (!junctionFits(L, st, edge.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, edge.glyph, edge.canvas.y1 + 1)) {
+                if (cutType < 0) { cutType = t; cutAngle = a; }
+                ++edgeCut;
+            }
         }
-    assert(cut > 0);
+    assert(fits > 0 && edgeCut > 0);
 
     g_log.clear();
     FakePort port;
-    Hud6waDisplay d(port, small, false);
+    Hud6waDisplay d(port, edge, false);
     d.setLog(&logFn, NULL);
     NavView v = timed(cutType, "Testroad", "300", 7, 280, 19);    // near: the junction view would be due
     v.has_exit_angle = true;
@@ -745,8 +754,8 @@ static void testJunctionFits() {
     port2.mh = 77;
     assert(d2.showManeuver(w, 1, false, false) == ClusterDisplay::kOk);   // whose health check takes the measure
     assert(logged("HUD picture buffer measured 126x77") && !d2.nearShown());
-    printf("  junctionFits on 126x77: %d fit, %d plain arrow (first type %d angle %d); a re-measure drops the view\n",
-           fits, cut, cutType, cutAngle);
+    printf("  junctionFits scaled onto 126x77: %d fit, %d plain arrow; box in the corner: %d plain arrow (first type %d"
+           " angle %d); a re-measure drops the view\n", fits, cut, edgeCut, cutType, cutAngle);
 }
 
 static void testJunctionDriver() {

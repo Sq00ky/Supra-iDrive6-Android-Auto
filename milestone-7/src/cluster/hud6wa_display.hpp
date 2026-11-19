@@ -113,6 +113,10 @@ private:
     void fitJunction(hudterm::Picture& pic) const {   // F20 layout -> this profile's picture area
         hudterm::fitPicture(pic, hudterm::k6wa.glyph, hudterm::k6wa.canvas.y1 + 1, p_.glyph, p_.canvas.y1 + 1);
     }
+    bool junctionShows() const {   // its way on the canvas at every stage, drawn as fitJunction scales it
+        return hudterm::junctionFits(layout_, kStages, p_.canvas, hudterm::k6wa.glyph, hudterm::k6wa.canvas.y1 + 1,
+                                     p_.glyph, p_.canvas.y1 + 1);
+    }
     Result sendRoute();
     Result sendLanes(const NavView& v);
 
