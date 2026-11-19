@@ -334,7 +334,17 @@
         </components>
       </hmiState>
     
-</hmiStates>
+      <hmiState id="18" parentId="14" text="Car manufacturer">
+        <properties><property id="24" value="3"/></properties>
+        <components>
+          <radiobutton action="421" id="462" model="450" text="Auto"/>
+          <radiobutton action="422" id="463" model="451" text="BMW"/>
+          <radiobutton action="423" id="464" model="452" text="Toyota"/>
+          <radiobutton action="424" id="465" model="453" text="MINI"/>
+          <radiobutton action="425" id="466" model="454" text="Rolls-Royce"/>
+        </components>
+      </hmiState>
+      </hmiStates>
   </pluginApp>
   <!-- One-press entry "Open Android Auto" (raAction 2), right after the menu entry. Property 55 is its UUID: without
        one, iDrive refuses to store a plugin entry on a favourite key. Keep the UUID fixed: a new one orphans keys
@@ -370,16 +380,6 @@
               <property id="21" value="0"/>
             </properties>
           </image>
-        </components>
-      </hmiState>
-      <hmiState id="18" parentId="14" text="Car manufacturer">
-        <properties><property id="24" value="3"/></properties>
-        <components>
-          <radiobutton action="421" id="462" model="450" text="Auto"/>
-          <radiobutton action="422" id="463" model="451" text="BMW"/>
-          <radiobutton action="423" id="464" model="452" text="Toyota"/>
-          <radiobutton action="424" id="465" model="453" text="MINI"/>
-          <radiobutton action="425" id="466" model="454" text="Rolls-Royce"/>
         </components>
       </hmiState>
     </hmiStates>
