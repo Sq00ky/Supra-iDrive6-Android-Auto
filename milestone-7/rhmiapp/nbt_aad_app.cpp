@@ -2600,7 +2600,7 @@ void showFavouriteColours(bmw::PluginApp* app) {
     app->updateModel(250,!fileExists(nbt::kFavouriteDisabledPath));
 }
 template<int Mode> bool onFavouriteColour(void*,const bmw::Parcel&) {
-    mkdir(kAutostartDir,0755);
+    nbt::makeDataDir();
     const char* next="/var/opt/aa/favourite-bar-colour.next";
     FILE* f=fopen(next,"w");if(!f){alog("favourites colour: cannot save errno=%d",errno);return true;}
     bool ok=fprintf(f,"%d\n",Mode)>0; if(fclose(f)!=0)ok=false;
@@ -2611,7 +2611,7 @@ template<int Mode> bool onFavouriteColour(void*,const bmw::Parcel&) {
 bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
     if(fileExists(nbt::kFavouriteDisabledPath))unlink(nbt::kFavouriteDisabledPath);
     else {
-        mkdir(kAutostartDir,0755);int fd=open(nbt::kFavouriteDisabledPath,O_WRONLY|O_CREAT|O_TRUNC,0666);
+        nbt::makeDataDir();int fd=open(nbt::kFavouriteDisabledPath,O_WRONLY|O_CREAT|O_TRUNC,0666);
         if(fd>=0)close(fd);else alog("favourites bar: cannot save switch errno=%d",errno);
     }
     if(g_app)showFavouriteColours(g_app);return true;
