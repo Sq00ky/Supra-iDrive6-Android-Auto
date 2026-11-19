@@ -11,7 +11,6 @@
 #include "screen_video.h"
 #include "volume.hpp"
 #include "volume_glyphs.hpp"
-#include "favourite_colour.hpp"
 
 #include <errno.h>
 #include <stdio.h>
@@ -47,12 +46,27 @@ inline uint32_t rgba(int r, int g, int b, int a) {
     return ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
 }
 
-// Shared colour preference; volume percentage controls length only.
-inline void ramp(int /*pct*/, int* r, int* g, int* b) {
-    // The level still controls bar length; its colour follows BMW Favorite Keys.
-    uint32_t colour=nbt::favouriteColourRGB(nbt::loadFavouriteColour(),nbt::loadFavouriteAmbient());
-    if(!colour)colour=0xf83a01u;
-    *r=(colour>>16)&255;*g=(colour>>8)&255;*b=colour&255;
+// The level drives both length and colour: green at 0 %, lime at 35, amber at 70, red at 100, interpolated.
+// Restored from before the favourites PR (rhmiapp-100) - the bar must not be a flat colour, and it stays
+// independent of the favourite-bar colour preference.
+inline void ramp(int pct, int* r, int* g, int* b) {
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    static const int stops[4][4] = {
+        {  0, 0x2F, 0xA8, 0x4F },   // 0%   green
+        { 35, 0x7B, 0xC0, 0x43 },   // 35%  lime
+        { 70, 0xF2, 0xA2, 0x1E },   // 70%  amber
+        {100, 0xE0, 0x3B, 0x30 },   // 100% red
+    };
+    int i = 0;
+    while (i < 2 && pct > stops[i + 1][0]) ++i;
+    const int* a = stops[i];
+    const int* c = stops[i + 1];
+    const int span = c[0] - a[0];
+    const int t = span > 0 ? (pct - a[0]) * 255 / span : 255;
+    *r = a[1] + (c[1] - a[1]) * t / 255;
+    *g = a[2] + (c[2] - a[2]) * t / 255;
+    *b = a[3] + (c[3] - a[3]) * t / 255;
 }
 
 const uint32_t kPill   = rgba(0x08, 0x0A, 0x0D, 0xD1);   // dark navy, 0.82 alpha (mockup body)

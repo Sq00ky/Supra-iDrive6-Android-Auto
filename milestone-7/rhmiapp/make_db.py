@@ -43,10 +43,25 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          35: "Checking rules...", 36: "Rules in place", 37: "Rules in place, not active", 38: "Rules not in place",
          39: "Removing rules...", 40: "Rules successfully removed", 41: "Packet filter off, as before",
          42: "Done, not active - see log", 43: "Failed - see log",
+         # 320-325 = the entry row and the Start row carry the daemon state (rhmiapp-98).
+         320: "Android Auto",
+         321: "Connecting to the phone...",
+         322: "Connected",
+         323: "Waiting for the phone",
+         324: "Android Auto: no Wi-Fi Direct, use USB",
+         325: "Android Auto: no CarPlay network, using Wi-Fi Direct",
+         326: "Waiting for phone on CarPlay Wi-Fi",
+         327: "No CarPlay: enable WiFi Direct",
+         328: "No CarPlay or WiFi Direct: use USB",
+         329: "Connected over Wi-Fi",
+         330: "Connected over USB",
+         331: "Connecting to the phone...",
+         332: "Waiting for phone over USB",
+         333: "Waiting: CarPlay Wi-Fi",
+         334: "No CarPlay: enable WiFi Direct",
+
+
          44: "CarPlay compatibility",   # 44 = CarPlay compatibility checkbox (rhmiapp-54-cpcompat)
-         300: "BMW Favorite Keys", 301: "BMW default orange", 302: "Match ambient lighting",
-         303: "Bronze", 304: "White", 305: "Orange", 306: "Blue", 307: "Green", 308: "Lilac",
-         309: "Show Favorites Keys Bar", 310: "bar color", 311: "custom color",
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).
 LANG_TEXTS = {

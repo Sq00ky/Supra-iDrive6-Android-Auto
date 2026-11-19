@@ -36,17 +36,13 @@
       <raAction id="136"/>
       <raAction id="137"/>
       <raAction id="159"/>
-      <hmiAction id="200" target="16"/>
+      <hmiAction id="420" target="18"/>
+      <raAction id="421"/>
+      <raAction id="422"/>
+      <raAction id="423"/>
+      <raAction id="424"/>
+      <raAction id="425"/>
       <raAction id="248"/>
-      <raAction id="210"/>
-      <raAction id="211"/>
-      <raAction id="212"/>
-      <raAction id="213"/>
-      <raAction id="214"/>
-      <raAction id="215"/>
-      <raAction id="216"/>
-      <raAction id="217"/>
-      <hmiAction id="260" target="17"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -105,6 +101,14 @@
       </textIdModel>
       <raDataModel id="163" modelType="Richtext"/>
       <raDataModel id="164" modelType="Richtext"/>
+
+      <!-- rhmiapp-96: live nbt-aad status on the Settings page, and the car manufacturer choice. -->
+      <raDataModel id="430" modelType="Richtext"/>
+      <raBoolModel id="450"/>
+      <raBoolModel id="451"/>
+      <raBoolModel id="452"/>
+      <raBoolModel id="453"/>
+      <raBoolModel id="454"/>
       <textIdModel id="165" textId="45">
         <synonyms/>
       </textIdModel>
@@ -200,27 +204,15 @@
       <textIdModel id="161" textId="44">
         <synonyms/>
       </textIdModel>
-      <textIdModel id="202" textId="300"><synonyms/></textIdModel>
       <raBoolModel id="250"/>
-      <textIdModel id="251" textId="309"><synonyms/></textIdModel>
-      <raBoolModel id="220"/>
       <textIdModel id="230" textId="301"><synonyms/></textIdModel>
-      <raBoolModel id="221"/>
       <textIdModel id="231" textId="302"><synonyms/></textIdModel>
-      <raBoolModel id="222"/>
       <textIdModel id="232" textId="303"><synonyms/></textIdModel>
-      <raBoolModel id="223"/>
       <textIdModel id="233" textId="304"><synonyms/></textIdModel>
-      <raBoolModel id="224"/>
       <textIdModel id="234" textId="305"><synonyms/></textIdModel>
-      <raBoolModel id="225"/>
       <textIdModel id="235" textId="306"><synonyms/></textIdModel>
-      <raBoolModel id="226"/>
       <textIdModel id="236" textId="307"><synonyms/></textIdModel>
-      <raBoolModel id="227"/>
       <textIdModel id="237" textId="308"><synonyms/></textIdModel>
-      <textIdModel id="261" textId="310"><synonyms/></textIdModel>
-      <textIdModel id="262" textId="311"><synonyms/></textIdModel>
     </models>
     <events>
       <focusEvent id="54" target="16"/>
@@ -308,12 +300,13 @@
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
           <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
           <checkbox action="159" id="162" model="160" text="CarPlay compatibility" textModel="161"/>
-          <button action="200" id="201" model="202" text="BMW Favorite Keys"/>
+          <checkbox action="248" id="249" model="250" text="Disable Favorites Bar"/>
           <button action="414" id="407" model="400" text="Gauge cluster type"/>
           <separator id="142"/>
           <button action="132" id="135" model="134" text="Install PF Rules"/>
           <button action="136" id="140" model="138" text="Check PF Rules"/>
           <button action="137" id="141" model="139" text="Uninstall PF Rules"/>
+          <button action="420" id="461" text="Car manufacturer"/>
         </components>
       </hmiState>
       <!-- Build versions, filled when the page is shown (BasicString into two Richtext labels): the daemon build
@@ -339,26 +332,6 @@
           <radiobutton action="412" id="409" model="402" text="..." textModel="405"/>
           <radiobutton action="413" id="410" model="403" text="..." textModel="406"/>
         </components>
-      </hmiState>
-      <hmiState id="16" parentId="14" text="BMW Favorite Keys" textModel="202">
-        <properties><property id="24" value="3"/></properties>
-        <components>
-          <checkbox action="248" id="249" model="250" text="Show Favorites Keys Bar" textModel="251"/>
-          <separator id="252"/>
-          <label id="264" model="261"><properties><property id="2" value="false"/></properties></label>
-          <checkbox action="210" id="240" model="220" text="BMW default orange" textModel="230"/>
-          <checkbox action="211" id="241" model="221" text="Match ambient lighting" textModel="231"/>
-          <checkbox action="212" id="242" model="222" text="Bronze" textModel="232"/>
-          <checkbox action="213" id="243" model="223" text="White" textModel="233"/>
-          <checkbox action="214" id="244" model="224" text="Orange" textModel="234"/>
-          <checkbox action="215" id="245" model="225" text="Blue" textModel="235"/>
-          <checkbox action="216" id="246" model="226" text="Green" textModel="236"/>
-          <checkbox action="217" id="247" model="227" text="Lilac" textModel="237"/>
-          <button action="260" id="263" model="262" text="custom color"/>
-        </components>
-      </hmiState>
-      <hmiState id="17" parentId="16" text="custom color" textModel="262">
-        <components><image id="265" model="12"><properties><property id="2" value="false"/><property id="3" value="true"/></properties></image></components>
       </hmiState>
     
 </hmiStates>
@@ -397,6 +370,16 @@
               <property id="21" value="0"/>
             </properties>
           </image>
+        </components>
+      </hmiState>
+      <hmiState id="18" parentId="14" text="Car manufacturer">
+        <properties><property id="24" value="3"/></properties>
+        <components>
+          <radiobutton action="421" id="462" model="450" text="Auto"/>
+          <radiobutton action="422" id="463" model="451" text="BMW"/>
+          <radiobutton action="423" id="464" model="452" text="Toyota"/>
+          <radiobutton action="424" id="465" model="453" text="MINI"/>
+          <radiobutton action="425" id="466" model="454" text="Rolls-Royce"/>
         </components>
       </hmiState>
     </hmiStates>

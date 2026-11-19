@@ -68,7 +68,6 @@
 #include "entry_key.hpp"
 #include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
 #include "../src/favourite_colour.hpp"
-#include "../src/favourite_picker.hpp"
 #include <vector>
 #ifdef __QNX__
 #include <sys/slog.h>
@@ -76,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-95-favourite (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-106-test (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -244,6 +243,24 @@ const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start A
 const unsigned    kActStop        = 22;      // <raAction id="22"/> row "Force Stop"
 const unsigned    kActRestart     = 23;      // <raAction id="23"/> row "Restart"
 const unsigned    kStartRowModel  = 31;      // textIdModel of the Start row
+// Status wording (rhmiapp-98): the entry row and the Start row say what nbt-aad is doing. Static text ids, because
+// those rows are textIdModels; the daemon's status token picks which one.
+const unsigned    kTextAaDefault    = 320;
+const unsigned    kTextAaConnecting = 321;
+const unsigned    kTextAaConnected  = 322;
+const unsigned    kTextAaWaiting    = 323;
+const unsigned    kTextAaNoWfd      = 324;
+const unsigned    kTextAaNoCarplay  = 325;
+// 326-331: the measured chain (carplay.ini -> wfd0 -> USB), emitted by the daemon as "state|carplay|wfd|usb|transport"
+const unsigned    kTextAaCarplayWifi = 326;
+const unsigned    kTextAaWfd         = 327;
+const unsigned    kTextAaUsbOnly     = 328;
+const unsigned    kTextAaWifiOk      = 329;
+const unsigned    kTextAaUsbOk       = 330;
+const unsigned    kTextAaConnecting2 = 331;
+const unsigned    kTextAaWaitUsb     = 332;
+const unsigned    kTextAaWaitCarplay = 333;
+const unsigned    kTextAaWaitWfd     = 334;
 const unsigned    kTextStart      = 10;      // "Start Android Auto"
 const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
@@ -297,6 +314,16 @@ const unsigned    kAboutModel      = 37;
 // choice is one word in /var/opt/aa/cluster; nbt-aad reads it when NBT_CLUSTER is unset. 6WB has no display
 // driver yet, so it is offered with that stated and the daemon says so rather than quietly doing 6WA's job.
 const char* const kClusterFlag       = "cluster";
+// Car manufacturer choice (rhmiapp-96): /var/opt/aa/vehicle -> the daemon exports NBT_VEHICLE at start, and
+// car_config.hpp then skips carplay.ini. "auto" keeps today's behaviour (carplay.ini decides).
+const char* const kVehicleChoiceFile = "/var/opt/aa/vehicle";
+const char* const kVehicleNames[5]   = { "auto", "bmw", "toyota", "mini", "rollsroyce" };
+const char* const kVehicleLabels[5]  = { "Auto (carplay.ini)", "BMW", "Toyota", "MINI", "Rolls-Royce" };
+const unsigned    kVehicleActions[5] = { 421, 422, 423, 424, 425 };
+const unsigned    kVehicleModels[5]  = { 450, 451, 452, 453, 454 };
+const unsigned    kVehicleState      = 18;
+const unsigned    kStatusModel       = 430;
+std::string g_vehicleAtEntry;
 const unsigned    kClusterModels[3]  = { 401, 402, 403 };
 const char* const kClusterValues[3]  = { "j29", "6wa", "6wb" };
 const unsigned    kAboutText       = 17;
@@ -1012,12 +1039,10 @@ bool g_focusKnown = false;     // a focus notification for our menu arrived at l
 bool g_menuFocused = false;    // focus notification of hmiState 10 (the menu itself)
 bool g_settingsFocused = false; // focus notification of hmiState 14 (the Settings page under it, rhmiapp-39)
 bool g_colourFocused = false;
-bool g_pickerFocused = false;
-pid_t g_pickerPid = 0;
 // "The driver is in our own UI" (menu or its Settings page). Used by the hold: coming back to either is not a car
 // screen taking over. g_menuFocused alone stays the answer to "is the menu itself on top", which is what the
 // connected-after-Start return to the main menu tests (a driver reading Settings must not be pulled out of it).
-bool inOurMenu() { return g_menuFocused || g_settingsFocused || g_colourFocused || g_pickerFocused; }
+bool inOurMenu() { return g_menuFocused || g_settingsFocused || g_colourFocused; }
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
 bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
 pid_t g_autostartPid = 0;     // automatic launch waiting for its first projection handoff
@@ -1798,6 +1823,48 @@ bool onClusterJ29(void*, const bmw::Parcel&) { return onClusterPick(0); }
 bool onCluster6wa(void*, const bmw::Parcel&) { return onClusterPick(1); }
 bool onCluster6wb(void*, const bmw::Parcel&) { return onClusterPick(2); }
 
+// The stored choice, always a known value ("auto" when the file is missing or odd).
+std::string readVehicleChoice() {
+    FILE* f = fopen(kVehicleChoiceFile, "r");
+    if (!f) return "auto";
+    char v[24] = {0};
+    if (fscanf(f, "%23s", v) != 1) v[0] = 0;
+    fclose(f);
+    for (int i = 0; i < 5; ++i) if (!strcmp(v, kVehicleNames[i])) return std::string(v);
+    return "auto";
+}
+bool writeVehicleChoice(const char* v) {
+    nbt::makeDataDir();
+    const char* next = "/var/opt/aa/vehicle.next";
+    FILE* f = fopen(next, "w");
+    if (!f) { alog("vehicle: cannot save errno=%d", errno); return false; }
+    bool ok = fprintf(f, "%s\n", v) > 0;
+    if (fclose(f) != 0) ok = false;
+    if (ok && rename(next, kVehicleChoiceFile) == 0) return true;
+    unlink(next); alog("vehicle: save failed errno=%d", errno);
+    return false;
+}
+void showVehicleChoice(bmw::PluginApp* app) {
+    if (!app) return;
+    const std::string cur = readVehicleChoice();
+    for (int i = 0; i < 5; ++i) app->updateModel(kVehicleModels[i], cur == kVehicleNames[i]);
+    g_vehicleAtEntry = cur;
+}
+template <int Mode> bool onVehiclePick(void*, const bmw::Parcel&) {
+    if (writeVehicleChoice(kVehicleNames[Mode])) {
+        alog("vehicle choice -> %s (nbt-aad reads it at its next start)", kVehicleNames[Mode]);
+        if (g_app) showVehicleChoice(g_app);
+    }
+    return true;
+}
+bool onVehicleFocus(void*, const bmw::Parcel& p) {
+    bool f = false; p.readBool(f);
+    if (f && g_app) showVehicleChoice(g_app);
+    return true;
+}
+
+// Live status line: the daemon writes a short token with every UI-state record, and this turns it into a sentence.
+// The daemon's own state file decides "not running", so the line cannot claim a session that is not there.
 void showAutostart(bmw::PluginApp* app) {
     bool on = autostartOn();
     app->updateModel(kAutostartModel, on);
@@ -2355,11 +2422,6 @@ void statusRun(void* /*self*/) {
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_noLogShown) showNoLog(app);
-    if(g_pickerPid>0){int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;}
-    if(g_pickerFocused && (fileExists(nbt::kPickerDonePath)||(g_pickerPid>0&&!pidAlive(g_pickerPid))||
-                           (g_pickerPid==-1&&!fileExists(nbt::kPickerActivePath)))){
-        unlink(nbt::kPickerDonePath);unlink(nbt::kPickerActivePath);app->triggerEvent(54);
-    }
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
     if (!g_menuIdriveShown) showMenuIdrive(app);
@@ -2380,7 +2442,26 @@ void statusRun(void* /*self*/) {
     DaemonState d = readDaemonState();
     bool connecting = !strcmp(d.state, "connecting"), connected = !strcmp(d.state, "connected");
 
-    unsigned want = connecting ? kTextConnecting : kTextDefault;          // the Media/Radio entry row
+    // "state|carplay|wfd|usb|transport", written by the daemon from measured facts. The chain is
+    // carplay.ini -> wfd0 -> USB, so the row names the link that is missing and the setting that fixes it.
+    char rec[72] = {0};
+    { FILE* sf = fopen("/dev/shmem/nbt-aad-status", "r");
+      if (sf) { if (fscanf(sf, "%71s", rec) != 1) rec[0] = 0; fclose(sf); } }
+    char st[24] = {0}, tr[8] = {0};
+    int hasIni = 0, hasWfd = 0, hasUsb = 0;
+    sscanf(rec, "%23[^|]|%d|%d|%d|%7s", st, &hasIni, &hasWfd, &hasUsb, tr);
+    unsigned statusText = kTextAaDefault;
+    if (!strcmp(st, "connected"))       statusText = !strcmp(tr, "usb") ? kTextAaUsbOk : kTextAaWifiOk;
+    else if (!strcmp(st, "connecting")) statusText = kTextAaConnecting2;
+    else if (d.pid > 0) {
+        // Which link the driver should use: the USB-only setting wins, then carplay.ini, then Wi-Fi Direct.
+        // usbAaOn() is the same flag file the daemon reads, so both sides agree without a second channel.
+        if (usbAaOn())        statusText = kTextAaWaitUsb;
+        else if (hasIni)      statusText = kTextAaWaitCarplay;
+        else if (hasWfd)      statusText = kTextAaWaitWfd;
+        else                  statusText = kTextAaUsbOnly;
+    }
+    unsigned want = statusText;                                          // the Media/Radio entry row
     if (want != g_shownText) {
         bmw::TextID text(want);
         app->updateModel(kEntryTextModel, text);
@@ -2389,6 +2470,7 @@ void statusRun(void* /*self*/) {
     }
     if (!fileExists(nbt::appFile("spinner.disable").c_str())) setConnectingAnimation(app, connecting);
     unsigned row = connected ? kTextRowOpen : connecting ? kTextRowConnecting : kTextStart;   // our menu's Start row
+    if (!connected && !connecting && statusText != kTextAaDefault) row = statusText;   // waiting or missing link: say why
     if (row != g_shownRow) {
         bmw::TextID text(row);
         app->updateModel(kStartRowModel, text);
@@ -2529,6 +2611,7 @@ time_t g_setSnapTime = 0;
 void settingsPageEntered() {
     if (g_setSnapPending) return;                        // keep the snapshot of the first visit since the last check
     g_setSnap = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
+    if (g_app) showVehicleChoice(g_app);              // remember the manufacturer too, for the restart decision
     g_setSnapPending = true;
     g_setSnapTime = time(NULL);
 }
@@ -2537,7 +2620,12 @@ void settingsBackOnMainPage() {
     if (!g_setSnapPending) return;
     g_setSnapPending = false;
     const std::string now = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
-    const std::string diff = nbt::settingsDiff(kSettingsFlags, kSettingsFlagCount, g_setSnap, now);
+    std::string diff = nbt::settingsDiff(kSettingsFlags, kSettingsFlagCount, g_setSnap, now);
+    const std::string vehicleNow = readVehicleChoice();
+    if (!g_vehicleAtEntry.empty() && vehicleNow != g_vehicleAtEntry) {
+        if (!diff.empty()) diff += ", ";
+        diff += "car manufacturer " + g_vehicleAtEntry + " -> " + vehicleNow;
+    }
     DaemonState d = readDaemonState();
     nbt::SettingsRestart r = nbt::settingsRestartDecide(
         !diff.empty(), envFlagOn("NBT_SETTINGS_RESTART", true), d.pid != 0,
@@ -2595,66 +2683,20 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 // focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
-void showFavouriteColours(bmw::PluginApp* app) {
-    int selected=nbt::loadFavouriteColour();
-    for(int i=0;i<8;++i)app->updateModel(220+i,i==selected);
-    app->updateModel(250,!fileExists(nbt::kFavouriteDisabledPath));
-}
-template<int Mode> bool onFavouriteColour(void*,const bmw::Parcel&) {
-    nbt::makeDataDir();
-    const char* next="/var/opt/aa/favourite-bar-colour.next";
-    FILE* f=fopen(next,"w");if(!f){alog("favourites colour: cannot save errno=%d",errno);return true;}
-    bool ok=fprintf(f,"%d\n",Mode)>0; if(fclose(f)!=0)ok=false;
-    if(ok&&rename(next,nbt::kFavouriteColourPath)==0)alog("favourites colour selected mode=%d",Mode);
-    else {unlink(next);alog("favourites colour: save failed errno=%d",errno);}
-    if(g_app)showFavouriteColours(g_app);return true;
+// Favourites bar switch (rhmiapp-98): one checkbox on the Settings page, no submenu. It reads
+// "Disable Favorites Bar" and is ticked exactly when the disabled marker exists - the file is the state, the tick
+// only reflects it, the same rule every other row on this page follows.
+void showFavouriteBar(bmw::PluginApp* app) {
+    if (app) app->updateModel(250, fileExists(nbt::kFavouriteDisabledPath));
 }
 bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
-    if(fileExists(nbt::kFavouriteDisabledPath))unlink(nbt::kFavouriteDisabledPath);
+    if(fileExists(nbt::kFavouriteDisabledPath))unlink(nbt::kFavouriteDisabledPath);   // unticked: bar back on
     else {
         nbt::makeDataDir();int fd=open(nbt::kFavouriteDisabledPath,O_WRONLY|O_CREAT|O_TRUNC,0666);
         if(fd>=0)close(fd);else alog("favourites bar: cannot save switch errno=%d",errno);
     }
-    if(g_app)showFavouriteColours(g_app);return true;
-}
-bool onFavouriteColourFocus(void*,const bmw::Parcel& p) {
-    bool f=false;p.readBool(f);g_colourFocused=f;g_focusKnown=true;
-    if(f){g_ow.onOwnState(nbt::OverlayWatch::kColourState,nowMs());if(g_app)showFavouriteColours(g_app);}
-    return true;
-}
-bool onFavouritePickerFocus(void*,const bmw::Parcel& p){
-    bool f=false;p.readBool(f);g_pickerFocused=f;g_focusKnown=true;
-    if(!f){unlink(nbt::kPickerActivePath);return true;}
-    g_ow.onOwnState(nbt::OverlayWatch::kPickerState,nowMs());
-    if(g_pickerPid){
-        int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;
-        else if(pidAlive(g_pickerPid)){
-            // A quick BACK/reopen renews the focus lease of the existing picker.
-            int marker=open(nbt::kPickerActivePath,O_WRONLY|O_CREAT|O_TRUNC,0600);if(marker>=0)close(marker);return true;
-        }
-    }
-    unlink(nbt::kPickerDonePath);
-    int marker=open(nbt::kPickerActivePath,O_WRONLY|O_CREAT|O_TRUNC,0600);if(marker<0)return true;close(marker);
-    if(fileExists(nbt::kInProcMarkerPath)){
-        // The daemon owns the picker now (single binary). Ask it, and mark the pid as "not ours" so the
-        // poll below waits for the picker's own done file instead of reaping a child that does not exist.
-        int rq=open(nbt::kPickerRequestPath,O_WRONLY|O_CREAT|O_TRUNC,0600);
-        if(rq>=0){close(rq);g_pickerPid=-1;alog("favourites picker: asked the daemon (in-process)");return true;}
-    }
-    const char* path="/opt/aa/nbt-aa-favourites";
-    char* argv[]={const_cast<char*>(path),const_cast<char*>("picker"),NULL};
-    std::vector<char*> env;for(char** e=environ;e&&*e;++e)if(strncmp(*e,"LD_PRELOAD=",11))env.push_back(*e);env.push_back(NULL);
-    int nul=open("/dev/null",O_RDWR),out=open("/dev/shmem/nbt-aa-colour-picker.log",O_WRONLY|O_CREAT|O_TRUNC,0600);
-    if(nul<0||out<0){if(nul>=0)close(nul);if(out>=0)close(out);unlink(nbt::kPickerActivePath);return true;}
-#ifdef __QNX__
-    int fdmap[3]={nul,out,out};struct inheritance inh;memset(&inh,0,sizeof(inh));inh.flags=SPAWN_SETSIGDEF;sigfillset(&inh.sigdefault);
-    g_pickerPid=spawn(path,3,fdmap,&inh,argv,&env[0]);
-#else
-    posix_spawn_file_actions_t actions;posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_adddup2(&actions,nul,0);posix_spawn_file_actions_adddup2(&actions,out,1);posix_spawn_file_actions_adddup2(&actions,out,2);
-    if(posix_spawn(&g_pickerPid,path,&actions,NULL,argv,&env[0]))g_pickerPid=0;posix_spawn_file_actions_destroy(&actions);
-#endif
-    close(nul);close(out);if(g_pickerPid<=0){g_pickerPid=0;unlink(nbt::kPickerActivePath);}
+    alog("favourites bar %s", fileExists(nbt::kFavouriteDisabledPath) ? "disabled" : "enabled");
+    if(g_app)showFavouriteBar(g_app);
     return true;
 }
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
@@ -2719,6 +2761,13 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, 411, &onClusterJ29);
     addAction(self, 412, &onCluster6wa);
     addAction(self, 413, &onCluster6wb);
+    addAction(self, 421, &onVehiclePick<0>); addAction(self, 422, &onVehiclePick<1>);
+    addAction(self, 423, &onVehiclePick<2>); addAction(self, 424, &onVehiclePick<3>);
+    addAction(self, 425, &onVehiclePick<4>);
+    {
+        bmw::ActionDelegate veh; veh.object = self; veh.stub = &onVehicleFocus;
+        self->addHandler(kVehicleState, kHandlerFocus, veh);
+    }
     addAction(self, kActWarnings, &onWarningsToggle);
     addAction(self, kActUsbAa, &onUsbAaToggle);
     addAction(self, kActPhoneGps, &onPhoneGpsToggle);
@@ -2733,10 +2782,6 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
     addAction(self,248,&onFavouriteBarToggle);
-    addAction(self,210,&onFavouriteColour<0>);addAction(self,211,&onFavouriteColour<1>);
-    addAction(self,212,&onFavouriteColour<2>);addAction(self,213,&onFavouriteColour<3>);
-    addAction(self,214,&onFavouriteColour<4>);addAction(self,215,&onFavouriteColour<5>);
-    addAction(self,216,&onFavouriteColour<6>);addAction(self,217,&onFavouriteColour<7>);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
@@ -2751,10 +2796,6 @@ bool appOnInit(bmw::PluginApp* self) {
         vp.object = self;
         vp.stub = &onVersionFocus;
         self->addHandler(kVersionState, kHandlerFocus, vp);
-        bmw::ActionDelegate colour;colour.object=self;colour.stub=&onFavouriteColourFocus;
-        self->addHandler(16,kHandlerFocus,colour);
-        bmw::ActionDelegate picker;picker.object=self;picker.stub=&onFavouritePickerFocus;
-        self->addHandler(17,kHandlerFocus,picker);
         bmw::ActionDelegate f;
         f.object = self;
         f.stub = &onAaFocus;
@@ -2766,7 +2807,6 @@ bool appOnInit(bmw::PluginApp* self) {
     }
     bool ok = self->onInit();
     showAbout(self);
-    showFavouriteColours(self);
     alog("onInit: raActions %u/%u/%u/%u/%u/%u/%u + menu focus handler + settings focus handler registered, base onInit -> %d, start with the car %s, "
          "save logs to USB %s, MENU opens iDrive %s", kEntryAction, kActStart, kActStop, kActRestart, kActAutostart,
          kActUsbLog, kActMenuIdrive, (int)ok, autostartOn() ? "on" : "off", nbt::usblog::enabled() ? "on" : "off",
@@ -2782,7 +2822,6 @@ void appOnError(bmw::PluginApp* /*self*/, unsigned code, const bmw::BasicString<
 }
 
 void appOnFinalize(bmw::PluginApp* self) {
-    unlink(nbt::kPickerActivePath);
     alog("onFinalize");
     g_runApp = NULL;
     self->onFinalize();

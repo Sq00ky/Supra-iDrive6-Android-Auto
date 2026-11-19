@@ -174,8 +174,6 @@ static volatile sig_atomic_t g_mainWake = 0;   // cuts the main loop's 250 ms sl
 // frame, so the switch works without restarting the daemon (the env only forces the capturer off).
 static const char* const kFavouriteOffFile = "/var/opt/aa/favourite-bar.disabled";
 static bool favouriteBarOff() { return access(kFavouriteOffFile, F_OK) == 0; }
-#include "favourite_picker.hpp"
-
 namespace nbt { int favouriteOverlayRun(int argc, char** argv); void favouriteOverlayStop(); }
 
 // The favourite strip used to be a second process (nbt-aa-favourites, spawned through TileProcess). It is
@@ -188,11 +186,6 @@ static void* favouriteOverlayThreadFn(void*) {
     snprintf(a3, sizeof(a3), "%d", (int)getpid());
     char* argv[] = { a0, a1, a2, a3, NULL };          // follow + owner pid: the thread ends with this process
     nbt::favouriteOverlayRun(4, argv);
-    return NULL;
-}
-static void* favouritePickerThreadFn(void*) {
-    nbt::favouritePickerMain();                        // writes kPickerDonePath itself before returning
-    unlink(nbt::kPickerRequestPath);
     return NULL;
 }
 
@@ -541,8 +534,31 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
-// The iDrive app's "Start automatically" bootloop guard (rhmiapp-20): it records each autostart here and skips the
-// autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
+static void writeStatus(const char* state);    // defined after the session globals it reads
+static std::string g_carplayIni;               // carplay.ini path car_config resolved, "" = none
+// Car manufacturer (rhmiapp-96): the Settings page writes /var/opt/aa/vehicle (auto|bmw|toyota|mini|rollsroyce).
+// "auto" means: say nothing and let car_config.hpp read the car's carplay.ini, which is what it already does when
+// NBT_VEHICLE is unset. An explicit NBT_VEHICLE in nbt-aad.env still wins over the file.
+static const char* const kVehicleChoiceFile = "/var/opt/aa/vehicle";
+static const char* const kStatusFile = "/dev/shmem/nbt-aad-status";
+static void applyVehicleChoice() {
+    if (getenv("NBT_VEHICLE")) { printf("[Car] NBT_VEHICLE from the environment: %s\n", getenv("NBT_VEHICLE")); return; }
+    FILE* f = fopen(kVehicleChoiceFile, "r");
+    if (!f) return;
+    char v[24] = {0};
+    if (fscanf(f, "%23s", v) != 1) v[0] = 0;
+    fclose(f);
+    if (!v[0] || !strcmp(v, "auto")) { printf("[Car] vehicle: auto (carplay.ini decides)\n"); return; }
+    if (strcmp(v,"bmw") && strcmp(v,"toyota") && strcmp(v,"mini") && strcmp(v,"rollsroyce")) {
+        printf("[Car] %s says '%s', which is not a vehicle; ignoring\n", kVehicleChoiceFile, v);
+        return;
+    }
+    setenv("NBT_VEHICLE", v, 1);
+    printf("[Car] vehicle from %s: %s\n", kVehicleChoiceFile, v);
+}
+
+// A short machine token for the iDrive Settings page: the plugin turns it into a sentence. Written with the same
+// record as the UI state, so the two never disagree about whether nbt-aad is running.
 // <data dir>/bootguard (nbt_paths.hpp).
 static const char* const kBootGuardName = "bootguard";
 static void writeUiState(const char* state, int overlay, bool favouritePeek) {
@@ -572,6 +588,7 @@ static void writeUiState(const char* state, int overlay, bool favouritePeek) {
     ssize_t w = write(fd, rec, (size_t)n);
     if (w == n) ftruncate(fd, n);   // drop a longer old record only after the new line is in place
     else if (!s_warned) { printf("[UiState] short write to %s\n", kUiStateFile); s_warned = true; }
+    writeStatus(state);
     close(fd);
 }
 static volatile bool g_sessionActive = false;   // AA session running (set by connect/end callbacks)
@@ -582,6 +599,42 @@ static nbt::VideoManager* g_video = NULL;       // for the session callbacks (va
 // The audio mode (NBT_AUDIO_MODE=bt|browser|a2i, audio/backend.hpp): BtAudio, BrowserAudio or A2iAudio, picked once
 // at start-up. Same lifetime rule as g_video.
 static nbt::AudioBackend* g_audioBackend = NULL;
+
+// Status facts, in the order that decides how a phone can reach nbt-aad:
+//   1. carplay.ini exists (car_config.hpp resolved it, NBT_CARPLAY_INI included) -> the phone joins that network
+//   2. else wfd0 holds an address (measured with ifconfig)                        -> Wi-Fi Direct
+//   3. else                                                                        -> USB is the only way
+// The plugin renders "state|carplay|wfd|usb|transport" as a sentence naming the missing thing.
+static struct { int wfd, usb, at; } s_statusFacts = { -1, -1, 0 };
+static void probeStatusFacts(uint32_t now) {
+    if (s_statusFacts.at && (uint32_t)(now - s_statusFacts.at) < 15000u) return;
+    s_statusFacts.at = (int)now;
+    std::string why;
+    const char* ifn = getenv("NBT_WFD_IF");
+    s_statusFacts.wfd = nbt::wfdInterfaceHasAddress(ifn && *ifn ? ifn : "wfd0", &why) ? 1 : 0;
+    static int loggedWfd = -1;
+    if (loggedWfd != s_statusFacts.wfd) {
+        loggedWfd = s_statusFacts.wfd;
+        printf("[Status] wifi-direct usable=%d (%s)\n", s_statusFacts.wfd, why.c_str());
+    }
+    s_statusFacts.usb = access("/dev/io-usb", F_OK) == 0 ? 1 : 0;
+}
+static void writeStatus(const char* state) {
+    const char* tok = "waiting-phone";
+    if (!strcmp(state, "connected")) tok = "connected";
+    else if (!strcmp(state, "connecting")) tok = "connecting";
+    probeStatusFacts((uint32_t)upMs());
+    const char* transport = g_owner.get() == nbt::kTransportTcp ? "wifi" : (g_sessionActive ? "usb" : "-");
+    char rec[72];
+    snprintf(rec, sizeof(rec), "%s|%d|%d|%d|%s", tok, g_carplayIni.empty() ? 0 : 1, s_statusFacts.wfd,
+             s_statusFacts.usb, transport);
+    int fd = open(kStatusFile, O_WRONLY | O_CREAT, 0666);
+    if (fd < 0) return;
+    fchmod(fd, 0666);
+    if (write(fd, rec, strlen(rec)) == (ssize_t)strlen(rec)) ftruncate(fd, (off_t)strlen(rec));
+    close(fd);
+}
+
 
 // Prints the Wi-Fi clients the head unit currently knows on the AP subnet (ARP table), so a log
 // shows whether the phone actually joined the network it was offered: the /24 of the address the daemon listens on
@@ -2004,7 +2057,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.120-favourite"
+#define NBT_AAD_BUILD "v1.9.132-test"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -2203,10 +2256,12 @@ int main(int argc, char* argv[]) {
     signal(SIGINT,  signalHandler);
     signal(SIGTERM, signalHandler);
 
+    applyVehicleChoice();
     // Vehicle + panel profile (NBT_VEHICLE / NBT_SCREEN, else the car's carplay.ini, else the display's own size for
     // the screen, else Toyota 1280x480).
     // Parsed here, before any thread starts.
     const nbt::CarConfig& car = nbt::carConfig();
+    g_carplayIni = car.iniPath;                 // "" = no carplay.ini: the status line says so
     printf("[Car] vehicle %s (%s; Manufacturer=%s, logo %s), screen %dx%d (%s), carplay.ini %s%s%s%s\n",
            nbt::carMakeName(car.make), car.vehicleFrom,
            car.manufacturer.empty() ? "-" : car.manufacturer.c_str(), car.oemIcon.empty() ? "-" : car.oemIcon.c_str(), car.screenW, car.screenH, car.screenFrom,
@@ -2396,9 +2451,7 @@ int main(int argc, char* argv[]) {
     if (g_favInProc) {
         if (pthread_create(&g_favOverlayThread, NULL, favouriteOverlayThreadFn, NULL) == 0) {
             g_favOverlayRunning = true;
-            FILE* m = fopen(nbt::kInProcMarkerPath, "w");
-            if (m) { fputs("1\n", m); fclose(m); }
-            printf("[Favourites] overlay in-process: no helper process, picker on request\n");
+            printf("[Favourites] overlay in-process: no helper process\n");
         } else {
             g_favInProc = false;
             printf("[Favourites] in-process overlay thread failed to start; falling back to the helper\n");
@@ -2564,12 +2617,6 @@ int main(int argc, char* argv[]) {
             }
             if (!g_favInProc)
                 favouriteProcess.service(act, "/opt/aa/nbt-aa-favourites", "/dev/shmem/nbt-aa-favourites.log",(unsigned)g_favouriteInputSerial);
-            if (g_favInProc && access(nbt::kPickerRequestPath, F_OK) == 0) {
-                unlink(nbt::kPickerRequestPath);                    // claim it before the thread starts
-                pthread_t th;
-                if (pthread_create(&th, NULL, favouritePickerThreadFn, NULL) == 0) pthread_detach(th);
-                else printf("[Favourites] picker thread failed to start\n");
-            }
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
         // while the phone has the mic closed the session simply drops the PCM. Opening/closing the endpoint per
@@ -2853,7 +2900,6 @@ int main(int argc, char* argv[]) {
     if (g_favInProc) {
         nbt::favouriteOverlayStop();
         if (g_favOverlayRunning) pthread_join(g_favOverlayThread, NULL);
-        unlink(nbt::kInProcMarkerPath);
     }
     favouriteProcess.stop();
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down

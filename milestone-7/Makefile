@@ -48,7 +48,6 @@ SRCS = src/main.cpp \
        src/touch_probe.cpp \
        src/dsi_client.cpp \
        src/favourite_overlay_daemon.cpp \
-       src/favourite_picker_daemon.cpp \
        src/audio/voice_scenario.cpp \
        src/audio/bt_play.cpp \
        src/most/client.cpp \
