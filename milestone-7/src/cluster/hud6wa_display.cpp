@@ -54,6 +54,11 @@ void addItems(Batch& b, uint16_t h, const Picture& pic) {
         b.add(kAddPolygon, addPolygon(h, (uint16_t)i, pic[i].poly.type, pic[i].poly.pts));
     }
 }
+// Hide the surfaces the cluster draws over the panel itself during guidance (NBT_HUD_HIDE, e.g. 0x15/0x16): on every
+// picture (after frame-on) and every distance update, so the strip never shows back through our drawing.
+void addHides(Batch& b, const HudProfile& p) {
+    for (int i = 0; i < p.nHide; i++) b.add(kSetVisibility, setVisibility(p.hide[i], false));
+}
 }
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
@@ -136,6 +141,7 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
     b.add(kTextareaSetText, setText(p_.distance, t.distance.c_str()));
     b.add(kTextareaSetText, setText(p_.unit, t.unit.c_str()));
     b.add(kSetVisibility, setVisibility(p_.frame, true));
+    addHides(b, p_);                                    // kill the cluster's own strips (0x15/0x16) after frame-on
     return b;
 }
 
@@ -408,6 +414,7 @@ ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
     Batch b("distance");
     if (t.distance != shown_.distance) b.add(kTextareaSetText, setText(p_.distance, t.distance.c_str()));
     if (t.unit != shown_.unit) b.add(kTextareaSetText, setText(p_.unit, t.unit.c_str()));
+    addHides(b, p_);                                    // the cluster redraws its strips as the distance changes
     if (b.calls.empty()) return kOk;
     log("DIST '%s' '%s'%s", t.distance.c_str(), t.unit.c_str(), shadow_ ? " (shadow: not sent)" : "");
     SubmitResult sr;
@@ -435,6 +442,7 @@ ClusterDisplay::Result Hud6waDisplay::remind(const NavView& v, double) {
     if (r != kOk || port_.status() == kNavActive || !sent_any_) return r;
     Batch b("remind");
     b.add(kSetVisibility, setVisibility(p_.frame, true));
+    addHides(b, p_);
     log("REMIND type %d: panel on again%s", v.aa_type, shadow_ ? " (shadow: not sent)" : "");
     SubmitResult sr;
     if (!submit(b, &sr)) return sr == kRefused ? kInternal : health(NULL);

@@ -45,6 +45,9 @@ struct HudProfile {
     size_t streetChars;        // longest street text
     size_t distanceChars;      // longest distance text
     const char* streetPunct;   // punctuation kept in a street name (toClusterText); anything else becomes a space
+    uint16_t hide[8];          // handles the cluster draws itself over the panel during guidance (e.g. 0x15/0x16, the
+    int nHide;                 // narrow strips by the distance): SetVisibility-off'd on every picture and distance
+                               // update. 0 = none; set by NBT_HUD_HIDE "21 22". Same idea as carplay-advanced hud_hide.
 };
 
 // The 6WA, as our F20 showed it:
@@ -95,6 +98,7 @@ inline HandleSet handlesOf(const HudProfile& p) {
         h.allow(p.laneA);
         h.allow(p.laneB);
     }
+    for (int i = 0; i < p.nHide; i++) h.allow(p.hide[i]);   // the surfaces we SetVisibility-off (NBT_HUD_HIDE)
     return h;
 }
 
@@ -116,6 +120,18 @@ inline void applyHudEnv(HudProfile& p) {
     if (parseRect(getenv("NBT_HUD_LANES_BOX"), r)) p.lanes = r;
     const char* f = getenv("NBT_HUD_FILL");
     if (f && *f) p.fill = (uint8_t)atoi(f);
+    // NBT_HUD_HIDE "21 22": handles (decimal) the cluster draws over the panel itself -> SetVisibility-off each picture.
+    const char* hd = getenv("NBT_HUD_HIDE");
+    if (hd && *hd) {
+        p.nHide = 0;
+        for (const char* s = hd; *s && p.nHide < 8; ) {
+            while (*s && (*s < '0' || *s > '9')) ++s;   // any separator (space, comma): space-free env values are safe
+            if (!*s) break;
+            int v = atoi(s);
+            if (v > 0 && v <= 255) p.hide[p.nHide++] = (uint16_t)v;
+            while (*s >= '0' && *s <= '9') ++s;
+        }
+    }
 }
 
 // The cluster's own picture-buffer size (ImageGetSize on bufA, asked at the HUD's start) -> canvas and glyph box, so a
