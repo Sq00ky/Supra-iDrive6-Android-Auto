@@ -174,6 +174,28 @@ static volatile sig_atomic_t g_mainWake = 0;   // cuts the main loop's 250 ms sl
 // frame, so the switch works without restarting the daemon (the env only forces the capturer off).
 static const char* const kFavouriteOffFile = "/var/opt/aa/favourite-bar.disabled";
 static bool favouriteBarOff() { return access(kFavouriteOffFile, F_OK) == 0; }
+#include "favourite_picker.hpp"
+
+namespace nbt { int favouriteOverlayRun(int argc, char** argv); void favouriteOverlayStop(); }
+
+// The favourite strip used to be a second process (nbt-aa-favourites, spawned through TileProcess). It is
+// now a thread of this daemon and the picker is started on request, so one binary is all there is to install.
+static bool g_favInProc = false;
+static pthread_t g_favOverlayThread;
+static bool g_favOverlayRunning = false;
+static void* favouriteOverlayThreadFn(void*) {
+    char a0[] = "nbt-aa-favourites", a1[] = "follow", a2[] = "-", a3[16];
+    snprintf(a3, sizeof(a3), "%d", (int)getpid());
+    char* argv[] = { a0, a1, a2, a3, NULL };          // follow + owner pid: the thread ends with this process
+    nbt::favouriteOverlayRun(4, argv);
+    return NULL;
+}
+static void* favouritePickerThreadFn(void*) {
+    nbt::favouritePickerMain();                        // writes kPickerDonePath itself before returning
+    unlink(nbt::kPickerRequestPath);
+    return NULL;
+}
+
 // NBT_FAVOURITE_PROBE=1: log every status frame from function block 0x15, whatever its function code.
 // The point is to find out whether this car publishes the 8 favourite keys at all, and under which fkt.
 static void onFavouriteProbe(const nbt::most::View& m, nbt::most::MsgClass, void*) {
@@ -2368,6 +2390,20 @@ int main(int argc, char* argv[]) {
             printf("[Favourites] capture route 15/0C/0C02 registered (preview %s)\n",
                    favouriteBarOff() ? "off: Settings toggle" : "on");
     }
+
+    // One binary: the overlay runs here unless NBT_FAVOURITE_INPROC=0 asks for the old helper process.
+    g_favInProc = favouritePreviewEnabled && nbt::envFlag("NBT_FAVOURITE_INPROC") != 0;
+    if (g_favInProc) {
+        if (pthread_create(&g_favOverlayThread, NULL, favouriteOverlayThreadFn, NULL) == 0) {
+            g_favOverlayRunning = true;
+            FILE* m = fopen(nbt::kInProcMarkerPath, "w");
+            if (m) { fputs("1\n", m); fclose(m); }
+            printf("[Favourites] overlay in-process: no helper process, picker on request\n");
+        } else {
+            g_favInProc = false;
+            printf("[Favourites] in-process overlay thread failed to start; falling back to the helper\n");
+        }
+    }
     // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
     if (!g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL))
         printf("[Main] driver input tracking failed to start: the iDrive app treats every iDrive screen as the car's.\n");
@@ -2526,7 +2562,14 @@ int main(int argc, char* argv[]) {
                 ui_favouritePeek = (int)g_favouritePeek;
                 ui_favouriteMask = (int)g_favouriteTouchMask;
             }
-            favouriteProcess.service(act, "/opt/aa/nbt-aa-favourites", "/dev/shmem/nbt-aa-favourites.log",(unsigned)g_favouriteInputSerial);
+            if (!g_favInProc)
+                favouriteProcess.service(act, "/opt/aa/nbt-aa-favourites", "/dev/shmem/nbt-aa-favourites.log",(unsigned)g_favouriteInputSerial);
+            if (g_favInProc && access(nbt::kPickerRequestPath, F_OK) == 0) {
+                unlink(nbt::kPickerRequestPath);                    // claim it before the thread starts
+                pthread_t th;
+                if (pthread_create(&th, NULL, favouritePickerThreadFn, NULL) == 0) pthread_detach(th);
+                else printf("[Favourites] picker thread failed to start\n");
+            }
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
         // while the phone has the mic closed the session simply drops the PCM. Opening/closing the endpoint per
@@ -2807,6 +2850,11 @@ int main(int argc, char* argv[]) {
     // the tester logs (2026-10-29) needed SIGTERM on every Force Stop, so the slow step has to show in the log.
     const double t0 = upSec();
     printf("[Main] [%9.3f] Shutdown requested, stopping subsystems...\n", t0);
+    if (g_favInProc) {
+        nbt::favouriteOverlayStop();
+        if (g_favOverlayRunning) pthread_join(g_favOverlayThread, NULL);
+        unlink(nbt::kInProcMarkerPath);
+    }
     favouriteProcess.stop();
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
     g_audioBackend->cancelPending();   // no queued audioconn starts while we tear down

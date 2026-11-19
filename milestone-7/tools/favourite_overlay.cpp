@@ -61,9 +61,13 @@ static void order(bool shown,int aa) {
           L,shown?"0x501,0x503,":"0x501,",aa,shown?",0x100":"",L,shown?1:0,L,shown?1:0);
  system(cmd);
 }
-int main(int argc,char** argv) {
- if(argc>1&&!strcmp(argv[1],"picker"))return nbt::favouritePickerMain();
- setvbuf(stdout,NULL,_IOLBF,0); signal(SIGTERM,stop);signal(SIGINT,stop);signal(SIGHUP,SIG_IGN);
+// Embedded (NBT_FAVOURITE_NO_MAIN, compiled into nbt-aad) or standalone (the old helper binary).
+// favouriteOverlayStop() is the only way out of the loop when it runs as a thread: no signals there.
+namespace nbt {
+void favouriteOverlayStop() { running=0; }
+int favouriteOverlayRun(int argc,char** argv) {
+ running=1;
+ if(argc>1&&!strcmp(argv[1],"picker"))return favouritePickerMain();
  bool follow=argc>1&&!strcmp(argv[1],"follow");
  int seconds=follow?0:90,owner=follow&&argc>3?atoi(argv[3]):0;
  bool compatibility=argc>1&&!strcmp(argv[1],"probe-v3");
@@ -248,3 +252,11 @@ int main(int argc,char** argv) {
  else {snprintf(cmd,sizeof(cmd),"%s set surface 1283 visibility 0 >/dev/null 2>&1",L);system(cmd);}
  unlink(capture);screen_destroy_window(win);screen_destroy_context(ctx);puts("overlay stopped; AA retained");return 0;
 }
+} // namespace nbt
+
+#ifndef NBT_FAVOURITE_NO_MAIN
+int main(int argc,char** argv) {
+ setvbuf(stdout,NULL,_IOLBF,0); signal(SIGTERM,stop);signal(SIGINT,stop);signal(SIGHUP,SIG_IGN);
+ return nbt::favouriteOverlayRun(argc,argv);
+}
+#endif

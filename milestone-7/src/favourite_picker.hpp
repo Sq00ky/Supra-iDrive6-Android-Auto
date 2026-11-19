@@ -8,6 +8,10 @@ namespace nbt {
 static const char* const kFavouriteCustomPath="/var/opt/aa/favourite-bar-custom";
 static const char* const kPickerActivePath="/dev/shmem/nbt-aa-colour-picker.active";
 static const char* const kPickerDonePath="/dev/shmem/nbt-aa-colour-picker.done";
+// In-process mode (rhmiapp-87): the daemon owns the picker too. The plugin writes a request instead of
+// spawning a helper, and the daemon's marker tells it that this is the case.
+static const char* const kPickerRequestPath="/dev/shmem/nbt-aa-colour-picker.request";
+static const char* const kInProcMarkerPath="/dev/shmem/nbt-aa-inproc-favourites";
 inline unsigned pickerClamp(int n,unsigned max){return n<0?0:(unsigned)n>max?max:(unsigned)n;}
 inline uint32_t pickerHSV(unsigned h,unsigned s,unsigned v){
  uint32_t pure=favouriteHueRGB(h%360);unsigned r=(pure>>16)&255,g=(pure>>8)&255,b=pure&255;

@@ -2355,8 +2355,9 @@ void statusRun(void* /*self*/) {
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_noLogShown) showNoLog(app);
-    if(g_pickerPid){int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;}
-    if(g_pickerFocused && (fileExists(nbt::kPickerDonePath)||!g_pickerPid)){
+    if(g_pickerPid>0){int st=0;if(waitpid(g_pickerPid,&st,WNOHANG)==g_pickerPid)g_pickerPid=0;}
+    if(g_pickerFocused && (fileExists(nbt::kPickerDonePath)||(g_pickerPid>0&&!pidAlive(g_pickerPid))||
+                           (g_pickerPid==-1&&!fileExists(nbt::kPickerActivePath)))){
         unlink(nbt::kPickerDonePath);unlink(nbt::kPickerActivePath);app->triggerEvent(54);
     }
     if (!g_autostartShown) showAutostart(app);
@@ -2634,6 +2635,12 @@ bool onFavouritePickerFocus(void*,const bmw::Parcel& p){
     }
     unlink(nbt::kPickerDonePath);
     int marker=open(nbt::kPickerActivePath,O_WRONLY|O_CREAT|O_TRUNC,0600);if(marker<0)return true;close(marker);
+    if(fileExists(nbt::kInProcMarkerPath)){
+        // The daemon owns the picker now (single binary). Ask it, and mark the pid as "not ours" so the
+        // poll below waits for the picker's own done file instead of reaping a child that does not exist.
+        int rq=open(nbt::kPickerRequestPath,O_WRONLY|O_CREAT|O_TRUNC,0600);
+        if(rq>=0){close(rq);g_pickerPid=-1;alog("favourites picker: asked the daemon (in-process)");return true;}
+    }
     const char* path="/opt/aa/nbt-aa-favourites";
     char* argv[]={const_cast<char*>(path),const_cast<char*>("picker"),NULL};
     std::vector<char*> env;for(char** e=environ;e&&*e;++e)if(strncmp(*e,"LD_PRELOAD=",11))env.push_back(*e);env.push_back(NULL);
