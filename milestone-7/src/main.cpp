@@ -2389,9 +2389,7 @@ int main(int argc, char* argv[]) {
     if (g_favInProc) {
         if (pthread_create(&g_favOverlayThread, NULL, favouriteOverlayThreadFn, NULL) == 0) {
             g_favOverlayRunning = true;
-            FILE* m = fopen(nbt::kInProcMarkerPath, "w");
-            if (m) { fputs("1\n", m); fclose(m); }
-            printf("[Favourites] overlay in-process: no helper process, picker on request\n");
+            printf("[Favourites] overlay in-process: no helper process\n");
         } else {
             g_favInProc = false;
             printf("[Favourites] in-process overlay thread failed to start; falling back to the helper\n");
@@ -2840,7 +2838,6 @@ int main(int argc, char* argv[]) {
     if (g_favInProc) {
         nbt::favouriteOverlayStop();
         if (g_favOverlayRunning) pthread_join(g_favOverlayThread, NULL);
-        unlink(nbt::kInProcMarkerPath);
     }
     favouriteProcess.stop();
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
