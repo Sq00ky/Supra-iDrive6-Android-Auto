@@ -89,6 +89,7 @@
 #include "audio/browser_audio.hpp"
 #include "volume.hpp"
 #include "volume_osd.hpp"
+#include "volume_pill.hpp"
 #include "audio/bt_audio.hpp"
 #include "audio/mic_uplink.hpp"
 #include "video_manager.hpp"
@@ -1750,11 +1751,11 @@ static bool volGainEnabled() {
     return v != 0;
 }
 
-static void volumeApply(int pct, bool setGain) {
+static void volumeApply(int pct, bool setGain, nbt::PillLabel label) {
     const int p = nbt::volumeClampPct(pct);
     if (setGain && volGainEnabled() && g_browserAudio) g_browserAudio->setMediaGain(nbt::volumePctToGain(p));
-    g_volumeOsd.setPct(p);
-    printf("[Volume] %d%% (%d dB)%s\n", p, nbt::volumePctToDb(p),
+    g_volumeOsd.setLevel(p, label);
+    printf("[Volume] %d%% (%d dB) %s%s\n", p, nbt::volumePctToDb(p), nbt::pillLabelName(label),
            (setGain && volGainEnabled()) ? " [mixer]" : "");
 }
 
@@ -1795,8 +1796,8 @@ static void onCarInput(const char* what, void*) {
 // Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03, car/volume_level.hpp): mirror it on
 // the overlay. This is the value the amplifier actually applied, so the pill always matches what the driver hears.
 // From g_carVolume on the DSI callback thread.
-static void onCarVolume(int level, int max, void*) {
-    const int pct = nbt::car::VolumeLevel::percent(level, max);
+static void onCarVolume(const nbt::car::CarVolume& v, void*) {
+    const int pct = nbt::car::VolumeLevel::percent(v.level, v.max);
     struct timespec ts;   // 64-bit ms, same base as SpeechOut (monoMs() wraps at 32 bit)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     const uint64_t now = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
@@ -1805,7 +1806,7 @@ static void onCarVolume(int level, int max, void*) {
         return;
     }
     g_carInputMs = monoMs() | 1u;   // iDrive draws its own volume bar: that is the driver, not the car
-    volumeApply(pct, false);
+    volumeApply(pct, false, nbt::pillLabelFor(nbt::focusVolumeQuiet().routed()));
 }
 
 static uint32_t g_idrWaitMs = 0;   // decoder rebuilt on the way back: waiting for the phone's keyframe since

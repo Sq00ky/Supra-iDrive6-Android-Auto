@@ -32,8 +32,9 @@ public:
     virtual void setFeed(bool on) = 0;
     virtual void flush() = 0;
     virtual size_t queuedBytes() const = 0;
-    // A focus build or remove is in flight (the volume pill's quiet window starts when that ends).
-    virtual void setFocusBusy(bool busy, uint64_t now) = 0;
+    // busy: a focus build or remove is in flight (the volume pill's quiet window starts when that ends). routed: the
+    // focus is held (the knob sets the nav volume).
+    virtual void setFocusState(bool busy, bool routed, uint64_t now) = 0;
     // Asynchronous and idempotent: the endpoint plays the ring once open, or silence while the feed is off. Queued
     // audio stays in the ring while it opens. openEndpoint also retries an open that failed.
     virtual void openEndpoint() = 0;

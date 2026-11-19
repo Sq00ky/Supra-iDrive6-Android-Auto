@@ -25,7 +25,8 @@ namespace {
 
 class FakePort : public SpeechFocusPort {
 public:
-    FakePort() : build_ok(true), remove_ok(true), queued(0), healthy(true), log_ep(false), ep(false), writes(0) {}
+    FakePort() : build_ok(true), remove_ok(true), queued(0), healthy(true), log_ep(false), ep(false), writes(0),
+                 routed(false) {}
 
     bool queueBuild() { add("build"); return build_ok; }
     bool queueRemove() { add("remove"); return remove_ok; }
@@ -33,10 +34,13 @@ public:
     void setFeed(bool on) { add(on ? "feed+" : "feed-"); }
     void flush() { add("flush"); queued = 0; }
     size_t queuedBytes() const { return queued; }
-    void setFocusBusy(bool busy, uint64_t now) {
+    // "routed+" / "routed-" only when it changes.
+    void setFocusState(bool busy, bool r, uint64_t now) {
         char b[32];
         snprintf(b, sizeof(b), "%s@%llu", busy ? "busy" : "free", (unsigned long long)now);
         add(b);
+        if (r != routed) add(r ? "routed+" : "routed-");
+        routed = r;
     }
     void openEndpoint() { ep = true; if (log_ep) add("open"); }
     void closeEndpoint() { ep = false; if (log_ep) add("close"); }
@@ -52,6 +56,7 @@ public:
     bool log_ep;     // record open / close in the calls
     bool ep;         // opened and not closed since
     mutable uint32_t writes;
+    bool routed;
 
 private:
     void add(const char* c) { if (!calls_.empty()) calls_ += ' '; calls_ += c; }
@@ -114,7 +119,7 @@ int main() {
         CHECK_CALLS(p, "busy@1100");
 
         CHECK(f.granted(1300) == NavPromptPolicy::BUILDING);
-        CHECK_CALLS(p, "feed+ free@1300");
+        CHECK_CALLS(p, "feed+ free@1300 routed+");
         CHECK(f.state() == NavPromptPolicy::ROUTED);
         CHECK(f.grantAfterMs() == 300);
         CHECK(f.playsFrames());
@@ -132,7 +137,7 @@ int main() {
         CHECK(t.action == NavPromptPolicy::RELEASE);
         CHECK(t.idle_ms == 501);
         CHECK(f.grantAfterMs() == 300);
-        CHECK_CALLS(p, "feed- remove busy@1801");
+        CHECK_CALLS(p, "feed- remove busy@1801 routed-");
         CHECK(f.state() == NavPromptPolicy::RELEASING);
         CHECK(!f.playsFrames());
         CHECK(f.takesPrompt(1801));
@@ -163,7 +168,7 @@ int main() {
         p.take();
         CHECK(f.tick(2500).action == NavPromptPolicy::NONE);
         CHECK(f.tick(2501).action == NavPromptPolicy::RELEASE);
-        CHECK_CALLS(p, "free@2500 feed- remove busy@2501");
+        CHECK_CALLS(p, "free@2500 feed- remove busy@2501 routed-");
     }
 
     // 2. A new prompt within the hold: no second build, it plays at once on the held focus.
@@ -183,7 +188,7 @@ int main() {
         SpeechFocus::Tick t = f.tick(2201);
         CHECK(t.action == NavPromptPolicy::RELEASE);
         CHECK(t.idle_ms == 501);
-        CHECK_CALLS(p, "free@2200 feed- remove busy@2201");
+        CHECK_CALLS(p, "free@2200 feed- remove busy@2201 routed-");
     }
 
     // 3. A new prompt while RELEASING: its audio waits in the ring, the next tick after the remove builds again.
@@ -214,7 +219,7 @@ int main() {
 
         CHECK(f.granted(2300) == NavPromptPolicy::BUILDING);
         CHECK(f.grantAfterMs() == 300);
-        CHECK_CALLS(p, "feed+ free@2300");
+        CHECK_CALLS(p, "feed+ free@2300 routed+");
     }
 
     // 3b. The waiting prompt is over and its ring empty when the release is done: dropped, no build.
@@ -341,7 +346,7 @@ int main() {
         routed(f, p);
         p.queued = 2000;
         CHECK(f.sessionEnded(1500));
-        CHECK_CALLS(p, "feed- remove flush busy@1500");
+        CHECK_CALLS(p, "feed- remove flush busy@1500 routed-");
         CHECK(f.state() == NavPromptPolicy::RELEASING);
         CHECK(!f.active());
         CHECK(f.tick(1600).action == NavPromptPolicy::NONE);   // the prompt counts as stopped
@@ -425,7 +430,7 @@ int main() {
         for (int i = 0; i < 200; ++i) CHECK(f.stopStep());   // the 2 s limit is the caller's
         CHECK_CALLS(p, "");
         f.removeDone(1600, true);
-        CHECK_CALLS(p, "free@1600");
+        CHECK_CALLS(p, "free@1600 routed-");
         CHECK(!f.stopStep());
         const SpeechFocus::Stop s = f.endStop(1620);
         CHECK(s.sent);
@@ -445,7 +450,7 @@ int main() {
         const SpeechFocus::Stop s = f.endStop(3500);
         CHECK(s.sent);
         CHECK(s.held);
-        CHECK_CALLS(p, "busy@3500");
+        CHECK_CALLS(p, "busy@3500 routed-");
     }
 
     // 8d. Shutdown while BUILDING: cancel the build, the release is the one remove.
@@ -580,7 +585,7 @@ int main() {
         f.promptStopped();
         p.remove_ok = false;
         CHECK(f.tick(1801).action == NavPromptPolicy::RELEASE);
-        CHECK_CALLS(p, "feed- remove free@1801");
+        CHECK_CALLS(p, "feed- remove free@1801 routed-");
         CHECK(f.state() == NavPromptPolicy::IDLE);
         CHECK(!f.sessionEnded(2000));
         CHECK_CALLS(p, "remove flush free@2000");
@@ -600,9 +605,9 @@ int main() {
         CHECK_TEXT(f.promptStarted(7000), kRequesting);
         CHECK(f.granted(7100) == NavPromptPolicy::BUILDING);
         f.promptStopped();
-        CHECK_CALLS(p, "feed- build busy@7000 feed+ busy@7100");
+        CHECK_CALLS(p, "feed- build busy@7000 feed+ busy@7100 routed+");
         CHECK(f.tick(7601).action == NavPromptPolicy::RELEASE);
-        CHECK_CALLS(p, "feed- remove busy@7601");
+        CHECK_CALLS(p, "feed- remove busy@7601 routed-");
 
         f.removeDone(7700, true);   // the old one
         CHECK(f.state() == NavPromptPolicy::RELEASING);
@@ -631,7 +636,7 @@ int main() {
         CHECK(f.state() == NavPromptPolicy::BUILDING);
 
         CHECK(f.granted(6900) == NavPromptPolicy::BUILDING);
-        CHECK_CALLS(p, "feed+ busy@6900");   // the timed-out remove is still out
+        CHECK_CALLS(p, "feed+ busy@6900 routed+");   // the timed-out remove is still out
         f.removeDone(7000, true);
         CHECK(f.state() == NavPromptPolicy::ROUTED);
         CHECK_CALLS(p, "free@7000");
@@ -681,7 +686,7 @@ int main() {
         f.promptStopped();
         p.take();
         CHECK(f.tick(1801).action == NavPromptPolicy::RELEASE);
-        CHECK_CALLS(p, "feed- remove busy@1801");   // the focus goes first
+        CHECK_CALLS(p, "feed- remove busy@1801 routed-");   // the focus goes first
         f.removeDone(1900, true);
         p.take();
         SpeechFocus::Tick t = f.tick(2000);
@@ -702,7 +707,7 @@ int main() {
         CHECK_TEXT(f.promptStarted(1400), "focus still held");
         CHECK_CALLS(p, "open free@1400");
         CHECK(f.sessionEnded(1500));
-        CHECK_CALLS(p, "feed- remove flush close busy@1500");
+        CHECK_CALLS(p, "feed- remove flush close busy@1500 routed-");
         CHECK(!p.ep);
     }
 
@@ -775,7 +780,7 @@ int main() {
         CHECK(t.stall_ms == 1001);
         CHECK(t.dropped == 8000);
         CHECK(t.action == NavPromptPolicy::NONE);
-        CHECK_CALLS(p, "flush feed- remove close busy@3001");
+        CHECK_CALLS(p, "flush feed- remove close busy@3001 routed-");
         CHECK(f.state() == NavPromptPolicy::RELEASING);
         CHECK(!f.playsFrames());   // the rest of this prompt is not queued
         CHECK(!f.active());
