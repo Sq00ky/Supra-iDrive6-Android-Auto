@@ -600,8 +600,8 @@ static void writeUiState(const char* state, int overlay, bool favouritePeek) {
     }
     ssize_t w = write(fd, rec, (size_t)n);
     if (w == n) ftruncate(fd, n);   // drop a longer old record only after the new line is in place
-    writeStatus(state);
     else if (!s_warned) { printf("[UiState] short write to %s\n", kUiStateFile); s_warned = true; }
+    writeStatus(state);
     close(fd);
 }
 static volatile bool g_sessionActive = false;   // AA session running (set by connect/end callbacks)
