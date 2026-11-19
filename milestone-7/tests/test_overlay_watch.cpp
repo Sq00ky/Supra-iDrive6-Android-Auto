@@ -225,6 +225,13 @@ int main() {
         assert(w.poll(5100, true, false, false) == nbt::OverlayWatch::NONE);       // settling
         assert(w.poll(9000, true, false, false) == nbt::OverlayWatch::STEP_ASIDE);
     }
+    // New settings states must not look like vehicle overlays or shift the Version page.
+    const int ownPages[] = {OverlayWatch::kVersionState, OverlayWatch::kColourState, OverlayWatch::kPickerState};
+    for (unsigned i = 0; i < sizeof(ownPages) / sizeof(ownPages[0]); ++i) {
+        OverlayWatch w;
+        w.onOwnState(ownPages[i], 1000);
+        assert(!w.takeAside(4000));
+    }
     printf("test_overlay_watch: all passed\n");
     return 0;
 }

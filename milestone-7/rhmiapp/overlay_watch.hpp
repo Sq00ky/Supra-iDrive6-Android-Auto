@@ -143,6 +143,9 @@ public:
     static const int kAaState = 13;     // <hmiState id="13">, our blank state (hmi.graphicalContext: 50002 on the Supra)
     static const int kMenuState = 10;   // <hmiState id="10">, our menu (hmi.graphicalContext: 50000 on the Supra)
     static const int kSettingsState = 14; // <hmiState id="14">, the menu's Settings page (its six checkboxes)
+    static const int kVersionState = 15;
+    static const int kColourState = 16;
+    static const int kPickerState = 17;
 
 private:
     static const int kMaxIgnore = 16;
@@ -151,7 +154,7 @@ private:
     static const uint32_t kBackMs = 2000;     // back on the old screen this long = the overlay is really gone
     static const uint32_t kHideLagMs = 3000;
 
-    static bool isOwnState(int vc) { return vc == kAaState || vc == kMenuState || vc == kSettingsState; }
+    static bool isOwnState(int vc) { return vc == kAaState || vc == kMenuState || vc == kSettingsState || vc == kVersionState || vc == kColourState || vc == kPickerState; }
     bool isOwn(int vc) const {
         if (isOwnState(vc)) return true;
         for (int i = 0; i < nIgnore_; ++i) if (ignore_[i] == vc) return true;

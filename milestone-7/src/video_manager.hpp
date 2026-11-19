@@ -28,6 +28,10 @@ public:
 
     // Toggle overlay visibility (bring forward or hide back to native iDrive 6)
     void setVisible(bool visible);
+    // Main thread: change the desired top-strip composition, without toggling picture/session visibility.
+    // Returns true when setVisible(current visibility) must apply the new geometry/render order.
+    bool setFavouritePreview(bool active);
+    void refreshFavouritePreview();
     bool isVisible() const;
 
     // Call from the AASession end-of-session callback: drops queued frames and the cached SPS/PPS of
@@ -163,6 +167,7 @@ private:
     int overlay_surface_;           // main thread only: the pill's surface, on top of the picture while shown (0 = none)
     bool overlay_verified_;         // the two-surface render order was read back once
     bool overlay_failed_;           // ... and LayerManagerControl did not take it: not tried again this run
+    bool favourite_preview_, favourite_verified_, favourite_failed_;
     bool aa_surface_seen_;          // main thread only: LayerManager has surface aaSurface() (it persists for the boot)
     bool aa_surface_logged_;        // ... and its state + the layer's render order were logged once while shown
     unsigned aa_surface_ticks_;     // serviceAaSurface() calls since the window was created
@@ -171,6 +176,7 @@ private:
     std::string cp_name_;           // decoder_mutex_: its name
     MmrCtxSnapshot cp_snap_;        // decoder_mutex_: what it had attached (PPS) before we detached it
     void verifyOverlayOrder();
+    void verifyFavouritePreview();
     FrameQueue frame_queue_;            // guarded by queue_mutex_
     std::vector<uint8_t> cached_codec_config_;
 };

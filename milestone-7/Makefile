@@ -47,6 +47,8 @@ SRCS = src/main.cpp \
        src/gcf_client.cpp \
        src/touch_probe.cpp \
        src/dsi_client.cpp \
+       src/favourite_overlay_daemon.cpp \
+       src/favourite_picker_daemon.cpp \
        src/audio/voice_scenario.cpp \
        src/audio/bt_play.cpp \
        src/most/client.cpp \
@@ -79,7 +81,10 @@ TARGET = nbt-aad
 check:
 	$(MAKE) -C tests check
 
-all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
+all: $(TARGET) nbt-aa-favourites test_display test_controls plugin rhmiapp wfd_probe pf_aa
+
+nbt-aa-favourites: tools/favourite_overlay.cpp tools/favourite_picker.cpp src/favourite_picker.hpp src/favourite_release.hpp src/favourite_press.hpp src/touch_frame.hpp src/favourite_bitmap.hpp src/favourite_strip.hpp src/favourite_ready.hpp src/favourite_retry.hpp src/favourite_colour.hpp src/ambient_colour_observer.hpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp src/most/msg.hpp include/screen_video.h
+	$(CXX) $(CXXFLAGS) -Wl,-s -o $@ tools/favourite_overlay.cpp tools/favourite_picker.cpp src/dsi_client.cpp -L./lib -lscreen -lsocket -lang-c++ -Wl,-rpath,/opt/mm/lib:/lib:/usr/lib
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -109,7 +114,7 @@ RHMI_LIBS = $(wildcard $(RHMI_LIBDIR)/libAppFramework.A.so $(RHMI_LIBDIR)/libCor
 .PHONY: rhmiapp
 rhmiapp: rhmiapp/libNbtAad.so
 
-rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp
+rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp rhmiapp/overlay_watch.hpp src/favourite_colour.hpp src/favourite_picker.hpp
 	@echo [BUILD] PluginApp $@
 	$(PLUGIN_CXX) $(PLUGIN_CXXFLAGS) -shared -Wl,-soname,libNbtAad.so -o $@ rhmiapp/nbt_aad_app.cpp $(RHMI_LIBS) -Wl,--allow-shlib-undefined -lang-c++
 	@echo [DONE] Built $@ - install with NbtAad.manifest, NbtAad.xml, NbtAad_ALL_*.zip into Plugins/NbtAad
@@ -164,7 +169,7 @@ volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp 
 
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) nbt-aa-favourites test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa
 
 # osdprobe: standalone check that this unit lets us own an LM surface for our own window.
 osdprobe: tools/osdprobe.cpp

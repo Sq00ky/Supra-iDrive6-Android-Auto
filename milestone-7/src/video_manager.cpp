@@ -4,6 +4,8 @@
 #include "nbt_env.hpp"
 #include "car_config.hpp"
 #include "lm_geometry.hpp"
+#include "favourite_strip.hpp"
+#include "favourite_composition.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -157,7 +159,8 @@ VideoManager::VideoManager()
       idr_dropped_(0),
       idr_wanted_(false),
       decoder_gen_(0), frames_in_gen_(0), window_ready_(false), overlay_surface_(0), overlay_verified_(false),
-      overlay_failed_(false), aa_surface_seen_(false), aa_surface_logged_(false), aa_surface_ticks_(0),
+      overlay_failed_(false), favourite_preview_(false), favourite_verified_(false), favourite_failed_(false),
+      aa_surface_seen_(false), aa_surface_logged_(false), aa_surface_ticks_(0),
       cp_ctx_(NULL), cp_detached_(false), frame_queue_(nbt::videoQueueCapacity()) {
     memset(&sink_, 0, sizeof(sink_));
     pthread_mutex_init(&queue_mutex_, NULL);
@@ -1337,6 +1340,14 @@ bool VideoManager::hideVideoWindow() {
     return r1 == 0;
 }
 
+bool VideoManager::setFavouritePreview(bool active) {
+    // The shared CarPlay path has different geometry ownership; leave AA intact on that legacy path.
+    bool wanted = active && !favourite_failed_ && !sharesCarPlaySurface();
+    if (wanted == favourite_preview_) return false;
+    favourite_preview_ = wanted;
+    return true;
+}
+
 void VideoManager::setVisible(bool visible) {
     sink_.is_visible = visible;
     if (visible && mmr_hidden_ && mmr_win_) {
@@ -1365,20 +1376,21 @@ void VideoManager::setVisible(bool visible) {
     char cmd[768];
     if (visible) {
         const nbt::CarConfig& cc = nbt::carConfig();
-        // The plain order first (car-proven); with the pill's surface the two-surface order follows at once, so a
-        // LayerManagerControl that refused the list has still put the picture up.
+        // AA always keeps its full geometry. A separate transparent surface copies BMW's live top strip.
         const unsigned aa = (unsigned)aaSurface();
-        char pill[160] = "";
-        if (overlay_surface_ > 0)
-            snprintf(pill, sizeof(pill), "%s set layer 0x80000000 render order 0x%x,0x%x 2>/dev/null; ", L,
-                     (unsigned)overlay_surface_, aa);
+        const nbt::FavouriteStripRegion r = nbt::favouriteStripRegion(cc.screenW, cc.screenH, false,
+                                                                                    vidEnvInt("NBT_FAVOURITE_BAR_HEIGHT", 0));
+        char order[80], nativeFirst[100] = "";
+        nbt::favouriteRenderOrder(order, sizeof(order), aa, overlay_surface_, favourite_preview_);
+        if (favourite_preview_) snprintf(nativeFirst, sizeof(nativeFirst), "%s set surface 256 visibility 1 2>/dev/null; ", L);
         snprintf(cmd, sizeof(cmd),
-                 "%s set layer 0x80000000 render order 0x%x 2>/dev/null; %s"
-                 "%s set surface %u source region 0 0 %d %d 2>/dev/null; "
-                 "%s set surface %u destination region 0 0 %d %d 2>/dev/null; "
-                 "%s set surface 256 visibility 0 2>/dev/null; "
+                 "%s%s set layer 0x80000000 render order %s 2>/dev/null; "
+                 "%s set surface %u source region %d %d %d %d 2>/dev/null; "
+                 "%s set surface %u destination region %d %d %d %d 2>/dev/null; "
+                 "%s set surface 256 visibility %d 2>/dev/null; "
                  "%s set surface %u visibility 1 2>/dev/null",
-                 L, aa, pill, L, aa, cc.screenW, cc.screenH, L, aa, cc.screenW, cc.screenH, L, L, aa);
+                 nativeFirst, L, order, L, aa, r.x, r.y, r.w, r.h, L, aa, r.x, r.y, r.w, r.h,
+                 L, favourite_preview_ ? 1 : 0, L, aa);
     } else {
         snprintf(cmd, sizeof(cmd),
                  "%s set layer 0x80000000 render order 0x100 2>/dev/null; "
@@ -1392,8 +1404,29 @@ void VideoManager::setVisible(bool visible) {
     printf("[VideoManager] Screen overlay visibility changed: %s (Z-Order: %d, %ld ms)%s\n",
            visible ? "VISIBLE" : "HIDDEN", z_order, ms, (visible && overlay_surface_ > 0) ? " [volume pill on top]" : "");
     if (visible && overlay_surface_ > 0 && !overlay_verified_) verifyOverlayOrder();
+    if (visible && favourite_preview_ && !favourite_verified_) verifyFavouritePreview();
     if (visible) fixCarPlayLayer();  // both no-ops on Android Auto's own surface
     else restoreFactoryGeometry();   // NBT_AA_SURFACE=1280 shares CarPlay's surface: give it its own regions back
+}
+
+void VideoManager::refreshFavouritePreview() {
+    if (!window_ready_ || sharesCarPlaySurface()) return;
+    static nbt::FavouriteComposition composition;
+    struct timespec before, after;
+    clock_gettime(CLOCK_MONOTONIC, &before);
+    if (composition.apply((unsigned)aaSurface(), overlay_surface_, favourite_preview_)) {
+        clock_gettime(CLOCK_MONOTONIC, &after);
+        long ms = (long)(after.tv_sec-before.tv_sec)*1000 + (after.tv_nsec-before.tv_nsec)/1000000;
+        printf("[Favourites] atomic composition preview=%d duration=%ld ms\n", favourite_preview_, ms);
+        return;
+    }
+    char order[80], cmd[512];
+    nbt::favouriteRenderOrder(order, sizeof(order), (unsigned)aaSurface(), overlay_surface_, favourite_preview_);
+    snprintf(cmd, sizeof(cmd),
+             "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order %s >/dev/null 2>&1; "
+             "/opt/sys/bin/LayerManagerControl set surface 256 visibility %d >/dev/null 2>&1",
+             order, favourite_preview_ ? 1 : 0);
+    system(cmd); // Preview changes layer order only; never touches AA window visibility or geometry.
 }
 
 // Surface ids after "surface render order:" in `LayerManagerControl get layer` output, e.g.
@@ -1412,6 +1445,37 @@ static int parseLayerRenderOrder(const char* dump, int* ids, int max) {
         while (*k && *k != ',' && *k != '\n') ++k;   // skip "(0x501)"
     }
     return n;
+}
+
+void VideoManager::verifyFavouritePreview() {
+    char command[256], dump[4096];
+    snprintf(command, sizeof(command), "/opt/sys/bin/LayerManagerControl get surface %d 2>&1; "
+             "/opt/sys/bin/LayerManagerControl get layer 0x80000000 2>&1", aaSurface());
+    FILE* pipe = popen(command, "r");
+    size_t n = pipe ? fread(dump, 1, sizeof(dump) - 1, pipe) : 0;
+    if (pipe) pclose(pipe);
+    dump[n] = 0;
+    int ids[8], aaIndex = -1, hmiIndex = -1;
+    int count = parseLayerRenderOrder(dump, ids, 8);
+    for (int i = 0; i < count; ++i) {
+        if (ids[i] == aaSurface()) aaIndex = i;
+        if (ids[i] == 256) hmiIndex = i;
+    }
+    const nbt::CarConfig& cc = nbt::carConfig();
+    const nbt::FavouriteStripRegion r = nbt::favouriteStripRegion(cc.screenW, cc.screenH, false,
+                                                                            vidEnvInt("NBT_FAVOURITE_BAR_HEIGHT", 0));
+    const nbt::LmGeometry g = nbt::lmParseSurface(dump);
+    bool regions = g.src.valid && g.dst.valid && g.src.x == r.x && g.src.y == r.y && g.src.w == r.w && g.src.h == r.h &&
+                   g.dst.x == r.x && g.dst.y == r.y && g.dst.w == r.w && g.dst.h == r.h;
+    if (aaIndex >= 0 && hmiIndex > aaIndex && regions) {
+        favourite_verified_ = true;
+        printf("[Favourites] full AA geometry retained; separate live-label overlay supplies preview\n");
+        return;
+    }
+    printf("[Favourites] top strip composition could not be verified; retaining full AA picture, preview disabled\n");
+    favourite_failed_ = true;
+    favourite_preview_ = false;
+    setVisible(true);
 }
 
 void VideoManager::verifyOverlayOrder() {
@@ -1446,23 +1510,18 @@ void VideoManager::verifyOverlayOrder() {
            hasAa ? "" : ", without the Android Auto surface");
     overlay_failed_ = true;
     overlay_surface_ = 0;
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x%x 2>/dev/null",
-             (unsigned)aa);
+    char cmd[192], order[80];
+    nbt::favouriteRenderOrder(order, sizeof(order), aa, 0, favourite_preview_);
+    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order %s 2>/dev/null", order);
     system(cmd);
 }
 
 bool VideoManager::applyOverlayOrder() {
     if (!window_ready_ || !sink_.is_visible) return false;   // hidden: the hide order holds neither surface
-    char cmd[160];
+    char cmd[192], order[80];
     const unsigned aa = (unsigned)aaSurface();
-    if (overlay_surface_ > 0)
-        snprintf(cmd, sizeof(cmd),
-                 "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x%x,0x%x 2>/dev/null",
-                 (unsigned)overlay_surface_, aa);
-    else
-        snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order 0x%x 2>/dev/null",
-                 aa);
+    nbt::favouriteRenderOrder(order, sizeof(order), aa, overlay_surface_, favourite_preview_);
+    snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl set layer 0x80000000 render order %s 2>/dev/null", order);
     system(cmd);
     if (overlay_surface_ > 0 && !overlay_verified_) verifyOverlayOrder();
     return true;
