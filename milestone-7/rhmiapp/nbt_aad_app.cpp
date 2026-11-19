@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-100-chain (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-101-fade (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
