@@ -44,9 +44,9 @@ with zipfile.ZipFile(root / 'rhmiapp/NbtAad_ALL_Texts.zip') as z:
     for name in z.namelist():
         texts = dict(line.split('=', 1) for line in z.read(name).decode().splitlines())
         assert '300' not in texts, 'favourite colour texts should be gone'
-        assert texts['309'] == 'Show Favorites Keys Bar'
-        assert texts['310'] == 'bar color'
-        assert texts['311'] == 'custom color'
+        assert '309' not in texts, 'the favourites submenu texts should be gone'
+        assert '320' in texts, 'the status texts should be there'
+        assert '320' in texts, 'the status texts should be there'
         assert texts['45'] != texts['48']
 # Every text id the XML references must exist in every language file, or the HMI refuses the plugin.
 import re as _re
