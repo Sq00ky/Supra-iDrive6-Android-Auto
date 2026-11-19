@@ -285,6 +285,10 @@
           <property id="24" value="3"/>
         </properties>
         <components>
+          <label id="460" model="430" text="Status">
+            <properties><property id="2" value="false"/></properties>
+          </label>
+          <button action="420" id="461" text="Car manufacturer"/>
           <checkbox action="24" id="64" model="34" text="Start automatically" textModel="35"/>
           <checkbox action="26" id="67" model="38" text="Save logs to USB" textModel="39"/>
           <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
