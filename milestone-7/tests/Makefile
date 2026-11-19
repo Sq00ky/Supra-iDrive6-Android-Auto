@@ -115,6 +115,7 @@ SRC_test_voice_scenario    := src/audio/voice_scenario.cpp
 SRC_test_volume_input      := src/car/volume_input.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_volume_level      :=
 SRC_test_volume_pill       := src/volume_pill.cpp
+SRC_test_aa_phone_status   :=
 SRC_test_volume            := src/audio/mixer.cpp src/audio/playout.cpp src/audio/drift.cpp src/audio/stream_rate.cpp
 SRC_test_wpp               := src/wireless_setup.cpp
 SRC_test_settings_watch    :=

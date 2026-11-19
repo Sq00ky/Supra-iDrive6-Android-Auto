@@ -158,7 +158,7 @@ void pillPaint(PillCanvas& cv, const PillLayout& L, int pct, PillLabel label) {
 
     drawAlpha(cv, L.iconX, L.iconY, L.icon->px, L.icon->px, L.icon->alpha, kSpeaker);
     drawBar(cv, L.barX0, L.barX1, L.barY, L.barH, pct);
-    const VolBitmap& b = label == kPillLabelNavigation ? L.labels->navigation : L.labels->entertainment;
+    const VolBitmap& b = L.labels->word[label];
     drawAlpha(cv, L.x + (L.w - b.w) / 2, L.labelY, b.w, b.h, b.alpha, kLabel);
 }
 

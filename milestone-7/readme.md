@@ -1128,7 +1128,7 @@ Finding the values on another car, over SSH:
   declared rate, backing off) the prompt plays through the browser mix (`0xb8`) as before, radio muted for it. AA
   media and system sounds always stay on `0xb8`. The volume pill is not shown for volume changes while the nav focus
   is being taken or released and for 1.5 s after. While the focus is held the knob sets the nav volume, and the pill
-  says "Navigation"; otherwise it says "Entertainment".
+  says "Navigation".
 - Log: `[Browser] guidance: nav prompt channel /input_mono_0 focus 0x1a -> 0x1 (NBT_SPEECH=1)` (else `guidance: browser mix ..`),
   `[Speech] ready: .. opened for each prompt, route audioconn 0x1a -> 0x1`, per prompt `[Speech] prompt #N started: ..`
   and `focus granted after .. ms, released .. ms after the last audio`, then `[Speech] endpoint closed`; on a refused
@@ -1394,7 +1394,8 @@ nbt-aad logs the first 40 C10/C20 messages raw (`[Knob] ... (CCS protocol)`).
    MIN is the lowest level of the volume being set (0 for the radio, 25 for navigation, the browser source and a phone
    call), so the message does not say which volume the knob sets.
    The pill is drawn by `volume_pill.cpp`; its speaker and labels are bitmaps from `tools/gen_volume_glyphs.py`
-   (Inter 4.1 Regular, SIL OFL 1.1).
+   (Inter 4.1 Regular, SIL OFL 1.1). Its label: "Phone call" while Android Auto reports a call (ringing or in a call,
+   phone status channel 11), "Navigation" while the nav prompt focus is held, else "Entertainment".
 8. **Car GPS (`car/gps`).** `CarGps` is another consumer of the MOST client: it receives copies of the navigation's GNSS fix
    (FBlock 0x52 inst 00, fkt 0x440, about once a second, one copy per HMI receiver) and of its receiver status (FBlock 0xCD
    inst 01, fkt 0xC00), decodes them and logs them under `[GPS]`. It adds no device-controller keys. With `NBT_KNOB=0` the
@@ -1552,6 +1553,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 | `test_most_client`, `test_ccs_input` | MOST client against a fake `DsiClient` (`tests/fake_dsi_client.cpp`): request order, refusal, re-attach; a car capture from DSI frame to controller event |
 | `test_ccs_config`, `test_ptt` | Controller settings, steering-wheel voice button timing |
 | `test_volume_level`, `test_volume_input` | Car volume level against the car capture (AudioMaster 0x20/0x0C08), and from DSI frame to the overlay callback beside the controller |
+| `test_aa_phone_status` | Android Auto phone status (ch 11, 0x8001): whether a call is ringing or active |
 | `test_volume_pill` | Volume pill label (volume type, nav prompt focus) and drawing: layout per panel size, fill, label; writes `tests/build/volume_pill_*.ppm` to look at |
 | `test_car_gps` | Car GPS decode (MOST 52/00 fkt 440 and CD/01 fkt C00, car captures), repeats and log cadence, the 3D fix check, from DSI frame to `LocationFix` and satellite count on the fake `DsiClient` |
 | `test_aa_sensor_msg` | LOCATION (incl. 10-byte negative varints and the optional altitude, speed and bearing, which nothing sets yet) and GPS_SATELLITE event encodings, their age limits |

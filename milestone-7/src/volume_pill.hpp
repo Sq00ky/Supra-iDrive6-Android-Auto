@@ -14,16 +14,18 @@ struct VolLabelSet;
 namespace nbt {
 
 // Which volume the pill names.
-enum PillLabel { kPillLabelEntertainment = 0, kPillLabelNavigation = 1 };
+enum PillLabel { kPillLabelEntertainment = 0, kPillLabelNavigation = 1, kPillLabelPhoneCall = 2 };
 
-// focusRouted: our nav prompt focus is routed, so the knob sets the nav volume. The car's volume message cannot
-// tell (car/volume_level.hpp), so BMW's own prompts count as entertainment.
-inline PillLabel pillLabelFor(bool focusRouted) {
+// inCall: Android Auto reports a call. focusRouted: our nav prompt focus is routed, so the knob sets the nav volume.
+// The car's volume message cannot tell (car/volume_level.hpp), so BMW's own prompts count as entertainment.
+inline PillLabel pillLabelFor(bool focusRouted, bool inCall) {
+    if (inCall) return kPillLabelPhoneCall;
     return focusRouted ? kPillLabelNavigation : kPillLabelEntertainment;
 }
 
 inline const char* pillLabelName(PillLabel l) {
-    return l == kPillLabelEntertainment ? "Entertainment" : (l == kPillLabelNavigation ? "Navigation" : "no label");
+    static const char* const kNames[] = { "Entertainment", "Navigation", "Phone call" };   // tools/gen_volume_glyphs.py
+    return kNames[l];
 }
 
 // Level 0..100 and label in one int, so another thread never reads half a pair.

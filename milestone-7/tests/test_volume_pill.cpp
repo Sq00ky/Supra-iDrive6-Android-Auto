@@ -14,10 +14,13 @@ static int fails = 0;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
 
 static void testLabel() {
-    CHECK(pillLabelFor(false) == kPillLabelEntertainment);
-    CHECK(pillLabelFor(true) == kPillLabelNavigation);   // our nav prompt focus is routed
+    CHECK(pillLabelFor(false, false) == kPillLabelEntertainment);
+    CHECK(pillLabelFor(true, false) == kPillLabelNavigation);   // our nav prompt focus is routed
+    CHECK(pillLabelFor(false, true) == kPillLabelPhoneCall);
+    CHECK(pillLabelFor(true, true) == kPillLabelPhoneCall);     // a call wins
     CHECK(!strcmp(pillLabelName(kPillLabelEntertainment), "Entertainment"));
     CHECK(!strcmp(pillLabelName(kPillLabelNavigation), "Navigation"));
+    CHECK(!strcmp(pillLabelName(kPillLabelPhoneCall), "Phone call"));
 }
 
 struct Frame {
@@ -81,8 +84,10 @@ static void testLayout() {
     for (int i = 0; i < 2; ++i) {
         const PillLayout s = pillLayoutFor(sizes[i][0], sizes[i][1]);
         CHECK(s.s == (i == 0 ? 0.8 : 1.6));
-        const VolBitmap& e = s.labels->entertainment;
-        CHECK(e.w < s.w - 2 && s.labelY + e.h <= s.y + s.h - 1);
+        for (int w = kPillLabelEntertainment; w <= kPillLabelPhoneCall; ++w) {
+            const VolBitmap& b = s.labels->word[w];
+            CHECK(b.w < s.w - 2 && s.labelY + b.h <= s.y + s.h - 1);
+        }
         CHECK(s.barY + s.barH <= s.labelY);
         CHECK(s.y + s.h <= s.ph && s.x >= 0);
     }
@@ -115,6 +120,14 @@ static void testPaint() {
         pillPaint(f.cv, L, 55, kPillLabelNavigation);
         CHECK(labelInk(f, L) >= 50);
         writePpm(f, L, "2-navigation");
+    }
+    {   // a call has its own word
+        Frame f(L), g(L);
+        pillPaint(f.cv, L, 60, kPillLabelPhoneCall);
+        pillPaint(g.cv, L, 60, kPillLabelEntertainment);
+        CHECK(labelInk(f, L) >= 50);
+        CHECK(f.px != g.px);
+        writePpm(f, L, "5-phone-call");
     }
     {   // level 0: an empty track
         Frame f(L);

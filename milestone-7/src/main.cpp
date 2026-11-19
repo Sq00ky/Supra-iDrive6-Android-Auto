@@ -1603,6 +1603,13 @@ static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t 
 static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
 static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
 static const double kShortSessionS = 15.0;
+// Android Auto reports a call (phone status channel): the knob then sets the call volume. Session thread writes.
+static volatile bool g_phoneInCall = false;
+static void onPhoneCall(bool inCall, void*) {
+    if (inCall != g_phoneInCall) printf("[Phone] %s\n", inCall ? "call active" : "no call");
+    g_phoneInCall = inCall;
+}
+
 static void onSessionEnded(void* user_data) {
     nbt::UsbAccessory* usb = g_usb;
     const nbt::AASession::Outcome outcome = g_session.outcome();
@@ -1628,6 +1635,7 @@ static void onSessionEnded(void* user_data) {
     if (g_audioBackend) g_audioBackend->onSessionEnded();
     g_kombiNav.onSessionEnded();   // the worker clears a cluster/HUD arrow
     resetMedia("session ended");   // the iDrive app must not show the last track of a session that is over
+    g_phoneInCall = false;
 }
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
@@ -1806,7 +1814,7 @@ static void onCarVolume(const nbt::car::CarVolume& v, void*) {
         return;
     }
     g_carInputMs = monoMs() | 1u;   // iDrive draws its own volume bar: that is the driver, not the car
-    volumeApply(pct, false, nbt::pillLabelFor(nbt::focusVolumeQuiet().routed()));
+    volumeApply(pct, false, nbt::pillLabelFor(nbt::focusVolumeQuiet().routed(), g_phoneInCall));
 }
 
 static uint32_t g_idrWaitMs = 0;   // decoder rebuilt on the way back: waiting for the phone's keyframe since
@@ -2455,6 +2463,7 @@ int main(int argc, char* argv[]) {
     g_session.setMicRequestCallback(&onMicRequest, NULL);
     g_session.setNavStatusCallback(&nbt::kombinav::KombiNav::navStatusCallback, &g_kombiNav);
     g_session.setMediaStatusCallback(&onMediaStatus, NULL);
+    g_session.setPhoneCallCallback(&onPhoneCall, NULL);
 
     if (!tcp_server.start()) {
         printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
