@@ -220,6 +220,10 @@ static void testTexts() {
     assert(toClusterText("Testroad Alpha Testroad Beta Tes ", "", 32, false).size() <= 32);
     assert(toClusterText("1,2", ".", 8, true) == "1.2");
     assert(toClusterText("0.3", ".", 8, true) == "0.3");
+    // Cyrillic street names (NBT_HUD_CYRILLIC): blanked by default, kept verbatim with the opt-in (re-encoded to UTF-8,
+    // then to UTF-16BE in setText). "\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80" is the UTF-8 for "Твер".
+    assert(toClusterText("\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80", "", 32, false) == "");
+    assert(toClusterText("\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80", "", 32, false, true) == "\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80");
 
     HudTexts t = kombinav::hudTexts(view(7, "Sample Lane Beta", "1,2", 3, 1200), k6wa);
     assert(t.street == "Sample Lane Beta" && t.distance == "1.2" && t.unit == "km");

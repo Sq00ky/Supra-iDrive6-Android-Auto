@@ -4,11 +4,19 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>   // getenv (NBT_HUD_CYRILLIC)
 
 namespace nbt {
 namespace kombinav {
 
 using namespace hudterm;
+
+// NBT_HUD_CYRILLIC: keep Cyrillic street names (sent as UTF-16BE) instead of blanking them. Off unless set to a
+// non-"0" value, since it needs the cluster font to carry the glyphs.
+static bool hudCyrillicEnabled() {
+    const char* e = getenv("NBT_HUD_CYRILLIC");
+    return e && *e && e[0] != '0';
+}
 
 const char* hudUnitText(int aa_unit) {
     switch (aa_unit) {
@@ -25,7 +33,7 @@ const char* hudUnitText(int aa_unit) {
 // then, rather than a character its font may not have.
 HudTexts hudTexts(const NavView& v, const HudProfile& p) {
     HudTexts t;
-    t.street = toClusterText(v.road, p.streetPunct, p.streetChars, false);
+    t.street = toClusterText(v.road, p.streetPunct, p.streetChars, false, hudCyrillicEnabled());
     if (v.dist_text != "-") t.distance = toClusterText(v.dist_text, ".", p.distanceChars, true);
     if (!t.distance.empty()) t.unit = hudUnitText(v.aa_unit);
     return t;
