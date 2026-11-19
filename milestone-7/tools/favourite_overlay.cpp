@@ -99,7 +99,6 @@ namespace nbt {
 void favouriteOverlayStop() { running=0; }
 int favouriteOverlayRun(int argc,char** argv) {
  running=1;
- if(argc>1&&!strcmp(argv[1],"picker"))return favouritePickerMain();
  bool follow=argc>1&&!strcmp(argv[1],"follow");
  int seconds=follow?0:90,owner=follow&&argc>3?atoi(argv[3]):0;
  bool compatibility=argc>1&&!strcmp(argv[1],"probe-v3");
