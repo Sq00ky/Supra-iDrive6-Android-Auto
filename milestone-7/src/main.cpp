@@ -558,12 +558,12 @@ static void applyVehicleChoice() {
 // A short machine token for the iDrive Settings page: the plugin turns it into a sentence. Written with the same
 // record as the UI state, so the two never disagree about whether nbt-aad is running.
 static void writeStatus(const char* state) {
+    // Only what the daemon actually knows: its own session state. Earlier versions also guessed "no Wi-Fi Direct"
+    // from /dev/wfd0 and "no carplay.ini" from a config path - both are interface names / optional files, so the
+    // guesses fired on cars where everything was fine and told the driver a lie.
     const char* tok = "waiting-phone";
     if (!strcmp(state, "connected")) tok = "connected";
     else if (!strcmp(state, "connecting")) tok = "connecting";
-    else if (access("/dev/wfd0", F_OK) != 0 && access("/dev/wfd0", R_OK) != 0) tok = "wfd-missing";
-    else if (access("/var/opt/conn/carplay/iap2.cfg", F_OK) != 0 &&
-             access("/fs/sda1/opt/conn/carplay/iap2.cfg", F_OK) != 0) tok = "cp-ini-missing";
     int fd = open(kStatusFile, O_WRONLY | O_CREAT, 0666);
     if (fd < 0) return;
     fchmod(fd, 0666);
@@ -2034,7 +2034,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.124-status"
+#define NBT_AAD_BUILD "v1.9.125-status"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
