@@ -83,8 +83,9 @@ ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
     Status st = port_.status();
     if (st == kFailed) return kRejected;
     if (st == kOffline) return kLink;
-    // The cluster's own picture-buffer size, once the terminal has it: fit canvas and glyph to it (env pins still win),
-    // so no cluster needs a hand-measured profile. On our F30 the fit equals the k6wa defaults, so nothing moves.
+    // The cluster's own picture-buffer size, once the terminal has it: the canvas becomes it, and the glyph box moves
+    // where the profile's would be cut off (fitMeasured; env pins still win). On the F30's 126x77 HUD that moves the
+    // F20-sized defaults to the factory arrow's place; on a buffer they fit, nothing moves.
     int mw, mh;
     if (port_.measuredSize(mw, mh) && (mw != measured_w_ || mh != measured_h_)) {
         fitMeasured(mw, mh, p_);

@@ -70,10 +70,10 @@ const HudProfile k6wa = {
     9, 10,
     4,
     7, 3, 4,
-    { 0, 0, 125, 76 },     // canvas: our F30 cluster's picture buffer, measured 126x77 (hud_probe, 17.11.2026).
-                           // The F20's 199x129 overflowed it -> garbled arrow. Override at the car: NBT_HUD_CANVAS.
-    { 31, 8, 94, 68 },     // glyph: ~0.5xW x 0.78xH centred, the F20's arrow proportions mapped onto 126x77.
-                           // A starting box to tune on the car without a rebuild: NBT_HUD_GLYPH "x0 y0 x1 y1".
+    { 0, 0, 199, 129 },    // canvas: the F20's (above); a cluster that answers ImageGetSize gets its own (fitMeasured).
+    { 70, 20, 170, 120 },  // glyph: the F20's; moved only where a measured buffer would cut it off (fitMeasured).
+                           // Both stay the fallback for a cluster that does not answer. Pin either at the car:
+                           // NBT_HUD_CANVAS / NBT_HUD_GLYPH "x0 y0 x1 y1".
     { 0, 0, 183, 16 },     // lanes: the laneA/laneB handles (9/10) measured 184x17; override NBT_HUD_LANES_BOX.
                            // Lanes draw only with NBT_HUD_LANES=1 (hud_lanes); this is a starting box to tune on the car.
     32,
@@ -134,23 +134,24 @@ inline void applyHudEnv(HudProfile& p) {
     }
 }
 
-// The cluster's own picture-buffer size (ImageGetSize on bufA, asked at the HUD's start) -> canvas and glyph box, so a
-// cluster with another buffer needs no hand-measured profile. canvas = the whole buffer; glyph = a box centred in it,
-// half the width and 0.78 the height (the arrow proportions the F20 showed). The arithmetic reproduces the k6wa
-// defaults exactly at the measured 126x77 (glyph 31,8-94,68), and scales for any other buffer. A field pinned by env
-// (NBT_HUD_CANVAS / NBT_HUD_GLYPH) is left as applyHudEnv set it; a size of 0 (an instance not created yet) changes
-// nothing. Same idea as the carplay-advanced measureBox that fits that plugin's box on any cluster.
+// The cluster's own picture-buffer size (ImageGetSize on bufA, asked at the HUD's start). The canvas becomes the whole
+// buffer. The glyph box moves only if the profile's would not fit inside it: that is the cut-off arrow of #229/#253
+// (the F20-sized box on the F30's 126x77 HUD), so a buffer the box fits (the F20's own) keeps the box it was tuned
+// with. Where it moves: where the factory navigation draws its own arrow on the 126x77 HUD buffer, x 37..82, y 23..68
+// in a MOST capture (sabifa, #264), kept in proportion for another size. That is one capture: a buffer of another
+// shape may want its own numbers once someone captures the factory arrow there (NBT_HUD_GLYPH pins them meanwhile).
+// A field pinned by env (NBT_HUD_CANVAS / NBT_HUD_GLYPH) is left as applyHudEnv set it; a size of 0 (no answer, yet or
+// ever) changes nothing, so a cluster that refuses ImageGetSize keeps the F20 profile.
 inline void fitMeasured(int w, int h, HudProfile& p) {
     if (w <= 0 || h <= 0) return;
     if (!getenv("NBT_HUD_CANVAS")) {
         p.canvas.x0 = 0; p.canvas.y0 = 0;
         p.canvas.x1 = (int16_t)(w - 1); p.canvas.y1 = (int16_t)(h - 1);
     }
-    if (!getenv("NBT_HUD_GLYPH")) {
-        int gw = w / 2, gh = h * 78 / 100;
-        int x0 = (w - gw) / 2, y0 = (h - gh) / 2;
-        p.glyph.x0 = (int16_t)x0;        p.glyph.y0 = (int16_t)y0;
-        p.glyph.x1 = (int16_t)(x0 + gw); p.glyph.y1 = (int16_t)(y0 + gh);
+    bool cut = p.glyph.x0 < 0 || p.glyph.y0 < 0 || p.glyph.x1 >= w || p.glyph.y1 >= h;
+    if (cut && !getenv("NBT_HUD_GLYPH")) {
+        p.glyph.x0 = (int16_t)(w * 37 / 126); p.glyph.x1 = (int16_t)(w * 82 / 126);
+        p.glyph.y0 = (int16_t)(h * 23 / 77);  p.glyph.y1 = (int16_t)(h * 68 / 77);
     }
 }
 

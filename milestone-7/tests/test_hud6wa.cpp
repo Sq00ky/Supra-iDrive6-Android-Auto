@@ -1032,32 +1032,32 @@ static void testKombiNavUnknownCluster() {
     unsetenv("NBT_CLUSTER");
 }
 
-// The picture-buffer size -> canvas and glyph (cluster/hud6wa_profile.hpp fitMeasured): reproduces the k6wa defaults
-// at the measured 126x77 (so our F30 does not move), scales for another buffer, leaves the profile alone on 0x0 or an
-// env pin.
+// The picture-buffer size -> canvas and glyph (cluster/hud6wa_profile.hpp fitMeasured): the canvas is the measured
+// buffer; the glyph box moves only where the F20 profile's would be cut off (to the factory arrow's place on the F30's
+// 126x77 HUD), stays on a buffer it fits, and the profile is left alone on 0x0 (no answer) or an env pin.
 static void testFitMeasured() {
     unsetenv("NBT_HUD_CANVAS");
     unsetenv("NBT_HUD_GLYPH");
-    {   // the F30's own 126x77 must give exactly the committed defaults
+    {   // the F30's 126x77 HUD cuts the F20 box off: the factory arrow's box there (MOST capture, sabifa in #264)
         HudProfile p = k6wa;
         fitMeasured(126, 77, p);
         assert(p.canvas.x0 == 0 && p.canvas.y0 == 0 && p.canvas.x1 == 125 && p.canvas.y1 == 76);
-        assert(p.glyph.x0 == 31 && p.glyph.y0 == 8 && p.glyph.x1 == 94 && p.glyph.y1 == 68);
-        assert(p.glyph.x0 == k6wa.glyph.x0 && p.glyph.y1 == k6wa.glyph.y1);
+        assert(p.glyph.x0 == 37 && p.glyph.y0 == 23 && p.glyph.x1 == 82 && p.glyph.y1 == 68);
     }
-    {   // a MINI-sized 120x72 buffer scales (centred, half the width, 0.78 the height)
+    {   // a MINI-sized 120x72 buffer: the same proportions
         HudProfile p = k6wa;
         fitMeasured(120, 72, p);
         assert(p.canvas.x1 == 119 && p.canvas.y1 == 71);
-        assert(p.glyph.x0 == 30 && p.glyph.y0 == 8 && p.glyph.x1 == 90 && p.glyph.y1 == 64);
+        assert(p.glyph.x0 == 35 && p.glyph.y0 == 21 && p.glyph.x1 == 78 && p.glyph.y1 == 63);
     }
-    {   // the F20's 199x129 (the old overflow) now fits inside the buffer
+    {   // a buffer the F20 box fits (the F20's own): the box it was tuned with stays, only the canvas is the real one
         HudProfile p = k6wa;
         fitMeasured(199, 129, p);
         assert(p.canvas.x1 == 198 && p.canvas.y1 == 128);
-        assert(p.glyph.x0 >= 0 && p.glyph.y0 >= 0 && p.glyph.x1 <= 198 && p.glyph.y1 <= 128);
+        assert(p.glyph.x0 == k6wa.glyph.x0 && p.glyph.y0 == k6wa.glyph.y0 && p.glyph.x1 == k6wa.glyph.x1 &&
+               p.glyph.y1 == k6wa.glyph.y1);
     }
-    {   // no answer (0x0): the profile is left as it was
+    {   // no answer (0x0, a cluster that refuses ImageGetSize): the F20 profile, as before the measuring
         HudProfile p = k6wa;
         fitMeasured(0, 0, p);
         assert(p.canvas.x1 == k6wa.canvas.x1 && p.glyph.x0 == k6wa.glyph.x0 && p.glyph.y1 == k6wa.glyph.y1);
@@ -1066,12 +1066,12 @@ static void testFitMeasured() {
         setenv("NBT_HUD_GLYPH", "1 2 3 4", 1);
         HudProfile p = k6wa;
         applyHudEnv(p);                        // as nav_core does before the display sees it
-        fitMeasured(200, 200, p);
+        fitMeasured(126, 77, p);               // would move the box, but it is pinned
         assert(p.glyph.x0 == 1 && p.glyph.y0 == 2 && p.glyph.x1 == 3 && p.glyph.y1 == 4);
-        assert(p.canvas.x1 == 199 && p.canvas.y1 == 199);
+        assert(p.canvas.x1 == 125 && p.canvas.y1 == 76);
         unsetenv("NBT_HUD_GLYPH");
     }
-    printf("  fitMeasured: 126x77 == defaults, scales, 0x0 and env pins respected\n");
+    printf("  fitMeasured: F20 box kept where it fits, factory box on 126x77, 0x0 and env pins respected\n");
 }
 
 int main() {
