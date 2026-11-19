@@ -2782,7 +2782,6 @@ bool appOnInit(bmw::PluginApp* self) {
         vp.object = self;
         vp.stub = &onVersionFocus;
         self->addHandler(kVersionState, kHandlerFocus, vp);
-        self->addHandler(16,kHandlerFocus,colour);
         bmw::ActionDelegate f;
         f.object = self;
         f.stub = &onAaFocus;
