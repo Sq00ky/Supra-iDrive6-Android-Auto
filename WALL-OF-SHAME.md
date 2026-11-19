@@ -8,5 +8,11 @@
 7. Bimmer Fits
 8. Woj-Car Carplay Tuning
 9. carmee_mods / Carmee Performance Parts
+10. BeamerFlash
+11. Menupolskie.pl
+12. Next Level Auto Enhancements
+13. Codificações Auto
+14. M Coding
+15. GF Customs
 
 If you find any other resellers, please submit an issue. They'll be listed here for all eternity.
