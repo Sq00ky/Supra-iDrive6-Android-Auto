@@ -559,6 +559,38 @@ static void applyVehicleChoice() {
 
 // A short machine token for the iDrive Settings page: the plugin turns it into a sentence. Written with the same
 // record as the UI state, so the two never disagree about whether nbt-aad is running.
+// <data dir>/bootguard (nbt_paths.hpp).
+static const char* const kBootGuardName = "bootguard";
+static void writeUiState(const char* state, int overlay, bool favouritePeek) {
+    // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
+    // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
+    // tried to bind the control port itself.
+    // The fourth field marks a temporary favourite preview. Older readers ignore it. A paired plugin must
+    // understand it before enabling this feature, or it may treat a preview as an ordinary exit.
+    // The overlay is 0 hidden, 1 on screen, 2 BACK held, 3 menu key, 4 car
+    // control, 5 knob turn / push only).
+    // fscanf("%23s %d %d") still matches.
+    char rec[48];
+    int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d %d %u\n", state ? state : "idle", (int)getpid(), overlay,
+                     favouritePeek ? 1 : 0, (unsigned)g_favouriteTouchMask);
+    if (n < 0) return;
+    int fd = open(kUiStateFile, O_WRONLY | O_CREAT, 0666);
+    static bool s_warned = false;
+    if (fd < 0) {
+        if (!s_warned) { printf("[UiState] cannot write %s: %s\n", kUiStateFile, strerror(errno)); s_warned = true; }
+        return;
+    }
+    fchmod(fd, 0666);   // readable by HmiMain3D whatever our umask is
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1 && !s_warned) {
+        printf("[UiState] seek failed on %s\n", kUiStateFile);
+        s_warned = true;
+    }
+    ssize_t w = write(fd, rec, (size_t)n);
+    if (w == n) ftruncate(fd, n);   // drop a longer old record only after the new line is in place
+    else if (!s_warned) { printf("[UiState] short write to %s\n", kUiStateFile); s_warned = true; }
+    writeStatus(state);
+    close(fd);
+}
 static volatile bool g_sessionActive = false;   // AA session running (set by connect/end callbacks)
 static nbt::SessionOwner g_owner;               // which transport that session came in on (session_owner.hpp)
 static pthread_mutex_t g_connectMutex = PTHREAD_MUTEX_INITIALIZER;   // serializes startSession() (TCP and USB)
