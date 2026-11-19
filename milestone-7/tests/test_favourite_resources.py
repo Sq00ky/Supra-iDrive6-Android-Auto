@@ -14,9 +14,14 @@ states = app.find('hmiStates')
 # since. What matters is that the favourites pages are present and wired to each other.
 by_id = {s.get('id'): s for s in states}
 assert len(by_id) == len(states), 'duplicate state id'
-assert by_id['16'].get('text') == 'BMW Favorite Keys' and by_id['16'].get('parentId') == '14'
-assert by_id['17'].get('text') == 'custom color' and by_id['17'].get('parentId') == '16'
+# rhmiapp-98: the favourites submenu is gone. One checkbox on the Settings page replaces it, and the car
+# manufacturer choice has its own page.
+assert '16' not in by_id and '17' not in by_id, 'favourites submenu should be gone'
 assert by_id['15'].get('text') == 'Version'
+assert by_id['18'].get('text') == 'Car manufacturer' and by_id['18'].get('parentId') == '14'
+rows = [c for c in app.iter('checkbox') if c.get('text') == 'Disable Favorites Bar']
+assert len(rows) == 1, 'the Disable Favorites Bar checkbox is missing'
+assert len([c for c in by_id['18'].iter('radiobutton')]) == 5, 'manufacturer page needs five radios'
 for section in ('actions', 'models', 'events'):
     ids = [n.get('id') for n in app.find(section)]
     assert len(ids) == len(set(ids)), ('duplicate ID', section)
@@ -38,7 +43,7 @@ for n in ast.walk(tree):
 with zipfile.ZipFile(root / 'rhmiapp/NbtAad_ALL_Texts.zip') as z:
     for name in z.namelist():
         texts = dict(line.split('=', 1) for line in z.read(name).decode().splitlines())
-        assert texts['300'] == 'BMW Favorite Keys'
+        assert '300' not in texts, 'favourite colour texts should be gone'
         assert texts['309'] == 'Show Favorites Keys Bar'
         assert texts['310'] == 'bar color'
         assert texts['311'] == 'custom color'
