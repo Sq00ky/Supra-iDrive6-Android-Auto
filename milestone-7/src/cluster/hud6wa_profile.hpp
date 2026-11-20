@@ -134,14 +134,10 @@ inline void applyHudEnv(HudProfile& p) {
     }
 }
 
-// The cluster's own picture-buffer size (ImageGetSize on bufA, asked at the HUD's start). The canvas becomes the whole
-// buffer. The glyph box moves only if the profile's would not fit inside it: that is the cut-off arrow of #229/#253
-// (the F20-sized box on the F30's 126x77 HUD), so a buffer the box fits (the F20's own) keeps the box it was tuned
-// with. Where it moves: where the factory navigation draws its own arrow on the 126x77 HUD buffer, x 37..82, y 23..68
-// in a MOST capture (sabifa, #264), kept in proportion for another size. That is one capture: a buffer of another
-// shape may want its own numbers once someone captures the factory arrow there (NBT_HUD_GLYPH pins them meanwhile).
-// A field pinned by env (NBT_HUD_CANVAS / NBT_HUD_GLYPH) is left as applyHudEnv set it; a size of 0 (no answer, yet or
-// ever) changes nothing, so a cluster that refuses ImageGetSize keeps the F20 profile.
+// Fit the measured buffer, keeping the F20 fallback unless its box is cut off or the measured field is the F30
+// cluster's 176x126. sabifa's factory captures (#264) put the HUD arrow at 37,23..82,68 on 126x77, and the cluster
+// arrow near 50,36..121,113: the same proportional box fits both. Round to the nearest pixel when scaling it.
+// Env pins win; no answer keeps the original F20 profile.
 inline void fitMeasured(int w, int h, HudProfile& p) {
     if (w <= 0 || h <= 0) return;
     if (!getenv("NBT_HUD_CANVAS")) {
@@ -149,9 +145,9 @@ inline void fitMeasured(int w, int h, HudProfile& p) {
         p.canvas.x1 = (int16_t)(w - 1); p.canvas.y1 = (int16_t)(h - 1);
     }
     bool cut = p.glyph.x0 < 0 || p.glyph.y0 < 0 || p.glyph.x1 >= w || p.glyph.y1 >= h;
-    if (cut && !getenv("NBT_HUD_GLYPH")) {
-        p.glyph.x0 = (int16_t)(w * 37 / 126); p.glyph.x1 = (int16_t)(w * 82 / 126);
-        p.glyph.y0 = (int16_t)(h * 23 / 77);  p.glyph.y1 = (int16_t)(h * 68 / 77);
+    if ((cut || (w == 176 && h == 126)) && !getenv("NBT_HUD_GLYPH")) {
+        p.glyph.x0 = (int16_t)((w * 37 + 63) / 126); p.glyph.x1 = (int16_t)((w * 82 + 63) / 126);
+        p.glyph.y0 = (int16_t)((h * 23 + 38) / 77);  p.glyph.y1 = (int16_t)((h * 68 + 38) / 77);
     }
 }
 

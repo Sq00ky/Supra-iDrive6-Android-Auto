@@ -795,8 +795,8 @@ static void testJunctionFits() {
 }
 
 // The guidance moves between the HUD (126 x 77) and the cluster (176 x 126) with the iDrive setting, and each
-// measurement is fitted from the profile as given: in the cluster the F20 box comes back (it fits there), in the HUD the
-// factory box again - not the HUD's small box kept in the cluster's bigger field.
+// measurement is fitted from the profile as given: the factory box scales with either measured field,
+// rather than keeping the HUD's small box or the F20's right-shifted cluster box.
 static void testRefitFromProfile() {
     g_log.clear();
     FakePort port;
@@ -810,13 +810,13 @@ static void testRefitFromProfile() {
     port.mw = 176;
     port.mh = 126;
     assert(d.showManeuver(v, 1, false, false) == ClusterDisplay::kOk);
-    assert(logged("HUD picture buffer measured 176x126: canvas 0,0-175,125 glyph 70,20-170,120"));
+    assert(logged("HUD picture buffer measured 176x126: canvas 0,0-175,125 glyph 52,38-115,111"));
     g_log.clear();
     port.mw = 126;
     port.mh = 77;
     assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
     assert(logged("HUD picture buffer measured 126x77: canvas 0,0-125,76 glyph 37,23-82,68"));
-    printf("  refit from the profile: HUD 126x77 (factory box), cluster 176x126 (F20 box), HUD again\n");
+    printf("  refit from the profile: HUD 126x77 (factory box), cluster 176x126 (scaled factory box), HUD again\n");
 }
 
 static void testJunctionDriver() {
@@ -1536,6 +1536,11 @@ static void testFitMeasured() {
         assert(p.canvas.x1 == 119 && p.canvas.y1 == 71);
         assert(p.glyph.x0 == 35 && p.glyph.y0 == 21 && p.glyph.x1 == 78 && p.glyph.y1 == 63);
     }
+    {   // the F30 cluster also fits the F20 box, but the factory arrow is centred further left (sabifa, #264)
+        HudProfile p = k6wa;
+        fitMeasured(176, 126, p);
+        assert(p.glyph.x0 == 52 && p.glyph.y0 == 38 && p.glyph.x1 == 115 && p.glyph.y1 == 111);
+    }
     {   // a buffer the F20 box fits (the F20's own): the box it was tuned with stays, only the canvas is the real one
         HudProfile p = k6wa;
         fitMeasured(199, 129, p);
@@ -1557,7 +1562,7 @@ static void testFitMeasured() {
         assert(p.canvas.x1 == 125 && p.canvas.y1 == 76);
         unsetenv("NBT_HUD_GLYPH");
     }
-    printf("  fitMeasured: F20 box kept where it fits, factory box on 126x77, 0x0 and env pins respected\n");
+    printf("  fitMeasured: F20 box kept where it fits, factory boxes on 126x77/176x126, 0x0 and env pins respected\n");
 }
 
 int main() {
