@@ -11,6 +11,24 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.116 / rhmiapp-93: song title in the cluster, native-audio track list behind one setting.**
+> - **Song title in gauge cluster** (PR #288, @bejusxd, opt-in): while no turn is shown, the song the phone plays is
+>   shown in the cluster's navigation area. Which way follows the **Gauge cluster** setting:
+>   - `6wa` (BMW F-series, MOST HUDTerminal): the 6WA's street line (PR #288).
+>   - `j29` (Toyota GR Supra, Ethernet SOME/IP KOMBI): the title as the road name of a guidance panel of our own, with
+>     no arrow and no distance (direction 0, car-verified on the J29). It also shows in the HUD. A real Android Auto
+>     turn replaces it; it is cancelled when playback stops. Tuning: `NBT_KOMBI_MEDIA_DIR`, `_DIST`, `_UNIT`,
+>     `_CHARS`, and the search mode `NBT_KOMBI_MEDIA_CYCLE=dir|unit`.
+>   - `6wb`: no driver yet, nothing is shown.
+>   `NBT_KOMBI_MEDIA` belongs to this feature.
+> - **Native Functionality Media Controls Restore (beta)** (the old "Media Controls for LCI Steering Wheels") now also
+>   turns on, in native audio mode, the Android Auto track title in the J29 cluster's track list and the thumb-wheel
+>   press on Previous / Next title (branch `feat/native-audio-kombi-media`, car-confirmed). Its env override is
+>   `NBT_KOMBI_TRACKS` (was `NBT_KOMBI_MEDIA`, now PR #288's).
+> - The Android Auto row says "Waiting for Bluetooth device" while no phone is connected over Bluetooth: the car's
+>   device list is now always read (it was only with `NBT_BT_TRACE=1`).
+> - "Android Auto over USB" is no longer marked beta.
+>
 > **v1.9.115 / rhmiapp-92: the Android Auto row says what to fix, in order.** While waiting for a phone the row
 > picks the first that applies:
 > 1. "Car refused phone: see coding-requirements.md (GitHub)": 5 ServiceRequestErrors in a row (the car turning the
@@ -1021,7 +1039,11 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_NAV_MWAY_WARN_M`, `NBT_KOMBI_NAV_MWAY_MAIN_M` | `time`: off-ramps and forks also show this many metres before them (default `2000`) and again at (default `1000`), `200`..`5000` |
 | `NBT_KOMBI_NAV_APPROACH_MI` | `distance`, and `time` when the phone sends no seconds: show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once, and on its own it turns the approach `off`). Set, it wins over the **Show directions at any distance** checkbox |
 | `NBT_NO_LOG` | `1` turns every log sink off (daemon RAM + USB log, stdout/stderr, app log and slog), the same as ticking **Disable logging (performance test)**; it wins over the checkbox. Useful to measure whether logging costs anything; the one-shot `--pf-*` / `--license` commands keep their output |
-| `NBT_KOMBI_TRACKS=1` | Show the Android Auto track title in the instrument cluster's track list (off by default; not in Bluetooth audio mode) |
+| `NBT_KOMBI_MEDIA_DIR` | J29 song title: the arrow, as the KOMBI direction enum (default `0` = none; `1` straight on) |
+| `NBT_KOMBI_MEDIA_DIST`, `NBT_KOMBI_MEDIA_UNIT` | J29 song title: the distance text (default empty) and its unit byte (default: the template's). With direction `0` the cluster shows neither |
+| `NBT_KOMBI_MEDIA_CHARS` | J29 song title: longest title shown (default `40`, `1`..`60`; longer ones end in `...`) |
+| `NBT_KOMBI_MEDIA_CYCLE` | J29 song title, search mode: `dir` or `unit` steps that value (`NBT_KOMBI_MEDIA_CYCLE_FROM` / `_TO`, every `NBT_KOMBI_MEDIA_CYCLE_S` s, default 8) with `[d N]` / `[u N]` in front of the title; a value the KOMBI refuses is skipped |
+| `NBT_KOMBI_TRACKS` | Android Auto track title in the instrument cluster's track list and the thumb-wheel press on Previous / Next title (J29, native audio only). Default: follows **Native Functionality Media Controls Restore**; `1` / `0` wins either way |
 | `NBT_KOMBI_TRACKS_MODE` | `slot` (default): the title is written into iDrive's own title text model. `list`: iDrive's list is answered with a list naming a text model of our own (not shown by the cluster so far) |
 | `NBT_KOMBI_TRACKS_PRESS` | With `NBT_KOMBI_TRACKS=1`: the steering-wheel function whose press picks the row under the cluster list's cursor (default `C31`, the thumb-wheel press; `0` = off; `fkt[:value]` hex as the `[MFL]` log prints it) |
 | `NBT_KOMBI_TRACKS_IF`, `NBT_KOMBI_TRACKS_INDEX` | The interface iDrive's requests to the KOMBI are read from (default `vlan73`) and the index of our own text model (default `0x7E01`) |
