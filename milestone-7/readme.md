@@ -11,15 +11,18 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
-> **v1.9.114-status / rhmiapp-89-status: Gesture Control after a move to NBTApps, and a status row that says why the phone is stuck.** A package install keeps its files in
-> `/var/opt/nbtapp/data/com.github.sq00ky.android-auto`, but a few still used `/var/opt/aa`:
-> - Gesture Control under Android Auto (issue #281): the touch controller's learned address (`touch-peer`) was looked
->   for only in the package's data dir, so after moving from a hand install every gesture was swallowed again until
->   the screen was touched. A package install now falls back to `/var/opt/aa/touch-peer` and copies it over.
-> - The favourite keys' "Disable Favorites Bar" switch and colour files, and the Car manufacturer choice (`vehicle`),
->   were written and read at `/var/opt/aa`; they now live in the data dir of the install, like every other setting.
-> - The favourite bar is built into nbt-aad only: the `nbt-aa-favourites` helper, its fallback launch from
->   `/opt/aa` and `NBT_FAVOURITE_INPROC=0` are gone, so the package (nbt-aad + the plugin files) has everything.
+> **v1.9.114-status / rhmiapp-89-status: Gesture Control after a move to NBTApps, the favourite bar in nbt-aad only,
+> and a status row that says why the phone is stuck.**
+> - Gesture Control under Android Auto (issue #281): the touch controller's learned address (`touch-peer`) is kept in
+>   the data dir, which for an NBTApps install is `/var/opt/nbtapp/data/com.github.sq00ky.android-auto`. A car moved
+>   from a hand install had none there, so gestures were swallowed until the screen was touched once. A package
+>   install now takes `/var/opt/aa/touch-peer` and copies it over.
+> - The favourite bar's files (`favourite-bar.disabled`, `-colour`, `-custom`) and the Car manufacturer choice
+>   (`vehicle`) were always at `/var/opt/aa`, which nothing creates on a fresh NBTApps install. They now live in the
+>   install's data dir (unchanged on a hand install; a car moved to NBTApps sets them again once).
+> - The favourite bar is built into nbt-aad only: the `nbt-aa-favourites` helper, its launch from `/opt/aa` and
+>   `NBT_FAVOURITE_INPROC=0` are gone; the favourites updater ships nbt-aad and the plugin and keeps an old helper in
+>   its backup.
 > - The Android Auto row's waiting text names the network nbt-aad really offers ("Waiting for phone on Wi-Fi Direct"
 >   with Use WiFi Direct Network on a CarPlay car, where it used to say "CarPlay Wi-Fi"), and says why a phone is stuck:
 >   "No Bluetooth link: forget phone in car, pair again" (the phone is connected over Bluetooth but has not opened the
