@@ -586,7 +586,7 @@ static void testJ29Idle() {
         assert(idleRoad(s, 0, &dir) == "Sense - Band Maid" && dir == 1);
         for (size_t i = 0; i < s.size(); ++i)
             if (s[i].method == 0x000A && modelType(s[i].body) == 29 && modelIndex(s[i].body) == 0)
-                assert(text0(s[i].body, NULL) == " ");
+                assert(text0(s[i].body, NULL) == "");
         assert(countLog("IDLE 'Sense - Band Maid'") == 1 && r.core.idleShown());
         r.core.idle("Sense - Band Maid", 1.0);              // unchanged: nothing sent
         assert(r.k.count() == 97);
@@ -615,6 +615,38 @@ static void testJ29Idle() {
         assert(idleRoad(s, 0, &dir) == "Sense" && dir == 0);
         unsetenv("NBT_KOMBI_MEDIA_DIR");
         unsetenv("NBT_KOMBI_MEDIA_DIST");
+    }
+    {   // search mode: the direction steps every NBT_KOMBI_MEDIA_CYCLE_S with its value in front of the title
+        setenv("NBT_KOMBI_MEDIA_CYCLE", "dir", 1);
+        setenv("NBT_KOMBI_MEDIA_CYCLE_FROM", "11", 1);
+        setenv("NBT_KOMBI_MEDIA_CYCLE_TO", "12", 1);
+        setenv("NBT_KOMBI_MEDIA_CYCLE_S", "5", 1);
+        setenv("NBT_KOMBI_MEDIA_UNIT", "7", 1);
+        Rig r(inPlace());
+        r.core.idle("Sense", 100.0);
+        int dir = -1;
+        assert(idleRoad(r.k.seen(), 0, &dir) == "[d 11] Sense" && dir == 11);
+        std::vector<Seen> s = r.k.seen();
+        for (size_t i = 0; i < s.size(); ++i)
+            if (s[i].method == 0x000A && modelType(s[i].body) == 29 && modelIndex(s[i].body) == 0) {
+                int u = -1;
+                assert(text0(s[i].body, &u) == "" && u == 7);
+            }
+        size_t n = r.k.count();
+        r.core.idle("Sense", 102.0);                        // same step: nothing
+        assert(r.k.count() == n);
+        r.core.idle("Sense", 105.5);                        // next step: in place, direction 12
+        dir = -1;
+        assert(r.k.count() > n && idleRoad(r.k.seen(), n, &dir) == "[d 12] Sense" && dir == 12);
+        n = r.k.count();
+        r.core.idle("Sense", 110.5);                        // wraps to 11
+        dir = -1;
+        assert(idleRoad(r.k.seen(), n, &dir) == "[d 11] Sense" && dir == 11);
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE");
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE_FROM");
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE_TO");
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE_S");
+        unsetenv("NBT_KOMBI_MEDIA_UNIT");
     }
 }
 

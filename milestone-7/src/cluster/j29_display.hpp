@@ -13,8 +13,12 @@
 //                            title goes where a maneuver's road name goes: the full template graph the first time,
 //                            in-place maneuver-0 updates when the title changes. Arrow NBT_KOMBI_MEDIA_DIR (KOMBI
 //                            direction enum, default 1 = STRAIGHT_ON, car-proven), distance text NBT_KOMBI_MEDIA_DIST
-//                            (default " ": the template's own "600" must never show), at most NBT_KOMBI_MEDIA_CHARS
-//                            characters (default 40, at most 60). A real maneuver replaces it with a full graph.
+//                            (default empty; the template's own "600" never shows), its unit byte
+//                            NBT_KOMBI_MEDIA_UNIT (default: the template's), at most NBT_KOMBI_MEDIA_CHARS characters
+//                            (default 40, at most 60). A real maneuver replaces it with a full graph.
+//                            Search mode: NBT_KOMBI_MEDIA_CYCLE=dir|unit steps that value from NBT_KOMBI_MEDIA_CYCLE_FROM
+//                            to _TO every NBT_KOMBI_MEDIA_CYCLE_S seconds (default 8) with "[d N]" / "[u N]" in front
+//                            of the title; a value the KOMBI rejects is logged and skipped, never fatal.
 #ifndef CLUSTER_J29_DISPLAY_HPP
 #define CLUSTER_J29_DISPLAY_HPP
 
@@ -74,11 +78,19 @@ private:
     double t_pos_;
     bool has_last_pos_;
     double last_pos_;
+    bool idleFrames(int dir, int unit, const std::string& road, bool inplace, std::vector<Frame>& out) const;
     int idle_dir_;            // the idle text's arrow (KOMBI direction enum)
-    std::string idle_dist_;   // the idle text's distance text (never "": that keeps the template's "600")
+    int idle_unit_;           // the idle distance's unit byte, -1 = the template's
+    std::string idle_dist_;   // the idle text's distance text ("" = empty string, not the template's "600")
     size_t idle_chars_;       // the idle text's length limit
+    int cycle_;               // 0 off, 1 direction, 2 unit (search mode)
+    int cycle_from_, cycle_to_;
+    double cycle_s_;
+    double cycle_t0_;         // < 0: not started
+    int rejected_value_;      // the last cycle value the KOMBI rejected (not resent), -1 = none
     bool idle_up_;            // our idle graph is on the KOMBI (since the last forget())
     std::string idle_line_;   // the line it shows
+    int shown_dir_, shown_unit_;
     double idle_t_;           // when it was last sent
 };
 
