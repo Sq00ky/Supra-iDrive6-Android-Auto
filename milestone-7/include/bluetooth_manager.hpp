@@ -62,9 +62,11 @@ unsigned sppDirRequests();
 // re-registration is held. agoSec (optional) gets the age of the last request. Thread-safe.
 bool sppPhoneAsking(unsigned* agoSec);
 // For the iDrive status hint: the car's Bluetooth connection state for the phone (2 = connected, 3 = service
-// connected, 0 = none) and the ServiceRequestErrors in a row (reset by a ServiceRequestComplete).
+// connected, 0 = none, -1 = no device list from the car yet) and the ServiceRequestErrors in a row (reset by a
+// ServiceRequestComplete).
 int btPhoneConnState();
 unsigned btRefusedRun();
+void btResetRefusedRun();   // an Android Auto session started: the refused-link run is over
 
 } // namespace nbt
 

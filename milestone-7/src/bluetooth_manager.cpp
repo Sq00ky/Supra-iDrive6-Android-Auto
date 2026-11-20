@@ -116,6 +116,7 @@ double upSecBt() {
 }
 std::string g_phoneAddr;
 uint32_t g_phoneConn = 0;
+bool g_devKnown = false;   // the car has sent its device list at least once (status hint: no "connect phone" before)
 bool g_listAsked = false;
 // Refused phone-opened links in a row (ServiceRequestError, reset by ServiceRequestComplete), and whether the phone's
 // service list was already fetched once for such a run (DSI callback thread only).
@@ -149,6 +150,7 @@ void logServiceList(const uint8_t* pl, uint32_t len, bool withError) {
 }
 
 void updateDevices(DsiClient* c, const std::vector<GapDevice>& d, const char* from) {
+    g_devKnown = true;
     size_t best = d.size();
     for (size_t i = 0; i < d.size(); ++i)
         if (d[i].connection >= 2 && (best == d.size() || d[i].connection > d[best].connection)) best = i;
@@ -452,7 +454,8 @@ void BluetoothManager::stop() {
 }
 
 // For the iDrive status hint (status_hint.hpp): plain word reads, written on the DSI callback thread only.
-int btPhoneConnState() { return (int)g_phoneConn; }
+int btPhoneConnState() { return g_devKnown ? (int)g_phoneConn : -1; }
 unsigned btRefusedRun() { return g_reqErrRun; }
+void btResetRefusedRun() { g_reqErrRun = 0; g_reqErrListAsked = false; }
 
 } // namespace nbt

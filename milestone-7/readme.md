@@ -11,6 +11,15 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.115-status4 / rhmiapp-92-status4: re-pair hint sooner.** A phone that took the Wi-Fi details and has not connected 20 s later gets "Phone not on Wi-Fi: forget phone in car, pair again" right away, and the hint now replaces "Connecting to the phone..." while the phone keeps retrying (before: only after it dropped Bluetooth ~36 s later, and hidden again by the next try).
+
+> **v1.9.115-status3 / rhmiapp-91-status3: status row priority.** The waiting row now picks, in order: 1. the car refuses the phone's Android Auto link (coding, see coding-requirements.md), 2. forget the phone in the car and pair again, 3. "No usable Wi-Fi in car: use USB", 4. "Can't use WiFi Direct: set SSID name manually" (Wi-Fi Direct up, group name not found; `NBT_WFD_SSID` in nbt-aad.env), then "Waiting: connect phone". The row refreshes every second.
+
+> **v1.9.115-status2 / rhmiapp-90-status2: "Waiting: connect phone".** While no phone is connected over Bluetooth
+> (the car's device list says so), the Android Auto row says "Waiting: connect phone" instead of the network name
+> ("Waiting: CarPlay Wi-Fi"). Not shown before the car has sent its device list, and the re-pair / coding hints still
+> come first.
+>
 > **v1.9.114-status / rhmiapp-89-status: Gesture Control after a move to NBTApps, the favourite bar in nbt-aad only,
 > and a status row that says why the phone is stuck.**
 > - Gesture Control under Android Auto (issue #281): the touch controller's learned address (`touch-peer`) is kept in
