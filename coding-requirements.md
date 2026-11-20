@@ -1,8 +1,8 @@
 # This file contains a list of coding requirements needed for Android Auto to work properly
 These can be coded in using BimmerCode, BimmerUtility, esys, ProTool, or any other BMW Coding Apps
 ## HMI Plugin
-**3000 HMI:
-**REMOTE_HMI -> AKTIV
+**3000 HMI:**
+REMOTE_HMI -> AKTIV
 A4A -> AKTIV
 A4A_REMOTE_APS -> AKTIV
 
