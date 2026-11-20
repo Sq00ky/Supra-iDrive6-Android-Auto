@@ -66,6 +66,7 @@ bool sppPhoneAsking(unsigned* agoSec);
 // ServiceRequestComplete).
 int btPhoneConnState();
 unsigned btRefusedRun();
+void btResetRefusedRun();   // an Android Auto session started: the refused-link run is over
 
 } // namespace nbt
 

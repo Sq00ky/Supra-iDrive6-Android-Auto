@@ -1656,6 +1656,7 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     printf("[Main] [%9.3f] Android Auto client connected over %s on fd %d. Initializing aasdk session...\n",
            g_sessionStartS, nbt::transportName(t), client_fd);
     g_sessionActive = true;
+    nbt::btResetRefusedRun();   // a working session ends any "car refused the phone" (coding) run
     g_noJoinAt = 0;
     resetMedia("new session");
     if (server) server->markSessionActive();

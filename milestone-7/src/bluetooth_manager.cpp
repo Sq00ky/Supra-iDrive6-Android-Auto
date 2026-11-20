@@ -456,5 +456,6 @@ void BluetoothManager::stop() {
 // For the iDrive status hint (status_hint.hpp): plain word reads, written on the DSI callback thread only.
 int btPhoneConnState() { return g_devKnown ? (int)g_phoneConn : -1; }
 unsigned btRefusedRun() { return g_reqErrRun; }
+void btResetRefusedRun() { g_reqErrRun = 0; g_reqErrListAsked = false; }
 
 } // namespace nbt
