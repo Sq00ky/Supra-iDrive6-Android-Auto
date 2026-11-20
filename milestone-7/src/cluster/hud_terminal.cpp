@@ -54,7 +54,8 @@ Core::Core(const Config& cfg)
       frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0),
-      measureDue_(false), measureInFlight_(false), measureLate_(false), measureSentMs_(0), haveSize_(false), sizeW_(0), sizeH_(0) {
+      measureDue_(false), measureInFlight_(false), measureLate_(false), measureSentMs_(0), haveSize_(false), sizeW_(0), sizeH_(0),
+      haveMovedTo_(false) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
 }
@@ -408,8 +409,15 @@ void Core::onNav(const most::View& m, uint32_t now) {
 
 // The guidance moved between the HUD and the cluster, whose picture buffers differ: ask ImageGetSize again, ahead of
 // the next drawing. The last size stands until the answer (a driver refits only on a change).
-void Core::remeasure() {
-    if (!cfg_.measureHandle || !host_) return;
+// Only the cluster's own message counts (an answer from the navigation would be on the same function), and only a
+// place other than the last one: with the factory navigation coded in but not licensed, the function arrived many times
+// a second from the start on (F30, #264), and asking on each one sent ImageGetSize at bus speed. The first one after a
+// start asks once.
+void Core::guidanceMoved(const most::View& m) {
+    if (!cfg_.measureHandle || !host_ || m.src != host_) return;
+    if (haveMovedTo_ && m.len == movedTo_.size() && (m.len == 0 || memcmp(m.data, &movedTo_[0], m.len) == 0)) return;
+    movedTo_.assign(m.data, m.data + m.len);
+    haveMovedTo_ = true;
     measureInFlight_ = measureLate_ = false;
     measureDue_ = true;
     ++stats_.remeasures;
@@ -610,9 +618,9 @@ void HudTerminal::onMessage(const most::View& m) {
     pthread_mutex_unlock(&lock_);
 }
 
-void HudTerminal::onGuidanceMoved() {
+void HudTerminal::onGuidanceMoved(const most::View& m) {
     pthread_mutex_lock(&lock_);
-    core_.remeasure();
+    core_.guidanceMoved(m);
     wake();
     pthread_mutex_unlock(&lock_);
 }
@@ -633,7 +641,7 @@ void HudTerminal::onRegistry(const std::vector<most::RegistryEntry>& reg) {
 }
 
 void HudTerminal::msgTramp(const most::View& m, void* self) { static_cast<HudTerminal*>(self)->onMessage(m); }
-void HudTerminal::movedTramp(const most::View&, void* self) { static_cast<HudTerminal*>(self)->onGuidanceMoved(); }
+void HudTerminal::movedTramp(const most::View& m, void* self) { static_cast<HudTerminal*>(self)->onGuidanceMoved(m); }
 
 // On the DSI callback thread, after the client released its lock, so selfAddress() is safe here.
 void HudTerminal::linkTramp(most::LinkState s, void* self) {

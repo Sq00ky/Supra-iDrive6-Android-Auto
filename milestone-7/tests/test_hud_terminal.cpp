@@ -144,13 +144,24 @@ static void testMeasure() {
         Wire hud = sizeAnswer(kSelf, 5, 126, 77), cluster = sizeAnswer(kSelf, 5, 176, 126);
         k.onMessage(hud.v, 10);
         assert(k.measuredSize(w, h) && w == 126 && h == 77 && !k.next(20, m));
-        k.remeasure();                                          // the guidance moved to the cluster
+        const uint8_t inCluster[] = { 0x01, 0x00, 0xa0, 0x00, 0xe2, 0x02 }, inHud[] = { 0x01, 0x00, 0x5e, 0x00, 0xb8, 0x03 };
+        Wire toCluster(kHost, 0x0140, kGuidanceMovedFkt, 0x2, std::vector<uint8_t>(inCluster, inCluster + 6), kGuidanceFBlock);
+        Wire toHud(kHost, 0x0140, kGuidanceMovedFkt, 0x2, std::vector<uint8_t>(inHud, inHud + 6), kGuidanceFBlock);
+        Wire navAnswer(0x0140, kHost, kGuidanceMovedFkt, most::kOpStatus, std::vector<uint8_t>(inHud, inHud + 6),
+                       kGuidanceFBlock);
+        k.guidanceMoved(toCluster.v);                           // the guidance moved to the cluster
         assert(k.measuredSize(w, h) && w == 126);               // the last size stands until the answer
         assert(k.next(30, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5);
         k.onMessage(cluster.v, 40);
         assert(k.measuredSize(w, h) && w == 176 && h == 126 && k.stats().remeasures == 1);
+        for (int i = 0; i < 25; ++i) k.guidanceMoved(toCluster.v);   // the same place over and over: nothing moved
+        k.guidanceMoved(navAnswer.v);                           // the navigation's answer, not the cluster
+        assert(k.stats().remeasures == 1 && !k.next(50, m));
+        k.guidanceMoved(toHud.v);                               // and back to the HUD: asked again, once
+        k.guidanceMoved(toHud.v);
+        assert(k.stats().remeasures == 2 && k.next(60, m) && m.fkt == kGetSize && !k.next(61, m));
     }
-    printf("  measure: a late answer taken, its copies ours, another handle and an error let go, asked again on a move\n");
+    printf("  measure: a late answer taken, its copies ours, another handle and an error let go, asked again on a move, not on a repeat\n");
 }
 
 static void testStatusAndOffline() {
@@ -874,6 +885,8 @@ static void testGuidanceMovedOnClient() {
     moved.data.assign(toCluster, toCluster + sizeof(toCluster));
     deliver(moved);
     assert(t.stats().remeasures == 1 && t.status() == kReady);   // asked again, not taken for the navigation
+    for (int i = 0; i < 10; ++i) deliver(moved);                 // repeated many times a second (#264): asked once
+    assert(t.stats().remeasures == 1 && t.status() == kReady);
     fake_dsi::detach();
 }
 

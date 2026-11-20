@@ -114,7 +114,7 @@ public:
     void setHost(uint16_t host, uint32_t now);
     void onMessage(const most::View& m, uint32_t now);
     void tick(uint32_t now);                  // timeouts and the end of the navigation's route
-    void remeasure();                         // the guidance moved: ask the picture buffer's size again
+    void guidanceMoved(const most::View& m);  // the cluster's kGuidanceMovedFkt: on a new place, measure again
     void reset(uint32_t now);                 // leave kFailed
 
     SubmitResult submit(const Batch& b, uint32_t now);
@@ -178,6 +178,8 @@ private:
     uint32_t measureSentMs_;
     bool haveSize_;
     int sizeW_, sizeH_;
+    std::vector<uint8_t> movedTo_;   // the last place the cluster named in kGuidanceMovedFkt
+    bool haveMovedTo_;
 };
 
 // What a HUDTerminal cluster driver needs from the transport: HudTerminal, or a test's fake.
@@ -230,7 +232,7 @@ public:
     void onMessage(const most::View& m);
     void onLink(bool up, uint16_t self);
     void onRegistry(const std::vector<most::RegistryEntry>& reg);
-    void onGuidanceMoved();                       // the cluster's kGuidanceMovedFkt to the navigation
+    void onGuidanceMoved(const most::View& m);    // the cluster's kGuidanceMovedFkt to the navigation
 
 private:
     static void* threadMain(void* self);
