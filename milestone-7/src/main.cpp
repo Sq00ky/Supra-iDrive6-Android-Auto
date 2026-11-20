@@ -539,6 +539,7 @@ static volatile uint32_t g_noJoinAt = 0;        // wireless thread: phone took t
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
 static void writeStatus(const char* state);    // defined after the session globals it reads
+static unsigned s_statusTick = 0;               // main-loop ticks since the status/hint files were written
 static std::string g_carplayIni;               // carplay.ini path car_config resolved, "" = none
 // Car manufacturer (rhmiapp-96): the Settings page writes /var/opt/aa/vehicle (auto|bmw|toyota|mini|rollsroyce).
 // "auto" means: say nothing and let car_config.hpp read the car's carplay.ini, which is what it already does when
@@ -2641,9 +2642,13 @@ int main(int argc, char* argv[]) {
             if (ki && !knobRecent) g_knobInputMs = 0;
             int ov = g_inputToPhone
                          ? (g_backState == 1 ? 2 : (menuRecent ? 3 : (inputRecent ? 4 : (knobRecent ? 5 : 1)))) : 0;
+            // The hint (refused links, Bluetooth state, no-join) changes without a menu state change: refresh the
+            // status and hint files once a second so the iDrive row follows (v1.9.115).
+            if (++s_statusTick >= 4) { s_statusTick = 0; writeStatus(st); }
             if (strcmp(st, ui_state) != 0 || ov != ui_overlay || ui_favouritePeek != (int)g_favouritePeek ||
                 ui_favouriteMask != (int)g_favouriteTouchMask) {
                 writeUiState(st, ov, g_favouritePeek != 0);
+                s_statusTick = 0;
                 if (strcmp(st, ui_state) != 0) printf("[UiState] iDrive menu entry: %s\n", st);
                 ui_state = st;
                 ui_overlay = ov;
