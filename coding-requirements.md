@@ -3,7 +3,9 @@ These can be coded in using BimmerCode, BimmerUtility, esys, ProTool, or any oth
 ## HMI Plugin
 **3000 HMI:**
 REMOTE_HMI -> AKTIV
+
 A4A -> AKTIV
+
 A4A_REMOTE_APS -> AKTIV
 
 ## Bluetooth / ServiceRequestError
