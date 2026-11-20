@@ -583,7 +583,7 @@ static void testJ29Idle() {
         assert(r.k.count() == 97);
         int dir = -1;
         std::vector<Seen> s = r.k.seen();
-        assert(idleRoad(s, 0, &dir) == "Sense - Band Maid" && dir == 1);
+        assert(idleRoad(s, 0, &dir) == "Sense - Band Maid" && dir == 0);
         for (size_t i = 0; i < s.size(); ++i)
             if (s[i].method == 0x000A && modelType(s[i].body) == 29 && modelIndex(s[i].body) == 0)
                 assert(text0(s[i].body, NULL) == "");
@@ -606,13 +606,13 @@ static void testJ29Idle() {
         assert(!r.core.idleShown() && r.k.count() > 97 && countLog("CLEAR (nothing playing)") == 1);
     }
     {
-        setenv("NBT_KOMBI_MEDIA_DIR", "0", 1);
+        setenv("NBT_KOMBI_MEDIA_DIR", "1", 1);
         setenv("NBT_KOMBI_MEDIA_DIST", "--", 1);
         Rig r(inPlace());
         r.core.idle("Sense", 0.0);
         int dir = -1;
         std::vector<Seen> s = r.k.seen();
-        assert(idleRoad(s, 0, &dir) == "Sense" && dir == 0);
+        assert(idleRoad(s, 0, &dir) == "Sense" && dir == 1);
         unsetenv("NBT_KOMBI_MEDIA_DIR");
         unsetenv("NBT_KOMBI_MEDIA_DIST");
     }

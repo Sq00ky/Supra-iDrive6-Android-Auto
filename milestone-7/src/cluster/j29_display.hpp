@@ -12,8 +12,9 @@
 //   idle text (now playing, "Song title in gauge cluster", experimental) -> the KOMBI has no free text field, so the
 //                            title goes where a maneuver's road name goes: the full template graph the first time,
 //                            in-place maneuver-0 updates when the title changes. Arrow NBT_KOMBI_MEDIA_DIR (KOMBI
-//                            direction enum, default 1 = STRAIGHT_ON, car-proven), distance text NBT_KOMBI_MEDIA_DIST
-//                            (default empty; the template's own "600" never shows), its unit byte
+//                            direction enum, default 0: no arrow, and with the empty distance no distance or unit
+//                            either - car-verified on the J29 2026-11-20; 1 = STRAIGHT_ON), distance text
+//                            NBT_KOMBI_MEDIA_DIST (default empty; the template's own "600" never shows), its unit byte
 //                            NBT_KOMBI_MEDIA_UNIT (default: the template's), at most NBT_KOMBI_MEDIA_CHARS characters
 //                            (default 40, at most 60). A real maneuver replaces it with a full graph.
 //                            Search mode: NBT_KOMBI_MEDIA_CYCLE=dir|unit steps that value from NBT_KOMBI_MEDIA_CYCLE_FROM

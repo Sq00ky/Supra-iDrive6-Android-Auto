@@ -25,10 +25,10 @@ int envInt(const char* name, int lo, int hi, int def) {
 
 J29Display::J29Display(const Graph& g, const Link& link)
     : g_(g), link_(link), log_fn_(NULL), log_user_(NULL), sent_any_(false), full_next_(false), inplace_ok_(true),
-      t_graph_(0), t_pos_(0), has_last_pos_(false), last_pos_(0), idle_dir_(1), idle_unit_(-1), idle_chars_(40),
+      t_graph_(0), t_pos_(0), has_last_pos_(false), last_pos_(0), idle_dir_(0), idle_unit_(-1), idle_chars_(40),
       cycle_(0), cycle_from_(0), cycle_to_(63), cycle_s_(8), cycle_t0_(-1), rejected_value_(-1), idle_up_(false),
       shown_dir_(-1), shown_unit_(-1), idle_t_(0) {
-    idle_dir_ = envInt("NBT_KOMBI_MEDIA_DIR", 0, 255, 1);
+    idle_dir_ = envInt("NBT_KOMBI_MEDIA_DIR", 0, 255, 0);
     idle_unit_ = envInt("NBT_KOMBI_MEDIA_UNIT", 0, 255, -1);
     idle_chars_ = (size_t)envInt("NBT_KOMBI_MEDIA_CHARS", 1, 60, 40);
     const char* d = getenv("NBT_KOMBI_MEDIA_DIST");
