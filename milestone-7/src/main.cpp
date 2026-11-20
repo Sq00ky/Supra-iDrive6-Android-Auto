@@ -172,12 +172,13 @@ static volatile sig_atomic_t g_favouriteInputSerial = 0;
 static volatile sig_atomic_t g_mainWake = 0;   // cuts the main loop's 250 ms sleep short
 // The Settings toggle (rhmiapp-87): the plugin writes /var/opt/aa/favourite-bar.disabled. Checked here, per
 // frame, so the switch works without restarting the daemon (the env only forces the capturer off).
-static const char* const kFavouriteOffFile = "/var/opt/aa/favourite-bar.disabled";
-static bool favouriteBarOff() { return access(kFavouriteOffFile, F_OK) == 0; }
+// The iDrive app's "Disable Favorites Bar" marker, in the data dir (favourite_colour.hpp, nbt_paths.hpp).
+static bool favouriteBarOff() { return access(nbt::dataFile("favourite-bar.disabled").c_str(), F_OK) == 0; }
 namespace nbt { int favouriteOverlayRun(int argc, char** argv); void favouriteOverlayStop(); }
 
-// The favourite strip used to be a second process (nbt-aa-favourites, spawned through TileProcess). It is
-// now a thread of this daemon and the picker is started on request, so one binary is all there is to install.
+// The favourite strip used to be a second process (nbt-aa-favourites, spawned through TileProcess). It is a thread of
+// this daemon only: the helper binary and its fallback are gone, so an NBTApps package (nbt-aad + the plugin files)
+// has everything.
 static bool g_favInProc = false;
 static pthread_t g_favOverlayThread;
 static bool g_favOverlayRunning = false;
@@ -539,10 +540,12 @@ static std::string g_carplayIni;               // carplay.ini path car_config re
 // Car manufacturer (rhmiapp-96): the Settings page writes /var/opt/aa/vehicle (auto|bmw|toyota|mini|rollsroyce).
 // "auto" means: say nothing and let car_config.hpp read the car's carplay.ini, which is what it already does when
 // NBT_VEHICLE is unset. An explicit NBT_VEHICLE in nbt-aad.env still wins over the file.
-static const char* const kVehicleChoiceFile = "/var/opt/aa/vehicle";
+// In the data dir (nbt_paths.hpp): /var/opt/aa on a hand install, the package's data dir with NBTApps.
 static const char* const kStatusFile = "/dev/shmem/nbt-aad-status";
 static void applyVehicleChoice() {
     if (getenv("NBT_VEHICLE")) { printf("[Car] NBT_VEHICLE from the environment: %s\n", getenv("NBT_VEHICLE")); return; }
+    const nbt::FilePath choicePath = nbt::dataFile("vehicle");
+    const char* kVehicleChoiceFile = choicePath.c_str();
     FILE* f = fopen(kVehicleChoiceFile, "r");
     if (!f) return;
     char v[24] = {0};
@@ -2057,7 +2060,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.113-cyrui"
+#define NBT_AAD_BUILD "v1.9.114-status"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -2446,15 +2449,17 @@ int main(int argc, char* argv[]) {
                    favouriteBarOff() ? "off: Settings toggle" : "on");
     }
 
-    // One binary: the overlay runs here unless NBT_FAVOURITE_INPROC=0 asks for the old helper process.
-    g_favInProc = favouritePreviewEnabled && nbt::envFlag("NBT_FAVOURITE_INPROC") != 0;
+    // One binary: the overlay is a thread of this daemon (no helper process any more; NBT_FAVOURITE_INPROC is gone).
+    if (nbt::envFlag("NBT_FAVOURITE_INPROC") == 0)
+        printf("[Favourites] NBT_FAVOURITE_INPROC=0 is no longer used: the overlay is built into nbt-aad\n");
+    g_favInProc = favouritePreviewEnabled;
     if (g_favInProc) {
         if (pthread_create(&g_favOverlayThread, NULL, favouriteOverlayThreadFn, NULL) == 0) {
             g_favOverlayRunning = true;
-            printf("[Favourites] overlay in-process: no helper process\n");
+            printf("[Favourites] overlay in-process (built into nbt-aad)\n");
         } else {
             g_favInProc = false;
-            printf("[Favourites] in-process overlay thread failed to start; falling back to the helper\n");
+            printf("[Favourites] overlay thread failed to start (errno %d): no favourite bar this run\n", errno);
         }
     }
     // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
@@ -2564,7 +2569,6 @@ int main(int argc, char* argv[]) {
     int ui_overlay = -1;
     int ui_favouritePeek = -1;
     int ui_favouriteMask = -1;
-    nbt::TileProcess favouriteProcess;
     int night_posted = -1;
     // CarPlay hand-off: 2.5 s without an Android Auto session -> decoder context gets CarPlay's settings (an iPhone
     // taking over right away gets an unzoomed picture). Any later Android Auto connection rebuilds the Android Auto
@@ -2615,8 +2619,6 @@ int main(int argc, char* argv[]) {
                 ui_favouritePeek = (int)g_favouritePeek;
                 ui_favouriteMask = (int)g_favouriteTouchMask;
             }
-            if (!g_favInProc)
-                favouriteProcess.service(act, "/opt/aa/nbt-aa-favourites", "/dev/shmem/nbt-aa-favourites.log",(unsigned)g_favouriteInputSerial);
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
         // while the phone has the mic closed the session simply drops the PCM. Opening/closing the endpoint per
@@ -2901,7 +2903,6 @@ int main(int argc, char* argv[]) {
         nbt::favouriteOverlayStop();
         if (g_favOverlayRunning) pthread_join(g_favOverlayThread, NULL);
     }
-    favouriteProcess.stop();
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
     g_audioBackend->cancelPending();   // no queued audioconn starts while we tear down
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block

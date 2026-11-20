@@ -27,7 +27,7 @@ if out.exists():
 archive = out.parent / (out.name + '.zip')
 if archive.exists():
     parser.error('Archive already exists; choose a new output name')
-payload = ['nbt-aad', 'nbt-aa-favourites']
+payload = ['nbt-aad']   # the favourite bar is built into nbt-aad (v1.9.113)
 plugin = ['libNbtAad.so', 'NbtAad.manifest', 'NbtAad.xml', 'NbtAad_ALL_Texts.zip', 'NbtAad_ALL_Images.zip']
 sources = {name: root / name for name in payload}
 sources.update({'release/' + name: root / 'rhmiapp' / name for name in plugin})

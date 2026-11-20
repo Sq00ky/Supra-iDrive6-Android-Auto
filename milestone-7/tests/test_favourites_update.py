@@ -27,10 +27,10 @@ with tempfile.TemporaryDirectory(prefix='nbt-update-test-') as tmp:
     (aa / 'nbt-aad').write_text('old daemon')
     for name in names:
         (plugin / name).write_text('old ' + name)
-    for name in ['nbt-aad', 'nbt-aa-favourites'] + ['release/' + n for n in names]:
+    for name in ['nbt-aad'] + ['release/' + n for n in names]:
         (package / name).write_text('new ' + name)
     crc = ''.join(subprocess.check_output(['cksum', name], cwd=package, text=True)
-                  for name in ['nbt-aad', 'nbt-aa-favourites'] + ['release/' + n for n in names])
+                  for name in ['nbt-aad'] + ['release/' + n for n in names])
     (package / 'PAYLOAD.cksum').write_text(crc)
     # Rewrite absolute target roots only in the test copy, never in shipping scripts.
     for name in ('favourites-update.sh', 'favourites-restore.sh'):
@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='nbt-update-test-') as tmp:
     backups = list(aa.glob('favourites-backup-*'))
     assert len(backups) == 1
     assert (aa / 'nbt-aad').read_text() == 'new nbt-aad'
-    assert (aa / 'nbt-aa-favourites').stat().st_mode & 0o111
+    assert not (aa / 'nbt-aa-favourites').exists()      # built into nbt-aad
     assert (backups[0] / 'nbt-aad').read_text() == 'old daemon'
     for name in names:
         assert (plugin / name).read_text() == 'new release/' + name
@@ -72,8 +72,10 @@ with tempfile.TemporaryDirectory(prefix='nbt-update-test-') as tmp:
         assert (plugin / name).read_text() == 'old ' + name
     (aa / 'nbt-aa-favourites').write_text('old helper')
     run(update, '--install')
+    assert not (aa / 'nbt-aa-favourites').exists()      # the old helper goes into the backup only
     second = [b for b in aa.glob('favourites-backup-*') if b != backups[0]]
     assert len(second) == 1
+    assert (second[0] / 'nbt-aa-favourites').read_text() == 'old helper'
     run('favourites-restore.sh', str(second[0]))
     assert (aa / 'nbt-aa-favourites').read_text() == 'old helper'
 print('test_favourites_update: all passed')

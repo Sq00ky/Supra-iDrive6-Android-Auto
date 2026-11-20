@@ -195,7 +195,7 @@ int favouriteOverlayRun(int argc,char** argv) {
  nbt::AmbientColourObserver* ambient=new nbt::AmbientColourObserver;
  printf("[Ambient] observer started=%d\n",ambient->start());
  nbt::AmbientColour ambientColour;
- int colourMode=nbt::loadFavouriteColour();bool barEnabled=access(nbt::kFavouriteDisabledPath,F_OK)!=0;
+ int colourMode=nbt::loadFavouriteColour();bool barEnabled=access(nbt::favouriteDisabledPath().c_str(),F_OK)!=0;
  uint32_t settingsAt=0,paintedRGB=0xffffffffu;
  unsigned refreshMask=0;bool refreshDone=false;
  uint32_t seenPress=0,releasedAt=0;unsigned pressBudget=0;
@@ -216,7 +216,7 @@ int favouriteOverlayRun(int argc,char** argv) {
    // Keep the last valid cache as a fallback; a failed capture must not erase it.
    printf("TIMING %lu physical favourite press serial=%u mask=%u; bounded refresh\n",ms(),(unsigned)seenPress,press.last);
   }
-  if(!settingsAt||(uint32_t)(now-settingsAt)>=200u){colourMode=nbt::loadFavouriteColour();barEnabled=access(nbt::kFavouriteDisabledPath,F_OK)!=0;settingsAt=now;}
+  if(!settingsAt||(uint32_t)(now-settingsAt)>=200u){colourMode=nbt::loadFavouriteColour();barEnabled=access(nbt::favouriteDisabledPath().c_str(),F_OK)!=0;settingsAt=now;}
   nbt::AmbientColour currentAmbient=ambient->current(now);
   if(currentAmbient.valid&&(!ambientColour.valid||ambientColour.hue!=currentAmbient.hue||ambientColour.scheme!=currentAmbient.scheme)){
    ambientColour=currentAmbient;
@@ -293,7 +293,7 @@ int favouriteOverlayRun(int argc,char** argv) {
   if(pressBudget&&--pressBudget==0){refreshDone=true;puts("press capture budget exhausted; valid cache retained until next press/touch");}
   // Recheck after capture: never show stale labels over a camera or after release.
   s=state();
-  if((!wanted(s)&&!armed(s))||access(nbt::kFavouriteDisabledPath,F_OK)==0) { if(shown) { ownVisibility(false);shown=false; } continue; }
+  if((!wanted(s)&&!armed(s))||access(nbt::favouriteDisabledPath().c_str(),F_OK)==0) { if(shown) { ownVisibility(false);shown=false; } continue; }
   if(ok)retry.reset();
   requested=nbt::favouriteButtonFromMask(s.mask);
   int selected=ok?nbt::favouriteSelectedButton(&decoded[0],w,bar,w):0;

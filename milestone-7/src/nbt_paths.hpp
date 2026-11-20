@@ -99,6 +99,10 @@ private:
 inline FilePath appFile(const char* name) { return FilePath(appDir(), name); }
 inline FilePath dataFile(const char* name) { return FilePath(dataDir(), name); }
 inline FilePath confFile(const char* name) { return FilePath(confDir(), name); }
+// The hand install's data dir, whatever this install is. Only for READING something nbt-aad learned from the car
+// (touch-peer): a package install falls back to it so a car moved from a hand install to NBTApps keeps what it knew.
+// Never for settings: a checkbox file left in /var/opt/aa could not be unticked from the package's Settings page.
+inline FilePath handDataFile(const char* name) { return FilePath(NBT_HAND_DATA_DIR, name); }
 
 // A checkbox setting: on while <data dir>/<name> (the checkbox's own file) or <app dir>/<name> (made by hand) exists.
 inline bool flagSet(const char* name) {

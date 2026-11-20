@@ -5,16 +5,21 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include "nbt_paths.hpp"
 namespace nbt {
 enum FavouriteColourMode { kFavouriteBMW=0,kFavouriteAmbient,kFavouriteBronze,kFavouriteWhite,
     kFavouriteOrange,kFavouriteBlue,kFavouriteGreen,kFavouriteLilac,kFavouriteCustom,kFavouriteColourCount };
-static const char* const kFavouriteColourPath="/var/opt/aa/favourite-bar-colour";
-static const char* const kFavouriteDisabledPath="/var/opt/aa/favourite-bar.disabled";
-inline int loadFavouriteColour(const char* path=kFavouriteColourPath) {
+// In the data dir (nbt_paths.hpp): /var/opt/aa on a hand install, the package's data dir with NBTApps. The iDrive app
+// writes them, the daemon reads them; both decide the install the same way.
+inline FilePath favouriteColourPath() { return dataFile("favourite-bar-colour"); }
+inline FilePath favouriteDisabledPath() { return dataFile("favourite-bar.disabled"); }
+inline FilePath favouriteCustomPath() { return dataFile("favourite-bar-custom"); }
+inline int loadFavouriteColour(const char* path) {
  FILE* f=fopen(path,"r");if(!f)return kFavouriteBMW;
  int n=-1;char extra=0;int count=fscanf(f,"%d %c",&n,&extra);fclose(f);
  return count==1&&n>=0&&n<kFavouriteColourCount?n:kFavouriteBMW;
 }
+inline int loadFavouriteColour() { return loadFavouriteColour(favouriteColourPath().c_str()); }
 struct AmbientColour {unsigned hue,scheme;bool valid;AmbientColour():hue(0),scheme(0),valid(false){} };
 inline AmbientColour loadFavouriteAmbient(){
  AmbientColour a;FILE* f=fopen("/dev/shmem/nbt-aa-ambient-colour","r");
@@ -42,7 +47,7 @@ inline uint32_t favouriteHueRGB(unsigned hue) {
 // specific to the physical LEDs. RGB zero preserves the native BMW gradient.
 inline uint32_t favouriteColourRGB(int mode,const AmbientColour& ambient) {
  if(mode==kFavouriteCustom){
-  FILE* f=fopen("/var/opt/aa/favourite-bar-custom","r");unsigned rgb=0x2080d0;char extra;
+  FILE* f=fopen(favouriteCustomPath().c_str(),"r");unsigned rgb=0x2080d0;char extra;
   if(f){unsigned n;if(fscanf(f,"%x %c",&n,&extra)==1&&n<=0xffffff)rgb=n;fclose(f);}
   return rgb?rgb:0x1000000u; // Zero is reserved for the untouched native gradient.
  }

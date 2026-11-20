@@ -5,7 +5,6 @@
 #include "favourite_colour.hpp"
 #include <math.h>
 namespace nbt {
-static const char* const kFavouriteCustomPath="/var/opt/aa/favourite-bar-custom";
 static const char* const kPickerActivePath="/dev/shmem/nbt-aa-colour-picker.active";
 static const char* const kPickerDonePath="/dev/shmem/nbt-aa-colour-picker.done";
 // In-process mode (rhmiapp-87): the daemon owns the picker too. The plugin writes a request instead of

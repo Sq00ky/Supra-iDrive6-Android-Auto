@@ -3,6 +3,7 @@
 // Host test for src/nbt_paths.hpp: hand install vs NBTApps package, decided from the daemon's argv[0] or (iDrive app)
 // from an executable nbt-aad in the package's app dir; the app, data and conf dirs of each.
 #include "nbt_paths.hpp"
+#include "favourite_colour.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -106,5 +107,19 @@ int main() {
     CHECK(!nbt::flagSet("nbt-paths-test-no-such-flag"));
 
     printf(fails ? "test_nbt_paths: %d FAILED\n" : "test_nbt_paths: all passed\n", fails);
+    // ---- handDataFile: always /var/opt/aa, for reading what a hand install learned (touch-peer) -------------------
+    nbt::setPackaged(true);
+    SAME(nbt::handDataFile("touch-peer").c_str(), "/var/opt/aa/touch-peer");
+    SAME(nbt::dataFile("touch-peer").c_str(), PKG_DATA "/touch-peer");
+    nbt::setPackaged(false);
+    SAME(nbt::handDataFile("touch-peer").c_str(), "/var/opt/aa/touch-peer");
+    SAME(nbt::dataFile("touch-peer").c_str(), "/var/opt/aa/touch-peer");
+    // favourites and the vehicle choice follow the install
+    nbt::setPackaged(true);
+    SAME(nbt::favouriteDisabledPath().c_str(), PKG_DATA "/favourite-bar.disabled");
+    SAME(nbt::favouriteColourPath().c_str(), PKG_DATA "/favourite-bar-colour");
+    SAME(nbt::favouriteCustomPath().c_str(), PKG_DATA "/favourite-bar-custom");
+    nbt::setPackaged(false);
+    SAME(nbt::favouriteDisabledPath().c_str(), "/var/opt/aa/favourite-bar.disabled");
     return fails ? 1 : 0;
 }

@@ -68,7 +68,8 @@ int favouritePickerMain(){
  if(access(kPickerActivePath,F_OK))return 1;
  // AA releases this port when iDrive owns the screen. Connect only to the
  // saved touch controller, leaving gesture-camera traffic with native iDrive.
- FILE* peer=fopen("/var/opt/aa/touch-peer","r");char ip[64]={0};if(!peer)return 2;
+ FILE* peer=fopen(dataFile("touch-peer").c_str(),"r");if(!peer&&packaged())peer=fopen(handDataFile("touch-peer").c_str(),"r");
+ char ip[64]={0};if(!peer)return 2;
  fgets(ip,sizeof(ip),peer);fclose(peer);char* colon=strchr(ip,':');if(!colon)return 2;*colon++=0;
  int sock=socket(AF_INET,SOCK_DGRAM,0);if(sock<0)return 2;
  int one=1;setsockopt(sock,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
@@ -91,7 +92,7 @@ int favouritePickerMain(){
  if(ok){screen_get_window_property_pv(win,SCREEN_PROPERTY_RENDER_BUFFERS,&buffer);if(buffer)screen_get_buffer_property_pv(buffer,SCREEN_PROPERTY_POINTER,&pixels);}
  if(!ok||!pixels){screen_destroy_window(win);screen_destroy_context(ctx);close(sock);return 3;}
  int stride=0;screen_get_buffer_property_iv(buffer,SCREEN_PROPERTY_STRIDE,&stride);if(stride<w*4)stride=w*4;
- FavouritePicker picker;FILE* saved=fopen(kFavouriteCustomPath,"r");unsigned rgb;
+ FavouritePicker picker;FILE* saved=fopen(favouriteCustomPath().c_str(),"r");unsigned rgb;
  if(saved){if(fscanf(saved,"%x",&rgb)==1&&rgb<=0xffffff)picker.fromRGB(rgb);fclose(saved);}
  Canvas canvas={(uint32_t*)pixels,w,h,stride/4};int rect[4]={0,0,w,h};canvas.draw(picker);screen_post_window(win,buffer,1,rect,0);usleep(150000);
  snprintf(cmd,sizeof(cmd),"%s set surface 1284 source region 0 0 %d %d >/dev/null 2>&1; %s set surface 1284 destination region 0 0 %d %d >/dev/null 2>&1; %s set layer 0x80000000 render order 0x504,0x100 >/dev/null 2>&1",LM,w,h,LM,w,h,LM);system(cmd);visibility(true);
@@ -104,7 +105,7 @@ int favouritePickerMain(){
    TouchMsg msgs[kTouchMaxMsgs];int nm=reassembler.feed(raw,n,msgs,kTouchMaxMsgs);
    for(int m=0;m<nm&&!finish;++m){TouchContact contacts[kTouchMaxContacts];int declared=0,nc=parseTouchStream(msgs[m],contacts,kTouchMaxContacts,&declared);
     if(nc==1){last=time(NULL);result=picker.touch(contacts[0].x*1440/w,contacts[0].y*540/h,contacts[0].state);
-     if(result==1){if(saveValue(kFavouriteCustomPath,picker.rgb(),"%06X\n")&&saveValue(kFavouriteColourPath,kFavouriteCustom,"%u\n"))finish=true;else puts("picker save failed");}
+     if(result==1){if(saveValue(favouriteCustomPath().c_str(),picker.rgb(),"%06X\n")&&saveValue(favouriteColourPath().c_str(),kFavouriteCustom,"%u\n"))finish=true;else puts("picker save failed");}
      else if(result==2)finish=true;
     }
    }

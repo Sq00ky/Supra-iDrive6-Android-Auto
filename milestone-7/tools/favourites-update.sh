@@ -23,12 +23,12 @@ echo "$geometry" | grep -qE 'original size: x=(1440, y=540|1280, y=480|1180, y=4
 # Verify SHA256SUMS on the computer before copying the package to the car.
 [ -s PAYLOAD.cksum ] || fail 'Missing payload checksums.'
 while read -r crc bytes file; do
-    case "$file" in nbt-aad|nbt-aa-favourites|release/libNbtAad.so|release/NbtAad.manifest|release/NbtAad.xml|release/NbtAad_ALL_Texts.zip|release/NbtAad_ALL_Images.zip) ;; *) fail 'Unexpected payload path.';; esac
+    case "$file" in nbt-aad|release/libNbtAad.so|release/NbtAad.manifest|release/NbtAad.xml|release/NbtAad_ALL_Texts.zip|release/NbtAad_ALL_Images.zip) ;; *) fail 'Unexpected payload path.';; esac
     [ -f "$file" ] || fail "Missing $file"
     set -- $(cksum "$file")
     [ "$1" = "$crc" ] && [ "$2" = "$bytes" ] || fail "Checksum mismatch: $file"
 done < PAYLOAD.cksum
-[ "$(wc -l < PAYLOAD.cksum | tr -d ' ')" = 7 ] || fail 'Expected seven payload files.'
+[ "$(wc -l < PAYLOAD.cksum | tr -d ' ')" = 6 ] || fail 'Expected six payload files.'
 echo 'Payload and basic platform checks passed. See README for hardware compatibility.'
 [ "$mode" = --install ] || exit 0
 # The caller must stop AA normally. Do not force-stop other processes or restart the HU.
@@ -49,10 +49,8 @@ for name in libNbtAad.so NbtAad.manifest NbtAad.xml NbtAad_ALL_Texts.zip NbtAad_
 done
 # Stage every file before replacing any live file. Backups are outside the plugin scanner.
 cp nbt-aad /opt/aa/nbt-aad.favourites-new
-cp nbt-aa-favourites /opt/aa/nbt-aa-favourites.favourites-new
 cmp nbt-aad /opt/aa/nbt-aad.favourites-new || fail 'Daemon staging verification failed.'
-cmp nbt-aa-favourites /opt/aa/nbt-aa-favourites.favourites-new || fail 'Helper staging verification failed.'
-chmod 755 /opt/aa/nbt-aad.favourites-new /opt/aa/nbt-aa-favourites.favourites-new
+chmod 755 /opt/aa/nbt-aad.favourites-new
 for name in libNbtAad.so NbtAad.manifest NbtAad.xml NbtAad_ALL_Texts.zip NbtAad_ALL_Images.zip; do
     cp "release/$name" "$plugin/$name.favourites-new"
     cmp "release/$name" "$plugin/$name.favourites-new" || fail "Staging verification failed: $name"
@@ -62,7 +60,8 @@ echo "Backup: $backup"
 for name in libNbtAad.so NbtAad.manifest NbtAad.xml NbtAad_ALL_Texts.zip NbtAad_ALL_Images.zip; do
     mv "$plugin/$name.favourites-new" "$plugin/$name"
 done
-mv /opt/aa/nbt-aa-favourites.favourites-new /opt/aa/nbt-aa-favourites
+# The favourite bar is built into nbt-aad (v1.9.113): an old helper is kept in the backup only.
+rm -f /opt/aa/nbt-aa-favourites
 mv /opt/aa/nbt-aad.favourites-new /opt/aa/nbt-aad
 sync
 echo 'Installed. Restart the head unit manually to load the matching plugin.'

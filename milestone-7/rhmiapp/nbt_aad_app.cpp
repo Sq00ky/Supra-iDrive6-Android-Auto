@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-88-cyrui (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-89-status (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -316,7 +316,8 @@ const unsigned    kAboutModel      = 37;
 const char* const kClusterFlag       = "cluster";
 // Car manufacturer choice (rhmiapp-96): /var/opt/aa/vehicle -> the daemon exports NBT_VEHICLE at start, and
 // car_config.hpp then skips carplay.ini. "auto" keeps today's behaviour (carplay.ini decides).
-const char* const kVehicleChoiceFile = "/var/opt/aa/vehicle";
+// In the data dir (nbt_paths.hpp), so a package install's daemon finds what this page wrote.
+static nbt::FilePath vehicleChoiceFile() { return nbt::dataFile("vehicle"); }
 const char* const kVehicleNames[5]   = { "auto", "bmw", "toyota", "mini", "rollsroyce" };
 const char* const kVehicleLabels[5]  = { "Auto (carplay.ini)", "BMW", "Toyota", "MINI", "Rolls-Royce" };
 const unsigned    kVehicleActions[5] = { 421, 422, 423, 424, 425 };
@@ -1825,7 +1826,7 @@ bool onCluster6wb(void*, const bmw::Parcel&) { return onClusterPick(2); }
 
 // The stored choice, always a known value ("auto" when the file is missing or odd).
 std::string readVehicleChoice() {
-    FILE* f = fopen(kVehicleChoiceFile, "r");
+    FILE* f = fopen(vehicleChoiceFile().c_str(), "r");
     if (!f) return "auto";
     char v[24] = {0};
     if (fscanf(f, "%23s", v) != 1) v[0] = 0;
@@ -1835,12 +1836,13 @@ std::string readVehicleChoice() {
 }
 bool writeVehicleChoice(const char* v) {
     nbt::makeDataDir();
-    const char* next = "/var/opt/aa/vehicle.next";
+    const nbt::FilePath nextPath = nbt::dataFile("vehicle.next");
+    const char* next = nextPath.c_str();
     FILE* f = fopen(next, "w");
     if (!f) { alog("vehicle: cannot save errno=%d", errno); return false; }
     bool ok = fprintf(f, "%s\n", v) > 0;
     if (fclose(f) != 0) ok = false;
-    if (ok && rename(next, kVehicleChoiceFile) == 0) return true;
+    if (ok && rename(next, vehicleChoiceFile().c_str()) == 0) return true;
     unlink(next); alog("vehicle: save failed errno=%d", errno);
     return false;
 }
@@ -2687,15 +2689,15 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 // "Disable Favorites Bar" and is ticked exactly when the disabled marker exists - the file is the state, the tick
 // only reflects it, the same rule every other row on this page follows.
 void showFavouriteBar(bmw::PluginApp* app) {
-    if (app) app->updateModel(250, fileExists(nbt::kFavouriteDisabledPath));
+    if (app) app->updateModel(250, fileExists(nbt::favouriteDisabledPath().c_str()));
 }
 bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
-    if(fileExists(nbt::kFavouriteDisabledPath))unlink(nbt::kFavouriteDisabledPath);   // unticked: bar back on
+    if(fileExists(nbt::favouriteDisabledPath().c_str()))unlink(nbt::favouriteDisabledPath().c_str());   // unticked: bar back on
     else {
-        nbt::makeDataDir();int fd=open(nbt::kFavouriteDisabledPath,O_WRONLY|O_CREAT|O_TRUNC,0666);
+        nbt::makeDataDir();int fd=open(nbt::favouriteDisabledPath().c_str(),O_WRONLY|O_CREAT|O_TRUNC,0666);
         if(fd>=0)close(fd);else alog("favourites bar: cannot save switch errno=%d",errno);
     }
-    alog("favourites bar %s", fileExists(nbt::kFavouriteDisabledPath) ? "disabled" : "enabled");
+    alog("favourites bar %s", fileExists(nbt::favouriteDisabledPath().c_str()) ? "disabled" : "enabled");
     if(g_app)showFavouriteBar(g_app);
     return true;
 }
