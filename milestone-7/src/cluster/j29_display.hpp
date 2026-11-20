@@ -9,6 +9,12 @@
 //   distance              -> one in-place distance frame
 //   lane row shown        -> a route-position update the KOMBI checks the lanes against, at most every lane_feed_s
 //   clear                 -> the factory cancel
+//   idle text (now playing, "Song title in gauge cluster", experimental) -> the KOMBI has no free text field, so the
+//                            title goes where a maneuver's road name goes: the full template graph the first time,
+//                            in-place maneuver-0 updates when the title changes. Arrow NBT_KOMBI_MEDIA_DIR (KOMBI
+//                            direction enum, default 1 = STRAIGHT_ON, car-proven), distance text NBT_KOMBI_MEDIA_DIST
+//                            (default " ": the template's own "600" must never show), at most NBT_KOMBI_MEDIA_CHARS
+//                            characters (default 40, at most 60). A real maneuver replaces it with a full graph.
 #ifndef CLUSTER_J29_DISPLAY_HPP
 #define CLUSTER_J29_DISPLAY_HPP
 
@@ -41,6 +47,8 @@ public:
     Result showManeuver(const NavView& v, double now, bool isNew, bool first);
     Result updateDistance(const NavView& v, double now);
     Result keepUp(const NavView& v, double now);
+    std::string idleText(const std::string& utf8) const;
+    Result showIdleText(const std::string& line, double now);
     void guidanceGap() { full_next_ = true; }
     bool clear(std::string* detail);
     void forget();
@@ -66,6 +74,12 @@ private:
     double t_pos_;
     bool has_last_pos_;
     double last_pos_;
+    int idle_dir_;            // the idle text's arrow (KOMBI direction enum)
+    std::string idle_dist_;   // the idle text's distance text (never "": that keeps the template's "600")
+    size_t idle_chars_;       // the idle text's length limit
+    bool idle_up_;            // our idle graph is on the KOMBI (since the last forget())
+    std::string idle_line_;   // the line it shows
+    double idle_t_;           // when it was last sent
 };
 
 } // namespace kombinav

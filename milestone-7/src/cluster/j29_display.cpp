@@ -4,13 +4,33 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#include "cluster/nav_msg.hpp"
 
 namespace nbt {
 namespace kombinav {
 
+namespace {
+int envInt(const char* name, int lo, int hi, int def) {
+    const char* e = getenv(name);
+    if (!e || !*e) return def;
+    char* end = NULL;
+    long v = strtol(e, &end, 10);
+    if (!end || *end || v < lo || v > hi) return def;
+    return (int)v;
+}
+} // namespace
+
 J29Display::J29Display(const Graph& g, const Link& link)
     : g_(g), link_(link), log_fn_(NULL), log_user_(NULL), sent_any_(false), full_next_(false), inplace_ok_(true),
-      t_graph_(0), t_pos_(0), has_last_pos_(false), last_pos_(0) {}
+      t_graph_(0), t_pos_(0), has_last_pos_(false), last_pos_(0), idle_dir_(1), idle_dist_(" "), idle_chars_(40),
+      idle_up_(false), idle_t_(0) {
+    idle_dir_ = envInt("NBT_KOMBI_MEDIA_DIR", 0, 255, 1);
+    idle_chars_ = (size_t)envInt("NBT_KOMBI_MEDIA_CHARS", 1, 60, 40);
+    const char* d = getenv("NBT_KOMBI_MEDIA_DIST");
+    if (d && *d && utf8Length(d) <= 8) idle_dist_ = d;
+}
 
 void J29Display::log(const char* fmt, ...) {
     char buf[320];
@@ -127,10 +147,66 @@ ClusterDisplay::Result J29Display::feed(const NavView& v, double now, bool force
     return kOk;
 }
 
+// ---- the idle text ("Song title in gauge cluster", experimental on the J29) ----
+
+std::string J29Display::idleText(const std::string& utf8) const {
+    std::string s;                                       // control characters out, runs of spaces folded
+    for (size_t i = 0; i < utf8.size(); ++i) {
+        unsigned char c = (unsigned char)utf8[i];
+        if (c < 0x20 || c == 0x7F) c = ' ';
+        if (c == ' ' && (s.empty() || s[s.size() - 1] == ' ')) continue;
+        s += (char)c;
+    }
+    while (!s.empty() && s[s.size() - 1] == ' ') s.erase(s.size() - 1);
+    if (utf8Length(s) <= idle_chars_) return s;
+    std::string cut = utf8Prefix(s, idle_chars_ > 3 ? idle_chars_ - 3 : idle_chars_);
+    while (!cut.empty() && cut[cut.size() - 1] == ' ') cut.erase(cut.size() - 1);
+    return cut + "...";
+}
+
+ClusterDisplay::Result J29Display::showIdleText(const std::string& line, double now) {
+    if (line.empty()) return kOk;
+    const bool changed = !idle_up_ || line != idle_line_;
+    const bool refresh = !changed && s_.media_refresh_s > 0 && now - idle_t_ >= s_.media_refresh_s;
+    if (!changed && !refresh) return kOk;
+    std::vector<Frame> frames;
+    bool done = false;
+    if (idle_up_ && inplace_ok_ && s_.inplace > 0 &&
+        g_.maneuver(idle_dir_, line, idle_dist_, -1, frames, NULL, s_.inplace != 2)) {
+        log("IDLE '%s' | direction %d | dist '%s' | in-place%s", line.c_str(), idle_dir_, idle_dist_.c_str(),
+            refresh ? " (refresh)" : "");
+        KombiClient::Result r = sendLogged("idle", frames, false);
+        if (r == KombiClient::kOk) {
+            done = true;
+        } else if (r == KombiClient::kRejected) {
+            log("the KOMBI rejected the in-place idle update: full graphs until the next clear");
+            inplace_ok_ = false;
+        } else {
+            return kLink;
+        }
+    }
+    if (!done) {
+        if (!g_.start(idle_dir_, line, idle_dist_, -1, frames, NULL)) {
+            log("internal error: the graph template has an unexpected layout");
+            return kInternal;
+        }
+        log("IDLE '%s' | direction %d | dist '%s' | full graph", line.c_str(), idle_dir_, idle_dist_.c_str());
+        Result r = send("idle-graph", frames);
+        if (r != kOk) return r;
+    }
+    idle_up_ = true;
+    idle_line_ = line;
+    idle_t_ = now;
+    shown_lanes_.clear();
+    return kOk;
+}
+
 bool J29Display::clear(std::string* detail) { return link_.cancel(link_.user, detail); }
 
 void J29Display::forget() {
     sent_any_ = false;
+    idle_up_ = false;
+    idle_line_.clear();
     shown_lanes_.clear();
     has_last_pos_ = false;
     full_next_ = false;
