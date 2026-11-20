@@ -5,6 +5,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>   // getenv (NBT_HUD_CYRILLIC)
+#include <string.h>   // strcmp
+
+#include "nbt_paths.hpp"
 
 namespace nbt {
 namespace kombinav {
@@ -14,8 +17,12 @@ using namespace hudterm;
 // NBT_HUD_CYRILLIC: keep Cyrillic street names (sent as UTF-16BE) instead of blanking them. Off unless set to a
 // non-"0" value, since it needs the cluster font to carry the glyphs.
 static bool hudCyrillicEnabled() {
+    // The Settings checkbox writes <data dir>/hud-cyrillic. The env var wins when set, so a hand-set
+    // NBT_HUD_CYRILLIC=0 turns it off even with the box ticked (and =1 turns it on without the box).
     const char* e = getenv("NBT_HUD_CYRILLIC");
-    return e && *e && e[0] != '0';
+    if (e && *e)
+        return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
+    return nbt::flagSet(nbt::kHudCyrillicFlagName);
 }
 
 const char* hudUnitText(int aa_unit) {

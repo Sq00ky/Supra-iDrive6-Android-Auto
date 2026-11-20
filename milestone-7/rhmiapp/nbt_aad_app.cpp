@@ -75,7 +75,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-86-favourite (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-88-cyrui (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -2699,6 +2699,26 @@ bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
     if(g_app)showFavouriteBar(g_app);
     return true;
 }
+// HUD Cyrillic switch (NBT_HUD_CYRILLIC): the Settings checkbox writes <data dir>/hud-cyrillic, which the 6WA HUD
+// text path reads (hud6wa_display.cpp). Off by default: the cluster font has to carry the glyphs. The env var still
+// wins, so a hand-set NBT_HUD_CYRILLIC=0 turns it off even with the box ticked.
+void showHudCyrillic(bmw::PluginApp* app) {
+    if (app) app->updateModel(251, nbt::flagSet(nbt::kHudCyrillicFlagName));
+}
+bool onHudCyrillicToggle(void*,const bmw::Parcel&) {
+    const char* n = nbt::kHudCyrillicFlagName;
+    if (nbt::flagSet(n)) {                                        // unticked: the file goes, English-only again
+        unlink(nbt::dataFile(n).c_str());
+        unlink(nbt::appFile(n).c_str());
+    } else {
+        nbt::makeDataDir();
+        int fd=open(nbt::dataFile(n).c_str(),O_WRONLY|O_CREAT|O_TRUNC,0666);
+        if(fd>=0)close(fd);else alog("hud cyrillic: cannot save switch errno=%d",errno);
+    }
+    alog("HUD Cyrillic %s", nbt::flagSet(n) ? "on" : "off");
+    if(g_app)showHudCyrillic(g_app);
+    return true;
+}
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
     bool f = false;
     p.readBool(f);
@@ -2715,6 +2735,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showMenuIdrive(g_app);
         showDriveMode(g_app);
         showKombiNav(g_app);
+        showHudCyrillic(g_app);
         showClusterType(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
@@ -2782,6 +2803,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
     addAction(self,248,&onFavouriteBarToggle);
+    addAction(self,421,&onHudCyrillicToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
