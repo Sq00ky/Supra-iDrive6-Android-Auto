@@ -22,7 +22,9 @@ SPEEX := $(ROOT)/src/audio/speex.c
 
 # The guidance runtime with both cluster drivers (KombiNav creates either).
 SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/cluster/nav_core.cpp \
-                 src/cluster/hud6wa_display.cpp src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
+                 src/cluster/hud6wa_display.cpp src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp \
+                 src/cluster/hud6wb_display.cpp src/cluster/hud6wb_codec.cpp \
+                 src/cluster/hud6wb_kit.cpp src/cluster/grafite_oro/artwork6wb.cpp src/cluster/grafite_oro/hudterminal_palette.cpp
 
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_aa_proto          := src/wireless_setup.cpp
@@ -60,6 +62,9 @@ SRC_test_favourite_strip   :=
 SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
+SRC_test_hud6wb            := $(SRC_KOMBI_NAV)
+SRC_test_hud6wb_async      := $(SRC_KOMBI_NAV)
+SRC_test_hud6wb_kit        := $(SRC_KOMBI_NAV)
 SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
@@ -69,6 +74,7 @@ SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp s
 SRC_test_kombi_graph       :=
 SRC_test_kombi_nav         := $(SRC_KOMBI_NAV)
 SRC_test_kombi_nav_msg     :=
+SRC_test_latency_diag      :=
 SRC_test_lm_geometry       :=
 SRC_test_media_ack         :=
 SRC_test_media_msgs        :=
@@ -82,6 +88,7 @@ SRC_test_most_reassembler  :=
 SRC_test_most_registry     :=
 SRC_test_most_router       :=
 SRC_test_most_trace        := src/most/client.cpp src/most/trace.cpp tests/fake_dsi_client.cpp
+SRC_test_nav_diag          :=
 SRC_test_nbt_paths         :=
 SRC_test_neutral_resume    :=
 SRC_test_keyframe_ask      :=

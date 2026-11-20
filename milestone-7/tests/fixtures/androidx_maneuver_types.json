@@ -1,0 +1,256 @@
+{
+  "source": "https://developer.android.com/reference/androidx/car/app/navigation/model/Maneuver",
+  "source_code": "https://github.com/androidx/androidx/blob/androidx-main/car/app/app/src/main/java/androidx/car/app/navigation/model/Maneuver.java",
+  "reviewed": "2026-11-18",
+  "types": [
+    {
+      "value": 0,
+      "androidx": "TYPE_UNKNOWN",
+      "work_role": "Unknown"
+    },
+    {
+      "value": 1,
+      "androidx": "TYPE_DEPART",
+      "work_role": "Start"
+    },
+    {
+      "value": 2,
+      "androidx": "TYPE_NAME_CHANGE",
+      "work_role": "RoadNameChange"
+    },
+    {
+      "value": 3,
+      "androidx": "TYPE_KEEP_LEFT",
+      "work_role": "KeepLeft"
+    },
+    {
+      "value": 4,
+      "androidx": "TYPE_KEEP_RIGHT",
+      "work_role": "KeepRight"
+    },
+    {
+      "value": 5,
+      "androidx": "TYPE_TURN_SLIGHT_LEFT",
+      "work_role": "SlightLeft"
+    },
+    {
+      "value": 6,
+      "androidx": "TYPE_TURN_SLIGHT_RIGHT",
+      "work_role": "SlightRight"
+    },
+    {
+      "value": 7,
+      "androidx": "TYPE_TURN_NORMAL_LEFT",
+      "work_role": "Left"
+    },
+    {
+      "value": 8,
+      "androidx": "TYPE_TURN_NORMAL_RIGHT",
+      "work_role": "Right"
+    },
+    {
+      "value": 9,
+      "androidx": "TYPE_TURN_SHARP_LEFT",
+      "work_role": "SharpLeft"
+    },
+    {
+      "value": 10,
+      "androidx": "TYPE_TURN_SHARP_RIGHT",
+      "work_role": "SharpRight"
+    },
+    {
+      "value": 11,
+      "androidx": "TYPE_U_TURN_LEFT",
+      "work_role": "UTurnLeft"
+    },
+    {
+      "value": 12,
+      "androidx": "TYPE_U_TURN_RIGHT",
+      "work_role": "UTurnRight"
+    },
+    {
+      "value": 13,
+      "androidx": "TYPE_ON_RAMP_SLIGHT_LEFT",
+      "work_role": "RampSlightLeft"
+    },
+    {
+      "value": 14,
+      "androidx": "TYPE_ON_RAMP_SLIGHT_RIGHT",
+      "work_role": "RampSlightRight"
+    },
+    {
+      "value": 15,
+      "androidx": "TYPE_ON_RAMP_NORMAL_LEFT",
+      "work_role": "RampLeft"
+    },
+    {
+      "value": 16,
+      "androidx": "TYPE_ON_RAMP_NORMAL_RIGHT",
+      "work_role": "RampRight"
+    },
+    {
+      "value": 17,
+      "androidx": "TYPE_ON_RAMP_SHARP_LEFT",
+      "work_role": "RampSharpLeft"
+    },
+    {
+      "value": 18,
+      "androidx": "TYPE_ON_RAMP_SHARP_RIGHT",
+      "work_role": "RampSharpRight"
+    },
+    {
+      "value": 19,
+      "androidx": "TYPE_ON_RAMP_U_TURN_LEFT",
+      "work_role": "RampUTurnLeft"
+    },
+    {
+      "value": 20,
+      "androidx": "TYPE_ON_RAMP_U_TURN_RIGHT",
+      "work_role": "RampUTurnRight"
+    },
+    {
+      "value": 21,
+      "androidx": "TYPE_OFF_RAMP_SLIGHT_LEFT",
+      "work_role": "ExitSlightLeft"
+    },
+    {
+      "value": 22,
+      "androidx": "TYPE_OFF_RAMP_SLIGHT_RIGHT",
+      "work_role": "ExitSlightRight"
+    },
+    {
+      "value": 23,
+      "androidx": "TYPE_OFF_RAMP_NORMAL_LEFT",
+      "work_role": "ExitLeft"
+    },
+    {
+      "value": 24,
+      "androidx": "TYPE_OFF_RAMP_NORMAL_RIGHT",
+      "work_role": "ExitRight"
+    },
+    {
+      "value": 25,
+      "androidx": "TYPE_FORK_LEFT",
+      "work_role": "ForkLeft"
+    },
+    {
+      "value": 26,
+      "androidx": "TYPE_FORK_RIGHT",
+      "work_role": "ForkRight"
+    },
+    {
+      "value": 27,
+      "androidx": "TYPE_MERGE_LEFT",
+      "work_role": "MergeLeft"
+    },
+    {
+      "value": 28,
+      "androidx": "TYPE_MERGE_RIGHT",
+      "work_role": "MergeRight"
+    },
+    {
+      "value": 29,
+      "androidx": "TYPE_MERGE_SIDE_UNSPECIFIED",
+      "work_role": "Merge"
+    },
+    {
+      "value": 32,
+      "androidx": "TYPE_ROUNDABOUT_ENTER_AND_EXIT_CW",
+      "work_role": "RoundaboutCW"
+    },
+    {
+      "value": 33,
+      "androidx": "TYPE_ROUNDABOUT_ENTER_AND_EXIT_CW_WITH_ANGLE",
+      "work_role": "RoundaboutCWAngle"
+    },
+    {
+      "value": 34,
+      "androidx": "TYPE_ROUNDABOUT_ENTER_AND_EXIT_CCW",
+      "work_role": "RoundaboutCCW"
+    },
+    {
+      "value": 35,
+      "androidx": "TYPE_ROUNDABOUT_ENTER_AND_EXIT_CCW_WITH_ANGLE",
+      "work_role": "RoundaboutCCWAngle"
+    },
+    {
+      "value": 36,
+      "androidx": "TYPE_STRAIGHT",
+      "work_role": "Straight"
+    },
+    {
+      "value": 37,
+      "androidx": "TYPE_FERRY_BOAT",
+      "work_role": "Ferry"
+    },
+    {
+      "value": 38,
+      "androidx": "TYPE_FERRY_TRAIN",
+      "work_role": "TrainFerry"
+    },
+    {
+      "value": 39,
+      "androidx": "TYPE_DESTINATION",
+      "work_role": "Destination"
+    },
+    {
+      "value": 40,
+      "androidx": "TYPE_DESTINATION_STRAIGHT",
+      "work_role": "DestinationStraight"
+    },
+    {
+      "value": 41,
+      "androidx": "TYPE_DESTINATION_LEFT",
+      "work_role": "DestinationLeft"
+    },
+    {
+      "value": 42,
+      "androidx": "TYPE_DESTINATION_RIGHT",
+      "work_role": "DestinationRight"
+    },
+    {
+      "value": 43,
+      "androidx": "TYPE_ROUNDABOUT_ENTER_CW",
+      "work_role": "RoundaboutEnterCW"
+    },
+    {
+      "value": 44,
+      "androidx": "TYPE_ROUNDABOUT_EXIT_CW",
+      "work_role": "RoundaboutExitCW"
+    },
+    {
+      "value": 45,
+      "androidx": "TYPE_ROUNDABOUT_ENTER_CCW",
+      "work_role": "RoundaboutEnterCCW"
+    },
+    {
+      "value": 46,
+      "androidx": "TYPE_ROUNDABOUT_EXIT_CCW",
+      "work_role": "RoundaboutExitCCW"
+    },
+    {
+      "value": 47,
+      "androidx": "TYPE_FERRY_BOAT_LEFT",
+      "work_role": "FerryLeft"
+    },
+    {
+      "value": 48,
+      "androidx": "TYPE_FERRY_BOAT_RIGHT",
+      "work_role": "FerryRight"
+    },
+    {
+      "value": 49,
+      "androidx": "TYPE_FERRY_TRAIN_LEFT",
+      "work_role": "TrainFerryLeft"
+    },
+    {
+      "value": 50,
+      "androidx": "TYPE_FERRY_TRAIN_RIGHT",
+      "work_role": "TrainFerryRight"
+    }
+  ],
+  "legacy_unchanged": [
+    30,
+    31
+  ]
+}

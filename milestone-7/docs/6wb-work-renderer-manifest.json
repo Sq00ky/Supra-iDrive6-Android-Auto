@@ -1,0 +1,38 @@
+{
+  "archive": "6wb-renderer-final.zip",
+  "archive_sha256": "ff20dbcfeaed85b72df7a52718ac071d45eb5c28896b689465e99c9c031feae7",
+  "normalization": "UTF-8, remove CR bytes; no other source changes",
+  "normalized_sha256": {
+    "src/cluster/grafite_oro/artwork6wb.cpp": "7fe272dbbf5ff31f73d46e7456d6a74c01745790cd8dc6a29f4178d2b7ff8d9c",
+    "src/cluster/grafite_oro/artwork6wb.hpp": "592a5a999a2b2487dbb4a93f2680c14b2f6264b2468eb8a0764b7822f9e5994c",
+    "src/cluster/grafite_oro/artwork_data.inc": "d55bc45de68f72426094c75d0524b862f008cd905c32e510f32802d68d30af8a",
+    "src/cluster/grafite_oro/hudterminal_palette.cpp": "01fcd28be23236a3391ef02e308dad03f8ab6b2501a75c3aef8c1c443707e368",
+    "src/cluster/grafite_oro/hudterminal_palette.hpp": "c05ede6087b671926a75e95252c887e0ccf26cbf77dd3350cb53f3fd288433a4",
+    "src/cluster/grafite_oro/miniature_raster.hpp": "5de8eefe698040a76122cd47244c927583da9592f2408ff4e5f9fe35546056ce",
+    "src/cluster/grafite_oro/maneuvers.inc": "799dcd75ad84ce4540b0dcd8f6e5671feb9ff90012829f7260159e02b8880b7e",
+    "src/cluster/hud6wb_config.hpp": "0aaa5da17a13451159706f567fe0cf6ff00e22f18003dbbe94d6428d3b1a0dec",
+    "src/cluster/hud6wb_display.cpp": "6e4e172b25136640e361cee319a779c819f3d2c1449426b1cf9dcb31bde0399b",
+    "src/cluster/hud6wb_kit.cpp": "0133257af6b17d02a7f9157f5e8571c9f11c8079a36bec200e24ae02859fe877",
+    "src/cluster/hud6wb_profile.hpp": "bd3e119121b30dc9403723d70dc4972ea88e951632250c36747a7c889c2ad273",
+    "src/cluster/hud6wb_road_sign.hpp": "c503855200d9539bfcc13234ce30a10fdfb83cb4d669ecabbf19476ee2534432"
+  },
+  "previous_revisions": [
+    {
+      "archive_sha256": "5402e8ecb3e7dce8a3979fca989dfee6ca5a939d801d50fe4989cc660078bdde",
+      "normalized_sha256": {
+        "src/cluster/grafite_oro/artwork6wb.cpp": "7fe272dbbf5ff31f73d46e7456d6a74c01745790cd8dc6a29f4178d2b7ff8d9c",
+        "src/cluster/grafite_oro/artwork6wb.hpp": "592a5a999a2b2487dbb4a93f2680c14b2f6264b2468eb8a0764b7822f9e5994c",
+        "src/cluster/grafite_oro/artwork_data.inc": "d55bc45de68f72426094c75d0524b862f008cd905c32e510f32802d68d30af8a",
+        "src/cluster/grafite_oro/hudterminal_palette.cpp": "01fcd28be23236a3391ef02e308dad03f8ab6b2501a75c3aef8c1c443707e368",
+        "src/cluster/grafite_oro/hudterminal_palette.hpp": "c05ede6087b671926a75e95252c887e0ccf26cbf77dd3350cb53f3fd288433a4",
+        "src/cluster/grafite_oro/miniature_raster.hpp": "5de8eefe698040a76122cd47244c927583da9592f2408ff4e5f9fe35546056ce",
+        "src/cluster/grafite_oro/maneuvers.inc": "799dcd75ad84ce4540b0dcd8f6e5671feb9ff90012829f7260159e02b8880b7e",
+        "src/cluster/hud6wb_config.hpp": "0aaa5da17a13451159706f567fe0cf6ff00e22f18003dbbe94d6428d3b1a0dec",
+        "src/cluster/hud6wb_display.cpp": "6e4e172b25136640e361cee319a779c819f3d2c1449426b1cf9dcb31bde0399b",
+        "src/cluster/hud6wb_kit.cpp": "0133257af6b17d02a7f9157f5e8571c9f11c8079a36bec200e24ae02859fe877",
+        "src/cluster/hud6wb_profile.hpp": "bd3e119121b30dc9403723d70dc4972ea88e951632250c36747a7c889c2ad273",
+        "src/cluster/hud6wb_road_sign.hpp": "c503855200d9539bfcc13234ce30a10fdfb83cb4d669ecabbf19476ee2534432"
+      }
+    }
+  ]
+}

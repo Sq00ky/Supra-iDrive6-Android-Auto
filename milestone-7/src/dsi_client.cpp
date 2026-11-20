@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#include "most/latency_diag.hpp"
 #include "dsi_client.hpp"
 
 #include <stdio.h>
@@ -188,6 +189,7 @@ void DsiClient::onDetachedTramp(void* self) {
 }
 
 void DsiClient::onDataTramp(void* self, void* istream) {
+    const uint64_t diagnosticEntry=latencydiag::stamp();
     DsiClient* c = lookup(self);
     if (!c || !istream) return;
     const char* s = static_cast<const char*>(istream);
@@ -203,6 +205,10 @@ void DsiClient::onDataTramp(void* self, void* istream) {
         fflush(stdout);
     }
     if (c->dataCb_) c->dataCb_(c, type, id, seq, pl, len, c->user_);
+    if(latencydiag::enabled()) {
+        latencydiag::Meta m=latencydiag::dsiMetadata(id,pl,len);m.seq=seq;
+        latencydiag::record(latencydiag::DsiCallbackSpan,m,diagnosticEntry,0,c);
+    }
 }
 
 bool DsiClient::setNotification(uint32_t attr) {
@@ -225,7 +231,12 @@ bool DsiClient::sendRequest(uint32_t requestId, const std::vector<uint8_t>& payl
     int ipcFd  = *reinterpret_cast<int*>(cli_ + 0x140);
     g_s.streamCtor(stream, chan, tcp, ipcFd, 0x100u, 7u, requestId, cli_ + 0x110, cli_ + 0x118, 0);
     if (!payload.empty()) g_s.streamWrite(stream, &payload[0], (unsigned)payload.size());
+    if(latencydiag::enabled())latencydiag::record(latencydiag::VendorSendEnter,
+        latencydiag::dsiMetadata(requestId,payload.empty()?NULL:&payload[0],payload.size(),true),0,0,this);
     int rc = g_s.streamSend(stream, -1);
+    const uint64_t diagnosticReturn=latencydiag::stamp();
+    if(latencydiag::enabled())latencydiag::record(latencydiag::VendorSendReturn,
+        latencydiag::dsiMetadata(requestId,payload.empty()?NULL:&payload[0],payload.size(),true),diagnosticReturn,0,this);
     g_s.streamDtor(stream);
     // 0 is the only value a send has returned on the car, so anything else is a failure, and always logged.
     if (!quietTx_ || rc != 0) {

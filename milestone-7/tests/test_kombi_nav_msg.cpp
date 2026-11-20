@@ -19,7 +19,33 @@ static NavMessages msgs(const Bytes& state, const Bytes& pos, int st = 1) {
     return m;
 }
 
+struct ManeuverCapture {
+    const char* source;unsigned sequence;int type;bool hasNumber;int number;bool hasAngle;int angle;const char* hex;
+};
+#include "fixtures/nav_androidx_cases.inc"
+static void testAndroidxCapturedManeuvers() {
+    for(size_t i=0;i<sizeof(kManeuverCaptures)/sizeof(*kManeuverCaptures);++i) {
+        const ManeuverCapture& c=kManeuverCaptures[i];Bytes state;
+        for(size_t j=0;c.hex[j];j+=2) {
+            unsigned value=0;assert(sscanf(c.hex+j,"%2x",&value)==1);state.push_back((uint8_t)value);
+        }
+        NavView v;assert(viewFromMessages(msgs(state,Bytes()),v));
+        assert(v.aa_type==c.type&&v.has_exit_number==c.hasNumber&&v.has_exit_angle==c.hasAngle);
+        if(c.hasNumber)assert(v.exit_number==c.number);
+        if(c.hasAngle)assert(v.exit_angle==c.angle);
+        assert(!v.has_next&&v.lanes.empty());
+    }
+    // Newly documented ferry directions: primary and lookahead keep the exact AA type.
+    for(int type=47;type<=50;++type) {
+        Bytes first=navState(7,"Fixture"),second=navState(type,"Fixture");
+        first.insert(first.end(),second.begin(),second.end());NavView v;
+        assert(viewFromMessages(msgs(first,Bytes()),v)&&v.aa_type==7&&v.has_next&&v.next_type==type);
+        assert(viewFromMessages(msgs(second,Bytes()),v)&&v.aa_type==type);
+    }
+}
+
 int main() {
+    testAndroidxCapturedManeuvers(); // Prepared for manual host execution; not compiled in this task.
     // A real Google Maps pair, parked (road text made neutral): 0x8006 = {1:{1:{1:1} 2:{1:"toward Main St"}
     // 4:{1:"toward Main St"}} 2:{1:"<dest>"}}, 0x8007 = {1:{1:{2:"0" 3:6}} 2:{1:{1:44306 2:"28" 3:4} 2:"12:17 AM"
     // 3:1844}}: no metres on the step while parked.

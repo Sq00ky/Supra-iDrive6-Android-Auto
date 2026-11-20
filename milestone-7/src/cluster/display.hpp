@@ -103,6 +103,11 @@ public:
     virtual bool factoryActive() { return false; }
     // The transport could take a clear now: the clear for a picture a killed daemon left waits for this.
     virtual bool ready() { return true; }
+    virtual bool factoryArbitration() const { return true; }
+    virtual bool markerTracksSentCommands() const { return false; }
+    virtual bool useFullRoadName() const { return false; }
+    virtual bool discardPreviousRoute() const { return false; }
+    virtual bool suppressDepartureAtZero() const { return true; }
 };
 
 } // namespace kombinav

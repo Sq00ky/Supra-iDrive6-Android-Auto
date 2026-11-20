@@ -74,6 +74,13 @@ struct NavMessages {
         return true;
     }
     void clear() { *this = NavMessages(); }
+    void discardGuidance() {
+        has_state=has_position=has_turn=has_turn_dist=false;
+        state.clear();
+        position.clear();
+        turn.clear();
+        turn_dist.clear();
+    }
 
     // Guidance is on only while the last NavigationStatus says ACTIVE (1). REROUTING (3) counts as off: the caller's
     // grace period keeps the arrow through it.
@@ -95,6 +102,7 @@ struct LaneDirection {
     bool highlighted;
     LaneDirection() : shape(0), highlighted(false) {}
     LaneDirection(int s, bool h) : shape(s), highlighted(h) {}
+    bool operator==(const LaneDirection& o) const { return shape==o.shape && highlighted==o.highlighted; }
 };
 typedef std::vector<LaneDirection> AaLane;
 
@@ -120,10 +128,11 @@ struct NavView {
     int64_t exit_angle;
     bool has_exit_number;
     int64_t exit_number;     // a roundabout's exit, counted from the entry (1 = the first exit)
+    bool has_next, next_has_angle; int next_type; int64_t next_angle, next_exit_number;
     std::vector<AaLane> lanes;   // the step's lanes, left to right (the phone sends them only near the junction)
     NavView() : aa_type(0), aa_unit(0), has_step_m(false), step_m(0), has_step_s(false), step_s(0), pos_seq(0), step_pos_seq(0),
                 step_seq(0), has_dest_m(false), dest_m(0), has_exit_angle(false), exit_angle(0), has_exit_number(false),
-                exit_number(0) {}
+                exit_number(0), has_next(false), next_has_angle(false), next_type(0), next_angle(0), next_exit_number(0) {}
 
     bool sameManeuver(const NavView& o) const {
         return aa_type == o.aa_type && road == o.road && has_exit_angle == o.has_exit_angle &&
@@ -169,6 +178,18 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         if (pbInt(man, 2, x)) { v.has_exit_number = true; v.exit_number = x; }
         if (pbInt(man, 3, x)) { v.has_exit_angle = true; v.exit_angle = x; }
         v.road = pbText(pbMsg(step, 2), 1);
+        // Second AA step only; its distance is not present here and is never synthesized.
+        PbReader steps(ns.data,ns.len); PbField sf; unsigned stepIndex=0;
+        while(steps.next(sf)) if(sf.num==1 && sf.wire==2 && ++stepIndex==2) {
+            PbSpan next(sf.data,sf.len), nm=pbMsg(next,1); int64_t nt;
+            if(pbInt(nm,1,nt) && nt>0 && nt<=50) {
+                v.has_next=true; v.next_type=(int)nt;
+                v.next_has_angle=pbInt(nm,3,v.next_angle) && v.next_angle>=1 && v.next_angle<=360;
+                pbInt(nm,2,v.next_exit_number);
+                if(v.next_exit_number<1 || v.next_exit_number>99)v.next_exit_number=0;
+            }
+            break;
+        }
         // step field 3: repeated NavigationLane {1 repeated LaneDirection {1 shape, 2 is_highlighted}}
         PbReader lr(step.data, step.len);
         PbField lf;

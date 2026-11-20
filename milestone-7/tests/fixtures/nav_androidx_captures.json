@@ -1,0 +1,326 @@
+{
+  "purpose": "Sanitized real maneuver samples. No road, instruction, destination, or app-based runtime selection.",
+  "captures": [
+    {
+      "label_for_test_only": "amigo",
+      "source": "nbt-aad-nav-diag-amigo.jsonl",
+      "sha256": "1d6cfad8816aa881c5a2641c771e8976101887159727322c0ca0afd01e678557",
+      "state_messages": 87,
+      "cases": [
+        {
+          "sequence": 3,
+          "mono_ns": 1123766876232,
+          "type": 1,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0801",
+          "state_hex": "0a040a020801",
+          "wire_origin": "captured_maneuver_submessage",
+          "occurrences": 13
+        },
+        {
+          "sequence": 32,
+          "mono_ns": 1200155799843,
+          "type": 43,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "082b",
+          "state_hex": "0a040a02082b",
+          "wire_origin": "captured_maneuver_submessage",
+          "occurrences": 20
+        },
+        {
+          "sequence": 78,
+          "mono_ns": 1252147747851,
+          "type": 6,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0806",
+          "state_hex": "0a040a020806",
+          "wire_origin": "captured_maneuver_submessage",
+          "occurrences": 8
+        },
+        {
+          "sequence": 86,
+          "mono_ns": 1261171738827,
+          "type": 45,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "082d",
+          "state_hex": "0a040a02082d",
+          "wire_origin": "captured_maneuver_submessage",
+          "occurrences": 5
+        },
+        {
+          "sequence": 99,
+          "mono_ns": 1278201721797,
+          "type": 39,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0827",
+          "state_hex": "0a040a020827",
+          "wire_origin": "captured_maneuver_submessage",
+          "occurrences": 1
+        },
+        {
+          "sequence": 113,
+          "mono_ns": 1293185706813,
+          "type": 8,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0808",
+          "state_hex": "0a040a020808",
+          "wire_origin": "captured_maneuver_submessage",
+          "occurrences": 5
+        },
+        {
+          "sequence": 127,
+          "mono_ns": 1308145691853,
+          "type": 7,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0807",
+          "state_hex": "0a040a020807",
+          "wire_origin": "captured_maneuver_submessage",
+          "occurrences": 35
+        }
+      ]
+    },
+    {
+      "label_for_test_only": "maps",
+      "source": "LOG/nbt-aad-nav-diag google.jsonl",
+      "sha256": "19a5fe3198fa5fd12a8a7e7d3043d3eb8f2dbfbd02c3866c0267991443c040c1",
+      "state_messages": 434,
+      "cases": [
+        {
+          "sequence": 4,
+          "mono_ns": 144987855012,
+          "type": 1,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0801",
+          "state_hex": "0a040a020801",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 31
+        },
+        {
+          "sequence": 42,
+          "mono_ns": 163392836607,
+          "type": 7,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0807",
+          "state_hex": "0a040a020807",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 107
+        },
+        {
+          "sequence": 122,
+          "mono_ns": 203415796584,
+          "type": 35,
+          "exit_number": 2,
+          "exit_angle": 225,
+          "maneuver_hex": "0823100218e101",
+          "state_hex": "0a090a070823100218e101",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 17
+        },
+        {
+          "sequence": 156,
+          "mono_ns": 220417779582,
+          "type": 35,
+          "exit_number": 1,
+          "exit_angle": 90,
+          "maneuver_hex": "08231001185a",
+          "state_hex": "0a080a0608231001185a",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 65
+        },
+        {
+          "sequence": 286,
+          "mono_ns": 285380714619,
+          "type": 46,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "082e",
+          "state_hex": "0a040a02082e",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 13
+        },
+        {
+          "sequence": 292,
+          "mono_ns": 288421711578,
+          "type": 35,
+          "exit_number": 2,
+          "exit_angle": 270,
+          "maneuver_hex": "08231002188e02",
+          "state_hex": "0a090a0708231002188e02",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 75
+        },
+        {
+          "sequence": 620,
+          "mono_ns": 452414547585,
+          "type": 8,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0808",
+          "state_hex": "0a040a020808",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 93
+        },
+        {
+          "sequence": 806,
+          "mono_ns": 545395454604,
+          "type": 35,
+          "exit_number": 2,
+          "exit_angle": 180,
+          "maneuver_hex": "0823100218b401",
+          "state_hex": "0a090a070823100218b401",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 15
+        },
+        {
+          "sequence": 836,
+          "mono_ns": 560410439589,
+          "type": 42,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "082a",
+          "state_hex": "0a040a02082a",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 18
+        }
+      ]
+    },
+    {
+      "label_for_test_only": "waze",
+      "source": "LOG/nbt-aad-nav-diag waze.jsonl",
+      "sha256": "a4727acb3d9cb7820d9f8ad87987cd36422fee6a3b04e12c390e6978ed9bd33f",
+      "state_messages": 227,
+      "cases": [
+        {
+          "sequence": 4,
+          "mono_ns": 174292825707,
+          "type": 7,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0807",
+          "state_hex": "0a040a020807",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 31
+        },
+        {
+          "sequence": 38,
+          "mono_ns": 240994759005,
+          "type": 8,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0808",
+          "state_hex": "0a040a020808",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 12
+        },
+        {
+          "sequence": 145,
+          "mono_ns": 325006674993,
+          "type": 3,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0803",
+          "state_hex": "0a040a020803",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 26
+        },
+        {
+          "sequence": 221,
+          "mono_ns": 380091619908,
+          "type": 4,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "0804",
+          "state_hex": "0a040a020804",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 6
+        },
+        {
+          "sequence": 240,
+          "mono_ns": 397002602997,
+          "type": 45,
+          "exit_number": null,
+          "exit_angle": null,
+          "maneuver_hex": "082d",
+          "state_hex": "0a040a02082d",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 25
+        },
+        {
+          "sequence": 343,
+          "mono_ns": 472029527970,
+          "type": 34,
+          "exit_number": 2,
+          "exit_angle": null,
+          "maneuver_hex": "08221002",
+          "state_hex": "0a060a0408221002",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 32
+        },
+        {
+          "sequence": 393,
+          "mono_ns": 509009490990,
+          "type": 45,
+          "exit_number": 2,
+          "exit_angle": null,
+          "maneuver_hex": "082d1002",
+          "state_hex": "0a060a04082d1002",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 22
+        },
+        {
+          "sequence": 397,
+          "mono_ns": 512054487945,
+          "type": 24,
+          "exit_number": 2,
+          "exit_angle": null,
+          "maneuver_hex": "08181002",
+          "state_hex": "0a060a0408181002",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 37
+        },
+        {
+          "sequence": 530,
+          "mono_ns": 607965392034,
+          "type": 3,
+          "exit_number": 2,
+          "exit_angle": null,
+          "maneuver_hex": "08031002",
+          "state_hex": "0a060a0408031002",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 10
+        },
+        {
+          "sequence": 697,
+          "mono_ns": 734430265569,
+          "type": 46,
+          "exit_number": 2,
+          "exit_angle": null,
+          "maneuver_hex": "082e1002",
+          "state_hex": "0a060a04082e1002",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 3
+        },
+        {
+          "sequence": 705,
+          "mono_ns": 739031260968,
+          "type": 7,
+          "exit_number": 2,
+          "exit_angle": null,
+          "maneuver_hex": "08071002",
+          "state_hex": "0a060a0408071002",
+          "wire_origin": "reconstructed_from_logged_numeric_fields",
+          "occurrences": 23
+        }
+      ]
+    }
+  ]
+}

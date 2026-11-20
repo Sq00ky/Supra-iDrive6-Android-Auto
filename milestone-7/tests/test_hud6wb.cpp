@@ -1,0 +1,495 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+// Host-only: no BMW libraries, device, network or vehicle required.
+#include "cluster/nav_core.hpp"
+#include "cluster/hud6wb_display.hpp"
+#include "hud6wb_kit_test_util.hpp"
+#include "cluster/hud6wb_codec.hpp"
+#include "cluster/hud6wb_road_sign.hpp"
+#include "cluster/hud6wb_config.hpp"
+#include "fake_dsi_client.hpp"
+#include "kombi_nav_test_util.hpp"
+#include <assert.h>
+#include <stdio.h>
+#include <unistd.h>
+using namespace nbt;
+using namespace nbt::hudterm;
+using namespace nbt::kombinav;
+namespace {
+std::vector<std::string> logs;
+void record(const char* s,void*) {logs.push_back(s);}
+void route(const most::View&,void*) {}
+struct FakePort : Port {
+    Status st;uint32_t ep;bool idle,badSize,queried;uint16_t badSizeHandle;unsigned resets;Bmw6wbProfile p;std::vector<Batch> batches;
+    FakePort():st(kReady),ep(0),idle(true),badSize(false),queried(false),badSizeHandle(0),resets(0){}
+    SubmitResult submit(const Batch& b){if(st!=kReady)return kNotReady;batches.push_back(b);if(b.label=="6wb-size-check")queried=true;return kQueued;}
+    Status status() const{return st;}uint32_t epoch() const{return ep;}
+    bool waiting(int) const{return false;}
+    void reset(){++resets;}bool waitIdle(uint32_t){return idle && st==kReady;}
+    bool imageSize(uint16_t h,uint16_t& w,uint16_t& height) const {
+        if(!queried)return false;
+        if(h==p.base.frame){w=p.frameWidth;height=p.frameHeight;}
+        else if(h==p.bar){w=p.barWidth;height=p.barHeight;}
+        else if(h==p.main.a||h==p.main.b){w=p.mainImageWidth;height=p.mainImageHeight;}
+        else {
+            Surface ss[]={p.main,p.icons,p.lanes};bool found=false;
+            for(unsigned i=0;i<3;++i)if(h==ss[i].a||h==ss[i].b){w=ss[i].width;height=ss[i].height;found=true;}
+            if(!found)return false;
+        }
+        if(badSize || h==badSizeHandle)++w;
+        return true;
+    }
+};
+NavView view(){NavView v;v.aa_type=8;v.road="Test Road";v.dist_text="250";v.aa_unit=1;v.has_step_m=true;v.step_m=250;return v;}
+const Call* find(const Batch& b,uint16_t f,uint16_t h=0){for(size_t i=0;i<b.calls.size();++i)if(b.calls[i].fkt==f&&(!h||b.calls[i].handle()==h))return &b.calls[i];return NULL;}
+void valid(const Batch& b,const Bmw6wbProfile& p){assert(!b.calls.empty());for(size_t i=0;i<b.calls.size();++i)assert(callOk(b.calls[i],handlesOf(p),true));}
+void testCodec(){
+    assert(toLatin15("Stra\xc3\x9f" "e \xe2\x82\xac",30)==std::string("Stra\xdf" "e \xa4"));
+    assert(toLatin15("\xc2\xa4",2)=="?"); // currency sign is not euro
+    assert(toLatin15("\xed\xa0\x80",5)=="?");
+    assert(toLatin15("\xe2\x82",5)=="?");
+    std::vector<uint8_t> t=latinText(0x1a,"Test",15);
+    assert(t.size()==8 && t[0]==0 && t[1]==0x1a && t[2]==1 && t[7]==0);
+    std::vector<uint8_t> bar=distanceBar(0x35,999);assert(bar.size()==7&&bar[5]==255&&bar[6]==2);
+    bar=distanceBar(0x35,-1);assert(bar[5]==0);
+    std::string code=road_sign::route("A 45 / Exit");assert(code=="A45");
+    assert(road_sign::route("Via A45").empty() && road_sign::route("A45xyz").empty());
+    assert(road_sign::route("SS 1")=="SS1" && road_sign::route("sp 123")=="SP123");
+    std::vector<uint32_t> image;road_sign::Layout layout;
+    assert(road_sign::draw(code,305,44,layout,image)&&image.size()==305*44);
+    std::vector<uint8_t> bmp=bitmap(0x18,3,image,305,44,4096);
+    assert(!bmp.empty()&&bmp[6]==1&&bmp[7]==1&&bmp[8]==0&&bmp[9]==3);
+    assert(bitmap(0x18,0,image,49,44,4096).empty());
+    assert(bitmap(0x18,0,image,305,44,20).empty());
+    for(unsigned n=1;n<=260;++n){
+        std::vector<uint32_t> in;
+        for(unsigned i=0;i<n;++i)in.push_back(i%4?0xff00579c:0x12345678);
+        if(n%2)in.assign(n,0xff00579c);
+        std::vector<uint8_t> r=rle32(in);assert(r.size()%8==0);
+        std::vector<uint32_t> out;size_t i=0;
+        while(out.size()<in.size()){
+            unsigned tag=r[i++],k=tag&127;assert(k);
+            if(tag&128){assert(i+4<=r.size());uint32_t c=((uint32_t)r[i]<<24)|((uint32_t)r[i+3]<<16)|((uint32_t)r[i+2]<<8)|r[i+1];i+=4;out.insert(out.end(),k,c);}
+            else for(unsigned j=0;j<k;++j){assert(i+4<=r.size());uint32_t c=((uint32_t)r[i]<<24)|((uint32_t)r[i+3]<<16)|((uint32_t)r[i+2]<<8)|r[i+1];i+=4;out.push_back(c);}
+        }
+        assert(out==in && i<r.size());for(;i<r.size();++i)assert(r[i]==0);
+    }
+}
+// Prepared for a later manual host run; this integration performs no compilation.
+void testWorkRoadSigns(){
+    const char* roads[]={"A 1","SS 1","SP 1234"};
+    const uint32_t backgrounds[]={0xff006b3c,0xff1565a8,0xffffd534};
+    for(unsigned i=0;i<3;++i){
+        std::vector<uint32_t> pixels;road_sign::Layout layout;
+        const std::string code=road_sign::route(roads[i]);
+        assert(road_sign::draw(code,305,44,layout,pixels));
+        assert(pixels[0]==0&&pixels[9*305]==backgrounds[i]&&pixels[35*305]==0);
+        assert(!bitmap(0x18,0,pixels,305,44,4096).empty());
+        FakePort port;Bmw6wbProfile p;p.roadShields=true;p.iconBitmaps=true;p.iconHandle=0x19;
+        Hud6wbDisplay display(port,p,true);NavView v=view();v.road=roads[i];v.has_next=true;v.next_type=8;
+        Batch b=display.render(v);valid(b,p);
+        assert(find(b,0xc05,0x19)&&!find(b,0xc05,0x18));
+        const Call* text=find(b,kTextareaSetText,p.base.street);assert(text);
+        assert(std::string((const char*)&text->payload[3])==std::string(15,' ')+roads[i]);
+        for(unsigned n=0;n<33&&display.sameManeuver(v,0);++n)display.showManeuver(v,0,true,true);
+        assert(!display.sameManeuver(v,0));
+        v.road="Via Roma";v.has_next=false;
+        Batch cleared=display.render(v);valid(cleared,p);assert(!find(cleared,0xc05));
+        assert(find(cleared,kSetVisibility,0x18)->payload[2]==0);
+        assert(find(cleared,kSetVisibility,0x19)->payload[2]==0);
+        text=find(cleared,kTextareaSetText,p.base.street);assert(text);
+        assert(std::string((const char*)&text->payload[3])=="Via Roma");
+    }
+    assert(road_sign::route("SS1bis").empty()&&road_sign::route("SP12345").empty());
+    std::vector<uint32_t> pixels;road_sign::Layout outside;outside.x=300;
+    assert(!road_sign::draw("A1",305,44,outside,pixels)&&pixels.empty());
+}
+void testGeometry(){
+    Bmw6wbProfile p;assert(validProfile(p));
+    assert(p.main.width==221&&p.main.height==158&&p.mainImageWidth==221&&p.mainImageHeight==158);
+    assert(p.base.canvas.x0==0&&p.base.canvas.y0==0&&p.base.canvas.x1==220&&p.base.canvas.y1==157);
+    assert(p.base.glyph.x0==0&&p.base.glyph.y0==0&&p.base.glyph.x1==220&&p.base.glyph.y1==157);
+    for(int type=1;type<=46;++type)for(int angle=0;angle<=360;angle+=15){
+        sixwbkit::NavigationEvent event;event.maneuver=GrafiteKit::maneuver(type);
+        event.hasExitAngle=angle>0;event.exitAngle=angle;
+        sixwbkit::Scene scene=sixwbkit::renderManeuver(event,sixwbkit::Rect(0,0,220,157),0);
+        if(sixwbkit::describe(event.maneuver).policy==sixwbkit::PlanePolicy::Hidden)continue;
+        assert(!scene.empty());
+        for(size_t i=0;i<scene.size();++i)for(size_t c=0;c<scene[i].contours.size();++c)
+            for(size_t j=0;j<scene[i].contours[c].points.size();++j){
+                const sixwbkit::Point& q=scene[i].contours[c].points[j];
+                const double radius=scene[i].stroke==sixwbkit::Color::None?0:scene[i].strokeWidth/2;
+                assert(q.x-radius>=-0.001&&q.x+radius<=220.001&&q.y-radius>=-0.001&&q.y+radius<=157.001);
+            }
+    }
+    p.main.a=p.base.street;assert(!validProfile(p));
+}
+void testRendering(){
+    FakePort port;Bmw6wbProfile p;p.roadShields=true;p.iconBitmaps=true;
+    Hud6wbDisplay d(port,p,true,testKit());Settings settings;d.setSettings(settings);NavView v=view();
+    logs.clear();d.setLog(&record,NULL);
+    v.road="A 45";v.has_next=true;v.next_type=7;
+    AaLane l;l.push_back(LaneDirection(1,false));l.push_back(LaneDirection(5,true));v.lanes.push_back(l);
+    Batch first=d.render(v);valid(first,p);
+    assert(find(first,0x227,0x35)&&find(first,0x210,0x1a)&&find(first,0x21d,0x23));
+    assert(find(first,0xc05,0x18)&&find(first,0xc05,0x18)->txType==0);
+    const Call* sw=find(first,0x20e);assert(sw&&rdBe16(&sw->payload[0])==0x20&&rdBe16(&sw->payload[2])==0x1f);
+    assert(d.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+    assert(logs.size()>=first.calls.size()+8 && logs[0].find("payload:")!=std::string::npos);
+    Batch second=d.render(v);assert(second.calls.empty());
+    v.aa_type=7;second=d.render(v);sw=find(second,0x20e);assert(sw && rdBe16(&sw->payload[0])==0x1f&&rdBe16(&sw->payload[2])==0x20);
+    assert(d.updateDistance(v,1)==ClusterDisplay::kOk);assert(d.clear(NULL));assert(port.batches.empty());
+}
+void testIncremental(){
+    FakePort port;Bmw6wbProfile p;p.iconBitmaps=true;Hud6wbDisplay d(port,p,false,testKit());NavView v=view();
+    d.showManeuver(v,0,true,true);d.showManeuver(v,1,true,true);size_t n=port.batches.size();
+    d.showManeuver(v,2,true,true);assert(port.batches.size()==n && d.render(v).calls.empty());
+    // Text-only changes must not clear, query, upload or flip any graphics buffer.
+    v.road="Other Road";d.showManeuver(v,3,true,false);
+    assert(port.batches.back().calls.size()==1&&find(port.batches.back(),kTextareaSetText,0x1a));
+    v.aa_type=7;d.showManeuver(v,4,true,false);const Batch& arrow=port.batches.back();
+    assert(find(arrow,kAddPolygon,0x20)&&find(arrow,kSwitchVisibility));
+    assert(!find(arrow,kTextareaSetText)&&!find(arrow,0xc05)&&!find(arrow,kGetSize));
+    assert(!find(arrow,kRemoveAllItems,0x1f)); // old visible buffer retained until reused
+    n=port.batches.size();v.step_m=250.1;d.keepUp(v,5);assert(port.batches.size()==n);
+    v.dist_text="251";v.step_m=251;d.updateDistance(v,6);const Batch& dist=port.batches.back();
+    assert(find(dist,kTextareaSetText,0x1b)&&!find(dist,kTextareaSetText,0x1c)&&!find(dist,kRemoveAllItems));
+    v.has_next=true;v.next_type=8;d.showManeuver(v,7,false,false);const Batch& icon=port.batches.back();
+    assert(find(icon,0xc05,0x18)&&!find(icon,kAddPolygon)&&!find(icon,kTextareaSetText));
+    v.next_type=7;d.showManeuver(v,8,false,false);assert(find(port.batches.back(),0xc05,0x19));
+    AaLane lane;lane.push_back(LaneDirection(1,true));v.lanes.push_back(lane);d.showManeuver(v,9,false,false);
+    assert(find(port.batches.back(),kAddPolygon,0x24)&&!find(port.batches.back(),0xc05)&&!find(port.batches.back(),kTextareaSetText));
+    // Deferred changes do not commit any predicted buffer state.
+    port.idle=false;v.aa_type=8;d.showManeuver(v,10,true,false);n=port.batches.size();
+    v.road="Latest Road";d.showManeuver(v,11,true,false);assert(port.batches.size()==n);
+    port.idle=true;d.showManeuver(v,12,true,false);assert(find(port.batches.back(),kAddPolygon,0x1f));
+    // C04 stays cached through repeated updates and a new AA guidance session.
+    d.forget();d.showManeuver(v,13,true,true);unsigned queries=0;
+    for(size_t i=0;i<port.batches.size();++i)if(port.batches[i].label=="6wb-size-check")++queries;
+    assert(queries==0);
+}
+void testDistancePolicyAndIconClear(){
+    FakePort port;Bmw6wbProfile p;p.iconBitmaps=true;
+    Hud6wbDisplay d(port,p,true,testKit());
+    NavView v=view();v.aa_type=8;v.road=std::string(300,'x');
+    v.has_step_m=true;v.step_m=501;
+    Batch far=d.render(v);
+    assert(find(far,kAddPolygon,0x1f));
+    assert(find(far,kSetVisibility,p.bar)->payload[2]==0);
+    assert(find(far,kTextareaSetText,p.base.street)->payload.size()==259);
+    assert(find(far,kTextareaSetText,p.base.distance));
+    assert(d.showManeuver(v,1,true,true)==ClusterDisplay::kOk);
+    v.step_m=500;v.dist_text="500";
+    Batch near=d.render(v);
+    assert(!find(near,kAddPolygon));
+    assert(find(near,kSetVisibility,p.bar)->payload[2]==1);
+    assert(find(near,0x227,p.bar));
+    assert(d.showManeuver(v,2,false,false)==ClusterDisplay::kOk);
+    v.step_m=501;v.dist_text="501";
+    assert(find(d.render(v),kSetVisibility,p.bar)->payload[2]==0);
+    v.aa_type=7;v.has_next=true;v.next_type=34;v.next_exit_number=2;
+    assert(find(d.render(v),kAddPolygon,0x20));
+    assert(find(d.render(v),0xC05,0x18));
+    assert(d.showManeuver(v,5,true,false)==ClusterDisplay::kOk);
+    v.next_exit_number=3;
+    assert(find(d.render(v),0xC05,0x19));
+    v.has_next=false;
+    Batch clear=d.render(v);
+    assert(!find(clear,0xC05));
+    for(uint16_t h=p.icons.a;h<=p.icons.b;++h)
+        assert(find(clear,kSetVisibility,h)->payload[2]==0);
+    v.has_step_m=false;v.dist_text.clear();v.aa_unit=0;
+    assert(!kitBarState(v,500).visible);
+}
+void testIconSurfaceSelection(){
+    setenv("NBT_6WB_ICON_BITMAPS","1",1);
+    const char* modes[]={"0x18","0x19","auto","off"};
+    for(unsigned mode=0;mode<4;++mode){
+        setenv("NBT_6WB_ICON_SURFACE",modes[mode],1);
+        Bmw6wbProfile p;configure6wb(p);assert(validProfile(p));
+        assert(p.iconBitmaps==(mode!=3));
+        assert(p.iconHandle==(mode==0?0x18:mode==1?0x19:0));
+        FakePort port;Hud6wbDisplay display(port,p,true,testKit());
+        NavView v=view();v.has_next=true;v.next_type=7;
+        const uint16_t expected=mode==1?0x19:0x18;
+        Batch b=display.render(v);valid(b,p);
+        const Call* image=find(b,0xC05);
+        if(mode==3){assert(!image);continue;}
+        assert(image&&image->handle()==expected);
+        int lastVisible=-1,otherVisible=-1;
+        size_t cleared=b.calls.size(),uploaded=b.calls.size(),activated=b.calls.size();
+        for(size_t k=0;k<b.calls.size();++k){
+            const Call& c=b.calls[k];
+            if(c.handle()==expected&&c.fkt==kRemoveAllItems)cleared=k;
+            if(c.handle()==expected&&c.fkt==0xC05)uploaded=k;
+            if(c.fkt==kSetVisibility&&c.handle()==expected){
+                lastVisible=c.payload[2];if(lastVisible)activated=k;
+            }
+            if(c.fkt==kSetVisibility&&c.handle()==(expected==0x18?0x19:0x18))otherVisible=c.payload[2];
+            if(mode<2&&c.fkt==kSwitchVisibility)assert(c.handle()!=p.icons.a&&c.handle()!=p.icons.b);
+        }
+        assert(cleared<uploaded&&uploaded<activated&&lastVisible==1&&otherVisible==0);
+        // After another icon update, fixed modes stay on the selected handle.
+        for(unsigned chunk=0;chunk<32 && display.sameManeuver(v,0);++chunk)
+            assert(display.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+        assert(!display.sameManeuver(v,0));
+        v.next_type=8;
+        Batch next=display.render(v);const Call* updated=find(next,0xC05);
+        assert(updated&&updated->handle()==(mode==2?0x19:expected));
+    }
+    FakePort sizes;sizes.queried=true;sizes.badSizeHandle=0x19;
+    Bmw6wbProfile p;p.iconHandle=0x18;
+    assert(BmwResources(p).iconsUsable(sizes));
+    p.iconHandle=0x19;assert(BmwResources(p).iconsUsable(sizes));
+    p.iconHandle=0;assert(BmwResources(p).iconsUsable(sizes));
+    unsetenv("NBT_6WB_ICON_SURFACE");
+    configure6wb(p);assert(p.iconBitmaps&&p.iconHandle==0);
+    unsetenv("NBT_6WB_ICON_BITMAPS");
+    p=Bmw6wbProfile();configure6wb(p);assert(!p.iconBitmaps&&p.iconHandle==0);
+}
+void testLayoutConfig(){
+    Bmw6wbProfile p;configure6wb(p);assert(p.base.streetChars==kMaxLatinTextBytes&&p.lineWidth==6&&p.roundaboutSegments==24&&!p.iconAntialias);
+    setenv("NBT_6WB_STREET_CHARS","22",1);setenv("NBT_6WB_LINE_WIDTH","4",1);
+    setenv("NBT_6WB_ARROW_WIDTH","120",1);setenv("NBT_6WB_ROUNDABOUT_SEGMENTS","48",1);
+    configure6wb(p);assert(validProfile(p)&&p.base.streetChars==22&&p.lineWidth==4&&p.base.glyph.x1==119);
+    // Retained legacy settings must parse; Work owns the actual geometry.
+    assert(p.roundaboutSegments==48);
+    setenv("NBT_6WB_STREET_CHARS","22garbage",1);setenv("NBT_6WB_LINE_WIDTH","999999999999999999999999",1);
+    Bmw6wbProfile invalid;configure6wb(invalid);assert(invalid.base.streetChars==kMaxLatinTextBytes&&invalid.lineWidth==6);
+    unsetenv("NBT_6WB_STREET_CHARS");unsetenv("NBT_6WB_LINE_WIDTH");unsetenv("NBT_6WB_ARROW_WIDTH");unsetenv("NBT_6WB_ROUNDABOUT_SEGMENTS");
+    // Legacy AA switch remains accepted; the final Work raster stays authoritative.
+    FakePort port;p=Bmw6wbProfile();p.iconAntialias=true;p.iconBitmaps=true;Hud6wbDisplay d(port,p,true,testKit());NavView v=view();v.has_next=true;v.next_type=8;
+    Batch aa=d.render(v);assert(find(aa,0xc05));valid(aa,p);
+}
+void testAllCentralManeuversWithoutSurfaceFile(){
+    Bmw6wbProfile p;assert(validProfile(p));BmwResources resources(p);assert(resources.queries().calls.empty());
+    // The production constructor has compiled colours and performs no file I/O.
+    for(int type=1;type<=46;++type)for(unsigned distanceKnown=0;distanceKnown<2;++distanceKnown) {
+        FakePort port;Hud6wbDisplay display(port,p,true);NavView v=view();v.aa_type=type;
+        v.has_step_m=distanceKnown!=0;v.step_m=1400;
+        if(!distanceKnown){v.dist_text.clear();v.aa_unit=0;}
+        v.has_exit_angle=type>=30&&type<=35;v.exit_angle=225;
+        v.has_exit_number=v.has_exit_angle;v.exit_number=2;
+        Batch drawing=display.render(v);assert(drawing.label=="6wb-guidance");valid(drawing,p);
+        bool switched=false,geometry=false;
+        for(size_t i=0;i<drawing.calls.size();++i) {
+            const Call& c=drawing.calls[i];assert(c.handle()!=0x21&&c.handle()!=0x22);
+            if(c.fkt==kAddPolygon){assert(c.handle()==0x1f);geometry=true;}
+            if(c.fkt==kSwitchVisibility&&c.handle()==0x20){assert(rdBe16(&c.payload[2])==0x1f);switched=true;}
+        }
+        assert(geometry&&switched);
+    }
+    p.main.a=0x21;p.main.b=0x22;p.base.bufA=p.main.a;p.base.bufB=p.main.b;assert(!validProfile(p));
+}
+void testResourcesAndSafety(){
+    FakePort port;Bmw6wbProfile p;p.iconBitmaps=true;
+    BmwResources resources(p);assert(resources.state()==BmwResources::kVerified);
+    assert(resources.queries().calls.empty()&&resources.advance(port));
+    assert(resources.iconsUsable(port)&&resources.lanesUsable(port)&&resources.barUsable(port));
+    Hud6wbDisplay display(port,p,false,testKit());NavView v=view();
+    assert(display.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+    assert(!port.batches.empty());
+    for(size_t i=0;i<port.batches.size();++i){valid(port.batches[i],p);assert(!find(port.batches[i],kGetSize));}
+    port.st=kOffline;size_t n=port.batches.size();++port.ep;
+    assert(display.showManeuver(v,1,true,true)==ClusterDisplay::kOk&&port.batches.size()==n);
+    port.st=kReady;++port.ep;
+    assert(display.showManeuver(v,2,true,true)==ClusterDisplay::kOk&&port.batches.size()>n);
+    for(size_t i=n;i<port.batches.size();++i)assert(!find(port.batches[i],kGetSize));
+    port.st=kFailed;assert(!display.clear(NULL)&&port.resets==0);
+    resources.forget();assert(resources.state()==BmwResources::kVerified);
+}
+
+most::View message(uint16_t f,const std::vector<uint8_t>& b,uint16_t dst=0x201f,uint8_t op=0xd){
+    most::View m={};m.src=0x101;m.dst=dst;m.fblock=0x82;m.inst=0;m.fkt=f;m.op=op;m.hdrTag=89;m.len=b.size();m.data=b.empty()?NULL:&b[0];return m;
+}
+void testTransport(){
+    Bmw6wbProfile p;Config cfg;cfg.handles=handlesOf(p);cfg.navFrame=p.base.frame;
+    cfg.initialNavActive=true;cfg.strictAnswers=true;cfg.acceptMirroredAnswers=true;cfg.extendedCalls=true;cfg.maxInFlight=1;
+    cfg.txType=4;cfg.useFixedTag=true;cfg.fixedTag=0xffff;
+    hudterm::Core core(cfg);core.setReplyTag(89);core.setLink(true,0x2059,0);core.setHost(0x101,0);assert(core.status()==kNavActive);
+    most::Msg out;assert(!core.next(0,out));core.tick(60000);assert(core.status()==kNavActive);
+    std::vector<uint8_t> off=setVisibility(p.base.frame,false);core.onMessage(message(0x204,off),60001);
+    core.tick(65001);assert(core.status()==kReady);
+    Batch b("size");std::vector<uint8_t> q=getSize(p.main.a);q.push_back(1);b.add(kGetSize,q);
+    assert(core.submit(b,65002)==kQueued&&core.next(65002,out));
+    assert(out.dst==0x101&&out.fblock==0x82&&out.inst==0&&out.opType==6&&out.txType==4&&out.hdrTag==0xffff);
+    std::vector<uint8_t> ack=getSize(p.main.a);putBe16(ack,221);putBe16(ack,158);
+    core.onMessage(message(kGetSize,ack),65003);assert(!core.busy());uint16_t w,h;assert(core.imageSize(p.main.a,w,h)&&w==221&&h==158);
+    Batch b2("size-next");q=getSize(p.main.b);q.push_back(1);b2.add(kGetSize,q);
+    assert(core.submit(b2,65004)==kQueued&&core.next(65004,out));core.tick(66504);assert(core.status()==kFailed&&core.stats().timeouts==1);
+    hudterm::Core fail(cfg);fail.setReplyTag(89);fail.setLink(true,0x2059,0);fail.setHost(0x101,0);fail.onMessage(message(0x204,off),0);fail.tick(5000);
+    assert(fail.submit(b,5001)==kQueued&&fail.next(5001,out));std::vector<uint8_t> err=getSize(p.main.a);err.push_back(0x41);
+    fail.onMessage(message(kGetSize,err,0x2059,9),5002);assert(fail.status()==kFailed&&!fail.next(5003,out));
+    hudterm::Core factory(cfg);factory.setReplyTag(89);factory.setLink(true,0x2059,0);factory.setHost(0x101,0);factory.onMessage(message(0x204,off),0);factory.tick(5000);
+    assert(factory.submit(b,5001)==kQueued&&factory.next(5001,out));
+    std::vector<uint8_t> foreign=setVisibility(p.base.frame,true);factory.onMessage(message(0x204,foreign),5002);
+    assert(factory.status()==kNavActive&&!factory.busy());
+    core.setLink(false,0,70000);core.setLink(true,0x2059,70001);core.setHost(0x101,70001);
+    core.tick(90000);assert(core.status()==kNavActive&&!core.next(90000,out));
+    assert(!core.imageSize(p.main.a,w,h));
+    core.onMessage(message(0x204,off),90001);core.tick(95001);assert(core.status()==kReady);
+    // Check the final ARM DSI request, including registered return tag and source address.
+    fake_dsi::reset();most::Client client;
+    assert(client.addRoute(0x82,0,most::kAny,most::kAny,&route,NULL)&&client.allowSend(0x82,0)&&client.start("HEADER"));
+    fake_dsi::attach();std::vector<uint8_t> response;most::putLe32(response,77);most::putLe16(response,0x2059);
+    fake_dsi::data(most::kInfoClientResponse,&response[0],response.size());
+    assert(client.registeredHeaderTag()==77);
+    assert(client.send(out,true));const fake_dsi::Call& request=fake_dsi::calls.back();
+    most::View wire;assert(most::parseView(&request.payload[4],request.payload.size()-4,wire));
+    assert(wire.src==0x2059&&wire.dst==0x101&&wire.hdrTag==77&&wire.txType==4&&request.payload.size()%4==0);
+    fake_dsi::detach();
+}
+// Deterministic replay of the F31 response, not a simulated vehicle success.
+void testSizeReplies(){
+    Bmw6wbProfile p;Config cfg;cfg.handles=handlesOf(p);cfg.extendedCalls=true;
+    cfg.strictAnswers=true;cfg.acceptMirroredAnswers=true;cfg.replyMs=3000;
+    cfg.useFixedTag=true;cfg.fixedTag=96;cfg.maxInFlight=1;
+    const uint8_t raw[]={0x00,0x17,0x01,0x35,0x01,0x4a};
+    std::vector<uint8_t> ack(raw,raw+sizeof(raw));
+    Batch b("frame-size");std::vector<uint8_t> q=getSize(0x17);q.push_back(1);b.add(kGetSize,q);
+    for(unsigned scenario=0;scenario<18;++scenario) {
+        hudterm::Core c(cfg);c.setLink(true,0x2060,0);c.setHost(0x101,0);
+        most::Msg out;uint16_t w=0,h=0;
+        assert(c.submit(b,100)==kQueued && c.next(100,out));
+        most::View m=message(kGetSize,ack,0x2060);m.hdrTag=96;
+        std::vector<uint8_t> bad=ack;
+        if(scenario==1)bad.insert(bad.begin()+2,1); // old synthetic seven-byte result: unsupported
+        if(scenario==2)bad.resize(5);
+        if(scenario==3)bad[1]=0x18;
+        if(scenario==4)m.fkt=kTextareaSetText;
+        if(scenario==5)m.hdrTag=95;
+        if(scenario==6)m.op=most::kOpStatus;
+        if(scenario==7){bad[2]=bad[3]=0;} // zero width
+        if(scenario==8){bad.clear();}
+        if(scenario==9){m.src=0x102;}
+        if(scenario==10){m.fblock=0x83;}
+        if(scenario==11){m.inst=1;}
+        if(scenario==14){bad[4]=bad[5]=0;} // zero height
+        if(scenario==15){bad.push_back(0);bad.push_back(0);} // trailing bytes
+        if(scenario==16){m.op=most::kOpErrorAck;m.hdrTag=95;}
+        if(scenario==17){m.op=most::kOpErrorAck;bad[1]=0x18;}
+        m.data=bad.empty()?NULL:&bad[0];m.len=bad.size();
+        if(scenario==12 || scenario==13) {
+            // Both an explicit tick and a delayed send-thread tick must expire.
+            if(scenario==12)c.tick(3100);
+            c.onMessage(m,3100);
+            assert(c.status()==kFailed && c.stats().timeouts==1 && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+            c.reset(3101);assert(c.status()==kReady);
+            assert(c.submit(b,3102)==kQueued && !c.next(3102,out));
+            assert(c.status()==kFailed && c.stats().calls==1); // no ambiguous same-tag retry
+            c.onMessage(m,3103);assert(c.stats().answers==0);
+            c.reset(3104);
+            Batch next("different-handle");std::vector<uint8_t> nq=getSize(0x1f);nq.push_back(1);next.add(kGetSize,nq);
+            assert(c.submit(next,3105)==kQueued && c.next(3105,out));
+            c.onMessage(m,3106);assert(c.status()==kReady && c.busy() && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+            continue;
+        }
+        c.onMessage(m,200);
+        if(scenario) {
+            assert(c.status()==kReady && c.busy() && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+            // Invalid packets neither consume the request nor prevent a valid result.
+            m=message(kGetSize,ack,0x2060);m.hdrTag=96;c.onMessage(m,201);
+        }
+        assert(c.status()==kReady && !c.busy() && c.stats().answers==1 && c.stats().batchesDone==1);
+        assert(c.imageSize(0x17,w,h) && w==309 && h==330);
+        c.onMessage(m,202);assert(c.stats().answers==1 && !c.busy()); // duplicate
+        // An old frame reply must not complete the next handle's request.
+        Batch next("next-size");q=getSize(0x1f);q.push_back(1);next.add(kGetSize,q);
+        assert(c.submit(next,203)==kQueued && c.next(203,out));
+        c.onMessage(m,204);assert(c.busy() && c.stats().answers==1);
+        std::vector<uint8_t> second=getSize(0x1f);putBe16(second,221);putBe16(second,158);
+        m=message(kGetSize,second,0x2019);m.hdrTag=96; // mirrored but correlated
+        c.onMessage(m,205);assert(!c.busy() && c.stats().answers==2 && c.status()==kReady);
+    }
+    Config bypassCfg=cfg;bypassCfg.ignoreFactoryNav=true;
+    hudterm::Core bypass(bypassCfg);bypass.setLink(true,0x2060,0);bypass.setHost(0x101,0);
+    assert(bypass.status()==kReady);most::Msg pending;
+    assert(bypass.submit(b,1)==kQueued && bypass.next(1,pending));
+    std::vector<uint8_t> on=setVisibility(0x17,true);
+    bypass.onMessage(message(kSetVisibility,on),2);
+    assert(bypass.status()==kReady && bypass.busy());
+    bypass.tick(3001);assert(bypass.status()==kFailed && bypass.stats().timeouts==1);
+    bypass.setLink(false,0,3002);bypass.setLink(true,0x2061,3003);bypass.setHost(0x102,3003);
+    assert(bypass.status()==kReady);
+    hudterm::Core idle(cfg);idle.setLink(true,0x2060,0);idle.setHost(0x101,0);
+    most::View unsolicited=message(kGetSize,ack,0x2019);unsolicited.hdrTag=96;
+    idle.onMessage(unsolicited,1);uint16_t w,h;
+    assert(idle.status()==kReady && idle.stats().answers==0 && !idle.imageSize(0x17,w,h));
+}
+void testExtendedSizeDeadline(){
+    Bmw6wbProfile p;Config cfg;cfg.handles=handlesOf(p);cfg.strictAnswers=true;
+    cfg.extendedCalls=true;cfg.replyMs=3000;cfg.sizeReplyMs=5000;cfg.maxInFlight=1;
+    cfg.useFixedTag=true;cfg.fixedTag=96;
+    const uint8_t raw[]={0,0x17,1,0x35,1,0x4a};std::vector<uint8_t> ack(raw,raw+6);
+    Batch b("size");std::vector<uint8_t> q=getSize(0x17);q.push_back(1);b.add(kGetSize,q);
+    for(unsigned scenario=0;scenario<4;++scenario) {
+        hudterm::Core c(cfg);c.setLink(true,0x2060,0);c.setHost(0x101,0);most::Msg out;
+        assert(c.submit(b,100)==kQueued && c.next(100,out));
+        assert(c.msUntilDeadline(100)==3000);
+        c.tick(3100);assert(c.status()==kReady && c.busy() && c.stats().timeouts==0);
+        assert(c.msUntilDeadline(3100)==2000 && !c.next(3100,out));
+        c.tick(3200);assert(c.stats().calls==1 && c.stats().answers==0);
+        most::View wrong=message(kGetSize,ack,0x2060);wrong.hdrTag=95;
+        c.onMessage(wrong,3300);assert(c.busy() && c.stats().answers==0);
+        most::View m=message(kGetSize,ack,0x2060);m.hdrTag=96;
+        uint32_t receipt=scenario==0?3501:scenario==1?5099:scenario==2?5100:5200;
+        if(scenario==3)c.tick(5100);
+        c.onMessage(m,receipt);uint16_t w,h;
+        if(scenario<2) {
+            assert(c.status()==kReady && !c.busy() && c.stats().answers==1);
+            assert(c.imageSize(0x17,w,h) && w==309 && h==330);
+            c.onMessage(m,receipt+1);assert(c.stats().answers==1);
+        } else {
+            assert(c.status()==kFailed && c.stats().timeouts==1 && c.stats().answers==0);
+            assert(!c.imageSize(0x17,w,h));
+        }
+        assert(c.stats().calls==1); // never a retry
+    }
+    // The extra wait belongs to ImageGetSize only, not arbitrary drawing calls.
+    hudterm::Core other(cfg);other.setLink(true,0x2060,0);other.setHost(0x101,0);
+    Batch draw("visibility");draw.add(kSetVisibility,setVisibility(0x17,true));most::Msg out;
+    assert(other.submit(draw,100)==kQueued && other.next(100,out));other.tick(3100);
+    assert(other.status()==kFailed && other.stats().timeouts==1);
+}
+void testSecondStep(){
+    kntest::Bytes first=kntest::navState(8,"First"),second=kntest::navState(7,"Second");
+    first.insert(first.end(),second.begin(),second.end());NavMessages m;assert(m.store(0x8006,&first[0],first.size()));
+    NavView v;assert(viewFromMessages(m,v)&&v.aa_type==8&&v.has_next&&v.next_type==7);
+    // The same mapper and Work API serve both AA steps; no former renderer remains.
+    sixwbkit::NavigationEvent event;event.maneuver=GrafiteKit::maneuver(v.next_type);
+    assert(!sixwbkit::renderMiniature(event,sixwbkit::Rect(0,0,305,44)).empty());
+}
+unsigned graphicRequests(){unsigned n=0;for(size_t i=0;i<fake_dsi::calls.size();++i)if(fake_dsi::calls[i].kind==fake_dsi::Call::kRequest&&fake_dsi::calls[i].id==most::kReqProcessMessage)++n;return n;}
+void testRuntime(const char* mode){
+    char dir[]="/tmp/6wb-host-XXXXXX";assert(mkdtemp(dir));std::string marker=std::string(dir)+"/shown";
+    KombiNav::kShownFile=marker.c_str();KombiNav::kFlagFile="/nonexistent/6wb-flag";KombiNav::kManualFile="/nonexistent/6wb-manual";
+    setenv("NBT_CLUSTER","6wb",1);setenv("NBT_KOMBI_NAV","1",1);setenv("NBT_KOMBI_NAV_YIELD","0",1);
+    if(mode)setenv("NBT_HUDTERM",mode,1);else unsetenv("NBT_HUDTERM");fake_dsi::reset();
+    {
+        most::Client client;KombiNav nav;nav.start(&client);assert(!strcmp(nav.clusterName(),"6wb"));assert(client.start("HOST_6WB"));
+        fake_dsi::attach();std::vector<uint8_t> reg;most::putLe32(reg,77);most::putLe16(reg,0x2059);
+        fake_dsi::data(most::kInfoClientResponse,&reg[0],reg.size());reg.clear();most::putLe32(reg,1);most::putLe16(reg,0x101);most::putLe16(reg,0x8200);
+        fake_dsi::data(most::kAttrRegistry,&reg[0],reg.size());
+        kntest::Bytes status=kntest::status(1),step=kntest::navState(8,"Synthetic Road"),pos=kntest::curPos(250,"250",1);
+        KombiNav::navStatusCallback(0x8003,&status[0],status.size(),&nav);KombiNav::navStatusCallback(0x8006,&step[0],step.size(),&nav);KombiNav::navStatusCallback(0x8007,&pos[0],pos.size(),&nav);
+        usleep(400000);nav.stop();assert((graphicRequests()>0)==(mode && !strcmp(mode,"on")));
+        // SHADOW never acquires send rights; LIVE starts size queries without any OEM route.
+        if(!mode || strcmp(mode,"on"))assert(access(marker.c_str(),F_OK)!=0);
+        fake_dsi::detach();
+    }
+    unlink(marker.c_str());rmdir(dir);unsetenv("NBT_CLUSTER");unsetenv("NBT_HUDTERM");unsetenv("NBT_KOMBI_NAV");unsetenv("NBT_KOMBI_NAV_YIELD");
+}
+}
+int main(){
+const bool trace=getenv("NBT_6WB_DIAG_TEST")!=NULL;
+char tracePath[]="/tmp/6wb-diag-integration-XXXXXX";
+if(trace){int fd=mkstemp(tracePath);assert(fd>=0);close(fd);assert(latencydiag::start(true,tracePath));}
+testCodec();testWorkRoadSigns();testGeometry();testRendering();testAllCentralManeuversWithoutSurfaceFile();testResourcesAndSafety();testIncremental();testDistancePolicyAndIconClear();testIconSurfaceSelection();testLayoutConfig();testTransport();testSizeReplies();testExtendedSizeDeadline();testSecondStep();testRuntime(NULL);testRuntime("log");testRuntime("on");if(trace) {
+    latencydiag::stop();FILE* f=fopen(tracePath,"r");assert(f);
+    char row[512];unsigned rows=0;while(fgets(row,sizeof(row),f))if(row[0]>='0'&&row[0]<='9')++rows;
+    fclose(f);unlink(tracePath);assert(rows>0);
+}
+puts("test_hud6wb OK");}

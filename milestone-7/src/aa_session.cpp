@@ -12,6 +12,7 @@
 #include "aa_manifest.hpp"
 #include "aa_control_msgs.hpp"
 #include "aa_proto.hpp"
+#include "nav_diag.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +43,8 @@ static uint32_t monoMs() {
 static const uint32_t kMaxUndecrypted = 16;
 
 AASession::AASession()
-    : client_fd_(-1),
+    : nav_diag_(NULL),
+      client_fd_(-1),
       running_(0),
       thread_(0),
       disconnect_cb_(NULL),
@@ -123,6 +125,7 @@ AASession::AASession()
 
 AASession::~AASession() {
     stop();
+    delete nav_diag_;
     pthread_mutex_destroy(&fd_mutex_);
     pthread_mutex_destroy(&touch_mutex_);
     if (wake_pipe_[0] >= 0) close(wake_pipe_[0]);
@@ -427,6 +430,21 @@ bool AASession::start(int client_fd) {
     releaseSocket();   // normally already done by the session thread; harmless if not
     if (live && disconnect_cb_) disconnect_cb_(disconnect_user_data_);
 
+    // Optional observer is started outside RX. It owns a separate bounded queue
+    // and writer; failures never change session startup or negotiated services.
+    if (!nav_diag_ && navdiag::flag("NBT_NAV_DIAG")) {
+        navdiag::Config cfg=navdiag::environment();
+        navdiag::Recorder* observer=new(std::nothrow) navdiag::Recorder(cfg);
+        if(observer && observer->start()) {
+            nav_diag_=observer;
+            printf("[NavDiag] enabled: %s (text %s; source label %s)\n",cfg.path,cfg.text?"explicitly enabled":"redacted",cfg.source);
+        } else {
+            delete observer;
+            printf("[NavDiag] unavailable; Android Auto behavior unchanged\n");
+        }
+    }
+    if(nav_diag_)nav_diag_->newSession();
+
     pthread_mutex_lock(&fd_mutex_);
     client_fd_ = client_fd;
     pthread_mutex_unlock(&fd_mutex_);
@@ -477,6 +495,7 @@ bool AASession::start(int client_fd) {
 
     if (pthread_create(&thread_, NULL, &AASession::sessionThreadStub, this) != 0) {
         perror("[AASession] Failed to spawn session thread");
+        if(nav_diag_)nav_diag_->endSession();
         setRunning(false);
         releaseSocket();
         thread_ = 0;
@@ -1342,12 +1361,14 @@ void AASession::sessionLoop() {
                 reassembly_total_.erase(channel);
                 reassembly_wire_.erase(channel);
                 if (!had_first) {
+                    if(channel==AA_CH_NAV_STATUS && nav_diag_)navtrace::fragmentDrop(channel,1);
                     printf("[AASession] LAST fragment on channel %u with no FIRST: dropping\n", channel);
                     continue;
                 }
                 // total_size is the size the phone announced. The length fields are the bytes on the
                 // wire (larger once encrypted). A shortfall means this LAST closed an incomplete message.
                 if (expect != 0 && wire < expect) {
+                    if(channel==AA_CH_NAV_STATUS && nav_diag_)navtrace::fragmentDrop(channel,2);
                     printf("[AASession] channel %u reassembled %u wire bytes, phone announced %u: dropping\n",
                            channel, wire, expect);
                     continue;
@@ -1371,6 +1392,11 @@ void AASession::sessionLoop() {
 
             // Universal Message Dispatcher based on protocol wire captures
             uint16_t msg_id = frame_data.size() >= 2 ? ((static_cast<uint16_t>(frame_data[0]) << 8) | frame_data[1]) : 0;
+            // Observe only the NAV service channel after decrypt/reassembly, including IDs
+            // not understood by NavMessages. No parsing or file I/O on RX.
+            if(channel==AA_CH_NAV_STATUS && nav_diag_)
+                nav_diag_->capture(msg_id,frame_data.size()>2?&frame_data[2]:NULL,
+                                   frame_data.size()>2?frame_data.size()-2:0,channel);
             noteRxMsg(msg_id);
             g_crumb_stage = 3;
             g_crumb_msg = msg_id;
@@ -1435,7 +1461,7 @@ void AASession::sessionLoop() {
                 if (cryptor_.encrypt(open_resp, sizeof(open_resp), enc_resp)) {
                     sendFrame(channel, 0x0F, &enc_resp[0], enc_resp.size()); // Specific channel flag 0x0F
                 }
-            } else if (channel == 10 && msg_id >= 0x8000) {
+            } else if (channel == AA_CH_NAV_STATUS && msg_id >= 0x8000) {
                 // Navigation status channel: guidance state (0x8003), next turn (0x8006), turn distance (0x8007), ...
                 // Nothing is answered; the messages go to the nav-status callback (kombi_nav). Before v1.6.3 the
                 // generic handlers below caught 0x8007 as a VideoFocusRequest and answered with a video message on
@@ -1739,6 +1765,7 @@ void AASession::sessionLoop() {
 }
 
 void AASession::finishSession() {
+    if(nav_diag_)nav_diag_->endSession();
     // Only this thread closes the socket. Whether the session ended on its own or stop()
     // asked it to, release the fd here, then tell the owner if nobody requested the stop.
     bool ended_on_its_own = exchangeRunningOff();

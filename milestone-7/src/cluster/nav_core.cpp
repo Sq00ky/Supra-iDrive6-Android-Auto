@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/nav_core.hpp"
+#include "cluster/hud6wb_display.hpp"
+#include "cluster/hud6wb_config.hpp"
 #include "nbt_env.hpp"
 #include "nbt_paths.hpp"
 
@@ -176,7 +178,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     if (stop_ != kRunning) return;
     // A DEPART at 0 m counts as no guidance: after a reroute the arrow shown stays through it (and goes after grace_s,
     // as in any gap) instead of a straight arrow at 0 yd for a second, drawn and then replaced or cleared.
-    bool depart = in && departHere(*in);
+    bool depart = in && d_.suppressDepartureAtZero() && departHere(*in);
     if (depart) {
         if (!depart_) log("DEPART at 0 m: not shown%s", has_shown_ ? ", the arrow shown stays" : "");
         in = NULL;
@@ -194,7 +196,8 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     off_ = false;
     NavView v = *in;
     // The road as it is stored in shown_, before anything compares the two (an unnamed road is " ").
-    v.road = utf8Prefix(v.road.empty() ? std::string(" ") : v.road, kMaxRoad);
+    if (v.road.empty()) v.road = " ";
+    if (!d_.useFullRoadName()) v.road = utf8Prefix(v.road, kMaxRoad);
     if (!renew_ && renewedStep(v)) {
         renew_ = true;                                 // until it is drawn or cleared
         have_next_ = false;                            // and the time rule judges it from now
@@ -230,7 +233,9 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     bool new_man = !isShown(v);
     bool redraw = !new_man && d_.sameManeuver(v, now);
     if (new_man || redraw) {
+        navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
         ClusterDisplay::Result r = d_.showManeuver(v, now, new_man, !has_shown_);
+        navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
         if (r != ClusterDisplay::kOk) {
             fail(r);
             return;
@@ -246,14 +251,18 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         double m;
         log("MAIN type %d: %lld s, %.0f m", v.aa_type, (long long)(v.has_step_s ? v.step_s : -1),
             distanceMetres(v, m) ? m : -1.0);
+        navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
         ClusterDisplay::Result r = d_.remind(v, now);
+        navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
         if (r != ClusterDisplay::kOk) {
             fail(r);
             return;
         }
     }
     if (!v.sameDistance(last_dist_) && now - last_dist_t_ >= s_.min_update_s) {
+        navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
         ClusterDisplay::Result r = d_.updateDistance(v, now);
+        navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
         if (r != ClusterDisplay::kOk) {
             fail(r);
             return;
@@ -261,7 +270,9 @@ void Core::step(const NavView* in, double now, const char* why_none) {
         last_dist_ = v;
         last_dist_t_ = now;
     }
+    navtrace::event(navtrace::DisplayBegin,diagnostic_token_,0,v.aa_type);
     ClusterDisplay::Result r = d_.keepUp(v, now);
+    navtrace::event(navtrace::DisplayEnd,diagnostic_token_,(int)r,v.aa_type);
     if (r != ClusterDisplay::kOk) {
         fail(r);
         return;
@@ -440,7 +451,37 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         stopHint_ = "a call failed, or this cluster is not laid out like the 6wa profile: see the [HudTerm] lines";
         return true;
     }
-    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa): cluster arrows disabled\n", id);
+    if (!strcmp(id, "6wb")) {
+        if (!most) return false;
+        const char* mode=getenv("NBT_HUDTERM");
+        shadow_=!mode || strcmp(mode,"on")!=0;
+        hudterm::Bmw6wbProfile p;
+        hudterm::configure6wb(p);
+        p.roadShields=envFlag("NBT_6WB_ROAD_SHIELDS")==1;
+        hudterm::Config c;
+        c.handles=hudterm::handlesOf(p); c.navFrame=p.base.frame;
+        c.txType=p.vectorTx; c.fixedTag=p.headerTag; c.useFixedTag=true;
+        c.strictAnswers=true; c.acceptMirroredAnswers=true; c.extendedCalls=true;
+        c.ignoreFactoryNav=true;
+        c.initialNavActive=false;
+        yield_enabled_=false;
+        printf("[KombiNav] 6wb experimental: OEM navigation checks disabled\n");
+        c.replyMs=3000; c.sizeReplyMs=5000;
+        c.surfaceDiagnostics=!shadow_;
+        c.pacedGraphics=true; c.graphicIntervalMs=15; c.graphicReplyMs=8000;
+        c.maxInFlight=1; c.maxBatch=128; c.logBatches=!shadow_;
+        terminal_=new hudterm::HudTerminal(c);
+        if(!terminal_->attach(*most,!shadow_) || !terminal_->start()) return false;
+        display_=new Hud6wbDisplay(*terminal_,p,shadow_);
+        settings_.approach=kApproachOff; // 6WB bar carries distance; keep the full AA distance text.
+        settings_.approach_mi=0;
+        target_="experimental BMW 6WB HUDTerminal (registry host)";
+        stopHint_="6WB: known surfaces; wait only for HUDTerminal communication; never reset after errors";
+        printf("[KombiNav] 6wb %s: measured F31 surfaces, C04 probing disabled; %s\n",shadow_?"SHADOW":"LIVE OPT-IN",
+            shadow_?"no HUDTerminal commands sent":"drawing when HUDTerminal is ready; no OEM prerequisite");
+        return true;
+    }
+    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa, 6wb): cluster arrows disabled\n", id);
     return false;
 }
 
@@ -559,11 +600,12 @@ void KombiNav::start(most::Client* most) {
                settings_.lanes ? "on" : "off", settings_.inplace);
     else
         printf("[KombiNav] cluster arrows %s (%s); cluster %s: %s%s, approach %s, junction view %s, lanes %s, "
-               "iDrive-route yield %s (and the factory navigation on the terminal, always)\n",
+               "iDrive-route yield %s (%s)\n",
                enabledNow() ? "ON" : "off", forced_ >= 0 ? "NBT_KOMBI_NAV" : "iDrive menu / flag file",
                display_->name(), target_.c_str(), shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "",
                approachText().c_str(), junctionText().c_str(), settings_.hud_lanes ? "on" : "off",
-               yield_enabled_ ? "on" : "off");
+               yield_enabled_ ? "on" : "off",
+               display_->factoryArbitration() ? "factory navigation on the terminal, always" : "OEM arbitration bypassed");
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
         return;
@@ -583,14 +625,32 @@ void KombiNav::stop() {
 void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t len, void* user) {
     KombiNav* self = static_cast<KombiNav*>(user);
     if (!self) return;
+    const navtrace::Token diagnostic=navtrace::latest(msg_id);
+    navtrace::event(navtrace::ParserEnter,diagnostic);
     pthread_mutex_lock(&self->mu_);
-    if (self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0)) self->last_msg_t_ = monoS();
+    const bool discard = msg_id == 0x8003 && self->display_ && self->display_->discardPreviousRoute();
+    const bool wasActive = discard && self->msgs_.guidanceActive();
+    const bool recognized=self->msgs_.store(msg_id, body ? body : (const uint8_t*)"", body ? len : 0);
+    if (recognized) {
+        self->diagnostic_rx_=diagnostic;
+        self->last_msg_t_ = monoS();
+        // Presentation bookkeeping only: don't lose a quick INACTIVE/ACTIVE
+        // transition between worker snapshots or reuse data from an ended route.
+        if(msg_id==0x8003) {
+            int64_t status=0;
+            if(pbInt(NavMessages::span(self->msgs_.status),1,status)) {
+                if (discard && status!=1 && (wasActive || status==0 || status==2))
+                    self->msgs_.discardGuidance();
+            }
+        }
+    }
+    navtrace::event(navtrace::StateStored,diagnostic,recognized?1:0);
     pthread_mutex_unlock(&self->mu_);
 }
 
 void KombiNav::onSessionEnded() {
     pthread_mutex_lock(&mu_);
-    msgs_.clear();
+    msgs_.clear();diagnostic_rx_=navtrace::Token();
     session_ended_ = true;
     pthread_mutex_unlock(&mu_);
 }
@@ -603,7 +663,9 @@ void KombiNav::onFatalSignal() {
 // cancel (or a yield: the factory graph owns the models then), so the next start retries a cancel that failed.
 // The shadow mode draws nothing and never touches it: a file a live run left stays for the next live run to clear.
 void KombiNav::markShown(bool on, bool force) {
-    if (shadow_ || on == marked_) return;
+    if (shadow_) return;
+    if (display_ && display_->markerTracksSentCommands()) on = display_->sentAny();
+    if (on == marked_) return;
     if (on) {
         int fd = open(kShownFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) close(fd);
@@ -639,7 +701,7 @@ void KombiNav::worker() {
     }
     while (!quitting(this)) {
         tick(monoS());
-        for (double t = 0; t < kTickS && !quitting(this); t += 0.05) usleep(50000);
+        for (double t=0;t<kTickS && !quitting(this);t+=0.05) usleep(50000);
     }
     if (client_) client_->setTimeoutMs(1500);   // Force Stop sends SIGKILL 10 s after 'quit': keep the exit clear short
     if (core_->shown() || core_->sentAny()) core_->clear("nbt-aad exiting");
@@ -679,11 +741,11 @@ void KombiNav::tick(double now) {
     if (!enabled_) return;
     if (yield_enabled_) startWatch(now);
 
-    NavMessages m;
+    NavMessages m;navtrace::Token diagnostic;
     double last_msg;
     bool ended;
     pthread_mutex_lock(&mu_);
-    m = msgs_;
+    m = msgs_;diagnostic=diagnostic_rx_;
     last_msg = last_msg_t_;
     ended = session_ended_;
     session_ended_ = false;
@@ -726,10 +788,25 @@ void KombiNav::tick(double now) {
     NavView v;
     const NavView* pv = NULL;
     const char* why = "guidance ended";
-    if (guidance && viewFromMessages(m, v)) {
+    const bool traceSnapshot=diagnostic.sequence && (diagnostic.sequence!=diagnostic_decoded_.sequence || diagnostic.connection!=diagnostic_decoded_.connection);
+    if(traceSnapshot)navtrace::event(navtrace::SnapshotBegin,diagnostic);
+    const bool decoded=guidance && viewFromMessages(m, v);
+    if(traceSnapshot) {
+        double metres=-1;if(decoded)distanceMetres(v,metres);
+        navtrace::event(navtrace::SnapshotDecoded,diagnostic,decoded?1:0,decoded?v.aa_type:-1,
+            decoded&&v.has_exit_number?v.exit_number:-1,decoded&&v.has_exit_angle?v.exit_angle:-1,metres);
+        diagnostic_decoded_=diagnostic;
+    }
+    core_->diagnosticToken(diagnostic);
+    if (decoded) {
         if (now - last_msg > settings_.nav_stale_s) why = "navigation status frozen";
         else pv = &v;
     }
+    int64_t navigationStatus=0;
+    if(m.has_status)pbInt(NavMessages::span(m.status),1,navigationStatus);
+    if (!pv && navigationStatus!=3 && display_->discardPreviousRoute() &&
+        (core_->shown() || core_->sentAny()))
+        core_->clear(why);
     core_->step(pv, now, why);
     if (core_->takeFallback() && !fallback_noted_) {
         fallback_noted_ = true;

@@ -1,0 +1,43 @@
+"""Measured Work vector-coordinate contracts; source/data only, never a compiler."""
+import pathlib
+import subprocess
+import unittest
+ROOT=pathlib.Path(__file__).resolve().parents[1]
+BASE='473b393e2ad6894d54b8b284bfa07c8cdc7ec52b'
+PROFILE=(ROOT/'src/cluster/hud6wb_profile.hpp').read_text()
+RESOURCES=(ROOT/'src/cluster/hud6wb_resources.hpp').read_text()
+KIT=(ROOT/'src/cluster/hud6wb_kit.cpp').read_text()
+CONFIG=(ROOT/'src/cluster/hud6wb_config.hpp').read_text()
+
+def old(name):return subprocess.check_output(['git','show',BASE+':milestone-7/src/cluster/'+name],cwd=ROOT.parent,text=True)
+
+class ExpandedGeometryChecks(unittest.TestCase):
+    def test_input_canvas_is_measured_221_by_158(self):
+        self.assertIn('main(0x1f,0x20,221,158)',PROFILE)
+        self.assertIn('Rect c={0,0,220,157}; base.canvas=c',PROFILE)
+        self.assertIn('base.glyph=c',PROFILE)
+        self.assertIn('kPerspectiveHorizon = 70',PROFILE)
+        self.assertNotIn('Rect g={20,74,200,151}',PROFILE)
+        self.assertIn('renderManeuver(e,area,0.0)',KIT)
+
+    def test_c04_measurement_is_separate_and_not_fabricated(self):
+        self.assertIn('mainImageWidth(221),mainImageHeight(158)',PROFILE)
+        for h in ('a','b'):
+            self.assertIn('compatibleOrMissing(port,p_.main.'+h+',p_.mainImageWidth,p_.mainImageHeight)',RESOURCES)
+        self.assertIn('rw==w && rh==h',RESOURCES)
+        self.assertIn('port.imageSize(handle,rw,rh)',RESOURCES)
+
+    def test_no_6wa_or_old_main_limits_are_used_to_fit_6wb(self):
+        self.assertIn('const Rect& useful=p_.base.glyph',(ROOT/'src/cluster/hud6wb_display.cpp').read_text())
+        self.assertNotIn('k6wa',KIT)
+        self.assertNotIn('199, 129',PROFILE)
+        self.assertIn('p.main.width',CONFIG);self.assertIn('p.main.height',CONFIG)
+        self.assertNotIn('221',CONFIG);self.assertNotIn('158',CONFIG)
+        self.assertIn('p.base.streetChars,1,kMaxLatinTextBytes',CONFIG)
+        self.assertIn('NBT_6WB_TX',CONFIG)
+
+    def test_most_transport_is_unchanged(self):
+        paths=['src/most','src/dsi_client.cpp']
+        self.assertEqual(subprocess.check_output(['git','diff',BASE,'--']+['milestone-7/'+p for p in paths],cwd=ROOT.parent),b'')
+
+if __name__=='__main__':unittest.main()

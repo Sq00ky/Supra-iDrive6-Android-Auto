@@ -5,9 +5,11 @@ project(nbt_aad C CXX)
 
 # The QNX Makefile passes -Wc,-std=gnu++0x. C++11 matches that. -fPIC is omitted: it
 # produces a shared object the head unit will not exec.
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_EXTENSIONS ON)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "QNX")
+    set(CMAKE_CXX_STANDARD 11)
+    set(CMAKE_CXX_EXTENSIONS ON)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -38,6 +40,8 @@ set(SOURCES
     src/video_manager.cpp
     src/mmr_launch.cpp
     src/tcp_server.cpp
+    src/usb_accessory.cpp
+    src/usb_direct.cpp
     src/aa_session.cpp
     src/audio/audio_acks.cpp
     src/aa_cryptor.cpp
@@ -64,9 +68,16 @@ set(SOURCES
     src/cluster/nav_core.cpp
     src/cluster/hud_terminal.cpp
     src/cluster/hud6wa_display.cpp
+    src/cluster/hud6wb_display.cpp
+    src/cluster/hud6wb_codec.cpp
+    src/cluster/hud6wb_kit.cpp
+    src/cluster/grafite_oro/artwork6wb.cpp
+    src/cluster/grafite_oro/hudterminal_palette.cpp
+    src/volume_osd.cpp
     src/audio/speex.c
 )
 
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
 add_executable(nbt-aad ${SOURCES})
 
 # Target QNX compilation flags
@@ -90,4 +101,14 @@ target_link_libraries(nbt-aad PRIVATE
     ssl
     crypto
     screen
+    usbdi
+    m
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "QNX")
+    target_link_libraries(nbt-aad PRIVATE -lang-c++)
+    set_target_properties(nbt-aad PROPERTIES
+        POSITION_INDEPENDENT_CODE FALSE
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "/opt/mm/lib;/lib;/usr/lib"
+    )
+endif()

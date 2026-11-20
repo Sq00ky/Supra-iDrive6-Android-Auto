@@ -1,0 +1,117 @@
+{
+  "capture_sha256": "1d6cfad8816aa881c5a2641c771e8976101887159727322c0ca0afd01e678557",
+  "record_counts": {
+    "session_start": 1,
+    "navigation_raw": 208,
+    "navigation": 208,
+    "navigation_timing": 4250,
+    "navigation_session_start": 1,
+    "navigation_session_end": 1,
+    "session_end": 1
+  },
+  "stages_since_rx": {
+    "aa_receive": {
+      "n": 208,
+      "median_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 1.0
+    },
+    "display_submit_begin": {
+      "n": 1458,
+      "median_ms": 1395.499,
+      "p95_ms": 64568.935,
+      "max_ms": 83548.916
+    },
+    "display_submit_end": {
+      "n": 1458,
+      "median_ms": 1395.499,
+      "p95_ms": 64568.935,
+      "max_ms": 83548.916
+    },
+    "most_send_begin": {
+      "n": 0
+    },
+    "most_send_return": {
+      "n": 0
+    },
+    "parser_enter": {
+      "n": 207,
+      "median_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 1.0
+    },
+    "snapshot_decode_begin": {
+      "n": 144,
+      "median_ms": 129.5,
+      "p95_ms": 236.0,
+      "max_ms": 253.0
+    },
+    "snapshot_decoded": {
+      "n": 144,
+      "median_ms": 129.5,
+      "p95_ms": 236.0,
+      "max_ms": 253.0
+    },
+    "state_store_done": {
+      "n": 207,
+      "median_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 1.0
+    }
+  },
+  "paired_durations": {
+    "snapshot_decode_begin -> snapshot_decoded": {
+      "n": 144,
+      "median_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 0.0
+    },
+    "display_submit_begin -> display_submit_end": {
+      "n": 1458,
+      "median_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 4.0
+    },
+    "most_send_begin -> most_send_return": {
+      "n": 212,
+      "median_ms": 0.0,
+      "p95_ms": 0.0,
+      "max_ms": 1.0
+    }
+  },
+  "transitions": [
+    {
+      "sequence": 32,
+      "type": 43,
+      "mono_ns": 1200155799843,
+      "snapshot_decoded_after_rx_ms": 134.0,
+      "display_submit_begin_after_rx_ms": 134.0,
+      "display_submit_end_after_rx_ms": 137.0,
+      "next_central_swap_timeline_only_after_rx_ms": 3224.997
+    },
+    {
+      "sequence": 86,
+      "type": 45,
+      "mono_ns": 1261171738827,
+      "snapshot_decoded_after_rx_ms": 222.0,
+      "display_submit_begin_after_rx_ms": 222.0,
+      "display_submit_end_after_rx_ms": 225.0,
+      "next_central_swap_timeline_only_after_rx_ms": 3312.997
+    },
+    {
+      "sequence": 99,
+      "type": 39,
+      "mono_ns": 1278201721797,
+      "snapshot_decoded_after_rx_ms": 95.0,
+      "display_submit_begin_after_rx_ms": 95.0,
+      "display_submit_end_after_rx_ms": 99.0,
+      "next_central_swap_timeline_only_after_rx_ms": 1982.998
+    }
+  ],
+  "notes": [
+    "Display since-RX includes repeated keepUp calls on an old snapshot: this is snapshot age, not queue latency.",
+    "Next central swap is timeline-only, not a proof of which queued maneuver was displayed."
+  ],
+  "max_lost": 0,
+  "max_trace_queue_full_drops": 0
+}
