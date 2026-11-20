@@ -656,7 +656,8 @@ static void writeStatus(const char* state) {
         if (direct && s_statusFacts.wfd == 1 && g_wfdMissing == nbt::WFD_MISSING_SSID) wifi = nbt::kHintWifiNoSsid;
         else if (g_apCfgState == 0 || (direct && s_statusFacts.wfd == 0)) wifi = nbt::kHintWifiNone;
         hint = nbt::statusHint(nbt::btRefusedRun(), monoSecs(), g_noJoinAt, g_btIdleSince, nbt::btPhoneConnState(), wifi);
-    }
+    } else if (!strcmp(tok, "connecting"))
+        hint = nbt::connectingHint(monoSecs(), g_noJoinAt);
     static const char* s_lastHint = "-";
     if (strcmp(hint, s_lastHint)) {
         printf("[Status] iDrive hint: %s (%s)\n", hint,
@@ -1464,6 +1465,11 @@ static void* wirelessThread(void*) {
                     break;
                 }
                 if (!g_sessionActive && (tick % 10) == 5) logStations("waiting for phone TCP connect");
+                if (!everActive && !g_sessionActive && tick == nbt::kHintJoinWaitS) {
+                    g_noJoinAt = monoSecs();   // iDrive: re-pair now, not after the phone gives up (~36 s + retries)
+                    printf("[Wireless] [%9.3f] phone took the Wi-Fi details %d s ago and has not connected: iDrive says "
+                           "forget the phone in the car and pair again (it keeps trying)\n", upSec(), tick);
+                }
                 if (!everActive && tick > 90) { printf("[Wireless] phone did not connect within 90 s\n"); break; }
                 if (everActive && !wirelessSessionActive()) { printf("[Wireless] session ended, releasing the Bluetooth link\n"); break; }
             }
@@ -2105,7 +2111,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.115-status3"
+#define NBT_AAD_BUILD "v1.9.115-status4"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.

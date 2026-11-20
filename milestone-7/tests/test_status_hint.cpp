@@ -31,6 +31,10 @@ int main() {
     SAME(statusHint(0, 1000, 0, 0, 3, kHintWifiNoSsid), "nossid");
     SAME(statusHint(0, 1000, 0, 0, 0, kHintWifiNoSsid), "nossid");
     SAME(statusHint(0, 1000, 0, 0, 0, kHintWifiOk), "nophone");
+    // connecting
+    SAME(connectingHint(1000, 0), "-");
+    SAME(connectingHint(1000, 990), "nojoin");
+    SAME(connectingHint(1000, 1000 - kHintNoJoinS), "-");
     // texts
     CHECK(waitingKind(true, "wfd", "nophone", true, true) == kWaitUsb);
     CHECK(waitingKind(false, "wfd", "coding", true, true) == kWaitCoding);

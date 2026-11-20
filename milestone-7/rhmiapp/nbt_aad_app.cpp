@@ -76,7 +76,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-91-status3 (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-92-status4 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -2466,7 +2466,7 @@ void statusRun(void* /*self*/) {
       if (hf) { char hrec[24] = {0}; if (fscanf(hf, "%23s", hrec) == 1) sscanf(hrec, "%7[^|]|%7s", net, hint); fclose(hf); } }
     unsigned statusText = kTextAaDefault;
     if (!strcmp(st, "connected"))       statusText = !strcmp(tr, "usb") ? kTextAaUsbOk : kTextAaWifiOk;
-    else if (!strcmp(st, "connecting")) statusText = kTextAaConnecting2;
+    else if (!strcmp(st, "connecting")) statusText = !strcmp(hint, "nojoin") ? kTextAaNoJoin : kTextAaConnecting2;
     else if (d.pid > 0) {
         // Which link the driver should use: the USB-only setting wins, then carplay.ini, then Wi-Fi Direct.
         // usbAaOn() is the same flag file the daemon reads, so both sides agree without a second channel.
@@ -2483,6 +2483,8 @@ void statusRun(void* /*self*/) {
         alog("entry text -> %u (%s)", want, want == kTextConnecting ? "connecting" : "default");
         g_shownText = want;
     }
+    // A try that already failed to join: say re-pair (no spinner) even while the phone keeps retrying.
+    if (connecting && statusText == kTextAaNoJoin) connecting = false;
     if (!fileExists(nbt::appFile("spinner.disable").c_str())) setConnectingAnimation(app, connecting);
     unsigned row = connected ? kTextRowOpen : connecting ? kTextRowConnecting : kTextStart;   // our menu's Start row
     if (!connected && !connecting && statusText != kTextAaDefault) row = statusText;   // waiting or missing link: say why

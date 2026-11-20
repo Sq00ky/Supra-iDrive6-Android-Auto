@@ -11,6 +11,9 @@ namespace nbt {
 const unsigned kHintRefusedRun = 5;     // ServiceRequestErrors in a row before the coding hint (1-2 are normal)
 const uint32_t kHintNoBtS = 90;         // phone on Bluetooth this long without opening the Android Auto link
 const uint32_t kHintNoJoinS = 600;      // how long "took the Wi-Fi details, never joined" stays shown
+// Seconds after the Wi-Fi details went out with no TCP connect before "never joined" is called. Working phones in the
+// car logs connected 0.6-13.8 s after the Bluetooth link opened; a phone that will not join holds Bluetooth ~36 s.
+const int kHintJoinWaitS = 20;
 
 // Wi-Fi state for the hint: what the car can offer the phone at all.
 enum HintWifi { kHintWifiOk = 0, kHintWifiNone = 1, kHintWifiNoSsid = 2 };
@@ -29,6 +32,12 @@ inline const char* statusHint(unsigned refusedRun, uint32_t now, uint32_t noJoin
     if (wifi == kHintWifiNoSsid) return "nossid";
     if (btConn == 0 || btConn == 1) return "nophone";
     return "-";
+}
+
+// While a link is "connecting": the re-pair hint replaces "Connecting to the phone..." once a try has gone
+// kHintJoinWaitS without the phone joining (v1.9.115-status4), so a phone that keeps retrying does not hide it.
+inline const char* connectingHint(uint32_t now, uint32_t noJoinAt) {
+    return noJoinAt && now - noJoinAt < kHintNoJoinS ? "nojoin" : "-";
 }
 
 // kWaitNoPhone is last so the iDrive app's text table only grew at the end.
