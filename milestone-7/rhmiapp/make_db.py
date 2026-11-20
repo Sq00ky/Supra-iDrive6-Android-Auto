@@ -30,6 +30,7 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          404: "Supra (J29)",
          405: "F-series (6WA)",
          406: "6WB (no driver yet)",
+         407: "Cyrillic street names in HUD",   # 407 = 6WA HUD Cyrillic checkbox (rhmiapp-99)
          22: "Show iDrive warnings",   # 22 = iDrive warnings checkbox (rhmiapp-32)
          23: "Settings",   # 23 = Settings row (hmiState 10) / page title (hmiState 14), rhmiapp-39
          24: "Android Auto over USB (beta)",   # 24 = USB checkbox on the Settings page (rhmiapp-40)

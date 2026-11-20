@@ -313,9 +313,9 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
                          matched ? "" : " (matches no call in flight)");
         for (size_t k = 0; k < m.len && k < 12 && n < (int)sizeof(why) - 4; ++k)
             n += snprintf(why + n, sizeof(why) - n, " %02x", m.data[k]);
-        if (m.fkt == kTextareaSetText) {           // the cluster's font refused a text (a glyph it lacks): cosmetic —
-            printf("[HudTerm] %s: text refused, guidance kept\n", why);   // keep the arrow up instead of failing
-            if (matched) finishIfDone(now);
+        if (m.fkt == kTextareaSetText && matched) {   // the cluster's font refused a text (a glyph it lacks): cosmetic —
+            printf("[HudTerm] %s: text refused, guidance kept\n", why);   // keep the arrow up instead of failing.
+            finishIfDone(now);                          // matched only: an unrelated error still fails the terminal
             return;
         }
         fail(why, now);
