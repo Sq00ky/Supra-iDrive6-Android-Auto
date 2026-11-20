@@ -528,6 +528,8 @@ static uint16_t g_aaPort = 5277;
 static volatile int g_btLink = 0;              // wireless thread: phone's Bluetooth setup link (/dev/btspp0) is open
 static volatile uint32_t g_btIdleSince = 0;     // wireless thread: waiting for that link since (monoSecs; 0 = not waiting)
 static volatile uint32_t g_noJoinAt = 0;        // wireless thread: phone took the Wi-Fi details, never joined (monoSecs)
+static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
+static volatile int g_apCfgState = -1;   // wireless thread's apCfgState: -1 not checked, 0 no usable Wi-Fi, 1 present
 
 // Menu-entry status for the iDrive plugin (libNbtAad.so polls it once a second): "<state> <pid> <overlay>" in
 // /dev/shmem/nbt-aad-state, state = idle | connecting | connected, overlay = 1 while Android Auto is on screen and
@@ -646,14 +648,23 @@ static void writeStatus(const char* state) {
     // "net|hint" (status_hint.hpp): the network offered to the phone, and why a waiting phone is stuck.
     const char* net = !nbt::altWifiPrefersCarplay() ? "wfd" : (g_carplayIni.empty() ? "-" : "cp");
     const char* hint = "-";
-    if (!strcmp(tok, "waiting-phone"))
-        hint = nbt::statusHint(nbt::btRefusedRun(), monoSecs(), g_noJoinAt, g_btIdleSince, nbt::btPhoneConnState());
+    if (!strcmp(tok, "waiting-phone")) {
+        // DIRECT with wfd0 up but no group name: the passphrase is fine, only NBT_WFD_SSID is missing. Otherwise no
+        // config at all (or DIRECT on a wfd0 without an address): nothing wireless can be offered, use USB.
+        const bool direct = nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT;
+        int wifi = nbt::kHintWifiOk;
+        if (direct && s_statusFacts.wfd == 1 && g_wfdMissing == nbt::WFD_MISSING_SSID) wifi = nbt::kHintWifiNoSsid;
+        else if (g_apCfgState == 0 || (direct && s_statusFacts.wfd == 0)) wifi = nbt::kHintWifiNone;
+        hint = nbt::statusHint(nbt::btRefusedRun(), monoSecs(), g_noJoinAt, g_btIdleSince, nbt::btPhoneConnState(), wifi);
+    }
     static const char* s_lastHint = "-";
     if (strcmp(hint, s_lastHint)) {
         printf("[Status] iDrive hint: %s (%s)\n", hint,
                !strcmp(hint, "coding") ? "the car keeps refusing the phone's Android Auto link: coding-requirements.md"
                : !strcmp(hint, "nojoin") ? "the phone took the Wi-Fi details but never joined: forget the phone in the car, pair again"
                : !strcmp(hint, "bt") ? "phone on Bluetooth but no Android Auto link: forget the phone in the car, pair again"
+               : !strcmp(hint, "nowifi") ? "no usable Wi-Fi network in the car (no CarPlay hotspot, no Wi-Fi Direct): use USB"
+               : !strcmp(hint, "nossid") ? "Wi-Fi Direct is up but its group name was not found: set NBT_WFD_SSID"
                : !strcmp(hint, "nophone") ? "no phone connected over Bluetooth: connect the phone"
                : "none");
         s_lastHint = hint;
@@ -909,7 +920,6 @@ static int g_wfdOwnFails = 0;
 static nbt::ApInfo g_wfdOwnAp;
 static std::string g_wfdOwnPath;
 static const int kWfdOwnRetrySec = 30;
-static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
 
 static bool wfdOwnMode() {
     return nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT && nbt::wfdOwnPassMode() != nbt::WFD_OWN_NEVER;
@@ -1212,6 +1222,7 @@ static void* wirelessThread(void*) {
                 if (st == 0 && apCfgState < 0) logNoApConfig(cfg);
                 if (st == 1 && apCfgState == 0) printf("[Wireless] Wi-Fi hotspot config found: wireless Android Auto available\n");
                 apCfgState = st;
+                g_apCfgState = st;
             }
             if (apCfgState != 1) { idleWait = false; g_btIdleSince = 0; usleep(500000); continue; }
         }
@@ -1325,6 +1336,7 @@ static void* wirelessThread(void*) {
                         close(fd);
                         logNoApConfig(cfg);
                         apCfgState = 0;
+                        g_apCfgState = 0;
                         apCfgChecked = monoSecs();
                         continue;
                     }
@@ -2092,7 +2104,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.115-status2"
+#define NBT_AAD_BUILD "v1.9.115-status3"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.

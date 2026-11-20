@@ -22,12 +22,24 @@ int main() {
     SAME(statusHint(0, 1000, 0, 0, 3), "-");                 // phone connected, not waiting for the link
     SAME(statusHint(0, 1000, 0, 0, 0), "nophone");           // no phone connected over Bluetooth
     SAME(statusHint(0, 1000, 0, 100, 1), "nophone");         // paired and in range, not connected
+    // Wi-Fi: below coding and re-pair, above "connect phone"
+    SAME(statusHint(5, 1000, 0, 0, 0, kHintWifiNone), "coding");
+    SAME(statusHint(0, 1000, 990, 0, 3, kHintWifiNone), "nojoin");
+    SAME(statusHint(0, 1000, 0, 1000 - kHintNoBtS, 2, kHintWifiNoSsid), "bt");
+    SAME(statusHint(0, 1000, 0, 0, 0, kHintWifiNone), "nowifi");
+    SAME(statusHint(0, 1000, 0, 0, unknown, kHintWifiNone), "nowifi");
+    SAME(statusHint(0, 1000, 0, 0, 3, kHintWifiNoSsid), "nossid");
+    SAME(statusHint(0, 1000, 0, 0, 0, kHintWifiNoSsid), "nossid");
+    SAME(statusHint(0, 1000, 0, 0, 0, kHintWifiOk), "nophone");
     // texts
     CHECK(waitingKind(true, "wfd", "nophone", true, true) == kWaitUsb);
     CHECK(waitingKind(false, "wfd", "coding", true, true) == kWaitCoding);
     CHECK(waitingKind(false, "cp", "nojoin", true, true) == kWaitNoJoin);
     CHECK(waitingKind(false, "cp", "bt", true, true) == kWaitNoBt);
     CHECK(waitingKind(false, "cp", "nophone", true, true) == kWaitNoPhone);   // not "Waiting: CarPlay Wi-Fi"
+    CHECK(waitingKind(false, "cp", "nowifi", true, true) == kWaitNoWifi);
+    CHECK(waitingKind(false, "wfd", "nossid", false, true) == kWaitNoSsid);
+    CHECK(waitingKind(true, "wfd", "nossid", false, true) == kWaitUsb);      // USB-only setting still wins
     CHECK(waitingKind(false, "wfd", "-", true, true) == kWaitWfdNet);
     CHECK(waitingKind(false, "cp", "-", true, false) == kWaitCarplay);
     CHECK(waitingKind(false, "", "", true, false) == kWaitCarplay);     // older daemon: old chain
