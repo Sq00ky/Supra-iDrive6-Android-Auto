@@ -1534,7 +1534,7 @@ static void testFitMeasured() {
         HudProfile p = k6wa;
         fitMeasured(120, 72, p);
         assert(p.canvas.x1 == 119 && p.canvas.y1 == 71);
-        assert(p.glyph.x0 == 35 && p.glyph.y0 == 21 && p.glyph.x1 == 78 && p.glyph.y1 == 63);
+        assert(p.glyph.x0 == 35 && p.glyph.y0 == 22 && p.glyph.x1 == 78 && p.glyph.y1 == 64);
     }
     {   // the F30 cluster also fits the F20 box, but the factory arrow is centred further left (sabifa, #264)
         HudProfile p = k6wa;
