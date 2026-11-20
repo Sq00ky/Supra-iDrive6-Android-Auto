@@ -18,6 +18,7 @@
       <raAction id="29"/>
       <raAction id="30"/>
       <raAction id="167"/>
+      <raAction id="470"/>
       <raAction id="173"/>
       <raAction id="174"/>
       <hmiAction id="25" target="12"/>
@@ -114,6 +115,10 @@
       </textIdModel>
       <raBoolModel id="170"/>
       <textIdModel id="168" textId="46">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="471"/>
+      <textIdModel id="472" textId="49">
         <synonyms/>
       </textIdModel>
       <raBoolModel id="175"/>
@@ -291,6 +296,7 @@
           <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
           <checkbox action="29" id="72" model="46" text="Show navigation in HUD/gauge cluster" textModel="47"/>
           <checkbox action="167" id="169" model="170" text="Show directions at any distance" textModel="168"/>
+          <checkbox action="470" id="473" model="471" text="Song title in gauge cluster" textModel="472"/>
           <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
           <checkbox action="174" id="180" model="177" text="Prompts on car radio (BT, beta)" textModel="178"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>

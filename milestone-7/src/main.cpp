@@ -1857,6 +1857,7 @@ static void resetMedia(const char* why) {
     g_media.clear();
     writeMediaRecordLocked();
     pthread_mutex_unlock(&g_mediaMutex);
+    g_kombiNav.setNowPlaying(std::string());
     printf("[Media] cleared (%s)\n", why);
 }
 
@@ -1874,7 +1875,9 @@ static void onMediaStatus(uint16_t msg_id, const uint8_t* body, size_t len, void
             writeMediaRecordLocked();
         }
     }
+    const std::string line = changed ? nbt::mediaClusterLine(g_media) : std::string();
     pthread_mutex_unlock(&g_mediaMutex);
+    if (changed) g_kombiNav.setNowPlaying(line);       // the cluster's idle text, when that setting is on
 }
 
 // One press: a media key acts on the down edge, and the phone expects the release too.

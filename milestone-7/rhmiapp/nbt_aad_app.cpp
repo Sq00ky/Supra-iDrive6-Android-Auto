@@ -415,6 +415,12 @@ const unsigned    kActAnyDist       = 167;   // checkbox raAction
 const unsigned    kAnyDistModel     = 170;   // raBoolModel (checkbox state)
 const unsigned    kAnyDistTextModel = 168;   // textIdModel (checkbox label)
 const char* const kAnyDistFlag      = "kombi-nav-anydist";
+// "Song title in gauge cluster", off by default: <checkbox action="470" id="473" model="471" textModel="472">. Flag
+// read by nbt-aad once a second (kombi_nav, cluster/nav_core.hpp mediaEnabledNow()): the song the phone plays is
+// the cluster's idle text (the 6WA's street line) while no turn is up. NBT_KOMBI_MEDIA in nbt-aad.env wins.
+const unsigned    kActKombiMedia    = 470;
+const unsigned    kKombiMediaModel  = 471;
+const char* const kKombiMediaFlag   = "kombi-media";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
 const unsigned    kNoLogModel       = 175;   // raBoolModel
 const unsigned    kActSpeechBt      = 174;   // "Prompts on car radio (BT, beta)" checkbox
@@ -2362,6 +2368,19 @@ bool onSpeechBtToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+bool g_kombiMediaShown = false;
+bool kombiMediaOn() { return nbt::flagSet(kKombiMediaFlag); }
+void showKombiMedia(bmw::PluginApp* app) {
+    app->updateModel(kKombiMediaModel, kombiMediaOn());
+    g_kombiMediaShown = true;
+}
+bool onKombiMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kKombiMediaFlag,
+                   "Song title in gauge cluster (NBT_KOMBI_MEDIA in nbt-aad.env wins; nbt-aad reads it every second)");
+    if (g_runApp) showKombiMedia(g_runApp);
+    return true;
+}
+
 bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kAnyDistFlag,
                    "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
@@ -2421,6 +2440,7 @@ void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
+    if (!g_kombiMediaShown) showKombiMedia(app);
     if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
@@ -2776,6 +2796,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActLciMedia, &onLciMediaToggle);
     addAction(self, kActCpCompat, &onCpCompatToggle);
     addAction(self, kActAnyDist, &onAnyDistToggle);
+    addAction(self, kActKombiMedia, &onKombiMediaToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
     addAction(self, kActSpeechBt, &onSpeechBtToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
