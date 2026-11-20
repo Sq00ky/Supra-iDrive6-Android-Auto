@@ -85,9 +85,74 @@ LANG_TEXTS = {
     "pl": {335: "Czekam na telefon przez Wi-Fi Direct", 336: "Brak Bluetooth: usuń telefon w aucie i sparuj ponownie", 337: "Telefon nie w Wi-Fi: usuń go w aucie, sparuj ponownie", 338: "Auto odrzuca telefon: coding-requirements.md (GitHub)", 48: "Komunikaty głosowe przez radio (BT, beta)", 22: "Pokazuj ostrzeżenia iDrive", 21: "Pokazuj nawigację na zegarach/HUD", 47: "Wyłącz zapis logów (test wydajności)", 45: "Wersja", 46: "Pokazuj wskazówki niezależnie od odległości", 20: "Pokazuj zmiany trybu jazdy", 19: "Przycisk MENU otwiera iDrive", 2: "Android Auto: Łączenie...", 18: "Zapisuj logi na USB", 10: "Uruchom Android Auto", 11: "Wymuś zatrzymanie", 12: "Uruchom ponownie", 1: "Android Auto",
            13: "Łączenie...", 14: "Otwórz Android Auto", 15: "Uruchamiaj automatycznie", 16: "Informacje", 23: "Ustawienia", 24: "Android Auto przez USB (beta)", 25: "Używaj GPS telefonu", 26: "Używaj sieci Wi-Fi Direct (własne hasło)", 27: "Używaj natywnego audio zamiast Bluetooth", 28: "Przyciski multimedialne kierownicy LCI", 29: "Zainstaluj reguły PF", 30: "Sprawdź reguły PF", 31: "Odinstaluj reguły PF", 32: "Zapisywanie reguł...", 33: "Reguły zapisane pomyślnie", 34: "Reguły aktywne", 35: "Sprawdzanie reguł...", 36: "Reguły zainstalowane", 37: "Reguły zainstalowane, ale nieaktywne", 38: "Brak zainstalowanych reguł", 39: "Usuwanie reguł...", 40: "Reguły usunięte pomyślnie", 41: "Filtr pakietów wyłączony, jak wcześniej", 42: "Gotowe, reguły nieaktywne - sprawdź log", 43: "Błąd - sprawdź log", 44: "Zgodność z CarPlay",
            17: "NBT-AAD: natywne, bezprzewodowe Android Auto dla NBT Evo.\\nAutor: nanaisu.\\nWspółtwórcy: @houssems, @tom-pryor, @dn00, @sabifa,\\n@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft.\\ngithub.com/Sq00ky/Supra-iDrive6-Android-Auto\\nBezpłatne. Jeśli za to zapłaciłeś, zostałeś oszukany."},
-    "hu": {48: "Navigációs hangok rádión keresztül (BT, Béta)", 22: "iDrive-figyelmeztetések megjelenítése", 21: "Navigáció megjelenítése a műszerfalon/HUD-on", 47: "Naplózás kikapcsolva (teljesítményteszt)", 45: "Verzió", 46: "Irányjelzések távolságkorlát nélkül", 20: "Menetmód-váltás megjelenítése", 19: "A MENU gomb az iDrive-ra visz", 2: "Android Auto: Csatlakozás...", 18: "Naplók mentése USB-re", 10: "Android Auto indítása", 11: "Kilépés kényszerítése", 12: "Újraindítás",
-           13: "Csatlakozás...", 14: "Android Auto megnyitása", 15: "Automatikus indítás", 16: "Információ", 23: "Beállítások", 24: "Android Auto USB kapcsolaton (Béta)", 25: "Telefon GPS használata", 26: "WiFi Direct hálózat használata (saját jelszós)", 27: "Natív hang Bluetooth helyett", 28: "Médiagombok az LCI-kormányon", 29: "Tűzfal-szabályok telepítése", 30: "Tűzfal-szabályok ellenőrzése", 31: "Tűzfal-szabályok eltávolítása", 32: "Szabályok írása...", 33: "Szabályok sikeresen módosítva", 34: "Szabályok aktívak", 35: "Szabályok ellenőrzése...", 36: "Szabályok jelen vannak", 37: "Szabályok jelen vannak,de nem aktív", 38: "Nincsenek szabályok", 39: "Szabályok eltávolítása...", 40: "Szabályok sikeresen eltávolítva", 41: "Csomagszűrő kikapcsolva, mint korábban", 42: "Kész, nem aktív – lásd a naplóban", 43: "Sikertelen – lásd a naplban", 44: "CarPlay-kompatibilitás",
-           17: "NBT-AAD: Natív Android Auto implementáció az NBT Evóhoz.\\nFejlesztette: nanaisu.\\nKözreműködők: @houssems, @tom-pryor, @dn00, @sabifa,\\n@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft.\\ngithub.com/Sq00ky/Supra-iDrive6-Android-Auto\\nIngyenes. Ha fizettél érte, átvertek."},
+    "hu": {
+        2: "Android Auto: Csatlakozás...",                          # Android Auto: Connecting...
+        10: "Android Auto indítása",                                # Start Android Auto
+        11: "Kényszerített leállítás",                              # Force Stop
+        12: "Újraindítás",                                          # Restart
+        13: "Csatlakozás...",                                       # Connecting...
+        14: "Android Auto megnyitása",                              # Open Android Auto
+        15: "Automatikus indítás",                                  # Start automatically
+        16: "Névjegy",                                              # About
+        17: "NBT-AAD: Natív Android Auto implementáció az NBT Evóhoz.\\nFejlesztette: nanaisu.\\nKözreműködők: @houssems, @tom-pryor, @dn00, @sabifa,\\n@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft.\\ngithub.com/Sq00ky/Supra-iDrive6-Android-Auto\\nIngyenes. Ha fizettél érte, átvertek.",
+        18: "Naplók mentése USB-re",                                # Save logs to USB
+        19: "A MENU gomb az iDrive-ra visz",                        # MENU key opens iDrive
+        20: "Menetmód-váltás megjelenítése",                        # Show driving mode changes
+        21: "Navigáció megjelenítése a műszerfalon/HUD-on",         # Show navigation in HUD/gauge cluster
+        22: "iDrive-figyelmeztetések megjelenítése",                # Show iDrive warnings
+        23: "Beállítások",                                          # Settings
+        24: "Android Auto USB-kapcsolaton (béta)",                  # Android Auto over USB (beta)
+        25: "Telefon GPS használata",                               # Use Phone GPS
+        26: "WiFi Direct hálózat használata (saját jelszóval)",     # Use WiFi Direct Network (own password)
+        27: "Natív hang Bluetooth helyett",                         # Use Native Audio instead of Bluetooth
+        28: "Médiagombok az LCI-kormányon",                         # Media Controls for LCI Steering Wheels
+        29: "Tűzfal-szabályok telepítése",                          # Install PF Rules
+        30: "Tűzfal-szabályok ellenőrzése",                         # Check PF Rules
+        31: "Tűzfal-szabályok eltávolítása",                        # Uninstall PF Rules
+        32: "Szabályok írása...",                                   # Writing rules...
+        33: "Szabályok sikeresen kiírva",                           # Rules successfully written
+        34: "Szabályok aktívak",                                    # Rules active
+        35: "Szabályok ellenőrzése...",                             # Checking rules...
+        36: "Szabályok jelen vannak",                               # Rules in place
+        37: "Szabályok jelen vannak, de nem aktívak",               # Rules in place, not active
+        38: "Nincsenek szabályok",                                  # Rules not in place
+        39: "Szabályok eltávolítása...",                            # Removing rules...
+        40: "Szabályok sikeresen eltávolítva",                      # Rules successfully removed
+        41: "Csomagszűrő kikapcsolva, mint korábban",               # Packet filter off, as before
+        42: "Kész, nem aktív - lásd a logot",                       # Done, not active - see log
+        43: "Sikertelen - lásd a logot",                            # Failed - see log
+        44: "CarPlay-kompatibilitás",                               # CarPlay compatibility
+        45: "Verzió",                                               # Version
+        46: "Navigációs utasítások távolságtól függetlenül",        # Show directions at any distance
+        47: "Naplózás kikapcsolása (teljesítményteszt)",            # Disable logging (performance test)
+        48: "Navigációs hangok a rádión (BT, béta)",                # Prompts on car radio (BT, beta)
+        # 320-338: állapotsorok (belépő sor és Start sor), rhmiapp-98 / rhmiapp-100
+        320: "Android Auto",                                        # Android Auto
+        321: "Csatlakozás a telefonhoz...",                         # Connecting to the phone...
+        322: "Csatlakoztatva",                                      # Connected
+        323: "Várakozás a telefonra",                               # Waiting for the phone
+        324: "Android Auto: nincs Wi-Fi Direct, használj USB csatlakozást",    # Android Auto: no Wi-Fi Direct, use USB
+        325: "Android Auto: nincs CarPlay-hálózat, Wi-Fi Direct használata",  # Android Auto: no CarPlay network, using Wi-Fi Direct
+        326: "Várakozás a telefonra CarPlay Wi-Fi-n",               # Waiting for phone on CarPlay Wi-Fi
+        327: "Nincs CarPlay: kapcsold be a WiFi Directet",          # No CarPlay: enable WiFi Direct
+        328: "Nincs CarPlay és WiFi Direct: használj USB csatlakozást",        # No CarPlay or WiFi Direct: use USB
+        329: "Csatlakoztatva Wi-Fi-n",                              # Connected over Wi-Fi
+        330: "Csatlakoztatva USB-n",                                # Connected over USB
+        331: "Csatlakozás a telefonhoz...",                         # Connecting to the phone...
+        332: "Várakozás a telefonra USB-n",                         # Waiting for phone over USB
+        333: "Várakozás: CarPlay Wi-Fi",                            # Waiting: CarPlay Wi-Fi
+        334: "Nincs CarPlay: kapcsold be a WiFi Directet",          # No CarPlay: enable WiFi Direct
+        335: "Várakozás a telefonra Wi-Fi Directen",                # Waiting for phone on Wi-Fi Direct
+        336: "Nincs Bluetooth: töröld a telefont az autóban, párosítsd újra",  # No Bluetooth link: forget phone in car, pair again
+        337: "Telefon nincs Wi-Fi-n: töröld az autóban, párosítsd újra",       # Phone not on Wi-Fi: forget phone in car, pair again
+        338: "Az autó elutasítja a telefont: lásd coding-requirements.md (GitHub)",  # Car refused phone: see coding-requirements.md (GitHub)
+        # 400-407: műszerfal típusa (sor, oldalcím, három választás) és a 6WA HUD cirill opció
+        400: "Műszerfal típusa",                                    # Gauge cluster type
+        404: "Supra (J29)",                                         # Supra (J29)
+        405: "F-széria (6WA)",                                      # F-series (6WA)
+        406: "6WB (még nem támogatott)",                            # 6WB (no driver yet)
+        407: "Cirill betűs utcanevek a HUD-on",                     # Cyrillic street names in HUD
+    },
 }
 LANG_TEXTS["es-US"] = LANG_TEXTS["es-ES"]
 LANG_TEXTS["fr-CA"] = LANG_TEXTS["fr-FR"]
