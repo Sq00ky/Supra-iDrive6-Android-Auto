@@ -160,17 +160,33 @@ inline std::vector<uint8_t> addCircle(uint16_t h, uint16_t index, PolyType type,
     return p;
 }
 
-// The firmware's text format: handle, 00, UTF-16BE characters, 00 00. Empty when the text is longer than kMaxTextChars
-// or not plain printable ASCII; which characters a cluster's font can show is its driver's business. An empty string is
-// a valid call: it clears the text.
+// The firmware's text format: handle, 00, UTF-16BE characters, 00 00. `s` is UTF-8 (ASCII, or the BMP code points
+// toClusterText let through, e.g. Cyrillic): it is decoded to UTF-16BE here. Empty (an invalid call the caller drops)
+// when longer than kMaxTextChars code points, or malformed / non-BMP UTF-8. An empty string is a valid call: it clears
+// the text. Which characters the cluster's font can actually show is its driver's business.
 inline std::vector<uint8_t> setText(uint16_t h, const char* s) {
     std::vector<uint8_t> p;
-    size_t n = strlen(s);
-    if (n > kMaxTextChars) return p;
-    for (size_t i = 0; i < n; ++i) if (s[i] < 0x20 || s[i] >= 0x7f) return p;
+    std::vector<uint16_t> units;                      // UTF-16 code units (BMP only)
+    size_t i = 0, n = strlen(s);
+    while (i < n) {
+        unsigned char c = (unsigned char)s[i];
+        uint32_t cp;
+        size_t k = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 0;
+        if (k == 0 || i + k > n) return std::vector<uint8_t>();        // non-BMP (4-byte) or truncated: refuse
+        cp = k == 1 ? c : k == 2 ? (c & 0x1Fu) : (c & 0x0Fu);
+        for (size_t j = 1; j < k; ++j) {
+            unsigned char cc = (unsigned char)s[i + j];
+            if ((cc & 0xC0) != 0x80) return std::vector<uint8_t>();    // bad continuation: refuse
+            cp = (cp << 6) | (cc & 0x3Fu);
+        }
+        if (cp < 0x20) return std::vector<uint8_t>();                  // a control character
+        units.push_back((uint16_t)cp);
+        i += k;
+    }
+    if (units.size() > kMaxTextChars) return p;
     putBe16(p, h);
     p.push_back(0x00);
-    for (size_t i = 0; i < n; ++i) { p.push_back(0); p.push_back((uint8_t)s[i]); }
+    for (size_t u = 0; u < units.size(); ++u) { p.push_back((uint8_t)(units[u] >> 8)); p.push_back((uint8_t)units[u]); }
     p.push_back(0); p.push_back(0);
     return p;
 }
@@ -180,7 +196,8 @@ inline std::vector<uint8_t> setText(uint16_t h, const char* s) {
 // the characters in `punct` are kept; a comma becomes a dot when commaToDot (a decimal comma in a distance); anything
 // else becomes a space. Runs of spaces become one, the ends are trimmed, and the result is cut to maxChars.
 // Which characters a cluster's font has is its profile's business: a comma made the 6WA show nothing at all.
-inline std::string toClusterText(const std::string& utf8, const char* punct, size_t maxChars, bool commaToDot) {
+inline std::string toClusterText(const std::string& utf8, const char* punct, size_t maxChars, bool commaToDot,
+                                 bool unicode = false) {
     // U+00C0..U+017F, one entry per code point.
     static const char* const kLatin =
         "A|A|A|A|Ae|A|AE|C|E|E|E|E|I|I|I|I|D|N|O|O|O|O|Oe| |O|U|U|U|Ue|Y|Th|ss|"
@@ -210,6 +227,9 @@ inline std::string toClusterText(const std::string& utf8, const char* punct, siz
             const char* p = kLatin;
             for (uint32_t n = cp - 0xC0; n; --n) p = strchr(p, '|') + 1;
             while (*p && *p != '|') raw.push_back(*p++);
+        } else if (unicode && cp >= 0x0400 && cp <= 0x04FF) {
+            raw.push_back((char)(0xC0 | (cp >> 6)));                   // Cyrillic kept as UTF-8 (2 bytes), re-decoded
+            raw.push_back((char)(0x80 | (cp & 0x3F)));                 // to UTF-16BE in setText; NBT_HUD_CYRILLIC
         } else {
             raw.push_back(' ');
         }
@@ -219,7 +239,14 @@ inline std::string toClusterText(const std::string& utf8, const char* punct, siz
         if (raw[j] == ' ' && (out.empty() || out[out.size() - 1] == ' ')) continue;
         out.push_back(raw[j]);
     }
-    if (out.size() > maxChars) out.resize(maxChars);
+    // cut to maxChars CODE POINTS (not bytes: a Cyrillic letter is 2 UTF-8 bytes)
+    size_t cps = 0, pos = 0;
+    while (pos < out.size()) {
+        if (cps == maxChars) { out.resize(pos); break; }
+        unsigned char c = (unsigned char)out[pos];
+        pos += c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : 1;
+        cps++;
+    }
     while (!out.empty() && out[out.size() - 1] == ' ') out.resize(out.size() - 1);
     return out;
 }

@@ -155,6 +155,24 @@ int main() {
         CHECK(line.find("12s/200s") != std::string::npos);
     }
 
+    // The cluster's line: the song title alone, and only while it plays.
+    {
+        MediaState st;
+        CHECK(mediaClusterLine(st).empty());                 // nothing known yet
+        st.song = "Example Song";
+        st.artist = "Sample Artist";
+        st.album = "Sample Album";
+        st.state = 2;
+        CHECK(mediaClusterLine(st) == "Example Song");
+        st.state = 3;
+        CHECK(mediaClusterLine(st).empty());                 // paused
+        st.state = 1;
+        CHECK(mediaClusterLine(st).empty());                 // stopped
+        st.state = 2;
+        st.song.clear();
+        CHECK(mediaClusterLine(st).empty());                 // playing, no title: nothing rather than the artist
+    }
+
     if (fails) { printf("%d check(s) failed\n", fails); return 1; }
     printf("test_media_state: all checks passed\n");
     return 0;

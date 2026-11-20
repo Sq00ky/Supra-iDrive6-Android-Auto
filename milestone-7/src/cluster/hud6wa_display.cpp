@@ -5,11 +5,26 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>   // getenv (NBT_HUD_CYRILLIC)
+#include <string.h>   // strcmp
+
+#include "nbt_paths.hpp"
 
 namespace nbt {
 namespace kombinav {
 
 using namespace hudterm;
+
+// NBT_HUD_CYRILLIC: keep Cyrillic street names (sent as UTF-16BE) instead of blanking them. Off unless set to a
+// non-"0" value, since it needs the cluster font to carry the glyphs.
+static bool hudCyrillicEnabled() {
+    // The Settings checkbox writes <data dir>/hud-cyrillic. The env var wins when set, so a hand-set
+    // NBT_HUD_CYRILLIC=0 turns it off even with the box ticked (and =1 turns it on without the box).
+    const char* e = getenv("NBT_HUD_CYRILLIC");
+    if (e && *e)
+        return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
+    return nbt::flagSet(nbt::kHudCyrillicFlagName);
+}
 
 const char* hudUnitText(int aa_unit) {
     switch (aa_unit) {
@@ -26,7 +41,7 @@ const char* hudUnitText(int aa_unit) {
 // then, rather than a character its font may not have.
 HudTexts hudTexts(const NavView& v, const HudProfile& p) {
     HudTexts t;
-    t.street = toClusterText(v.road, p.streetPunct, p.streetChars, false);
+    t.street = toClusterText(v.road, p.streetPunct, p.streetChars, false, hudCyrillicEnabled());
     if (v.dist_text != "-") t.distance = toClusterText(v.dist_text, ".", p.distanceChars, true);
     if (!t.distance.empty()) t.unit = hudUnitText(v.aa_unit);
     return t;
@@ -65,7 +80,7 @@ Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
     : port_(port), p_(p), base_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
       redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), has_layout_(false),
       near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
-      route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false) {}
+      route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false), idle_(false), idle_t_(0) {}
 
 void Hud6waDisplay::log(const char* fmt, ...) {
     char buf[320];
@@ -419,12 +434,81 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     epoch_ = e;
     shown_ = t;
     near_shown_ = junction;
+    idle_ = false;                                    // the maneuver's street text has replaced the idle text
     if (emptyRoute) route_dirty_ = false;
     if (!junction) stage_shown_ = 0;
     else if (!routeInOverlay()) stage_shown_ = stage_;
     r = sendRoute();
     if (r != kOk) return r;
     return sendLanes(v);
+}
+
+// ---- the idle text ("now playing") ----
+
+std::string Hud6waDisplay::idleText(const std::string& utf8) const {
+    return toClusterText(utf8, p_.streetPunct, p_.streetChars, false);
+}
+
+// Full: everything we show while idle. The picture buffers, and a route or lane layer a maneuver may have left, are
+// emptied so that nothing is left under the text.
+Batch Hud6waDisplay::idleBatch(const std::string& line) const {
+    Batch b("media", true, kSlotMain);
+    b.add(kRemoveAllItems, removeAllItems(p_.bufA));
+    b.add(kRemoveAllItems, removeAllItems(p_.bufB));
+    if (route_dirty_ && routeInOverlay()) {
+        b.add(kRemoveAllItems, removeAllItems(p_.routeA));
+        b.add(kRemoveAllItems, removeAllItems(p_.routeB));
+    }
+    if (lanes_dirty_ && p_.laneA && p_.laneB) {
+        b.add(kRemoveAllItems, removeAllItems(p_.laneA));
+        b.add(kRemoveAllItems, removeAllItems(p_.laneB));
+    }
+    if (fresh_) {
+        b.add(kSetVisibility, setVisibility(p_.street, true));
+        b.add(kSetVisibility, setVisibility(p_.distance, true));
+        b.add(kSetVisibility, setVisibility(p_.unit, true));
+    }
+    b.add(kTextareaSetText, setText(p_.street, line.c_str()));
+    b.add(kTextareaSetText, setText(p_.distance, ""));
+    b.add(kTextareaSetText, setText(p_.unit, ""));
+    b.add(kSetVisibility, setVisibility(p_.frame, true));
+    return b;
+}
+
+ClusterDisplay::Result Hud6waDisplay::showIdleText(const std::string& line, double now) {
+    uint32_t e;
+    Result r = health(&e);
+    if (r != kOk || port_.status() == kNavActive || line.empty()) return r;
+    const bool whole = !idle_ || redraw_;
+    const bool changed = !whole && line != shown_.street;
+    const bool refresh = !whole && !changed && s_.media_refresh_s > 0 && now - idle_t_ >= s_.media_refresh_s;
+    if (!whole && !changed && !refresh) return kOk;
+    // Like a maneuver, the whole picture is built on what the batches before it leave: it waits for the queue.
+    if (whole && !shadow_ && port_.waiting(kSlotMain)) return kOk;
+    Batch b = whole ? idleBatch(line) : Batch(changed ? "media-text" : "media-refresh");
+    if (changed) b.add(kTextareaSetText, setText(p_.street, line.c_str()));
+    if (!whole) b.add(kSetVisibility, setVisibility(p_.frame, true));
+    if (refresh) log("MEDIA panel on again%s", shadow_ ? " (shadow: not sent)" : "");
+    else log("MEDIA '%s' | %u calls%s", line.c_str(), (unsigned)b.calls.size(), shadow_ ? " (shadow: not sent)" : "");
+    SubmitResult sr;
+    bool ok = submit(b, &sr);
+    sent_any_ = true;
+    if (!ok) return sr == kRefused ? kInternal : health(NULL);
+    if (whole) {
+        fresh_ = false;
+        redraw_ = false;
+        held_ = false;
+        epoch_ = e;
+        shown_ = HudTexts();
+        route_dirty_ = false;
+        lanes_dirty_ = false;
+        near_shown_ = false;
+        stage_shown_ = 0;
+    }
+    shown_.street = line;
+    idle_ = true;
+    idle_t_ = now;
+    return kOk;
 }
 
 ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
@@ -524,6 +608,7 @@ void Hud6waDisplay::forget() {
     lanes_shown_.clear();
     lane_visible_ = p_.laneB;
     lanes_dirty_ = false;
+    idle_ = false;
 }
 
 } // namespace kombinav

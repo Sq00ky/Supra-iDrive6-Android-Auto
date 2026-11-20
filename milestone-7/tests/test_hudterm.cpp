@@ -65,7 +65,10 @@ static void testText() {
     assert(payloadShapeOk(kTextareaSetText, setText(2, s32.c_str())));
     std::string s33(kMaxTextChars + 1, 'A');
     assert(setText(2, s33.c_str()).empty());
-    assert(setText(2, "caf\xc3\xa9").empty());                            // not ASCII
+    // setText now decodes UTF-8 (BMP) to UTF-16BE, so a non-ASCII name is encoded, not refused.
+    assert(bytesAre(setText(2, "caf\xc3\xa9"), "00 02 00 00 63 00 61 00 66 00 e9 00 00"));   // "cafe" with U+00E9
+    assert(bytesAre(setText(2, "\xd0\xa2"), "00 02 00 04 22 00 00"));                         // Cyrillic T (U+0422)
+    assert(setText(2, "a\xf0\x9f\x98\x80").empty());                     // non-BMP (4-byte) is refused
     assert(setText(2, "a\tb").empty());                                   // control character
 
     std::vector<uint8_t> t = setText(4, "mi");

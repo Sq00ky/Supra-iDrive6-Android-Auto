@@ -46,7 +46,9 @@ inline uint32_t rgba(int r, int g, int b, int a) {
     return ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
 }
 
-// Volume ramp: four stops for a smooth sweep - deep green -> lime -> amber -> red.
+// The level drives both length and colour: green at 0 %, lime at 35, amber at 70, red at 100, interpolated.
+// Restored from before the favourites PR (rhmiapp-100) - the bar must not be a flat colour, and it stays
+// independent of the favourite-bar colour preference.
 inline void ramp(int pct, int* r, int* g, int* b) {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
@@ -233,9 +235,11 @@ void drawBar(Canvas& cv, int x0, int x1, int y, int h, int pct) {
 
     for (int i = 0; i < fillW; ++i) {
         const int t = fillW > 1 ? i * 255 / (fillW - 1) : 255;
-        const uint32_t col = rgba(rr + (lr - rr) * t / 255,
-                                  gg + (lg - gg) * t / 255,
-                                  bb + (lb - bb) * t / 255, 0xFF);
+        // Same verified BGRA display packing as the favourite strip/picker.
+        const uint32_t col = 0xff000000u |
+            ((uint32_t)(rr + (lr - rr) * t / 255) << 16) |
+            ((uint32_t)(gg + (lg - gg) * t / 255) << 8) |
+            (uint32_t)(bb + (lb - bb) * t / 255);
         int inset = 0;
         if (i < r) {
             const int dy = r - i;

@@ -17,7 +17,7 @@ typedef void (*Handler)(const View& m, void* user);
 
 class Router {
 public:
-    enum { kMaxRoutes = 16 };
+    enum { kMaxRoutes = 18 };   // HUD 2 + knob 3 + favourites 1 + activity 4 + volume 1 + GPS 3 + vehicle 4
 
     Router() : n_(0) {}
 

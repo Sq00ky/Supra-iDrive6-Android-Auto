@@ -6,8 +6,8 @@
 // (hudterm_shapes.hpp drawShape). Same picture model: convex polygons with a colour index, in the profile's glyph box.
 //
 // The glyph is chosen by the kombiDirection() family, so the Mapbox path reads a maneuver exactly like the parametric
-// one (left variants are the right glyph mirrored). Families with no static glyph (roundabouts) return false and the
-// caller falls back to the parametric shape; ferry/unknown fold to the straight glyph via kombiDirection.
+// one (left variants are the right glyph mirrored). Roundabouts are drawn from their exit angle;
+// ferry/unknown fold to the straight glyph via kombiDirection.
 //
 // Opt-in: NBT_HUD_GLYPHS=1 (on / yes / true) in nbt-aad.env draws these; unset or off keeps the parametric shapes, the
 // default look on every 6WA.
@@ -89,13 +89,18 @@ inline P16 polar(P16 c, int deg, int r, int w) {
     return { c.x + (r * isin(deg) + w * isin(deg + 90)) / 4096,
              c.y - (r * icos(deg) + w * icos(deg + 90)) / 4096 };
 }
-inline int arcDeg(int e) { int A = 180 - e; while (A <= 0) A += 360; while (A > 360) A -= 360; return A < 60 ? 60 : A > 300 ? 300 : A; }
 inline P16 centre(int A) { return { 256 + 96 * isin(A - 180) / 4096, 256 + 80 * icos(A - 180) / 4096 }; }
 
 // one convex piece (Mapbox-512 points) -> an Item in the glyph box
 inline void piece(const P16* p, unsigned n, uint8_t colour, bool mir, const Rect& box, Picture& pic) {
     std::vector<Point> q;
     for (unsigned j = 0; j < n; j++) q.push_back(mbxPoint(boxX(p[j].x), boxY(p[j].y), mir, box));
+    long area = 0;
+    for (unsigned j = 0; j < n; j++) {
+        const Point& prev = q[j ? j - 1 : n - 1];
+        area += (long)prev.x * q[j].y - (long)q[j].x * prev.y;
+    }
+    if (!area) return;   // a short arc can flatten to a line in the measured pixel box
     Item it; it.colour = colour; it.poly = shapes::poly(q); pic.push_back(it);
 }
 inline void rect(int x0, int y0, int x1, int y1, uint8_t col, bool mir, const Rect& box, Picture& pic) {
@@ -121,7 +126,7 @@ inline void arc(P16 c, int r, int w, int a0, int a1, uint8_t col, bool mir, cons
 // angle. clockwise (left-hand-traffic roundabout) mirrors the whole thing.
 inline void mbxRoundabout(int exit, bool clockwise, const HudProfile& prof, Picture& pic) {
     bool mir = clockwise;
-    int A = rb::arcDeg(exit), out = 180 - A;
+    int A = exit, out = 180 - A;   // AA already gives degrees travelled from the entry (180 = straight), unlike CarPlay
     rb::P16 c = rb::centre(A);
     rb::arc(c, rb::kRadius, rb::kWidth, out, -180, prof.road, mir, prof.glyph, pic);   // the part not driven
     rb::arc(c, rb::kRadius, rb::kWidth, 180, out, prof.fill, mir, prof.glyph, pic);    // the way round

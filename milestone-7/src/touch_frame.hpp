@@ -84,7 +84,7 @@ inline int parseTouchStream(const TouchMsg& m, TouchContact* out, int max, int* 
 // record resynchronises.
 class TouchReassembler {
 public:
-    TouchReassembler() : open_(false), lastSeq_(0), dropped_(0) { cur_.recs = 0; }
+    TouchReassembler() : open_(false), lastSeq_(0), dropped_(0) { cur_.recs = 0;cur_.seq0=cur_.seq1=0; }
 
     // Feeds one datagram. Returns the number of messages it completed (written to out, at most maxMsgs), or -1 if
     // the datagram is not a touch PDU.

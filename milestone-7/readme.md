@@ -1,5 +1,9 @@
 # NBT-AAD: native wireless Android Auto for NBT Evo (ID6) head units
 
+**BMW Favorite Keys:** native 1–8 previews over Android Auto, a visibility toggle,
+ambient/preset/custom colours, matching volume colour and an Android Auto menu icon.
+See [features, implementation, validation and update/restore instructions](FAVOURITE-KEYS.md).
+
 Wireless Android Auto running natively on the BMW NBT Evo ID6 head unit, as fitted to the Toyota GR Supra (J29)
 and several BMWs. A daemon on the head unit (`/opt/aa/nbt-aad`) speaks the Android Auto protocol directly. A native
 iDrive app (`NbtAad`) adds an **Android Auto** entry to the Media/Radio menu. You don't need a dongle, a phone-side
@@ -7,6 +11,61 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.116 / rhmiapp-93: song title in the cluster, native-audio track list behind one setting.**
+> - **Song title in gauge cluster** (PR #288, @bejusxd, opt-in): while no turn is shown, the song the phone plays is
+>   shown in the cluster's navigation area. Which way follows the **Gauge cluster** setting:
+>   - `6wa` (BMW F-series, MOST HUDTerminal): the 6WA's street line (PR #288).
+>   - `j29` (Toyota GR Supra, Ethernet SOME/IP KOMBI): the title as the road name of a guidance panel of our own, with
+>     no arrow and no distance (direction 0, car-verified on the J29). It also shows in the HUD. A real Android Auto
+>     turn replaces it; it is cancelled when playback stops. Tuning: `NBT_KOMBI_MEDIA_DIR`, `_DIST`, `_UNIT`,
+>     `_CHARS`, and the search mode `NBT_KOMBI_MEDIA_CYCLE=dir|unit`.
+>   - `6wb`: no driver yet, nothing is shown.
+>   `NBT_KOMBI_MEDIA` belongs to this feature.
+> - **Native Functionality Media Controls Restore (beta)** (the old "Media Controls for LCI Steering Wheels") now also
+>   turns on, in native audio mode, the Android Auto track title in the J29 cluster's track list and the thumb-wheel
+>   press on Previous / Next title (branch `feat/native-audio-kombi-media`, car-confirmed). Its env override is
+>   `NBT_KOMBI_TRACKS` (was `NBT_KOMBI_MEDIA`, now PR #288's).
+> - The Android Auto row says "Waiting for Bluetooth device" while no phone is connected over Bluetooth: the car's
+>   device list is now always read (it was only with `NBT_BT_TRACE=1`).
+> - "Android Auto over USB" is no longer marked beta.
+>
+> **v1.9.115 / rhmiapp-92: the Android Auto row says what to fix, in order.** While waiting for a phone the row
+> picks the first that applies:
+> 1. "Car refused phone: see coding-requirements.md (GitHub)": 5 ServiceRequestErrors in a row (the car turning the
+>    phone's Android Auto link down). Reset when the car accepts a link or a session starts.
+> 2. "Phone not on Wi-Fi: forget phone in car, pair again": the phone took the Wi-Fi details and has not connected
+>    20 s later (working phones connect within 14 s). Shown over "Connecting to the phone..." while it keeps retrying.
+>    "No Bluetooth link: forget phone in car, pair again": on Bluetooth for 90 s without opening the link.
+> 3. "No usable Wi-Fi in car: use USB": no CarPlay hotspot config, or Use WiFi Direct Network with no address on wfd0.
+> 4. "Can't use WiFi Direct: set SSID name manually": Wi-Fi Direct is up and the passphrase is fine, but the group
+>    name was not found (`NBT_WFD_SSID=DIRECT-...` in nbt-aad.env pins it).
+> 5. "Waiting for Bluetooth device": no phone connected over Bluetooth (the car's device list is now always read;
+>    before, only with `NBT_BT_TRACE=1`, so the row stayed on "Waiting: CarPlay Wi-Fi").
+>
+> The row and its hint are refreshed every second (they used to change only with the menu state). Hungarian
+> translations (PR #291).
+>
+> **v1.9.114-status / rhmiapp-89-status: Gesture Control after a move to NBTApps, the favourite bar in nbt-aad only,
+> and a status row that says why the phone is stuck.**
+> - Gesture Control under Android Auto (issue #281): the touch controller's learned address (`touch-peer`) is kept in
+>   the data dir, which for an NBTApps install is `/var/opt/nbtapp/data/com.github.sq00ky.android-auto`. A car moved
+>   from a hand install had none there, so gestures were swallowed until the screen was touched once. A package
+>   install now takes `/var/opt/aa/touch-peer` and copies it over.
+> - The favourite bar's files (`favourite-bar.disabled`, `-colour`, `-custom`) and the Car manufacturer choice
+>   (`vehicle`) were always at `/var/opt/aa`, which nothing creates on a fresh NBTApps install. They now live in the
+>   install's data dir (unchanged on a hand install; a car moved to NBTApps sets them again once).
+> - The favourite bar is built into nbt-aad only: the `nbt-aa-favourites` helper, its launch from `/opt/aa` and
+>   `NBT_FAVOURITE_INPROC=0` are gone; the favourites updater ships nbt-aad and the plugin and keeps an old helper in
+>   its backup.
+> - The Android Auto row's waiting text names the network nbt-aad really offers ("Waiting for phone on Wi-Fi Direct"
+>   with Use WiFi Direct Network on a CarPlay car, where it used to say "CarPlay Wi-Fi"), and says why a phone is stuck:
+>   "No Bluetooth link: forget phone in car, pair again" (the phone is connected over Bluetooth but has not opened the
+>   Android Auto link for 90 s), "Phone not on Wi-Fi: forget phone in car, pair again" (it took the Wi-Fi details and
+>   never joined; shown for 10 minutes or until a session starts), and "Car refused phone: see coding-requirements.md
+>   (GitHub)" (5 ServiceRequestErrors in a row, the car turning the link down; the log line points there too). The
+>   daemon writes these to `/dev/shmem/nbt-aad-hint` ("net|hint", `src/status_hint.hpp`), next to the unchanged
+>   `/dev/shmem/nbt-aad-status`, so an older iDrive app is not confused by a newer daemon.
+>
 > **v1.9.88-autors / rhmiapp-68-autors: Settings changes apply at once.** The app notes every Settings
 > checkbox when the Settings page opens and compares when you go back to the Android Auto main page (Start / Force Stop
 > / Restart / Settings / About). If any checkbox changed and nbt-aad is running, it restarts nbt-aad, the same as the
@@ -258,7 +317,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > Unset, nothing changes. `NBT_RX_TIMEOUT_S` defaults to 5 s (was 2), so short wireless gaps no longer end the
 > session. New log line every 5 s: `[VideoRate] phone frames=N in 5.0 s (30.2 fps), requested=30 fps, decoder 60 fps`.
 >
-> **v1.9.33-usbset + rhmiapp-40-usb (not car-verified): an Android Auto over USB (beta) checkbox.** The Settings page
+> **v1.9.33-usbset + rhmiapp-40-usb (not car-verified): an Android Auto over USB checkbox.** The Settings page
 > has a seventh checkbox that turns on Android Auto over USB (`NBT_USB`, still experimental) without editing
 > `nbt-aad.env`. It writes `/var/opt/aa/usb-aa`, which the daemon reads when it starts, so press **Restart** after
 > changing it. A set `NBT_USB` in `nbt-aad.env` wins either way (`NBT_USB=0` keeps it off). Daemon log at start:
@@ -272,6 +331,44 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > **v1.9.34-driverside (not car-verified): `NBT_DRIVER_SIDE` tells Android Auto which side the driver sits on.** It was
 > always told left, and still is unless `NBT_DRIVER_SIDE=right` is in `nbt-aad.env`: nothing reads it from the car. Log,
 > per connection: `[SDR] driver's side: right (NBT_DRIVER_SIDE)`.
+>
+> **v1.9.61-kombimedia (title and thumb-wheel press confirmed on the car, GR Supra, 2026-11-10;
+> off unless `NBT_KOMBI_TRACKS=1` is in `nbt-aad.env`): the Android Auto
+> track title in the instrument cluster's track list (GR Supra).** With the phone's music on the car's own audio source
+> (Use Native Audio), the list the thumb wheel brings up - Previous title / the track / Next title - kept showing the
+> last Bluetooth track. iDrive re-sends that list to the KOMBI on every thumb-wheel step (SOME/IP service `0xB00E`, the
+> sibling of the route-guidance service, same host and port), so a title sent on our own schedule would be overwritten
+> exactly when the driver looks. The daemon therefore listens to iDrive's own requests to the KOMBI on `vlan73` (a
+> receive-only BPF tap, the way `tcpdump` sees them; nothing is hooked or patched) while Android Auto is playing, and
+> answers each of iDrive's lists with the same list whose middle row names a text model of our own holding the
+> phone's song title. iDrive's own text models are never written (it remembers which one holds which Bluetooth title),
+> the handle and the list are taken from what iDrive just sent, and any other list is left alone. A new title while
+> the list is up is sent at once. Not in Bluetooth audio mode, where the car shows the phone's track itself. Car
+> findings behind it (2026-11-10): the capture decoded in `src/cluster/ric_list.hpp`, and `tools/ricprobe` changing
+> each row from a second connection. Log: `[KombiMedia] track title in the cluster list: on ...`,
+> `[KombiMedia] iDrive's track list seen: handle 0x64, ...`, `[KombiMedia] cluster list: '<title>' ...`,
+> `[KombiMedia] the KOMBI did not take the title: ...`. v1.9.58 never saw a packet on the car: it checked each BPF
+> record's header against `sizeof(struct bpf_hdr)` (20) where the kernel writes 18 bytes, so every record was dropped.
+> v1.9.59 takes the length from the record (host-tested now) and says what the capture sees:
+> `[KombiMedia] the capture works: first packet to the KOMBI seen`, or after 30 s without one
+> `[KombiMedia] no packet to the KOMBI seen on vlan73 ...`. v1.9.59 on the car: the capture works, the KOMBI answers
+> E_OK to our text, list and commit, and the display keeps iDrive's title - a list from a second client is not what
+> the cluster draws. v1.9.60 therefore does the one thing `tools/ricprobe` showed on the display: the title is
+> written into the text model iDrive's own list names for the middle row (mode `slot`, the default), when the title
+> changes rather than when the driver looks. iDrive remembers that model as the text of its last Bluetooth track,
+> so that one track shows the last Android Auto title if it comes back over Bluetooth before the head unit restarts.
+> `NBT_KOMBI_TRACKS_MODE=list` is the v1.9.59 way, now with iDrive's three value frames replayed after the list.
+> v1.9.60 on the car (2026-11-10): the list shows the Android Auto title and follows every skip.
+> v1.9.61: pressing the thumb wheel on "Previous title" / "Next title" skips on the phone. iDrive's own skip from that
+> list goes to its Bluetooth player, which is not what is playing. Each of iDrive's groups to the KOMBI carries the
+> list's cursor (value model `0x71`: row 0 or row 2, the track's own row is not selectable), so a press of the wheel
+> (MOST 15/02 fkt `C31`) is turned into Android's previous / next key for the row the cursor is on - only while the list
+> was already on the display for 300 ms, so the press that brings the list up skips nothing. The wheel's rotation is not
+> mapped to anything: it moves iDrive's cursor. Needs "Native Functionality Media Controls Restore" like the skip buttons.
+> `NBT_KOMBI_TRACKS_PRESS=0` turns it off, `=<fkt[:value]>` names another function. Log:
+> `[Media] thumb-wheel press on Next title -> AA key 87`, or `[KombiMedia] thumb-wheel press: nothing sent (<why>)`.
+> v1.9.61 on the car (2026-11-10): eight presses on "Next title" and four on "Previous title" each skipped on the
+> phone, and the list showed the new title.
 >
 > **v1.9.57-cpcompat + rhmiapp-54-cpcompat (CarPlay fixes from v1.9.48-v1.9.50, good feedback from the #156 testers;
 > the checkbox confirmed on the car on this build): Settings checkbox "CarPlay compatibility", off by default.** For cars that use
@@ -305,7 +402,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > **v1.9.53-fixes + rhmiapp-53-edrive-fixes (not car-verified; includes rhmiapp-51-edrive): fixes from a code review.**
 > - **Use Native Audio instead of Bluetooth** did nothing on a car without `/opt/aa/nbt-aad.env`: the iDrive app added
 >   `NBT_AUDIO_BT=1` to the daemon's environment in that case, and that setting outranks the checkbox (the log said
->   `audio mode: bt (... from nbt-aad.env)` with no such file). **Media Controls for LCI Steering Wheels** was dead with
+>   `audio mode: bt (... from nbt-aad.env)` with no such file). **Native Functionality Media Controls Restore** was dead with
 >   it. The app no longer adds it; Bluetooth is still the default.
 > - A session whose encrypted stream breaks ends: 16 frames in a row that do not decrypt
 >   (`encrypted frames in a row could not be decrypted: the encrypted stream is broken`). Before, only a session that
@@ -341,7 +438,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > **v1.9.42-audio-lci + rhmiapp-45-audio-lci (not car-verified): two more Settings checkboxes.** **Use Native Audio
 > instead of Bluetooth** (`/var/opt/aa/native-audio`) is browser audio mode from the menu: Android Auto sound comes over
 > the Android Auto connection and plays through the car's own audio instead of Bluetooth A2DP. `NBT_AUDIO_MODE` /
-> `NBT_AUDIO_BT` in `nbt-aad.env` still win. **Media Controls for LCI Steering Wheels** (`/var/opt/aa/lci-media`,
+> `NBT_AUDIO_BT` in `nbt-aad.env` still win. **Native Functionality Media Controls Restore** (`/var/opt/aa/lci-media`,
 > `NBT_LCI_MEDIA=1|0` wins) gates the steering-wheel previous / next from v1.9.38-media: off by default, and still only
 > in a non-Bluetooth audio mode. Both are read when the daemon starts, so press **Restart** after changing them. Log:
 > `[Main] audio mode: browser (...; Use Native Audio instead of Bluetooth is on)`, `[Media] steering-wheel media keys: on`.
@@ -721,7 +818,7 @@ Bluetooth reconnect.
 | Show directions at any distance (checkbox) | Off by default. When ticked the next maneuver appears as soon as the phone reports it, instead of only inside the last mile (or the last few seconds) - the same as `NBT_KOMBI_NAV_APPROACH=off`. Stored as `/var/opt/aa/kombi-nav-anydist` (a hand-made `/opt/aa/kombi-nav-anydist` also counts); `NBT_KOMBI_NAV_APPROACH` or `NBT_KOMBI_NAV_APPROACH_MI` in `nbt-aad.env` win over the checkbox. Applies at the next Start / Restart |
 | Disable logging (performance test) (checkbox) | Off by default. Silences every log sink while it is ticked: the daemon stops writing its RAM log and the USB log and sends stdout/stderr to `/dev/null`, the iDrive app returns from `alog()` before formatting, so nothing reaches `/dev/shmem/nbt-aad-app.log` or slog. Stored as `/var/opt/aa/no-log` (a hand-made `/opt/aa/no-log` also counts); `NBT_NO_LOG=1` in `nbt-aad.env` wins over the checkbox. Applies at the next Start / Restart. For a performance A/B only - a run with it on leaves no log to read |
 | Version (row, on the Android Auto page) | Opens a page with two labels: the daemon build, read from the `NBT-AAD-VERSION=` tag inside `/opt/aa/nbt-aad` (no daemon needed), and the iDrive app's compile-time version. Both are filled when the page opens |
-| Android Auto over USB (beta) (checkbox) | Off by default. When ticked, an Android phone plugged into the car's USB port gets Android Auto over the cable, next to wireless. Experimental, not car-verified: see `NBT_USB` (the same switch; a set `NBT_USB` in `nbt-aad.env` wins either way). The phone stays in accessory mode, so iDrive's own USB media doesn't see it until it is replugged. Stored as `/var/opt/aa/usb-aa` (a hand-made `/opt/aa/usb-aa` also counts); the daemon reads it when it starts, so use **Restart** after changing it | While it is ticked the wireless path is **not offered at all** - no Bluetooth Android Auto advert, no Wi-Fi credentials, and the session starter refuses a TCP connection (`refusing the wireless connection ... Android Auto over USB is selected`) - so a phone that was paired for wireless cannot take the session instead of the cable.
+| Android Auto over USB (checkbox) | Off by default. When ticked, an Android phone plugged into the car's USB port gets Android Auto over the cable, next to wireless. Experimental, not car-verified: see `NBT_USB` (the same switch; a set `NBT_USB` in `nbt-aad.env` wins either way). The phone stays in accessory mode, so iDrive's own USB media doesn't see it until it is replugged. Stored as `/var/opt/aa/usb-aa` (a hand-made `/opt/aa/usb-aa` also counts); the daemon reads it when it starts, so use **Restart** after changing it | While it is ticked the wireless path is **not offered at all** - no Bluetooth Android Auto advert, no Wi-Fi credentials, and the session starter refuses a TCP connection (`refusing the wireless connection ... Android Auto over USB is selected`) - so a phone that was paired for wireless cannot take the session instead of the cable.
 | Prompts on car radio (BT, beta) (checkbox) | Bluetooth audio mode only. Plays AA nav prompts on the car's own nav prompter (`/input_mono_0`) under the navigation focus (`eSRC_NAV_AUTO`, `0x1a`), so the radio **ducks** instead of the phone mixing the prompt into A2DP. It also keeps the guidance sink on channel 8 (what `NBT_GUIDANCE_BT=0` does) - without that the phone plays prompts itself over Bluetooth and the daemon never sees them. Off by default: the author's BT row is not car-tested. Browser / native audio needs no checkbox. Stored as `/var/opt/aa/speech-bt`; `NBT_SPEECH_BT=0` wins either way. Applies at the next Start / Restart. |
 | Use Phone GPS (checkbox) | Off by default. For cars without the navigation antenna (no GPS fix or heading from the car). When ticked, the daemon does not read the car's GPS and Android Auto is not offered the location, compass, GPS satellite or accelerometer sensors, so the phone uses its own GPS, compass and motion sensors. Stored as `/var/opt/aa/phone-gps` (a hand-made `/opt/aa/phone-gps` also counts); `NBT_PHONE_GPS=1` / `0` in `nbt-aad.env` wins either way. Read when the daemon starts, so use **Restart** after changing it |
 | Use WiFi Direct Network (checkbox) | Off by default. When ticked, the phone is offered only the car's Wi-Fi Direct group, never the CarPlay hotspot (the same as `NBT_ALT_WIFI=DIRECT`). Stored as `/var/opt/aa/wifi-direct` (a hand-made `/opt/aa/wifi-direct` also counts); a set `NBT_ALT_WIFI` in `nbt-aad.env` wins either way. Read when the daemon starts, so use **Restart** after changing it |
@@ -843,7 +940,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_KNOB` | `0` | iDrive controller to the phone |
 | `NBT_CAR_GPS` | `0` | The car's GPS position to the phone (LOCATION sensor). See also `NBT_PHONE_GPS` / **Use Phone GPS** |
 | `NBT_AA_CAMERA_CTX` | `692,1023` | iDrive contexts (`hmi.graphicalContext` visibleContext, logged in `nbt-aad-app.log`) that are camera views: Android Auto steps aside while one is up and comes back when iDrive leaves it, whatever the checkboxes. For the button-opened 360 / Top View, which neither reverse nor park assist reports. 1023 = an F-series NBTevo_Y24073J, 692 = the Supra's Top View. A widgetless untitled screen over Android Auto that is not listed is logged as `camera: context N ... add it to NBT_AA_CAMERA_CTX` |
-| `NBT_LCI_MEDIA` | `0` | Only matters when set: `1` = **Media Controls for LCI Steering Wheels** on, `0` = off, whatever the Settings checkbox says. On = the steering wheel's previous / next (`NBT_MFL_*`) become Android media keys in a non-Bluetooth audio mode. Off by default |
+| `NBT_LCI_MEDIA` | `0` | Only matters when set: `1` = **Native Functionality Media Controls Restore** on, `0` = off, whatever the Settings checkbox says. On = the steering wheel's previous / next (`NBT_MFL_*`) become Android media keys in a non-Bluetooth audio mode. Off by default |
 | `NBT_PHONE_GPS` | `0` | Only matters when set: `1` = Use Phone GPS on, `0` = off, whatever the Settings checkbox says. On = no car GPS read, and no location / compass / GPS satellite / accelerometer sensors offered |
 | `NBT_CAR_SPEED` | `0` | The car's wheel speed to the phone (CAR_SPEED sensor) |
 | `NBT_CAR_GEAR` | `0` | The car's gear to the phone (GEAR sensor). Reverse-gear handling is `NBT_GEAR_ACTION` |
@@ -862,7 +959,7 @@ Leave these unset unless you are testing.
 |---|---|
 | `NBT_AA_PORT` | TCP port the phone is told to use (default 5277). Port 52770 has been tried and failed on one car; under investigation |
 | `NBT_AA_SURFACE` | LayerManager surface for the Android Auto picture (default `1282`, its own; `1280` = shared with the factory CarPlay as before v1.9.20) |
-| `NBT_USB` | **Experiment, off.** Also the Settings checkbox **Android Auto over USB (beta)** (`/var/opt/aa/usb-aa`; a set `NBT_USB` wins either way, `0` forces it off; read at daemon start, so it applies at the next Start / Restart). `1` = Android Auto over USB through the head unit's own Android Open Accessory drivers, next to wireless. Not car-verified. With it on, an Android phone plugged in while the daemon runs is switched to accessory mode (`aoap-switch`, `/dev/android<bus><dev>`) as `Android` / `Android Auto`, and the session runs through io-usb (`NBT_USB_DIRECT`, on by default), or over `/dev/oap<bus><dev>` (`devc-serusb-aoap`) with `NBT_USB_DIRECT=0`. The phone then stays in accessory mode, so iDrive's USB media (MTP) doesn't see it until it is replugged. When the daemon stops it asks the phone to end a USB session (ByeByeRequest, waits up to 500 ms for the answer). After 3 sessions on one plug-in, replug it (a node that can't be opened or switched yet is retried every second and doesn't count as a session). USB and wireless share the one session: while a phone is on the cable the wireless thread leaves the Bluetooth links alone (`[Wireless] phone on the USB cable ...`, the same idle state as a car without a hotspot config); once USB gives up on the phone (out of tries or sessions, or switched by another client such as BMW's A4A) wireless is available again without unplugging it (`[Wireless] no phone for USB any more ...`) and a wireless connection that arrives anyway is refused (`USB Android Auto session running: refusing the wireless connection`); a phone plugged in during a wireless session waits until that session ends. Log: `[UsbAccessory] ...`. If the phone never answers, `NBT_USB_MANUFACTURER` / `NBT_USB_MODEL` change the identity sent |
+| `NBT_USB` | **Experiment, off.** Also the Settings checkbox **Android Auto over USB** (`/var/opt/aa/usb-aa`; a set `NBT_USB` wins either way, `0` forces it off; read at daemon start, so it applies at the next Start / Restart). `1` = Android Auto over USB through the head unit's own Android Open Accessory drivers, next to wireless. Not car-verified. With it on, an Android phone plugged in while the daemon runs is switched to accessory mode (`aoap-switch`, `/dev/android<bus><dev>`) as `Android` / `Android Auto`, and the session runs through io-usb (`NBT_USB_DIRECT`, on by default), or over `/dev/oap<bus><dev>` (`devc-serusb-aoap`) with `NBT_USB_DIRECT=0`. The phone then stays in accessory mode, so iDrive's USB media (MTP) doesn't see it until it is replugged. When the daemon stops it asks the phone to end a USB session (ByeByeRequest, waits up to 500 ms for the answer). After 3 sessions on one plug-in, replug it (a node that can't be opened or switched yet is retried every second and doesn't count as a session). USB and wireless share the one session: while a phone is on the cable the wireless thread leaves the Bluetooth links alone (`[Wireless] phone on the USB cable ...`, the same idle state as a car without a hotspot config); once USB gives up on the phone (out of tries or sessions, or switched by another client such as BMW's A4A) wireless is available again without unplugging it (`[Wireless] no phone for USB any more ...`) and a wireless connection that arrives anyway is refused (`USB Android Auto session running: refusing the wireless connection`); a phone plugged in during a wireless session waits until that session ends. Log: `[UsbAccessory] ...`. If the phone never answers, `NBT_USB_MANUFACTURER` / `NBT_USB_MODEL` change the identity sent |
 | `NBT_USB_DIRECT` | **On** whenever Android Auto over USB is on (the checkbox or `NBT_USB=1`); `0` / `off` / `no` / `false` = read the phone through `/dev/oap*` instead of libusbdi (io-usb). `devc-serusb-aoap` lets any client read the node (the media app's A4A handler opens it too) and a transfer that arrives while our read is not waiting can go to the other reader or be lost in the driver's queue: TLS records went missing in bursts and the phone dropped the session (car logs 2026-10-31). With it on, once the phone is in accessory mode the daemon stops `devc-serusb-aoap` (`[UsbDirect] stopped devc-serusb-aoap`), attaches to the accessory itself and keeps 8 reads queued. It also switches phones itself: the head unit asks a new USB device whether it speaks Android accessory only once, at plug-in, so a phone still set to "charging only" got no `/dev/android*` node and nothing happened until a replug. A device that has no node half a second after it appears is asked again through io-usb every second for up to 2 minutes (`[UsbDirect] usb0.N.0: AOA protocol 2: switch to accessory mode sent`); a device that leaves the request unanswered for a second is not a phone and is not asked again, and the head unit's own Microchip/SMSC devices (vendor 0424) are never asked. And it keeps `devc-serusb-aoap` from starting in the first place: it claims `/opt/mm/bin/devc-serusb-aoap` in the QNX path space and refuses every open of it, so the head unit's start of the driver fails (it logs that and leaves the phone alone, no retry) and the phone is opened as soon as it appears (`[UsbDirect] claimed /opt/mm/bin/devc-serusb-aoap`). QNX drops the claim when nbt-aad exits; `NBT_USB_CLAIM_DRIVER=0` goes back to stopping the driver after it has started. It also resets a phone that can't start a session (`[UsbAccessory] ...: resetting it`): one left in accessory mode keeps streaming its earlier session and ignores a new one, which used to need a replug. An accessory already plugged in when the daemon starts is reset before its first session, a session whose first frames can't be decrypted ends after 16 of them and resets the phone, and a phone that stays silent gets one more try and then a reset. At most 2 resets, then 2 minutes without one. Falls back to `/dev/oap*` if io-usb can't be reached; a phone can't be reset through that. Log: `[UsbDirect] ...` |
 | `NBT_BTSPP_DEV` | Use only this SPP node (default: scan `/dev/btspp0..7`) |
 | `NBT_WPP_MODE=0\|1\|2` | Pin the Bluetooth handshake mode (default rotates 2, 0, 1 on failures) |
@@ -876,7 +973,7 @@ Leave these unset unless you are testing.
 | `NBT_AUDIOCONN`, `NBT_AUDIOCONN_SUFFIX`, `NBT_AUDIOCONN_RETRIES` | `audioconn` path (default `/fs/sda0/opt/mm/bin/audioconn`), extra args, retries while the car refuses the source (default 6, max 20), pauses `NBT_AUDIOCONN_RETRY_S` (default 5) s growing by 2 s up to 12 s |
 | `NBT_BT_ROUTE_DELAY_MS` | wait before the Bluetooth-source `audioconn` after a session starts (default 1500 ms, 0 = at once). Since v1.8.41 the request is single-flight, at most one `audioconn` runs at a time, and a session that ends cancels its pending request and retries (a phone reconnecting every few seconds used to stack `audioconn` processes until the head unit ran out of memory and rebooted) |
 | `NBT_CHILD_NO_PRELOAD` | **On by default since v1.9.69.** `LD_PRELOAD` is removed for every child process the daemon starts (`audioconn`, `LayerManagerControl`, `pfctl`, `arp`, `ifconfig`), so they stop loading the graphics libraries they never use (`ldd:FATAL: Could not preload library libEGL_X.gpp.so`, `unknown symbol: kdMain`). `NBT_CHILD_NO_PRELOAD=0` keeps it, which is only useful when debugging a child. The start-up line `[Main] LD_PRELOAD=...` says which way it went |
-| `NBT_TOUCH_CONNECT`, `NBT_TOUCH_PEER` | On by default since v1.8.47 (`NBT_TOUCH_CONNECT=0` turns it off; car-verified on a G11: gestures work under Android Auto): while Android Auto is on screen the touch socket is connected to the touch controller (the first touch PDU's sender, or `NBT_TOUCH_PEER=ip:port`), so BMW Gesture Control PDUs on the same UDP 30567 port go to iDrive instead of being swallowed: circle clockwise / anticlockwise = volume up / down, two fingers = next track or mute (as set in iDrive). Swipe right and point only close / confirm iDrive popups, so over Android Auto they normally do nothing (iDrive does not even enable them in the camera unless a popup is up); swipe left is ignored by iDrive. The learned address is kept in `/var/opt/aa/touch-peer`, so after the first touch every later start connects at once. Car-confirmed (G11, v1.8.43): the camera sends from `160.48.199.16:30501`, ~30 PDUs/s of `0xB5308006` hand coordinates plus `0xB5308005` gestures. Gestures that still reach the daemon are logged decoded (`[TouchFwd] gesture camera: rotate clockwise (volume up) (id 3)`). If Android Auto touch stops working, set `NBT_TOUCH_CONNECT=0` and delete `/var/opt/aa/touch-peer` |
+| `NBT_TOUCH_CONNECT`, `NBT_TOUCH_PEER` | On by default since v1.8.47 (`NBT_TOUCH_CONNECT=0` turns it off; car-verified on a G11: gestures work under Android Auto): while Android Auto is on screen the touch socket is connected to the touch controller (the first touch PDU's sender, or `NBT_TOUCH_PEER=ip:port`), so BMW Gesture Control PDUs on the same UDP 30567 port go to iDrive instead of being swallowed: circle clockwise / anticlockwise = volume up / down, two fingers = next track or mute (as set in iDrive). Swipe right and point only close / confirm iDrive popups, so over Android Auto they normally do nothing (iDrive does not even enable them in the camera unless a popup is up); swipe left is ignored by iDrive. The learned address is kept in `touch-peer` in the data dir (`/var/opt/aa` on a hand install, `/var/opt/nbtapp/data/com.github.sq00ky.android-auto` with NBTApps, which falls back to the hand install's copy), so after the first touch every later start connects at once. Car-confirmed (G11, v1.8.43): the camera sends from `160.48.199.16:30501`, ~30 PDUs/s of `0xB5308006` hand coordinates plus `0xB5308005` gestures. Gestures that still reach the daemon are logged decoded (`[TouchFwd] gesture camera: rotate clockwise (volume up) (id 3)`). If Android Auto touch stops working, set `NBT_TOUCH_CONNECT=0` and delete `/var/opt/aa/touch-peer` |
 | `NBT_BT_PLAY` | **Experiment, off.** `1` = once the car grants the Bluetooth source, wait `NBT_BT_PLAY_DELAY` ms (1500) and send SourceActivity PLAY to it (`AuxInBTAudio.DMMAudioSource` request 2), like picking Bluetooth audio in iDrive; `2` = also AVRCP START (`BlueMedia.SGMedia`). Log: `[BtPlay] ...`. Not car-verified |
 | `NBT_BT_CONN` | ConnId of the car's Bluetooth source, requested through the ConnectionMaster (`audioconn -b <id>`, the iDrive HMI's call). Default `0xc7` (`audioconn -l`: `eSRC_A2DP ... AuxInBTAudio srcNr: 0x1`), car-verified on a MINI F60 since v1.8.38; `0` = the old focus form `-b 0x3a 0x1` (`NBT_BT_SRC` / `NBT_BT_SINK`) |
 | `NBT_SDR_DROP` | AA channels left out of service discovery (default `9` in Bluetooth mode) |
@@ -928,7 +1025,7 @@ Leave these unset unless you are testing.
 | `NBT_CP_YIELD`, `NBT_CP_PURGE`, `NBT_CP_WINGRP` | `1` / `0` override CarPlay compatibility for one fix: yield to CarPlay completely, destroy (1) or detach (0) the factory CarPlay decoder context, CarPlay's window in our window group (1) or top-level (0) |
 | `NBT_CP_LIVE_RETUNE=0` | Do not give the decoder CarPlay's settings when CarPlay takes the screen during a live Android Auto session (v1.8.37) |
 | `NBT_PTT_ASSISTANT=1` | Experimental: long press of the steering-wheel voice button starts the Google Assistant. Off by default (the button is only logged) |
-| `NBT_MFL_NEXT`, `NBT_MFL_PREV`, `NBT_MFL_PLAYPAUSE` | Steering-wheel buttons (MOST 15/02) that become Android's next / previous / play-pause media keys: `fkt` or `fkt:value`, hex as the recon log prints them (`511:2`), several separated by commas (`511:2,C31`). A `:value` maps one direction of a roller that carries both on one function; without it any change away from 0 is a press. Defaults (`511:2` next, `511:1` previous) come from a J29 log and are unconfirmed - swap them if the wheel skips the wrong way, and `NBT_MFL_*= ` (empty) unmaps a key. Only forwarded with **Media Controls for LCI Steering Wheels** (`NBT_LCI_MEDIA`) on and `NBT_AUDIO_MODE` not `bt`. `NBT_MFL_LOG=0` stops the per-change log line. See `car/mfl.hpp` |
+| `NBT_MFL_NEXT`, `NBT_MFL_PREV`, `NBT_MFL_PLAYPAUSE` | Steering-wheel buttons (MOST 15/02) that become Android's next / previous / play-pause media keys: `fkt` or `fkt:value`, hex as the recon log prints them (`511:2`), several separated by commas (`511:2,C31`). A `:value` maps one direction of a roller that carries both on one function; without it any change away from 0 is a press. Defaults (`511:2` next, `511:1` previous) come from a J29 log and are unconfirmed - swap them if the wheel skips the wrong way, and `NBT_MFL_*= ` (empty) unmaps a key. Only forwarded with **Native Functionality Media Controls Restore** (`NBT_LCI_MEDIA`) on and `NBT_AUDIO_MODE` not `bt`. `NBT_MFL_LOG=0` stops the per-change log line. See `car/mfl.hpp` |
 | `NBT_AA_BROWSE=1` | Experiment, off: advertises the Android Auto media browser service (channel 17, descriptor field 11) with an empty config and logs every message the phone sends there. Nothing else uses it. See the v1.9.37 entry |
 | `NBT_GPS_ACCURACY_M` | A fixed accuracy for every car GPS fix, in metres, 2 to 499 (default: HDOP x 5 m, at least 2 m; 10 m when a fix has no usable HDOP) |
 | `NBT_NIGHT_MODE=0/1`, `NBT_DRIVING_STATUS=0` | Sensor values. Night mode follows the car by default (`vehicle.dayNightChangeOver` via the iDrive app); `NBT_NIGHT_MODE` forces day (0) or night (1) |
@@ -942,6 +1039,14 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_NAV_MWAY_WARN_M`, `NBT_KOMBI_NAV_MWAY_MAIN_M` | `time`: off-ramps and forks also show this many metres before them (default `2000`) and again at (default `1000`), `200`..`5000` |
 | `NBT_KOMBI_NAV_APPROACH_MI` | `distance`, and `time` when the phone sends no seconds: show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once, and on its own it turns the approach `off`). Set, it wins over the **Show directions at any distance** checkbox |
 | `NBT_NO_LOG` | `1` turns every log sink off (daemon RAM + USB log, stdout/stderr, app log and slog), the same as ticking **Disable logging (performance test)**; it wins over the checkbox. Useful to measure whether logging costs anything; the one-shot `--pf-*` / `--license` commands keep their output |
+| `NBT_KOMBI_MEDIA_DIR` | J29 song title: the arrow, as the KOMBI direction enum (default `0` = none; `1` straight on) |
+| `NBT_KOMBI_MEDIA_DIST`, `NBT_KOMBI_MEDIA_UNIT` | J29 song title: the distance text (default empty) and its unit byte (default: the template's). With direction `0` the cluster shows neither |
+| `NBT_KOMBI_MEDIA_CHARS` | J29 song title: longest title shown (default `40`, `1`..`60`; longer ones end in `...`) |
+| `NBT_KOMBI_MEDIA_CYCLE` | J29 song title, search mode: `dir` or `unit` steps that value (`NBT_KOMBI_MEDIA_CYCLE_FROM` / `_TO`, every `NBT_KOMBI_MEDIA_CYCLE_S` s, default 8) with `[d N]` / `[u N]` in front of the title; a value the KOMBI refuses is skipped |
+| `NBT_KOMBI_TRACKS` | Android Auto track title in the instrument cluster's track list and the thumb-wheel press on Previous / Next title (J29, native audio only). Default: follows **Native Functionality Media Controls Restore**; `1` / `0` wins either way |
+| `NBT_KOMBI_TRACKS_MODE` | `slot` (default): the title is written into iDrive's own title text model. `list`: iDrive's list is answered with a list naming a text model of our own (not shown by the cluster so far) |
+| `NBT_KOMBI_TRACKS_PRESS` | With `NBT_KOMBI_TRACKS=1`: the steering-wheel function whose press picks the row under the cluster list's cursor (default `C31`, the thumb-wheel press; `0` = off; `fkt[:value]` hex as the `[MFL]` log prints it) |
+| `NBT_KOMBI_TRACKS_IF`, `NBT_KOMBI_TRACKS_INDEX` | The interface iDrive's requests to the KOMBI are read from (default `vlan73`) and the index of our own text model (default `0x7E01`) |
 | `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
 | `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
 | `NBT_KOMBI_NAV_LANES=0` | No lane row in the cluster / HUD (the arrows stay) |

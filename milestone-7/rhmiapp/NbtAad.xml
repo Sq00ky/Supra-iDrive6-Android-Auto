@@ -18,6 +18,7 @@
       <raAction id="29"/>
       <raAction id="30"/>
       <raAction id="167"/>
+      <raAction id="470"/>
       <raAction id="173"/>
       <raAction id="174"/>
       <hmiAction id="25" target="12"/>
@@ -36,6 +37,13 @@
       <raAction id="136"/>
       <raAction id="137"/>
       <raAction id="159"/>
+      <hmiAction id="420" target="18"/>
+      <raAction id="421"/>
+      <raAction id="422"/>
+      <raAction id="423"/>
+      <raAction id="424"/>
+      <raAction id="425"/>
+      <raAction id="248"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -76,6 +84,10 @@
       <textIdModel id="406" textId="406">
         <synonyms/>
       </textIdModel>
+      <textIdModel id="407" textId="407">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="251"/>
       <raBoolModel id="38"/>
       <textIdModel id="39" textId="18">
         <synonyms/>
@@ -94,11 +106,23 @@
       </textIdModel>
       <raDataModel id="163" modelType="Richtext"/>
       <raDataModel id="164" modelType="Richtext"/>
+
+      <!-- rhmiapp-96: live nbt-aad status on the Settings page, and the car manufacturer choice. -->
+      <raDataModel id="430" modelType="Richtext"/>
+      <raBoolModel id="450"/>
+      <raBoolModel id="451"/>
+      <raBoolModel id="452"/>
+      <raBoolModel id="453"/>
+      <raBoolModel id="454"/>
       <textIdModel id="165" textId="45">
         <synonyms/>
       </textIdModel>
       <raBoolModel id="170"/>
       <textIdModel id="168" textId="46">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="471"/>
+      <textIdModel id="472" textId="49">
         <synonyms/>
       </textIdModel>
       <raBoolModel id="175"/>
@@ -189,8 +213,18 @@
       <textIdModel id="161" textId="44">
         <synonyms/>
       </textIdModel>
+      <raBoolModel id="250"/>
+      <textIdModel id="230" textId="301"><synonyms/></textIdModel>
+      <textIdModel id="231" textId="302"><synonyms/></textIdModel>
+      <textIdModel id="232" textId="303"><synonyms/></textIdModel>
+      <textIdModel id="233" textId="304"><synonyms/></textIdModel>
+      <textIdModel id="234" textId="305"><synonyms/></textIdModel>
+      <textIdModel id="235" textId="306"><synonyms/></textIdModel>
+      <textIdModel id="236" textId="307"><synonyms/></textIdModel>
+      <textIdModel id="237" textId="308"><synonyms/></textIdModel>
     </models>
     <events>
+      <focusEvent id="54" target="16"/>
       <focusEvent id="50" targetModel="40"/>
       <focusEvent id="51" targetModel="41"/>
       <focusEvent id="52" target="13"/>
@@ -265,21 +299,25 @@
           <checkbox action="27" id="68" model="42" text="MENU key opens iDrive" textModel="43"/>
           <checkbox action="28" id="69" model="44" text="Show driving mode changes" textModel="45"/>
           <checkbox action="29" id="72" model="46" text="Show navigation in HUD/gauge cluster" textModel="47"/>
+          <checkbox action="421" id="260" model="251" text="Cyrillic street names in HUD" textModel="407"/>
           <checkbox action="167" id="169" model="170" text="Show directions at any distance" textModel="168"/>
+          <checkbox action="470" id="473" model="471" text="Song title in gauge cluster" textModel="472"/>
           <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
           <checkbox action="174" id="180" model="177" text="Prompts on car radio (BT, beta)" textModel="178"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
-          <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
+          <checkbox action="83" id="86" model="84" text="Android Auto over USB" textModel="85"/>
           <checkbox action="87" id="90" model="88" text="Use Phone GPS" textModel="89"/>
           <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network (own password)" textModel="93"/>
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
-          <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
+          <checkbox action="124" id="127" model="125" text="Native Functionality Media Controls Restore" textModel="126"/>
           <checkbox action="159" id="162" model="160" text="CarPlay compatibility" textModel="161"/>
+          <checkbox action="248" id="249" model="250" text="Disable Favorites Bar"/>
           <button action="414" id="407" model="400" text="Gauge cluster type"/>
           <separator id="142"/>
           <button action="132" id="135" model="134" text="Install PF Rules"/>
           <button action="136" id="140" model="138" text="Check PF Rules"/>
           <button action="137" id="141" model="139" text="Uninstall PF Rules"/>
+          <button action="420" id="461" text="Car manufacturer"/>
         </components>
       </hmiState>
       <!-- Build versions, filled when the page is shown (BasicString into two Richtext labels): the daemon build
@@ -306,7 +344,18 @@
           <radiobutton action="413" id="410" model="403" text="..." textModel="406"/>
         </components>
       </hmiState>
-</hmiStates>
+    
+      <hmiState id="18" parentId="14" text="Car manufacturer">
+        <properties><property id="24" value="3"/></properties>
+        <components>
+          <radiobutton action="421" id="462" model="450" text="Auto"/>
+          <radiobutton action="422" id="463" model="451" text="BMW"/>
+          <radiobutton action="423" id="464" model="452" text="Toyota"/>
+          <radiobutton action="424" id="465" model="453" text="MINI"/>
+          <radiobutton action="425" id="466" model="454" text="Rolls-Royce"/>
+        </components>
+      </hmiState>
+      </hmiStates>
   </pluginApp>
   <!-- One-press entry "Open Android Auto" (raAction 2), right after the menu entry. Property 55 is its UUID: without
        one, iDrive refuses to store a plugin entry on a favourite key. Keep the UUID fixed: a new one orphans keys
