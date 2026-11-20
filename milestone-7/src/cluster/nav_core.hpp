@@ -51,6 +51,12 @@ public:
 
     // One tick. v = the next maneuver, or NULL when there is no guidance (or it went stale).
     void step(const NavView* v, double now, const char* why_none = "guidance ended");
+    // After step(): the line to show while no maneuver is up (what the phone is playing), "" for none. A maneuver
+    // has the panel to itself: nothing is done while one is shown, and the line comes back once it is cleared.
+    // With media_show_s set, a line is taken down again that long after it came up and stays away until it changes
+    // (the next track, or playback starting again): the panel covers the cluster's own display while it is on.
+    void idle(const std::string& utf8, double now);
+    bool idleShown() const { return idle_shown_; }
     // Clears the arrow if we drew anything.
     void clear(const char* why);
     // An iDrive route is active: forget our state WITHOUT a cancel (the factory graph replaces ours).
@@ -106,6 +112,10 @@ private:
     bool timed_;            // it was shown by the time rule (not the distance fallback): it stays until the next one
     bool remind_;           // the main prompt is due on the maneuver shown
     bool fallback_;
+    bool idle_shown_;       // the idle text is up (and no maneuver)
+    std::string idle_line_; // the line that is up
+    double idle_since_;     // when it came up
+    std::string idle_done_; // media_show_s: the line that had its time, not shown again until it changes
     // A next step that looks like the one shown (two right turns onto roads with the same name): the step body changed
     // since the draw and the distance jumped up from the nearest it got. renew_ holds from then until it is drawn or
     // cleared, so it is judged and drawn as a new maneuver.
@@ -161,6 +171,9 @@ public:
 
     // AASession nav-status callback (session thread): copies the message and returns.
     static void navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t len, void* user);
+    // What the phone is playing, as one line ("" = nothing playing), from the media status callback (session thread).
+    // Shown as the cluster's idle text when "now playing in the cluster" is on and the driver has one (the 6WA).
+    void setNowPlaying(const std::string& line);
     // From onSessionEnded (session thread).
     void onSessionEnded();
     // From the fatal-signal handler: async-signal-safe cancel if an arrow may be up.
@@ -173,6 +186,13 @@ public:
     // checkbox, or <app dir>/kombi-nav made by hand).
     static const char* kFlagFile;
     static const char* kManualFile;
+    // "Now playing in the cluster": off by default; NBT_KOMBI_MEDIA if set, else these flag files. It does not need
+    // the arrows to be on. NBT_KOMBI_MEDIA_SHOW_S (0..600, default 0) takes a line down again that long after it
+    // came up (0 = it stays while it plays); NBT_KOMBI_MEDIA_REFRESH_S (0..600, default 0) switches its panel on
+    // again that often.
+    static bool mediaSettingOn();
+    static const char* kMediaFlagFile;    // <data dir>/kombi-media
+    static const char* kMediaManualFile;  // /opt/aa/kombi-media
     static const char* kShownFile;    // /dev/shmem/nbt-aad-kombi-nav.shown: an arrow may be up (survives a SIGKILL)
     // How `sloginfo -w` is started, tried in this order until one works (the HU's posix_spawn refused all paths on
     // the car, 2026-11-01): posix_spawn with file actions, QNX spawn() with an fd map (QNX only), popen.
@@ -193,10 +213,12 @@ private:
     static void logLine(const char* line, void* user);
     static bool quitting(void* self);
     bool enabledNow() const;
+    bool mediaEnabledNow() const;
     void markShown(bool on, bool force = false);
 
     pthread_mutex_t mu_;
     NavMessages msgs_;           // guarded by mu_
+    std::string now_playing_;    // guarded by mu_
     double last_msg_t_;          // guarded by mu_
     bool session_ended_;         // guarded by mu_
     bool quit_;                  // guarded by mu_
@@ -209,9 +231,11 @@ private:
     uint16_t port_;
     bool yield_enabled_;
     int forced_;                 // NBT_KOMBI_NAV: -1 unset, 0 off, 1 on
+    int media_forced_;           // NBT_KOMBI_MEDIA: -1 unset, 0 off, 1 on
 
     // worker-thread state
     bool enabled_;
+    bool media_enabled_;
     double t_setting_;
     bool prev_guidance_;
     bool disabled_session_;      // KOMBI rejected a frame: off until the next session

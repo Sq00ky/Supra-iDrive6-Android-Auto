@@ -80,6 +80,8 @@ public:
     Result updateDistance(const NavView& v, double now);
     Result keepUp(const NavView& v, double now);
     Result remind(const NavView& v, double now);
+    std::string idleText(const std::string& utf8) const;
+    Result showIdleText(const std::string& line, double now);
     void guidanceGap() {}
     bool clear(std::string* detail);
     void forget();
@@ -94,6 +96,7 @@ public:
     hudterm::Batch routeBatch(const hudterm::Picture& pic) const;
     hudterm::Batch lanesBatch(const hudterm::Picture& pic) const;   // an empty picture empties both lane buffers
     hudterm::Batch clearBatch() const;
+    hudterm::Batch idleBatch(const std::string& line) const;
     uint16_t visibleBuffer() const { return visible_; }
     uint16_t visibleRoute() const { return route_visible_; }
     bool nearShown() const { return near_shown_; }     // the picture queued is the junction view
@@ -140,6 +143,8 @@ private:
     std::vector<AaLane> lanes_shown_;   // the lanes queued
     uint16_t lane_visible_;  // the lane buffer on show
     bool lanes_dirty_;       // something of ours may be in the lane layer
+    bool idle_;              // the idle text is what we show (no maneuver)
+    double idle_t_;          // when its panel was last switched on
 };
 
 } // namespace kombinav

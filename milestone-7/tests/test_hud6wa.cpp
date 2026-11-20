@@ -950,6 +950,232 @@ static void testCore() {
     assert(core.stopped() == kombinav::Core::kStoppedRejected);
 }
 
+// ---- the idle text ("now playing") ----------------------------------------------------------------------------------
+
+// The driver: the whole picture once, then only what changed; nothing while the factory navigation has the panel or a
+// batch waits; drawn again after lost work; a maneuver takes its place and a clear removes it.
+static void testIdleText() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    Settings s;
+    d.setSettings(s);
+
+    assert(d.idleText("Example Song - Sample Artist") == "Example Song - Sample Artist");
+    assert(d.idleText("Za\xC5\xBC\xC3\xB3\xC5\x82\xC4\x87, g\xC4\x99\xC5\x9Bl\xC4\x85 (live)") == "Zazolc gesla live");
+    assert(d.idleText("An Invented Title That Is Far Too Long For The Line").size() == 32);
+    assert(d.idleText("\xE6\x97\xA5\xE6\x9C\xAC").empty());            // nothing the font has
+
+    assert(d.showIdleText("", 0) == ClusterDisplay::kOk && port.batches.empty() && !d.sentAny());
+    assert(d.showIdleText("Example Song - Sample Artist", 0) == ClusterDisplay::kOk && port.batches.size() == 1);
+    const Batch& b = port.batches[0];
+    assert(b.label == "media" && b.full && b.calls.size() == 9 && d.sentAny());
+    expectCall(b.calls[0], kRemoveAllItems, 5);
+    expectCall(b.calls[1], kRemoveAllItems, 6);
+    expectCall(b.calls[2], kSetVisibility, 2);
+    expectCall(b.calls[3], kSetVisibility, 3);
+    expectCall(b.calls[4], kSetVisibility, 4);
+    expectCall(b.calls[5], kTextareaSetText, 2);
+    assert(text(b.calls[5]) == "Example Song - Sample Artist");
+    expectCall(b.calls[6], kTextareaSetText, 3);
+    expectCall(b.calls[7], kTextareaSetText, 4);
+    assert(text(b.calls[6]).empty() && text(b.calls[7]).empty());
+    expectCall(b.calls[8], kSetVisibility, 1);
+    assert(b.calls[8].payload[2] == 1);
+    assert(logged("MEDIA 'Example Song - Sample Artist' | 9 calls"));
+
+    // The same line again: nothing, however often (no refresh by default).
+    assert(d.showIdleText("Example Song - Sample Artist", 5) == ClusterDisplay::kOk);
+    assert(d.showIdleText("Example Song - Sample Artist", 500) == ClusterDisplay::kOk && port.batches.size() == 1);
+
+    // The next track: the street text and the panel on again, partial (merged into a waiting batch, never replacing it).
+    port.wait = true;
+    assert(d.showIdleText("Other Song - Sample Artist", 6) == ClusterDisplay::kOk && port.batches.size() == 2);
+    const Batch& t = port.batches[1];
+    assert(t.label == "media-text" && !t.full && t.calls.size() == 2);
+    expectCall(t.calls[0], kTextareaSetText, 2);
+    assert(text(t.calls[0]) == "Other Song - Sample Artist");
+    expectCall(t.calls[1], kSetVisibility, 1);
+    port.wait = false;
+
+    // The refresh, when it is set: the panel on again, once per interval.
+    s.media_refresh_s = 10;
+    d.setSettings(s);
+    assert(d.showIdleText("Other Song - Sample Artist", 15) == ClusterDisplay::kOk && port.batches.size() == 2);
+    assert(d.showIdleText("Other Song - Sample Artist", 16.5) == ClusterDisplay::kOk && port.batches.size() == 3);
+    assert(port.batches[2].label == "media-refresh" && !port.batches[2].full && port.batches[2].calls.size() == 1);
+    expectCall(port.batches[2].calls[0], kSetVisibility, 1);
+    assert(d.showIdleText("Other Song - Sample Artist", 20) == ClusterDisplay::kOk && port.batches.size() == 3);
+    assert(logged("MEDIA panel on again"));
+
+    // The factory navigation has the panel: nothing is sent.
+    port.st = kNavActive;
+    assert(d.showIdleText("Third Song", 30) == ClusterDisplay::kOk && port.batches.size() == 3);
+    port.st = kReady;
+
+    // Work the terminal dropped: the whole picture again, texts switched on again; it waits for the queue.
+    port.ep = 3;
+    port.wait = true;
+    assert(d.showIdleText("Third Song", 31) == ClusterDisplay::kOk && port.batches.size() == 3);
+    port.wait = false;
+    assert(d.showIdleText("Third Song", 32) == ClusterDisplay::kOk && port.batches.size() == 4);
+    assert(port.batches[3].label == "media" && port.batches[3].full && port.batches[3].calls.size() == 9);
+    assert(text(port.batches[3].calls[5]) == "Third Song" && logged("drawing it again"));
+
+    // A maneuver takes the idle text's place: its own street, distance and unit; the texts are on already. Far enough
+    // that it is an arrow, not yet the junction view (near_m).
+    NavView v = view(8, "Testroad Alpha", "800", 1, 800);
+    assert(d.showManeuver(v, 40, true, true) == ClusterDisplay::kOk && port.batches.size() == 5);
+    const Batch& m = port.batches[4];
+    assert(m.label == "maneuver");
+    for (size_t i = 0; i < m.calls.size(); ++i)
+        assert(!(m.calls[i].fkt == kSetVisibility && m.calls[i].handle() != 1));
+    NavView v2 = view(8, "Testroad Alpha", "750", 1, 750);
+    assert(d.updateDistance(v2, 41) == ClusterDisplay::kOk && port.batches.size() == 6);
+    assert(port.batches[5].calls.size() == 1 && text(port.batches[5].calls[0]) == "750");
+
+    // After a clear the idle text is the whole picture again.
+    std::string detail;
+    assert(d.clear(&detail));
+    d.forget();
+    assert(!d.sentAny());
+    assert(d.showIdleText("Third Song", 50) == ClusterDisplay::kOk);
+    assert(port.batches.back().label == "media" && port.batches.back().calls.size() == 9);
+
+    // The transport's states, as for a maneuver.
+    port.st = kOffline;
+    assert(d.showIdleText("Fourth Song", 60) == ClusterDisplay::kLink);
+    port.st = kFailed;
+    assert(d.showIdleText("Fourth Song", 61) == ClusterDisplay::kRejected);
+    port.st = kReady;
+    port.result = kRefused;
+    assert(d.showIdleText("Fourth Song", 62) == ClusterDisplay::kInternal);
+
+    // Shadow mode: logged, nothing sent.
+    FakePort ps;
+    Hud6waDisplay ds(ps, k6wa, true);
+    ds.setLog(&logFn, NULL);
+    assert(ds.showIdleText("Example Song", 0) == ClusterDisplay::kOk && ps.batches.empty());
+    assert(logged("[shadow] 210 TextareaSetText h2 'Example Song'"));
+}
+
+// The state machine: the idle text only while no maneuver is up, back after the clear, gone when nothing plays.
+static void testCoreIdle() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    Settings s;
+    s.approach = kombinav::kApproachOff;
+    kombinav::Core core(d, s, &logFn, NULL);
+
+    core.step(NULL, 0);
+    core.idle("", 0);
+    assert(!core.idleShown() && port.batches.empty());            // nothing playing: nothing sent
+    core.idle("\xE6\x97\xA5\xE6\x9C\xAC", 0);
+    assert(!core.idleShown() && port.batches.empty());            // nothing of it can be shown
+    core.idle("Example Song - Sample Artist", 1);
+    assert(core.idleShown() && !core.shown() && port.batches.size() == 1 && port.batches[0].label == "media");
+
+    NavView a = view(8, "Testroad Alpha", "800", 1, 800);         // guidance: the maneuver has the panel
+    core.step(&a, 2);
+    core.idle("Example Song - Sample Artist", 2);
+    assert(core.shown() && !core.idleShown() && port.batches.size() == 2 && port.batches[1].label == "maneuver");
+    core.step(&a, 3);
+    core.idle("Other Song", 3);                                   // a new track changes nothing while it is shown
+    assert(port.batches.size() == 2);
+
+    core.step(NULL, 4);                                           // guidance gone: the grace period, then the clear
+    core.idle("Other Song", 4);
+    assert(port.batches.size() == 2);
+    core.step(NULL, 4 + s.grace_s);
+    assert(!core.shown() && port.batches.size() == 3 && port.batches[2].label == "clear");
+    core.idle("Other Song", 4 + s.grace_s);
+    assert(core.idleShown() && port.batches.size() == 4 && port.batches[3].label == "media");
+    assert(text(port.batches[3].calls[5]) == "Other Song");
+
+    core.step(NULL, 20);                                          // playback stopped: cleared
+    core.idle("", 20);
+    assert(!core.idleShown() && port.batches.size() == 5 && port.batches[4].label == "clear");
+    assert(logged("CLEAR (nothing playing)"));
+    core.step(NULL, 21);
+    core.idle("", 21);
+    assert(port.batches.size() == 5);
+
+    core.idle("Other Song", 22);                                  // the factory navigation takes the panel
+    assert(core.idleShown() && port.batches.size() == 6);
+    core.yieldToFactory();
+    assert(!core.idleShown() && !core.sentAny() && port.batches.size() == 6);
+
+    port.st = kFailed;                                            // a failed terminal stops it, as for a maneuver
+    port.afterReset = kFailed;
+    core.idle("Other Song", 30);
+    assert(core.stopped() == kombinav::Core::kStoppedRejected);
+
+    // media_show_s: a line is up for that long, then cleared, and stays away until it changes.
+    {
+        g_log.clear();
+        FakePort p;
+        Hud6waDisplay dd(p, k6wa, false);
+        Settings b = s;
+        b.media_show_s = 8;
+        kombinav::Core c(dd, b, &logFn, NULL);
+        c.idle("Example Song", 0);
+        assert(c.idleShown() && p.batches.size() == 1 && p.batches[0].label == "media");
+        c.idle("Example Song", 7.9);
+        assert(c.idleShown() && p.batches.size() == 1);
+        c.idle("Example Song", 8);                                // its time is up
+        assert(!c.idleShown() && p.batches.size() == 2 && p.batches[1].label == "clear");
+        assert(logged("CLEAR (now playing shown)"));
+        c.idle("Example Song", 9);                                // the same line: not again
+        c.idle("Example Song", 100);
+        assert(!c.idleShown() && p.batches.size() == 2);
+        c.idle("Other Song", 101);                                // the next track: up again, with its own time
+        assert(c.idleShown() && p.batches.size() == 3 && p.batches[2].label == "media");
+        c.idle("Third Song", 105);                                // changed while up: the text, and the time starts again
+        assert(c.idleShown() && p.batches.size() == 4 && p.batches[3].label == "media-text");
+        c.idle("Third Song", 112.9);
+        assert(c.idleShown() && p.batches.size() == 4);
+        c.idle("Third Song", 113);
+        assert(!c.idleShown() && p.batches.size() == 5 && p.batches[4].label == "clear");
+
+        c.idle("", 120);                                          // paused, then playing again: its line is shown again
+        c.idle("Third Song", 121);
+        assert(c.idleShown() && p.batches.size() == 6 && p.batches[5].label == "media");
+
+        NavView m = view(8, "Testroad Alpha", "800", 1, 800);     // a maneuver cuts it short ...
+        c.step(&m, 122);
+        c.idle("Third Song", 122);
+        assert(c.shown() && !c.idleShown() && p.batches.size() == 7);
+        c.step(NULL, 123);
+        c.step(NULL, 123 + b.grace_s);
+        assert(!c.shown() && p.batches.size() == 8 && p.batches[7].label == "clear");
+        c.idle("Third Song", 123 + b.grace_s);                    // ... so it gets its time afterwards
+        assert(c.idleShown() && p.batches.size() == 9 && p.batches[8].label == "media");
+    }
+
+    // A cluster without an idle text (the default of the interface): never asked to show one.
+    struct NoIdle : public ClusterDisplay {
+        int shows;
+        NoIdle() : shows(0) {}
+        const char* name() const { return "none"; }
+        void setSettings(const Settings&) {}
+        void setLog(kombinav::LogFn, void*) {}
+        bool sameManeuver(const NavView&, double) { return false; }
+        Result showManeuver(const NavView&, double, bool, bool) { return kOk; }
+        Result updateDistance(const NavView&, double) { return kOk; }
+        Result keepUp(const NavView&, double) { return kOk; }
+        Result showIdleText(const std::string&, double) { ++shows; return kOk; }
+        void guidanceGap() {}
+        bool clear(std::string*) { return true; }
+        void forget() {}
+        bool sentAny() const { return false; }
+    } none;
+    kombinav::Core c2(none, s, &logFn, NULL);
+    c2.idle("Example Song", 0);
+    assert(none.shows == 0 && !c2.idleShown());
+}
+
 // ---- KombiNav with NBT_CLUSTER=6wa ----------------------------------------------------------------------------------
 
 static size_t hudRequests() {
@@ -1019,6 +1245,54 @@ static void runKombiNav(bool shadow) {
     rmdir(dir);
 }
 
+// KombiNav with only "now playing in the cluster" on (the arrows off): the line goes out to 82/00, and nothing does
+// while the setting is off.
+static size_t runKombiMedia(bool on) {
+    char dir[] = "/tmp/hud6wa_mediaXXXXXX";
+    assert(mkdtemp(dir));
+    std::string shown = std::string(dir) + "/shown";
+    KombiNav::kFlagFile = "/nonexistent/kombi-nav";
+    KombiNav::kManualFile = "/nonexistent/kombi-nav";
+    KombiNav::kMediaFlagFile = "/nonexistent/kombi-media";
+    KombiNav::kMediaManualFile = "/nonexistent/kombi-media";
+    KombiNav::kShownFile = shown.c_str();
+    setenv("NBT_KOMBI_NAV", "0", 1);
+    setenv("NBT_KOMBI_NAV_YIELD", "0", 1);
+    setenv("NBT_KOMBI_MEDIA", on ? "1" : "0", 1);
+    setenv("NBT_CLUSTER", "6wa", 1);
+    unsetenv("NBT_HUDTERM");
+    assert(KombiNav::mediaSettingOn() == on);
+    fake_dsi::reset();
+    {
+        most::Client client;
+        KombiNav nav;
+        nav.start(&client);
+        assert(client.start("T"));
+        fake_dsi::attach();
+        std::vector<uint8_t> resp;
+        most::putLe32(resp, 77);
+        most::putLe16(resp, 0x2077);
+        fake_dsi::data(most::kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+        std::vector<uint8_t> reg;
+        most::putLe32(reg, 1);
+        most::putLe16(reg, 0x0123); most::putLe16(reg, most::registryKey(0x82, 0));
+        fake_dsi::data(most::kAttrRegistry, &reg[0], (uint32_t)reg.size());
+        nav.setNowPlaying("Example Song - Sample Artist");
+        usleep(1500000);                                         // the setting is read once a second
+        nav.stop();
+        fake_dsi::detach();
+    }
+    size_t n = hudRequests();
+    printf("KombiNav 6wa now playing %s: %u calls to 82/00\n", on ? "on" : "off", (unsigned)n);
+    unsetenv("NBT_CLUSTER");
+    unsetenv("NBT_KOMBI_NAV");
+    unsetenv("NBT_KOMBI_NAV_YIELD");
+    unsetenv("NBT_KOMBI_MEDIA");
+    unlink(shown.c_str());
+    rmdir(dir);
+    return n;
+}
+
 static void testKombiNavUnknownCluster() {
     setenv("NBT_CLUSTER", "6wb", 1);
     {
@@ -1056,8 +1330,12 @@ int main() {
     testStates();
     testShadow();
     testCore();
+    testIdleText();
+    testCoreIdle();
     runKombiNav(true);
     runKombiNav(false);
+    assert(runKombiMedia(false) == 0);
+    assert(runKombiMedia(true) >= 8);                            // the idle picture's calls, up to 8 in flight unanswered
     testKombiNavUnknownCluster();
     printf("test_hud6wa: all passed\n");
     return 0;

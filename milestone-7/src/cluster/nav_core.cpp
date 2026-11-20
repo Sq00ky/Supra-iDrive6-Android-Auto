@@ -50,7 +50,7 @@ Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
     : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
       no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning), have_next_(false), next_since_(0),
       stage_(kHidden), timed_(false), remind_(false), fallback_(false), drawn_step_seq_(0), has_min_m_(false),
-      min_m_(0), renew_(false), depart_(false) {
+      min_m_(0), renew_(false), depart_(false), idle_shown_(false), idle_since_(0) {
     d_.setSettings(s);
     d_.setLog(log, log_user);
 }
@@ -101,6 +101,7 @@ bool Core::renewedStep(const NavView& v) {
 
 void Core::drawn(const NavView& v) {
     has_shown_ = true;
+    idle_shown_ = false;                           // the maneuver took the idle text's place
     shown_ = v;
     drawn_step_seq_ = v.step_seq;
     double m;
@@ -269,8 +270,38 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     shown_ = v;
 }
 
+void Core::idle(const std::string& utf8, double now) {
+    if (stop_ != kRunning || has_shown_) return;
+    std::string line = utf8.empty() ? std::string() : d_.idleText(utf8);
+    if (line.empty()) {
+        idle_done_.clear();                            // playback starting again shows its line again
+        if (idle_shown_) clear("nothing playing");
+        return;
+    }
+    const bool up = idle_shown_ && line == idle_line_;
+    if (s_.media_show_s > 0) {
+        if (up && now - idle_since_ >= s_.media_show_s) {
+            clear("now playing shown");
+            idle_done_ = line;
+            return;
+        }
+        if (!idle_shown_ && line == idle_done_) return;   // it had its time: wait for the next one
+    }
+    ClusterDisplay::Result r = d_.showIdleText(line, now);
+    if (r != ClusterDisplay::kOk) {
+        fail(r);
+        return;
+    }
+    idle_shown_ = d_.sentAny();                        // false while the factory navigation has the panel
+    if (idle_shown_ && !up) {
+        idle_line_ = line;
+        idle_since_ = now;
+    }
+}
+
 void Core::forget() {
     has_shown_ = false;
+    idle_shown_ = false;
     remind_ = false;
     renew_ = false;
     has_min_m_ = false;
@@ -337,16 +368,28 @@ bool kombiNavFlagSet() {
     return (KombiNav::kFlagFile && access(KombiNav::kFlagFile, F_OK) == 0) ||
            (KombiNav::kManualFile && access(KombiNav::kManualFile, F_OK) == 0);
 }
+
+const char* const kKombiMediaFlagName = "kombi-media";
+
+// "Now playing in the cluster": the same pair of files, or a host test's paths.
+bool kombiMediaFlagSet() {
+    if (!KombiNav::kMediaFlagFile && !KombiNav::kMediaManualFile) return nbt::flagSet(kKombiMediaFlagName);
+    return (KombiNav::kMediaFlagFile && access(KombiNav::kMediaFlagFile, F_OK) == 0) ||
+           (KombiNav::kMediaManualFile && access(KombiNav::kMediaManualFile, F_OK) == 0);
+}
 } // namespace
 
 const char* KombiNav::kFlagFile = NULL;     // NULL: nbt::flagSet(kKombiNavFlagName)
 const char* KombiNav::kManualFile = NULL;
 const char* KombiNav::kShownFile = "/dev/shmem/nbt-aad-kombi-nav.shown";
+const char* KombiNav::kMediaFlagFile = NULL;      // NULL: nbt::flagSet(kKombiMediaFlagName)
+const char* KombiNav::kMediaManualFile = NULL;
 unsigned KombiNav::kWatchSkip = 0;
 
 KombiNav::KombiNav()
     : last_msg_t_(0), session_ended_(false), quit_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
-      port_(30502), yield_enabled_(true), forced_(-1), enabled_(false), t_setting_(-1e9), prev_guidance_(false),
+      port_(30502), yield_enabled_(true), forced_(-1), media_forced_(-1), enabled_(false), media_enabled_(false),
+      t_setting_(-1e9), prev_guidance_(false),
       disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), fallback_noted_(false),
       watch_pid_(-1), watch_fd_(-1),
       watch_thread_(false), watch_spawned_(-1e9), watch_failed_logged_(false), watch_fp_(NULL),
@@ -393,6 +436,23 @@ bool KombiNav::linkCancel(void* self, std::string* detail) {
 bool KombiNav::enabledNow() const {
     if (forced_ >= 0) return forced_ == 1;
     return kombiNavFlagSet();
+}
+
+bool KombiNav::mediaSettingOn() {
+    int f = envFlag("NBT_KOMBI_MEDIA");
+    if (f >= 0) return f == 1;
+    return kombiMediaFlagSet();
+}
+
+bool KombiNav::mediaEnabledNow() const {
+    if (media_forced_ >= 0) return media_forced_ == 1;
+    return kombiMediaFlagSet();
+}
+
+void KombiNav::setNowPlaying(const std::string& line) {
+    pthread_mutex_lock(&mu_);
+    if (line != now_playing_) now_playing_ = line;
+    pthread_mutex_unlock(&mu_);
 }
 
 void KombiNav::logLine(const char* line, void* /*user*/) {
@@ -544,6 +604,9 @@ void KombiNav::start(most::Client* most) {
     if (envFlag("NBT_HUD_JUNCTION") == 0) settings_.junction = false;
     envNumber("NBT_HUD_NEAR_M", 50, 2000, settings_.near_m);
     if (envFlag("NBT_HUD_LANES") == 1) settings_.hud_lanes = true;
+    media_forced_ = envFlag("NBT_KOMBI_MEDIA");
+    envNumber("NBT_KOMBI_MEDIA_REFRESH_S", 0, 600, settings_.media_refresh_s);
+    envNumber("NBT_KOMBI_MEDIA_SHOW_S", 0, 600, settings_.media_show_s);
     e = getenv("NBT_KOMBI_NAV_INPLACE");
     if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
     e = getenv("NBT_CLUSTER");                       // the env wins, like every other setting here
@@ -564,6 +627,14 @@ void KombiNav::start(most::Client* most) {
                display_->name(), target_.c_str(), shadow_ ? ", SHADOW MODE (NBT_HUDTERM=log): nothing is sent" : "",
                approachText().c_str(), junctionText().c_str(), settings_.hud_lanes ? "on" : "off",
                yield_enabled_ ? "on" : "off");
+    if (!display_->idleText("a").empty())
+        printf("[KombiNav] now playing in the cluster %s (%s), shown for %g s (0 = while it plays), panel refresh "
+               "%g s\n", mediaEnabledNow() ? "ON" : "off",
+               media_forced_ >= 0 ? "NBT_KOMBI_MEDIA" : "iDrive menu / flag file", settings_.media_show_s,
+               settings_.media_refresh_s);
+    else if (mediaEnabledNow())
+        printf("[KombiNav] now playing in the cluster is on, but the %s driver has no text of its own: nothing is "
+               "shown\n", display_->name());
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
         return;
@@ -591,6 +662,7 @@ void KombiNav::navStatusCallback(uint16_t msg_id, const uint8_t* body, size_t le
 void KombiNav::onSessionEnded() {
     pthread_mutex_lock(&mu_);
     msgs_.clear();
+    now_playing_.clear();
     session_ended_ = true;
     pthread_mutex_unlock(&mu_);
 }
@@ -662,31 +734,42 @@ void KombiNav::tick(double now) {
     if (now - t_setting_ >= 1.0) {
         t_setting_ = now;
         bool on = enabledNow();
+        bool media = mediaEnabledNow();
+        const bool was = enabled_ || media_enabled_;
         if (on != enabled_) {
             printf("[KombiNav] cluster/HUD arrows turned %s\n", on ? "ON" : "off");
             enabled_ = on;
-            if (!on) {
-                if (core_->shown() || core_->sentAny()) core_->clear("turned off");
-                stopWatch();
-            } else {
-                pthread_mutex_lock(&watch_mu_);
-                watch_.reset();
-                pthread_mutex_unlock(&watch_mu_);
-            }
+            // The idle text, if it is on, is drawn again on this tick.
+            if (!on && (core_->shown() || core_->sentAny())) core_->clear("turned off");
+        }
+        if (media != media_enabled_) {
+            printf("[KombiNav] now playing in the cluster turned %s\n", media ? "ON" : "off");
+            media_enabled_ = media;
+            if (!media && core_->idleShown()) core_->clear("now playing turned off");
+        }
+        const bool is = enabled_ || media_enabled_;
+        if (was && !is) {
+            stopWatch();
+        } else if (!was && is) {
+            pthread_mutex_lock(&watch_mu_);
+            watch_.reset();
+            pthread_mutex_unlock(&watch_mu_);
         }
     }
     markShown(core_->shown() || core_->sentAny());
-    if (!enabled_) return;
+    if (!enabled_ && !media_enabled_) return;
     if (yield_enabled_) startWatch(now);
 
     NavMessages m;
     double last_msg;
     bool ended;
+    std::string playing;
     pthread_mutex_lock(&mu_);
     m = msgs_;
     last_msg = last_msg_t_;
     ended = session_ended_;
     session_ended_ = false;
+    if (media_enabled_) playing = now_playing_;
     pthread_mutex_unlock(&mu_);
 
     if (ended) {
@@ -702,7 +785,7 @@ void KombiNav::tick(double now) {
     }
     if (disabled_session_ || now < backoff_until_) return;
 
-    bool guidance = m.guidanceActive();
+    bool guidance = enabled_ && m.guidanceActive();   // with the arrows off, only the idle text is ours
     bool factory = false;
     if (yield_enabled_) {
         pthread_mutex_lock(&watch_mu_);
@@ -731,6 +814,7 @@ void KombiNav::tick(double now) {
         else pv = &v;
     }
     core_->step(pv, now, why);
+    core_->idle(playing, now);
     if (core_->takeFallback() && !fallback_noted_) {
         fallback_noted_ = true;
         printf("[KombiNav] the phone sends no seconds to the next turn: using the %g mi distance rule\n",
