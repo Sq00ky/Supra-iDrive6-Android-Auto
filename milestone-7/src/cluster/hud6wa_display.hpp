@@ -131,6 +131,7 @@ private:
     bool fresh_;             // the texts' visibility is not known: the next picture switches them on
     bool redraw_;            // the terminal dropped work since our last picture: draw it again
     bool held_;              // a maneuver waits for the transport's queue: draw it on the next step
+    bool claim_;             // our guidance session has drawn nothing yet: it may take a quiet navigation's HUD
     uint16_t visible_;       // the buffer on show
     uint32_t epoch_;         // the terminal's epoch when our last picture was queued
     int measured_w_, measured_h_;   // the picture-buffer size last fitted into p_ (0 = still on the profile defaults)

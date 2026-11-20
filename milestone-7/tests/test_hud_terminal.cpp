@@ -497,6 +497,28 @@ static void testNavFinishes() {
     assert(k.status() == kNavActive);
 }
 
+// A navigation gone quiet with its route still on screen (CarPlay Advanced after its session ended mid-route) holds the
+// HUD for good on its own; a new guidance of ours may take it once it has been quiet for navQuietMs. One still drawing
+// keeps it, and drawing again takes it back.
+static void testNavClaim() {
+    Core k = readyCore();
+    assert(k.claim(500));                                     // nothing to take: ready
+    Wire on = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(on.v, 1000);
+    Wire poly = navAnswer(kAddPolygon, addPolygon(6, 0, kPolygon, std::vector<Point>(3)));
+    k.onMessage(poly.v, 2000);
+    k.tick(120000);
+    assert(k.status() == kNavActive);                         // its route is on screen: no quiet ever releases it
+    Wire poly2 = navAnswer(kAddPolygon, addPolygon(6, 1, kPolygon, std::vector<Point>(3)));
+    k.onMessage(poly2.v, 121000);
+    assert(!k.claim(125999) && k.status() == kNavActive);     // drawn 4999 ms ago: still its HUD
+    Status s;
+    while (k.takeStatusChange(s)) {}
+    assert(k.claim(126000) && k.status() == kReady && k.takeStatusChange(s) && s == kReady);
+    k.onMessage(poly.v, 127000);                              // it draws again: it has the HUD back
+    assert(k.status() == kNavActive);
+}
+
 // Navigation traffic that never draws (a set-up, a status, clearing up) yields only until the terminal is quiet; a
 // drawing seen without its frame-on (a route already running at start-up) holds until the frame goes off.
 static void testNavWithoutRoute() {
@@ -937,6 +959,7 @@ int main() {
     testOwnAndForeignIgnored();
     testNavTakeoverMidBatch();
     testNavFinishes();
+    testNavClaim();
     testNavWithoutRoute();
     testCleanUpAfterFrameOff();
     testLateErrorAfterTakeover();

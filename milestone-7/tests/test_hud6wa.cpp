@@ -44,8 +44,10 @@ struct FakePort : public Port {
     Status afterReset;
     std::vector<Batch> batches;
     int mw, mh;              // the picture buffer's size once "measured" (ImageGetSize); 0 = no answer
+    bool claimable;          // claim() takes the HUD from the navigation we yield to
+    int claims;
     FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady), mw(0),
-                 mh(0) {}
+                 mh(0), claimable(false), claims(0) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
         for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(k6wa)));
@@ -59,6 +61,7 @@ struct FakePort : public Port {
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
     bool measuredSize(int& w, int& h) const { if (!mw) return false; w = mw; h = mh; return true; }
+    bool claim() { ++claims; if (st == kNavActive && claimable) st = kReady; return st == kReady; }
 };
 
 static std::vector<std::string> g_log;
@@ -1030,6 +1033,40 @@ static void testStates() {
     assert(d.showManeuver(view(7, "Testroad", "1", 2, 1000), 4, true, false) == ClusterDisplay::kInternal);
 }
 
+// CarPlay Advanced ended mid-route without its frame-off: the terminal yields for good. A new guidance session of ours
+// takes the HUD once that navigation is quiet (Port::claim) and draws everything afresh, also when the step it missed
+// while yielding already counts as shown. A session that has drawn keeps yielding as before, until it ends.
+static void testClaim() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
+    d.setLog(&logFn, NULL);
+    NavView v = view(8, "Testroad", "200", 1, 200);
+    port.st = kNavActive;
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && port.batches.empty());   // not quiet yet
+    assert(port.claims == 1 && port.st == kNavActive);
+    port.claimable = true;
+    assert(d.updateDistance(view(8, "Testroad", "150", 1, 150), 1) == ClusterDisplay::kOk);     // quiet now: ours
+    assert(port.st == kReady && logged("taken for our new guidance"));
+    assert(d.sameManeuver(v, 2));                             // the missed step is drawn afresh, texts on
+    assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+    assert(port.batches.back().label == "redraw" && port.batches.back().full);
+    bool texts = false;
+    for (size_t i = 0; i < port.batches.back().calls.size(); ++i)
+        texts = texts || (port.batches.back().calls[i].fkt == kSetVisibility && port.batches.back().calls[i].handle() == k6wa.street);
+    assert(texts);
+
+    int claims = port.claims;
+    port.st = kNavActive;                                     // the navigation draws over our session again
+    assert(d.showManeuver(view(7, "Other", "300", 1, 300), 3, true, false) == ClusterDisplay::kOk);
+    assert(port.st == kNavActive && port.claims == claims);   // a session that drew does not take it back
+    std::string detail;
+    assert(d.clear(&detail));                                 // our guidance ends; the next one may take it
+    assert(d.showManeuver(v, 4, true, true) == ClusterDisplay::kOk && port.st == kReady);
+    assert(port.claims == claims + 1 && port.batches.back().label == "maneuver");
+}
+
 static void testShadow() {
     g_log.clear();
     FakePort port;
@@ -1238,6 +1275,7 @@ int main() {
     testJunctionLanes();
     testJunctionCore();
     testStates();
+    testClaim();
     testShadow();
     testCore();
     runKombiNav(true);

@@ -115,6 +115,7 @@ public:
     void onMessage(const most::View& m, uint32_t now);
     void tick(uint32_t now);                  // timeouts and the end of the navigation's route
     void guidanceMoved(const most::View& m);  // the cluster's kGuidanceMovedFkt: on a new place, measure again
+    bool claim(uint32_t now);                 // a new guidance of ours: a quiet navigation's HUD is ours (Port)
     void reset(uint32_t now);                 // leave kFailed
 
     SubmitResult submit(const Batch& b, uint32_t now);
@@ -198,6 +199,10 @@ public:
     // The cluster's picture-buffer size (ImageGetSize), once it has arrived; false until then, or when the transport
     // does not measure. A driver fits its box to it. Default false: a test fake need not implement it.
     virtual bool measuredSize(int& w, int& h) const { (void)w; (void)h; return false; }
+    // A new guidance of ours meets a navigation we yield to: take the HUD over when that navigation has been quiet for
+    // navQuietMs, even with its route still on screen (Core::claim). True when the terminal is then ready. Default
+    // false: a test fake need not implement it.
+    virtual bool claim() { return false; }
 };
 
 // A Core on its own thread. attach() before the client's start(). The listener runs on the terminal's thread with no
@@ -225,6 +230,7 @@ public:
     bool waiting(int slot) const;
     bool waitIdle(uint32_t ms);
     bool measuredSize(int& w, int& h) const;
+    bool claim();
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop
 

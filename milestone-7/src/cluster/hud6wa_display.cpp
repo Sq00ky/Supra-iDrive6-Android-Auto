@@ -63,7 +63,7 @@ void addHides(Batch& b, const HudProfile& p) {
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
     : port_(port), p_(p), base_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
-      redraw_(false), held_(false), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), has_layout_(false),
+      redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), has_layout_(false),
       near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
       route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false) {}
 
@@ -77,7 +77,15 @@ void Hud6waDisplay::log(const char* fmt, ...) {
 }
 
 // The terminal's state as a draw result. The epoch is read first, so work dropped after this read shows next time.
+// A guidance session that has drawn nothing yet takes the HUD from a navigation gone quiet with its route still on
+// screen (Port::claim: what CarPlay Advanced leaves when its session ends mid-route), and draws everything afresh:
+// the step it missed while yielding may already count as shown.
 ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
+    if (claim_ && !shadow_ && port_.status() == kNavActive && port_.claim()) {
+        log("a quiet navigation still held the HUD: taken for our new guidance, drawn afresh");
+        redraw_ = true;
+        fresh_ = true;
+    }
     uint32_t e = port_.epoch();
     if (epoch) *epoch = e;
     Status st = port_.status();
@@ -407,6 +415,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     fresh_ = false;
     redraw_ = false;
     held_ = false;
+    claim_ = false;
     epoch_ = e;
     shown_ = t;
     near_shown_ = junction;
@@ -461,6 +470,7 @@ ClusterDisplay::Result Hud6waDisplay::remind(const NavView& v, double) {
 }
 
 bool Hud6waDisplay::clear(std::string* detail) {
+    claim_ = true;                                    // our guidance ends: the next one starts a new session
     Status st = port_.status();
     if (st == kNavActive) {
         log("the factory navigation has the panel: it clears it itself");
@@ -497,6 +507,7 @@ bool Hud6waDisplay::clear(std::string* detail) {
 
 void Hud6waDisplay::forget() {
     sent_any_ = false;
+    claim_ = true;
     fresh_ = true;
     redraw_ = false;
     held_ = false;

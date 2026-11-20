@@ -423,6 +423,22 @@ void Core::guidanceMoved(const most::View& m) {
     ++stats_.remeasures;
 }
 
+// A navigation we yield to holds the HUD until its frame goes off and it is quiet (tick): a parked route is quiet too,
+// and is not to be drawn over. But a navigation that went without its frame-off would hold it for good: CarPlay
+// Advanced on the same picture buffers, when the CarPlay session ended mid-route (F30, #264), left its last picture on
+// show and our Android Auto guidance never drew until the daemon restarted. So a new guidance of ours, which has drawn
+// nothing yet (the driver's call, Port::claim), takes the HUD over from a navigation quiet for navQuietMs, route on
+// screen or not. One still drawing keeps it, and drawing again takes it back.
+bool Core::claim(uint32_t now) {
+    if (navActive_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
+        navActive_ = false;
+        routeOn_ = false;
+        frameOff_ = false;
+        refresh("factory navigation quiet with its route on screen: our new guidance takes the HUD", now);
+    }
+    return status_ == kReady;
+}
+
 void Core::tick(uint32_t now) {
     // No answer to ImageGetSize in time. A cold cluster answers it later (after an iDrive restart, #264), so keep
     // listening and take it then; meanwhile the defaults stand. Never a failure, never asked again.
@@ -616,6 +632,14 @@ void HudTerminal::onMessage(const most::View& m) {
     core_.onMessage(m, nowMs());
     wake();
     pthread_mutex_unlock(&lock_);
+}
+
+bool HudTerminal::claim() {
+    pthread_mutex_lock(&lock_);
+    bool ready = core_.claim(nowMs());
+    wake();
+    pthread_mutex_unlock(&lock_);
+    return ready;
 }
 
 void HudTerminal::onGuidanceMoved(const most::View& m) {
