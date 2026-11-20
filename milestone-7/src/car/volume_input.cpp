@@ -27,10 +27,10 @@ void VolumeInput::onLink(most::LinkState s) {
 }
 
 void VolumeInput::onStatus(const most::View& m) {
-    int level = 0, max = 0;
-    if (!level_.feed(m.len ? m.data : NULL, m.len, m.rxMs, level, max)) return;
-    printf("[Knob] VOLUME level %d/%d (AudioMaster)\n", level, max);
-    if (cb_) cb_(level, max, user_);
+    CarVolume v;
+    if (!level_.feed(m.len ? m.data : NULL, m.len, m.rxMs, v)) return;
+    printf("[Knob] VOLUME level %d/%d min %d (AudioMaster)\n", v.level, v.max, v.min);
+    if (cb_) cb_(v, user_);
 }
 
 } // namespace car

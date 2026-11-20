@@ -9,8 +9,8 @@
 namespace nbt {
 namespace car {
 
-// level 0..max as the car applied it (max > 0). On the DSI callback thread: see the handler rules in most/client.hpp.
-typedef void (*VolumeCb)(int level, int max, void* user);
+// The level as the car applied it. On the DSI callback thread: see the handler rules in most/client.hpp.
+typedef void (*VolumeCb)(const CarVolume& v, void* user);
 
 // The car's master volume for the daemon's volume overlay. A consumer of the observe-only MOST client: it receives
 // copies of AudioMaster's level status (car/volume_level.hpp) and adds no keys and no requests. The HMI keeps receiving

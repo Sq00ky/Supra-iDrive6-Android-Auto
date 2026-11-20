@@ -17,10 +17,12 @@ using most_fixture::registered;
 
 static std::vector<int> g_levels;
 static int g_max = -1;
-static void onVolume(int level, int max, void* user) {
+static int g_min = -1;
+static void onVolume(const CarVolume& v, void* user) {
     assert(user == &g_levels);
-    g_levels.push_back(level);
-    g_max = max;
+    g_levels.push_back(v.level);
+    g_max = v.max;
+    g_min = v.min;
 }
 
 static std::string g_keys;
@@ -83,6 +85,10 @@ int main() {
         registered(94);
         sendLevel(20, 0x01);
         assert(g_levels.size() == 8 && g_levels[7] == 20);
+
+        const uint8_t nav[5] = { 0x01, 0x00, 0x37, 0x19, 0x64 };   // the nav volume: its minimum reaches the callback
+        sendFrame(0x20, 0, 0xC08, kOpStatus, std::vector<uint8_t>(nav, nav + 5));
+        assert(g_levels.size() == 9 && g_levels[8] == 55 && g_min == 25);
     }
 
     // With CcsInput on the same client: the controller's 8 keys are unchanged and both consumers get their messages.

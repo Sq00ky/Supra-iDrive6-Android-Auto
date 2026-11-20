@@ -36,6 +36,8 @@ typedef void (*NavStatusCallback)(uint16_t msg_id, const uint8_t* body, size_t l
 // Media playback channel (ch 12: 0x8001 status, 0x8003 metadata, anything else the phone sends there): the message id and
 // its protobuf body (after the 2-byte message id). Session thread: copy what you need and return, never block.
 typedef void (*MediaStatusCallback)(uint16_t msg_id, const uint8_t* body, size_t len, void* user_data);
+// Phone status channel (ch 11): whether a call rings or is active (aa_phone_status.hpp). Session thread.
+typedef void (*PhoneCallCallback)(bool inCall, void* user_data);
 
 class AASession {
 public:
@@ -53,6 +55,7 @@ public:
     void setMicRequestCallback(MicRequestCallback cb, void* user_data = NULL);
     void setNavStatusCallback(NavStatusCallback cb, void* user_data = NULL);
     void setMediaStatusCallback(MediaStatusCallback cb, void* user_data = NULL);
+    void setPhoneCallCallback(PhoneCallCallback cb, void* user_data = NULL);
     bool isActive() const { return isRunning(); }   // true from start() until the session ended or stop()
     // How the phone behaved in the session. Written by the session thread: read it in the session-ended callback.
     enum Outcome {
@@ -208,6 +211,8 @@ private:
     void* nav_user_data_;
     MediaStatusCallback media_cb_;
     void* media_user_data_;
+    PhoneCallCallback phone_cb_;
+    void* phone_user_data_;
     bool mic_open_;                                // guarded by touch_mutex_
     std::vector<std::vector<uint8_t> > mic_queue_; // guarded by touch_mutex_
     uint32_t mic_sent_;                            // session thread

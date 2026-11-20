@@ -4,14 +4,16 @@
 #define NBT_VOLUME_OSD_HPP
 
 // Volume overlay: a QNX Screen window of its own (RGBA8888, per-pixel alpha) on LayerManager surface 1281, drawn over
-// the Android Auto picture, showing a pill with a speaker glyph, a bar and a percentage. It appears when the volume
-// changes and clears itself 1.4 s later, like the stock OSD.
+// the Android Auto picture, showing a pill with a speaker glyph, a bar and which volume it is. It appears when the
+// volume changes and clears itself 1.4 s later, like the stock OSD.
 //
 // It never touches the video window or surface 1280: its window is named "1281", so LayerManagerService gives it a
 // surface of its own (car-verified 2026-11-05, tools/osd1281probe). VideoManager puts that surface on top of 1280 in
 // the Android Auto layer while the picture is shown; the layer's hide order holds neither, so the pill leaves with
 // the picture. A failure only means "no OSD" - the daemon keeps running. On by default, NBT_VOL_OSD=0 turns it off; the
 // value comes from the car's own volume (AudioMaster 0x20/0x0C08), never from a synthetic sweep.
+
+#include "volume_pill.hpp"
 
 #include <stdint.h>
 
@@ -31,8 +33,8 @@ public:
     bool start(void* ctx, void* parentWindow);
     void stop();
 
-    // Thread-safe: records the new value, repaints and re-arms the hide timer.
-    void setPct(int pct);
+    // Thread-safe: records the level and label, repaints and re-arms the hide timer.
+    void setLevel(int pct, PillLabel label);
 
     // Thread-safe: follow Android Auto's own show/hide (reverse, park assist, driving mode, BACK hold, ...). The surface
     // itself leaves with the picture (VideoManager's render order); hidden here only means no pill is drawn (iDrive
@@ -54,7 +56,7 @@ private:
     void* win_;
     volatile bool running_;
     volatile bool ready_;
-    volatile int pct_;
+    volatile int level_;        // pillPack(pct, label)
     volatile bool dirty_;
     volatile bool aaShown_;     // Android Auto is on screen (setShown)
     volatile bool surfaceReady_;   // LayerManager surface 1281 exists for the window and is set up
