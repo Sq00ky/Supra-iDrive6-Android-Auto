@@ -1,5 +1,8 @@
 # NBT-AAD: native wireless Android Auto for NBT Evo (ID6) head units
 
+An experimental, opt-in dashboard shortcut using the factory CarPlay icon and caption
+is documented in [rhmiapp/HOME-SHORTCUT.md](rhmiapp/HOME-SHORTCUT.md). It supports one verified ID6L firmware profile.
+
 **BMW Favorite Keys:** native 1–8 previews over Android Auto, a visibility toggle,
 ambient/preset/custom colours, matching volume colour and an Android Auto menu icon.
 See [features, implementation, validation and update/restore instructions](FAVOURITE-KEYS.md).

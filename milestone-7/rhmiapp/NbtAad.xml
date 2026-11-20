@@ -43,6 +43,7 @@
       <raAction id="424"/>
       <raAction id="425"/>
       <raAction id="248"/>
+      <raAction id="181"/>
     </actions>
     <models>
       <textIdModel id="3" textId="1">
@@ -200,6 +201,8 @@
       <textIdModel id="154" textId="43">
         <synonyms/>
       </textIdModel>
+      <raBoolModel id="182"/>
+      <textIdModel id="183" textId="49"><synonyms/></textIdModel>
       <raBoolModel id="160"/>
       <textIdModel id="161" textId="44">
         <synonyms/>
@@ -302,6 +305,7 @@
           <checkbox action="159" id="162" model="160" text="CarPlay compatibility" textModel="161"/>
           <checkbox action="248" id="249" model="250" text="Disable Favorites Bar"/>
           <button action="414" id="407" model="400" text="Gauge cluster type"/>
+          <checkbox action="181" id="184" model="182" text="Home shortcut (CarPlay icon, experimental)" textModel="183"/>
           <separator id="142"/>
           <button action="132" id="135" model="134" text="Install PF Rules"/>
           <button action="136" id="140" model="138" text="Check PF Rules"/>
@@ -333,7 +337,7 @@
           <radiobutton action="413" id="410" model="403" text="..." textModel="406"/>
         </components>
       </hmiState>
-    
+
       <hmiState id="18" parentId="14" text="Car manufacturer">
         <properties><property id="24" value="3"/></properties>
         <components>

@@ -65,6 +65,8 @@
 #include "cds_parse.hpp"
 #include "boot_guard.hpp"
 #include "overlay_watch.hpp"
+#include "home_shortcut.hpp"
+#include "home_setting.hpp"
 #include "entry_key.hpp"
 #include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
 #include "../src/favourite_colour.hpp"
@@ -391,6 +393,8 @@ const char* const kLciMediaFlag    = "lci-media";
 // "CarPlay compatibility" (rhmiapp-54-cpcompat), off by default: <checkbox action="159" id="162" model="160"
 // textModel="161">. Flag file read by nbt-aad at start (nbt_env.hpp cpCompatEnabled()); NBT_CP_COMPAT in nbt-aad.env
 // wins. Ids 155-158 are left to PR #167.
+const unsigned    kActHomeShortcut = 181;
+const unsigned    kHomeShortcutModel = 182;
 const unsigned    kActCpCompat     = 159;
 const unsigned    kCpCompatModel   = 160;
 const char* const kCpCompatFlag    = "carplay-compat";
@@ -2199,6 +2203,22 @@ bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+// HMI-only preference: polled live, without restarting the phone session.
+bool g_homeShortcutShown = false;
+void showHomeShortcut(bmw::PluginApp* app) {
+    app->updateModel(kHomeShortcutModel, nbt::home::shortcutEnabled());
+    g_homeShortcutShown = true;
+}
+bool onHomeShortcutToggle(void*, const bmw::Parcel&) {
+    bool next = !nbt::home::shortcutEnabled();
+    if (!nbt::home::setShortcutEnabled(next))
+        alog("home shortcut: cannot save setting (errno %d)", errno);
+    else
+        alog("home shortcut: %s (factory CarPlay appearance, compatible firmware required)", next ? "on" : "off");
+    if (g_runApp) showHomeShortcut(g_runApp);
+    return true;
+}
+
 bool g_cpCompatShown = false;
 bool cpCompatOn() { return nbt::flagSet(kCpCompatFlag); }
 void showCpCompat(bmw::PluginApp* app) {
@@ -2434,6 +2454,7 @@ void statusRun(void* /*self*/) {
     if (!g_nativeAudioShown) showNativeAudio(app);
     if (!g_lciMediaShown) showLciMedia(app);
     if (!g_cpCompatShown) showCpCompat(app);
+    if (!g_homeShortcutShown) showHomeShortcut(app);
     servicePfOps(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
@@ -2441,6 +2462,10 @@ void statusRun(void* /*self*/) {
     serviceBootGuardSettle();
     DaemonState d = readDaemonState();
     bool connecting = !strcmp(d.state, "connecting"), connected = !strcmp(d.state, "connected");
+    if (nbt::home::poll(connected) && connected && !g_stopPid) {
+        alog("home shortcut selected: restoring Android Auto");
+        startDaemonOrShow();
+    }
 
     // "state|carplay|wfd|usb|transport", written by the daemon from measured facts. The chain is
     // carplay.ini -> wfd0 -> USB, so the row names the link that is missing and the setting that fixes it.
@@ -2723,8 +2748,9 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showNativeAudio(g_app);
         showLciMedia(g_app);
         showCpCompat(g_app);
+        showHomeShortcut(g_app);
         showSpeechBt(g_app);
-        alog("settings: thirteen checkbox models refreshed");
+        alog("settings: checkbox models refreshed");
     }
     return true;
 }
@@ -2748,7 +2774,10 @@ void addAction(bmw::PluginApp* self, unsigned id, bool (*stub)(void*, const bmw:
     self->addHandler(id, d);
 }
 
+void homeShortcutLog(const char* message) { alog("%s", message); }
+
 bool appOnInit(bmw::PluginApp* self) {
+    nbt::home::start(&homeShortcutLog);
     addAction(self, kEntryAction, &onEntryAction);
     addAction(self, kActStart, &onStartRow);
     addAction(self, kActStop, &onStopRow);
@@ -2775,6 +2804,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActNativeAudio, &onNativeAudioToggle);
     addAction(self, kActLciMedia, &onLciMediaToggle);
     addAction(self, kActCpCompat, &onCpCompatToggle);
+    addAction(self, kActHomeShortcut, &onHomeShortcutToggle);
     addAction(self, kActAnyDist, &onAnyDistToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
     addAction(self, kActSpeechBt, &onSpeechBtToggle);
@@ -2823,6 +2853,7 @@ void appOnError(bmw::PluginApp* /*self*/, unsigned code, const bmw::BasicString<
 
 void appOnFinalize(bmw::PluginApp* self) {
     alog("onFinalize");
+    nbt::home::stop();
     g_runApp = NULL;
     self->onFinalize();
 }

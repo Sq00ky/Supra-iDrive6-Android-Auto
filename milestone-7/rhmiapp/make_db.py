@@ -62,6 +62,7 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
 
 
          44: "CarPlay compatibility",   # 44 = CarPlay compatibility checkbox (rhmiapp-54-cpcompat)
+         49: "Home shortcut (CarPlay icon, experimental)",
          17: ABOUT}
 # Per-language overrides (ASCII only, like the language names above).
 LANG_TEXTS = {
