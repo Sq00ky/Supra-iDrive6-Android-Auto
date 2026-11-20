@@ -11,7 +11,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
-> **v1.9.113-nbtapps / rhmiapp-99-nbtapps: NBTApps compatibility.** A package install keeps its files in
+> **v1.9.114-status / rhmiapp-89-status: Gesture Control after a move to NBTApps, and a status row that says why the phone is stuck.** A package install keeps its files in
 > `/var/opt/nbtapp/data/com.github.sq00ky.android-auto`, but a few still used `/var/opt/aa`:
 > - Gesture Control under Android Auto (issue #281): the touch controller's learned address (`touch-peer`) was looked
 >   for only in the package's data dir, so after moving from a hand install every gesture was swallowed again until
@@ -20,6 +20,14 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 >   were written and read at `/var/opt/aa`; they now live in the data dir of the install, like every other setting.
 > - The favourite bar is built into nbt-aad only: the `nbt-aa-favourites` helper, its fallback launch from
 >   `/opt/aa` and `NBT_FAVOURITE_INPROC=0` are gone, so the package (nbt-aad + the plugin files) has everything.
+> - The Android Auto row's waiting text names the network nbt-aad really offers ("Waiting for phone on Wi-Fi Direct"
+>   with Use WiFi Direct Network on a CarPlay car, where it used to say "CarPlay Wi-Fi"), and says why a phone is stuck:
+>   "No Bluetooth link: forget phone in car, pair again" (the phone is connected over Bluetooth but has not opened the
+>   Android Auto link for 90 s), "Phone not on Wi-Fi: forget phone in car, pair again" (it took the Wi-Fi details and
+>   never joined; shown for 10 minutes or until a session starts), and "Car refused phone: see coding-requirements.md
+>   (GitHub)" (5 ServiceRequestErrors in a row, the car turning the link down; the log line points there too). The
+>   daemon writes these to `/dev/shmem/nbt-aad-hint` ("net|hint", `src/status_hint.hpp`), next to the unchanged
+>   `/dev/shmem/nbt-aad-status`, so an older iDrive app is not confused by a newer daemon.
 >
 > **v1.9.88-autors / rhmiapp-68-autors: Settings changes apply at once.** The app notes every Settings
 > checkbox when the Settings page opens and compares when you go back to the Android Auto main page (Start / Force Stop

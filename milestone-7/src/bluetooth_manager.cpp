@@ -221,7 +221,9 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
             printf("[BluetoothManager] the car has refused the phone's Android Auto Bluetooth link %u times in a row. "
                    "The phone sees the service and the car turns the link down for this phone: check the phone's "
                    "functions in iDrive (Mobile devices, the phone's settings), delete the phone in iDrive and on the "
-                   "phone and pair it again, with the ignition on and the pairing menu closed\n", g_reqErrRun);
+                   "phone and pair it again, with the ignition on and the pairing menu closed. If it keeps refusing, the car is "
+                   "most likely missing coding: see coding-requirements.md on GitHub (A4A_ANDROID, "
+                   "A4A_WIRELESS_ANDROID); iDrive's Android Auto row says so too\n", g_reqErrRun);
             if (!g_reqErrListAsked && !addr.empty()) {   // which of its services the car has connected (once per run)
                 g_reqErrListAsked = true;
                 g_reqErrListPending = true;
@@ -448,5 +450,9 @@ void BluetoothManager::stop() {
     // connection thread is detached and sending off-thread is unsafe.
     is_registered_ = false;
 }
+
+// For the iDrive status hint (status_hint.hpp): plain word reads, written on the DSI callback thread only.
+int btPhoneConnState() { return (int)g_phoneConn; }
+unsigned btRefusedRun() { return g_reqErrRun; }
 
 } // namespace nbt

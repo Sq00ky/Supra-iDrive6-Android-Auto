@@ -68,6 +68,7 @@
 #include "entry_key.hpp"
 #include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
 #include "../src/favourite_colour.hpp"
+#include "../src/status_hint.hpp"
 #include <vector>
 #ifdef __QNX__
 #include <sys/slog.h>
@@ -261,6 +262,10 @@ const unsigned    kTextAaConnecting2 = 331;
 const unsigned    kTextAaWaitUsb     = 332;
 const unsigned    kTextAaWaitCarplay = 333;
 const unsigned    kTextAaWaitWfd     = 334;
+const unsigned    kTextAaWaitWfdNet  = 335;   // waiting, Wi-Fi Direct is the network offered (rhmiapp-100)
+const unsigned    kTextAaNoBt        = 336;   // phone on Bluetooth, never opened the Android Auto link: re-pair
+const unsigned    kTextAaNoJoin      = 337;   // phone took the Wi-Fi details, never joined: re-pair
+const unsigned    kTextAaCoding      = 338;   // car keeps refusing the link (ServiceRequestError): coding
 const unsigned    kTextStart      = 10;      // "Start Android Auto"
 const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
@@ -2452,16 +2457,20 @@ void statusRun(void* /*self*/) {
     char st[24] = {0}, tr[8] = {0};
     int hasIni = 0, hasWfd = 0, hasUsb = 0;
     sscanf(rec, "%23[^|]|%d|%d|%d|%7s", st, &hasIni, &hasWfd, &hasUsb, tr);
+    // "net|hint" (status_hint.hpp; absent from an older daemon): the network offered and why a phone is stuck.
+    char net[8] = {0}, hint[8] = {0};
+    { FILE* hf = fopen("/dev/shmem/nbt-aad-hint", "r");
+      if (hf) { char hrec[24] = {0}; if (fscanf(hf, "%23s", hrec) == 1) sscanf(hrec, "%7[^|]|%7s", net, hint); fclose(hf); } }
     unsigned statusText = kTextAaDefault;
     if (!strcmp(st, "connected"))       statusText = !strcmp(tr, "usb") ? kTextAaUsbOk : kTextAaWifiOk;
     else if (!strcmp(st, "connecting")) statusText = kTextAaConnecting2;
     else if (d.pid > 0) {
         // Which link the driver should use: the USB-only setting wins, then carplay.ini, then Wi-Fi Direct.
         // usbAaOn() is the same flag file the daemon reads, so both sides agree without a second channel.
-        if (usbAaOn())        statusText = kTextAaWaitUsb;
-        else if (hasIni)      statusText = kTextAaWaitCarplay;
-        else if (hasWfd)      statusText = kTextAaWaitWfd;
-        else                  statusText = kTextAaUsbOnly;
+        // A hint (stuck on Bluetooth / Wi-Fi / refused by the car) comes before the network name.
+        static const unsigned kWaitText[] = { kTextAaWaitUsb, kTextAaCoding, kTextAaNoJoin, kTextAaNoBt,
+                                              kTextAaWaitWfdNet, kTextAaWaitCarplay, kTextAaWaitWfd, kTextAaUsbOnly };
+        statusText = kWaitText[nbt::waitingKind(usbAaOn(), net, hint, hasIni != 0, hasWfd != 0)];
     }
     unsigned want = statusText;                                          // the Media/Radio entry row
     if (want != g_shownText) {

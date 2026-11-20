@@ -100,6 +100,7 @@
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
+#include "status_hint.hpp"
 #include "wfd_own.hpp"     // DIRECT mode: nbt-aad's own passphrase on the car's Wi-Fi Direct group
 #include "keyframe_ask.hpp"
 #include "touch_probe.hpp"
@@ -525,6 +526,8 @@ static bool ctlClaimOrForward() {
 // credentials and our ip:port, and the phone then opens the TCP session itself.
 static uint16_t g_aaPort = 5277;
 static volatile int g_btLink = 0;              // wireless thread: phone's Bluetooth setup link (/dev/btspp0) is open
+static volatile uint32_t g_btIdleSince = 0;     // wireless thread: waiting for that link since (monoSecs; 0 = not waiting)
+static volatile uint32_t g_noJoinAt = 0;        // wireless thread: phone took the Wi-Fi details, never joined (monoSecs)
 
 // Menu-entry status for the iDrive plugin (libNbtAad.so polls it once a second): "<state> <pid> <overlay>" in
 // /dev/shmem/nbt-aad-state, state = idle | connecting | connected, overlay = 1 while Android Auto is on screen and
@@ -622,6 +625,8 @@ static void probeStatusFacts(uint32_t now) {
     }
     s_statusFacts.usb = access("/dev/io-usb", F_OK) == 0 ? 1 : 0;
 }
+static uint32_t monoSecs();
+static const char* const kHintFile = "/dev/shmem/nbt-aad-hint";
 static void writeStatus(const char* state) {
     const char* tok = "waiting-phone";
     if (!strcmp(state, "connected")) tok = "connected";
@@ -632,6 +637,27 @@ static void writeStatus(const char* state) {
     snprintf(rec, sizeof(rec), "%s|%d|%d|%d|%s", tok, g_carplayIni.empty() ? 0 : 1, s_statusFacts.wfd,
              s_statusFacts.usb, transport);
     int fd = open(kStatusFile, O_WRONLY | O_CREAT, 0666);
+    if (fd < 0) return;
+    fchmod(fd, 0666);
+    if (write(fd, rec, strlen(rec)) == (ssize_t)strlen(rec)) ftruncate(fd, (off_t)strlen(rec));
+    close(fd);
+
+    // "net|hint" (status_hint.hpp): the network offered to the phone, and why a waiting phone is stuck.
+    const char* net = !nbt::altWifiPrefersCarplay() ? "wfd" : (g_carplayIni.empty() ? "-" : "cp");
+    const char* hint = "-";
+    if (!strcmp(tok, "waiting-phone"))
+        hint = nbt::statusHint(nbt::btRefusedRun(), monoSecs(), g_noJoinAt, g_btIdleSince, nbt::btPhoneConnState());
+    static const char* s_lastHint = "-";
+    if (strcmp(hint, s_lastHint)) {
+        printf("[Status] iDrive hint: %s (%s)\n", hint,
+               !strcmp(hint, "coding") ? "the car keeps refusing the phone's Android Auto link: coding-requirements.md"
+               : !strcmp(hint, "nojoin") ? "the phone took the Wi-Fi details but never joined: forget the phone in the car, pair again"
+               : !strcmp(hint, "bt") ? "phone on Bluetooth but no Android Auto link: forget the phone in the car, pair again"
+               : "none");
+        s_lastHint = hint;
+    }
+    snprintf(rec, sizeof(rec), "%s|%s", net, hint);
+    fd = open(kHintFile, O_WRONLY | O_CREAT, 0666);
     if (fd < 0) return;
     fchmod(fd, 0666);
     if (write(fd, rec, strlen(rec)) == (ssize_t)strlen(rec)) ftruncate(fd, (off_t)strlen(rec));
@@ -1138,14 +1164,14 @@ static void* wirelessThread(void*) {
             printf("[Wireless] no hold while the phone asks (NBT_SPP_REREG_HOLD_S=0)\n");
     } else
         printf("[Wireless] automatic Bluetooth service re-registration off (NBT_SPP_REREG_S=0)\n");
-    bool idleWait = false;      // waiting for a link; the re-registration timer runs from when this started
+    bool idleWait = false; g_btIdleSince = 0;      // waiting for a link; the re-registration timer runs from when this started
     uint32_t idleStart = 0;
     int apCfgState = -1;        // Wi-Fi hotspot config: -1 not checked yet, 0 none, 1 present
     uint32_t apCfgChecked = 0;
     bool usbHeld = false;       // a phone is on the USB cable (NBT_USB=1): wireless steps aside
     while (g_running) {
         // Nothing to do while a projection session is running; re-arm after it ends.
-        if (g_sessionActive) { idleWait = false; sleep(1); continue; }
+        if (g_sessionActive) { idleWait = false; g_btIdleSince = 0; sleep(1); continue; }
 
         // Watch the access point while idle (every ~2 s): when it comes back after being off, the car was switched
         // off and on again under us -> refresh the firewall and the listener before the phone tries again.
@@ -1155,7 +1181,7 @@ static void* wirelessThread(void*) {
                 if (st == 0) printf("[Wireless] %s has no IP address: the car's Wi-Fi access point is off\n", pollIfn);
                 else if (apState == 0) {
                     recoverWifiPath("the car's Wi-Fi access point came back");
-                    idleWait = false;   // the car woke up: start the re-registration schedule from its first step
+                    idleWait = false; g_btIdleSince = 0;   // the car woke up: start the re-registration schedule from its first step
                 }
                 apState = st;
             }
@@ -1172,7 +1198,7 @@ static void* wirelessThread(void*) {
                                                  "wireless Android Auto available");
             usbHeld = usbPhone;
         }
-        if (usbPhone) { idleWait = false; usleep(500000); continue; }
+        if (usbPhone) { idleWait = false; g_btIdleSince = 0; usleep(500000); continue; }
 
         // No Wi-Fi hotspot config: do not open the phone's Bluetooth links (we would only close them again) and do
         // not re-register the Bluetooth service; look for the config again every kApCfgRecheckSec.
@@ -1185,7 +1211,7 @@ static void* wirelessThread(void*) {
                 if (st == 1 && apCfgState == 0) printf("[Wireless] Wi-Fi hotspot config found: wireless Android Auto available\n");
                 apCfgState = st;
             }
-            if (apCfgState != 1) { idleWait = false; usleep(500000); continue; }
+            if (apCfgState != 1) { idleWait = false; g_btIdleSince = 0; usleep(500000); continue; }
         }
 
         // The SPP node only exists while the phone's Bluetooth link is up: poll for it first and
@@ -1196,7 +1222,7 @@ static void* wirelessThread(void*) {
             if ((quiet++ % 30) == 0)
                 printf("[Wireless] [%9.3f] waiting for %s (%s)\n", upSec(), dev, strerror(errno));
             uint32_t now = monoSecs();
-            if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); }
+            if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); g_btIdleSince = now ? now : 1; }
             else if (g_btMgr && rereg.enabled()) {
                 // Held while the phone asks for the link: checked BEFORE due(), so held time does not use up the
                 // 5 s steps of the schedule (the next round after the hold is still a short one).
@@ -1235,7 +1261,7 @@ static void* wirelessThread(void*) {
             usleep(500000);
             continue;
         }
-        idleWait = false;
+        idleWait = false; g_btIdleSince = 0;
         // Which Wi-Fi this link is offered (NBT_ALT_WIFI, alt_wifi.hpp):
         //   CARPLAY  the car's hotspot from iap2.cfg (iap2_Wifi.cfg as a second passphrase), no DIRECT fallback
         //   DIRECT   the car's Wi-Fi Direct group only, no hotspot fallback
@@ -1437,7 +1463,10 @@ static void* wirelessThread(void*) {
                 if (wirelessSessionActive()) everActive = true;
                 else usleep(200000);
             }
-            if (!everActive) recoverWifiPath("phone took the Wi-Fi details but did not connect");
+            if (!everActive) {
+                g_noJoinAt = monoSecs();   // iDrive: "Phone not on Wi-Fi: forget phone in car, pair again"
+                recoverWifiPath("phone took the Wi-Fi details but did not connect");
+            }
             if (everActive) {
                 apNoJoin = 0;
             } else if (++apNoJoin >= 2) {
@@ -1613,6 +1642,7 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     printf("[Main] [%9.3f] Android Auto client connected over %s on fd %d. Initializing aasdk session...\n",
            g_sessionStartS, nbt::transportName(t), client_fd);
     g_sessionActive = true;
+    g_noJoinAt = 0;
     resetMedia("new session");
     if (server) server->markSessionActive();
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames

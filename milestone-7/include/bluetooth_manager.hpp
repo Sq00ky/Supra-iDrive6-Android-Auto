@@ -61,6 +61,10 @@ unsigned sppDirRequests();
 // A phone asked for the Android Auto serial link (a ServiceRequest inform for 'SPP') within NBT_SPP_REREG_HOLD_S: periodic
 // re-registration is held. agoSec (optional) gets the age of the last request. Thread-safe.
 bool sppPhoneAsking(unsigned* agoSec);
+// For the iDrive status hint: the car's Bluetooth connection state for the phone (2 = connected, 3 = service
+// connected, 0 = none) and the ServiceRequestErrors in a row (reset by a ServiceRequestComplete).
+int btPhoneConnState();
+unsigned btRefusedRun();
 
 } // namespace nbt
 
