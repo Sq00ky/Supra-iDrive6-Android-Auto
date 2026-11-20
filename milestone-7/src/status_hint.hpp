@@ -12,16 +12,20 @@ const unsigned kHintRefusedRun = 5;     // ServiceRequestErrors in a row before 
 const uint32_t kHintNoBtS = 90;         // phone on Bluetooth this long without opening the Android Auto link
 const uint32_t kHintNoJoinS = 600;      // how long "took the Wi-Fi details, never joined" stays shown
 
-// "coding", "nojoin", "bt" or "-". Times are monotonic seconds, 0 = not set. btConn: the car's Bluetooth connection
-// state for the phone (2 = connected, 3 = service connected, below = none).
+// "coding", "nojoin", "bt", "nophone" or "-". Times are monotonic seconds, 0 = not set. btConn: the car's Bluetooth
+// connection state for the phone (2 = connected, 3 = service connected, 0/1 = no phone connected, -1 = not known yet:
+// the car has not sent its device list, so no "connect phone" right after start).
 inline const char* statusHint(unsigned refusedRun, uint32_t now, uint32_t noJoinAt, uint32_t btIdleSince, int btConn) {
     if (refusedRun >= kHintRefusedRun) return "coding";
     if (noJoinAt && now - noJoinAt < kHintNoJoinS) return "nojoin";
     if (btIdleSince && btConn >= 2 && now - btIdleSince >= kHintNoBtS) return "bt";
+    if (btConn == 0 || btConn == 1) return "nophone";
     return "-";
 }
 
-enum WaitingKind { kWaitUsb, kWaitCoding, kWaitNoJoin, kWaitNoBt, kWaitWfdNet, kWaitCarplay, kWaitEnableWfd, kWaitUsbOnly };
+// kWaitNoPhone is last so the iDrive app's text table only grew at the end.
+enum WaitingKind { kWaitUsb, kWaitCoding, kWaitNoJoin, kWaitNoBt, kWaitWfdNet, kWaitCarplay, kWaitEnableWfd, kWaitUsbOnly,
+                   kWaitNoPhone };
 
 // The text for a running daemon with no phone yet. usbOnly = "Android Auto over USB" only; net = "wfd" / "cp" / "-"
 // (or empty from an older daemon, which keeps the old carplay.ini -> wfd0 -> USB chain).
@@ -30,6 +34,7 @@ inline WaitingKind waitingKind(bool usbOnly, const char* net, const char* hint, 
     if (!strcmp(hint, "coding")) return kWaitCoding;
     if (!strcmp(hint, "nojoin")) return kWaitNoJoin;
     if (!strcmp(hint, "bt")) return kWaitNoBt;
+    if (!strcmp(hint, "nophone")) return kWaitNoPhone;
     if (!strcmp(net, "wfd")) return kWaitWfdNet;
     if (!strcmp(net, "cp") || (!*net && hasIni)) return kWaitCarplay;
     if (hasWfd) return kWaitEnableWfd;

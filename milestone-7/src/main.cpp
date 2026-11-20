@@ -653,6 +653,7 @@ static void writeStatus(const char* state) {
                !strcmp(hint, "coding") ? "the car keeps refusing the phone's Android Auto link: coding-requirements.md"
                : !strcmp(hint, "nojoin") ? "the phone took the Wi-Fi details but never joined: forget the phone in the car, pair again"
                : !strcmp(hint, "bt") ? "phone on Bluetooth but no Android Auto link: forget the phone in the car, pair again"
+               : !strcmp(hint, "nophone") ? "no phone connected over Bluetooth: connect the phone"
                : "none");
         s_lastHint = hint;
     }
@@ -2090,7 +2091,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.114-status"
+#define NBT_AAD_BUILD "v1.9.115-status2"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.

@@ -11,6 +11,11 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.115-status2 / rhmiapp-90-status2: "Waiting: connect phone".** While no phone is connected over Bluetooth
+> (the car's device list says so), the Android Auto row says "Waiting: connect phone" instead of the network name
+> ("Waiting: CarPlay Wi-Fi"). Not shown before the car has sent its device list, and the re-pair / coding hints still
+> come first.
+>
 > **v1.9.114-status / rhmiapp-89-status: Gesture Control after a move to NBTApps, the favourite bar in nbt-aad only,
 > and a status row that says why the phone is stuck.**
 > - Gesture Control under Android Auto (issue #281): the touch controller's learned address (`touch-peer`) is kept in

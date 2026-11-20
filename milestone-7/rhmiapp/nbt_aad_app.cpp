@@ -76,7 +76,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-89-status (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-90-status2 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -265,7 +265,8 @@ const unsigned    kTextAaWaitWfd     = 334;
 const unsigned    kTextAaWaitWfdNet  = 335;   // waiting, Wi-Fi Direct is the network offered (rhmiapp-100)
 const unsigned    kTextAaNoBt        = 336;   // phone on Bluetooth, never opened the Android Auto link: re-pair
 const unsigned    kTextAaNoJoin      = 337;   // phone took the Wi-Fi details, never joined: re-pair
-const unsigned    kTextAaCoding      = 338;   // car keeps refusing the link (ServiceRequestError): coding
+const unsigned    kTextAaCoding      = 338;
+const unsigned    kTextAaNoPhone     = 339;   // no phone connected over Bluetooth (rhmiapp-90)   // car keeps refusing the link (ServiceRequestError): coding
 const unsigned    kTextStart      = 10;      // "Start Android Auto"
 const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
@@ -2469,7 +2470,8 @@ void statusRun(void* /*self*/) {
         // usbAaOn() is the same flag file the daemon reads, so both sides agree without a second channel.
         // A hint (stuck on Bluetooth / Wi-Fi / refused by the car) comes before the network name.
         static const unsigned kWaitText[] = { kTextAaWaitUsb, kTextAaCoding, kTextAaNoJoin, kTextAaNoBt,
-                                              kTextAaWaitWfdNet, kTextAaWaitCarplay, kTextAaWaitWfd, kTextAaUsbOnly };
+                                              kTextAaWaitWfdNet, kTextAaWaitCarplay, kTextAaWaitWfd, kTextAaUsbOnly,
+                                              kTextAaNoPhone };
         statusText = kWaitText[nbt::waitingKind(usbAaOn(), net, hint, hasIni != 0, hasWfd != 0)];
     }
     unsigned want = statusText;                                          // the Media/Radio entry row
