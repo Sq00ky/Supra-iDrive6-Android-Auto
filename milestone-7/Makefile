@@ -65,6 +65,7 @@ SRCS = src/main.cpp \
        src/cluster/nav_core.cpp \
        src/cluster/hud_terminal.cpp \
        src/cluster/hud6wa_display.cpp \
+       src/cluster/ric_media.cpp \
        src/volume_osd.cpp
 
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
@@ -179,6 +180,13 @@ osd1281probe: tools/osd1281probe.cpp
 # lmrestore: put screen 0's layer render order back after an experiment cleared it.
 lmrestore: tools/lmrestore.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/lmrestore.cpp -lang-c++
+
+# ricprobe: one text model to the KOMBI's list service (SOME/IP 0xB00E), to see whether it takes frames from a second
+# client (see tools/ricprobe.cpp). Not part of `all`.
+ricprobe: tools/ricprobe.cpp src/cluster/ric_list.hpp src/cluster/j29_graph.hpp
+	@echo [CXX] tools/ricprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/ricprobe.cpp -lsocket -lang-c++
+	@echo [DONE] Built $@
 
 # kdprobe: the supported overlay path -- KD window + EGL/GLES surface (see tools/kdprobe.cpp).
 kdprobe: tools/kdprobe.cpp

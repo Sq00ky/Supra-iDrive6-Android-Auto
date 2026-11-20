@@ -305,11 +305,11 @@
           <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
           <checkbox action="174" id="180" model="177" text="Prompts on car radio (BT, beta)" textModel="178"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
-          <checkbox action="83" id="86" model="84" text="Android Auto over USB (beta)" textModel="85"/>
+          <checkbox action="83" id="86" model="84" text="Android Auto over USB" textModel="85"/>
           <checkbox action="87" id="90" model="88" text="Use Phone GPS" textModel="89"/>
           <checkbox action="91" id="94" model="92" text="Use WiFi Direct Network (own password)" textModel="93"/>
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
-          <checkbox action="124" id="127" model="125" text="Media Controls for LCI Steering Wheels" textModel="126"/>
+          <checkbox action="124" id="127" model="125" text="Native Functionality Media Controls Restore" textModel="126"/>
           <checkbox action="159" id="162" model="160" text="CarPlay compatibility" textModel="161"/>
           <checkbox action="248" id="249" model="250" text="Disable Favorites Bar"/>
           <button action="414" id="407" model="400" text="Gauge cluster type"/>

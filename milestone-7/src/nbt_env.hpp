@@ -143,13 +143,16 @@ inline bool speechBtEnabled() { return usbSettingOn(getenv("NBT_SPEECH_BT"), nbt
 static const char* const kPhoneGpsFlagName = "phone-gps";
 inline bool phoneGpsFlagFileSet() { return flagSet(kPhoneGpsFlagName); }
 inline bool phoneGpsEnabled() { return usbSettingOn(getenv("NBT_PHONE_GPS"), phoneGpsFlagFileSet()); }
-// "Media Controls for LCI Steering Wheels" (iDrive Settings checkbox, rhmiapp-45; flag kLciMediaFlagName, a hand-made
+// "Native Functionality Media Controls Restore" (iDrive Settings checkbox, rhmiapp-45; flag kLciMediaFlagName, a hand-made
 // one also counts; NBT_LCI_MEDIA=1 / 0 wins either way, same words as NBT_USB). Off by default: the steering wheel's
 // previous / next / play-pause (MOST 15/02, car/mfl.hpp, NBT_MFL_*) become Android media keys only with it on, and
 // still only in a non-Bluetooth audio mode. Read at the start of the daemon.
 static const char* const kLciMediaFlagName = "lci-media";
 inline bool lciMediaFlagFileSet() { return flagSet(kLciMediaFlagName); }
 inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"), lciMediaFlagFileSet()); }
+// Native audio: the Android Auto track title in the J29 cluster's track list and the thumb-wheel press on Previous /
+// Next title (cluster/ric_media.hpp) come with the same setting (v1.9.116). NBT_KOMBI_TRACKS=1 / 0 wins either way.
+inline bool kombiTracksEnabled() { return usbSettingOn(getenv("NBT_KOMBI_TRACKS"), lciMediaKeysEnabled()); }
 // "CarPlay compatibility" (iDrive Settings checkbox, rhmiapp-54-cpcompat; flag kCpCompatFlagName, a hand-made one
 // also counts; NBT_CP_COMPAT=1 / 0 wins either way, same words as NBT_USB). Off by default: for cars that use the
 // factory CarPlay as well as Android Auto (issue #156). On = the three CarPlay fixes: Android Auto yields

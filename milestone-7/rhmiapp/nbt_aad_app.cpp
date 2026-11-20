@@ -371,7 +371,7 @@ const long        kUsbLogRecheckS  = 5;   // stick lookup cache: a stick plugged
 const unsigned    kActWarnings     = 30;
 const unsigned    kWarnModel       = 48;
 const char* const kWarnFlag        = "show-warnings";
-// "Android Auto over USB (beta)" checkbox (rhmiapp-40): <checkbox action="83" id="86" model="84" textModel="85"> on the
+// "Android Auto over USB" checkbox (rhmiapp-40): <checkbox action="83" id="86" model="84" textModel="85"> on the
 // Settings page, off by default. Flag file read by nbt-aad once at start (nbt_env.hpp usbEnabled(); NBT_USB in
 // nbt-aad.env wins either way), so a change applies at the next Start / Restart.
 const unsigned    kActUsbAa        = 83;
@@ -387,7 +387,7 @@ const char* const kPhoneGpsFlag    = "phone-gps";
 const unsigned    kActWfdOnly      = 91;
 const unsigned    kWfdOnlyModel    = 92;
 const char* const kWfdOnlyFlag     = "wifi-direct";
-// "Use Native Audio instead of Bluetooth" and "Media Controls for LCI Steering Wheels" (rhmiapp-45), both off by default:
+// "Use Native Audio instead of Bluetooth" and "Native Functionality Media Controls Restore" (rhmiapp-45), both off by default:
 // <checkbox action="120" id="123" model="121" textModel="122"> and <checkbox action="124" id="127" model="125"
 // textModel="126">. Flag files read by nbt-aad at start (audio/config.hpp nativeAudioFlagSet(), nbt_env.hpp
 // lciMediaKeysEnabled()); NBT_AUDIO_MODE / NBT_AUDIO_BT and NBT_LCI_MEDIA in nbt-aad.env win.
@@ -1980,7 +1980,7 @@ bool onKombiNavToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-// ---- Android Auto over USB (beta) -------------------------------------------------------------------------------
+// ---- Android Auto over USB -------------------------------------------------------------------------------
 bool g_usbAaShown = false;
 bool usbAaOn() { return nbt::flagSet(kUsbAaFlag); }
 
@@ -2033,7 +2033,7 @@ bool onWfdOnlyToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-// ---- Use Native Audio instead of Bluetooth / Media Controls for LCI Steering Wheels (rhmiapp-45) -----------------
+// ---- Use Native Audio instead of Bluetooth / Native Functionality Media Controls Restore (rhmiapp-45) -----------------
 bool g_nativeAudioShown = false;
 bool nativeAudioOn() { return nbt::flagSet(kNativeAudioFlag); }
 void showNativeAudio(bmw::PluginApp* app) {
@@ -2210,7 +2210,7 @@ void servicePfOps(bmw::PluginApp* app) {
 }
 
 bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kLciMediaFlag, "Media Controls for LCI Steering Wheels (NBT_LCI_MEDIA in nbt-aad.env wins)");
+    toggleFlagFile(kLciMediaFlag, "Native Functionality Media Controls Restore (NBT_LCI_MEDIA in nbt-aad.env wins)");
     if (g_runApp) showLciMedia(g_runApp);
     return true;
 }
