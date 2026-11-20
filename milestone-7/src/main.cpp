@@ -668,7 +668,7 @@ static void writeStatus(const char* state) {
                : !strcmp(hint, "bt") ? "phone on Bluetooth but no Android Auto link: forget the phone in the car, pair again"
                : !strcmp(hint, "nowifi") ? "no usable Wi-Fi network in the car (no CarPlay hotspot, no Wi-Fi Direct): use USB"
                : !strcmp(hint, "nossid") ? "Wi-Fi Direct is up but its group name was not found: set NBT_WFD_SSID"
-               : !strcmp(hint, "nophone") ? "no phone connected over Bluetooth: connect the phone"
+               : !strcmp(hint, "nophone") ? "no phone connected over Bluetooth: waiting for a Bluetooth device"
                : "none");
         s_lastHint = hint;
     }

@@ -165,7 +165,7 @@ void updateDevices(DsiClient* c, const std::vector<GapDevice>& d, const char* fr
     else
         printf("[BluetoothManager] [%9.3f] %s: phone '%s' %s is %s over Bluetooth\n", upSecBt(), from,
                d[best].name.c_str(), addr.c_str(), connName(conn));
-    if (!addr.empty() && conn >= 2) {
+    if (btTrace() && !addr.empty() && conn >= 2) {   // the phone's services: diagnostics only
         std::vector<uint8_t> p;
         DsiClient::putString(p, addr.c_str());
         waitTxIdle();
@@ -181,9 +181,14 @@ void onGapAttached(DsiClient* c, void*) {
         printf("[BluetoothManager] watching the phone's incoming link requests (ServiceRequest): an Android Auto "
                "link is opened by the phone, a BMW Apps link by the car\n");
     }
+    {   // always: whether a phone is connected over Bluetooth decides the iDrive row's "Waiting for Bluetooth
+        // device" (status_hint.hpp). Before v1.9.116 this was NBT_BT_TRACE=1 only, so the row never got it.
+        // DeviceDisconnected stays trace-only: its handler is, and an unhandled inform would reach the SPP state
+        // machine below as if it were the deregister response. DeviceListChanged is always consumed before that.
+        c->setNotification(kInfDeviceListChanged);
+    }
     if (btTrace()) {
-        const uint32_t informs[] = { kInfDeviceDisconnected, kInfDeviceListChanged, kInfServiceDisconnected,
-                                     kInfServiceListChanged };
+        const uint32_t informs[] = { kInfDeviceDisconnected, kInfServiceDisconnected, kInfServiceListChanged };
         for (size_t i = 0; i < sizeof(informs) / sizeof(informs[0]); ++i) c->setNotification(informs[i]);
         printf("[BluetoothManager] NBT_BT_TRACE=1: logging the phone's Bluetooth connection and services\n");
     }
@@ -244,7 +249,7 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
         fflush(stdout);
         return;
     }
-    if (btTrace() && (id == kRspDeviceListGet || id == kInfDeviceListChanged)) {
+    if (id == kRspDeviceListGet || id == kInfDeviceListChanged) {
         std::vector<GapDevice> d;
         uint32_t err = 0;
         if (gapParseDeviceList(pl, len, id == kRspDeviceListGet, d, &err))
@@ -301,7 +306,7 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
             printf("[BluetoothManager] Android Auto Bluetooth service registered again: a connected phone can now open "
                    "the Bluetooth setup link\n");
         setState(SPP_DONE);
-        if (btTrace() && !g_listAsked) {   // who is connected right now (later changes come as informs)
+        if (!g_listAsked) {   // who is connected right now (later changes come as informs); always (status row)
             g_listAsked = true;
             waitTxIdle();
             c->sendRequest(kReqDeviceListGet, std::vector<uint8_t>());

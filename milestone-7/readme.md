@@ -21,7 +21,8 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > 3. "No usable Wi-Fi in car: use USB": no CarPlay hotspot config, or Use WiFi Direct Network with no address on wfd0.
 > 4. "Can't use WiFi Direct: set SSID name manually": Wi-Fi Direct is up and the passphrase is fine, but the group
 >    name was not found (`NBT_WFD_SSID=DIRECT-...` in nbt-aad.env pins it).
-> 5. "Waiting: connect phone": no phone connected over Bluetooth.
+> 5. "Waiting for Bluetooth device": no phone connected over Bluetooth (the car's device list is now always read;
+>    before, only with `NBT_BT_TRACE=1`, so the row stayed on "Waiting: CarPlay Wi-Fi").
 >
 > The row and its hint are refreshed every second (they used to change only with the menu state). Hungarian
 > translations (PR #291).
