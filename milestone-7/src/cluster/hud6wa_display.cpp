@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/hud6wa_display.hpp"
+#include "cluster/mapbox_hud.hpp"   // Mapbox maneuver glyphs (NBT_HUD_GLYPHS); falls back to the parametric shapes
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -68,13 +69,18 @@ void addItems(Batch& b, uint16_t h, const Picture& pic) {
         b.add(kAddPolygon, addPolygon(h, (uint16_t)i, pic[i].poly.type, pic[i].poly.pts));
     }
 }
+// Hide the surfaces the cluster draws over the panel itself during guidance (NBT_HUD_HIDE, e.g. 0x15/0x16): on every
+// picture (after frame-on) and every distance update, so the strip never shows back through our drawing.
+void addHides(Batch& b, const HudProfile& p) {
+    for (int i = 0; i < p.nHide; i++) b.add(kSetVisibility, setVisibility(p.hide[i], false));
+}
 }
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
-    : port_(port), p_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
-      redraw_(false), held_(false), visible_(p.bufB), epoch_(0), has_layout_(false), near_(false), near_shown_(false),
-      near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB), route_dirty_(false), lane_visible_(p.laneB),
-      lanes_dirty_(false), idle_(false), idle_t_(0) {}
+    : port_(port), p_(p), base_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
+      redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), has_layout_(false),
+      near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
+      route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false), idle_(false), idle_t_(0) {}
 
 void Hud6waDisplay::log(const char* fmt, ...) {
     char buf[320];
@@ -86,12 +92,40 @@ void Hud6waDisplay::log(const char* fmt, ...) {
 }
 
 // The terminal's state as a draw result. The epoch is read first, so work dropped after this read shows next time.
+// A guidance session that has drawn nothing yet takes the HUD from a navigation gone quiet with its route still on
+// screen (Port::claim: what CarPlay Advanced leaves when its session ends mid-route), and draws everything afresh:
+// the step it missed while yielding may already count as shown.
 ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
+    if (claim_ && !shadow_ && port_.status() == kNavActive && port_.claim()) {
+        log("a quiet navigation still held the HUD: taken for our new guidance, drawn afresh");
+        redraw_ = true;
+        fresh_ = true;
+    }
     uint32_t e = port_.epoch();
     if (epoch) *epoch = e;
     Status st = port_.status();
     if (st == kFailed) return kRejected;
     if (st == kOffline) return kLink;
+    // The cluster's own picture-buffer size, once the terminal has it: the canvas becomes it, and the glyph box moves
+    // where the profile's would be cut off (fitMeasured; env pins still win). On the F30's 126x77 HUD that moves the
+    // F20-sized defaults to the factory arrow's place; on a buffer they fit, nothing moves.
+    int mw, mh;
+    if (port_.measuredSize(mw, mh) && (mw != measured_w_ || mh != measured_h_)) {
+        p_.canvas = base_.canvas;   // from the profile as given: the HUD's box must not stay in the cluster's field
+        p_.glyph = base_.glyph;
+        fitMeasured(mw, mh, p_);
+        has_layout_ = false;   // laid out for the old buffer: the next maneuver lays out (and checks) on this one
+        measured_w_ = mw;
+        measured_h_ = mh;
+        log("HUD picture buffer measured %dx%d: canvas %d,%d-%d,%d glyph %d,%d-%d,%d", mw, mh, p_.canvas.x0, p_.canvas.y0,
+            p_.canvas.x1, p_.canvas.y1, p_.glyph.x0, p_.glyph.y0, p_.glyph.x1, p_.glyph.y1);
+        if (sent_any_ && !shadow_ && !redraw_) {   // something is up at the old geometry: draw it again, fitted
+            redraw_ = true;
+            fresh_ = true;
+            stage_shown_ = 0;
+            if (lanes_dirty_ || !lanes_shown_.empty()) { lanes_shown_.clear(); lanes_dirty_ = true; }
+        }
+    }
     if (st == kReady && sent_any_ && !shadow_ && e != epoch_ && !redraw_) {
         log("the cluster may have lost what we drew: drawing it again");
         redraw_ = true;
@@ -134,11 +168,13 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
     b.add(kTextareaSetText, setText(p_.distance, t.distance.c_str()));
     b.add(kTextareaSetText, setText(p_.unit, t.unit.c_str()));
     b.add(kSetVisibility, setVisibility(p_.frame, true));
+    addHides(b, p_);                                    // kill the cluster's own strips (0x15/0x16) after frame-on
     return b;
 }
 
 namespace {
 void arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic) {
+    if (mbxManeuver(spec, p, pic)) return;   // Mapbox glyph/roundabout (NBT_HUD_GLYPHS); else the parametric shape below
     Shape design, fitted;
     drawShape(spec, design);
     fitShape(design, p.glyph, fitted);
@@ -238,7 +274,12 @@ bool Hud6waDisplay::nearDue(const NavView& v, double* m) const {
 
 void Hud6waDisplay::startManeuver(const NavView& v) {
     has_layout_ = s_.junction && junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
-                                                v.exit_number, p_.glyph, p_.canvas.y1, layout_);
+                                                v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
+    if (has_layout_ && !junctionShows()) {   // drawn scaled onto this buffer, its way would still be cut off
+        has_layout_ = false;
+        log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
+            p_.canvas.x1 - p_.canvas.x0 + 1, p_.canvas.y1 - p_.canvas.y0 + 1);
+    }
     near_ = false;
     near_m_ = 0;
     stage_ = 0;
@@ -279,6 +320,7 @@ ClusterDisplay::Result Hud6waDisplay::sendRoute() {
     Picture pic;
     int tail = tailFor(layout_, stage_, kStages);
     drawRoute(layout_, tail, colours(), kJunctionStyle, pic);
+    fitJunction(pic);
     Batch b = routeBatch(pic);
     log("ROUTE stage %d/%d, tail %d | %u calls%s", stage_, (int)kStages, tail, (unsigned)b.calls.size(),
         shadow_ ? " (shadow: not sent)" : "");
@@ -364,6 +406,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     if (junction) {
         drawRoads(layout_, colours(), kJunctionStyle, pic);
         if (!routeInOverlay()) drawRoute(layout_, tailFor(layout_, stage_, kStages), colours(), kJunctionStyle, pic);
+        fitJunction(pic);
         what = "junction view, " + describeSpec(spec);
         if (layout_.exitNumber) {
             char n[24];
@@ -387,6 +430,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     fresh_ = false;
     redraw_ = false;
     held_ = false;
+    claim_ = false;
     epoch_ = e;
     shown_ = t;
     near_shown_ = junction;
@@ -474,6 +518,7 @@ ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
     Batch b("distance");
     if (t.distance != shown_.distance) b.add(kTextareaSetText, setText(p_.distance, t.distance.c_str()));
     if (t.unit != shown_.unit) b.add(kTextareaSetText, setText(p_.unit, t.unit.c_str()));
+    addHides(b, p_);                                    // the cluster redraws its strips as the distance changes
     if (b.calls.empty()) return kOk;
     log("DIST '%s' '%s'%s", t.distance.c_str(), t.unit.c_str(), shadow_ ? " (shadow: not sent)" : "");
     SubmitResult sr;
@@ -501,6 +546,7 @@ ClusterDisplay::Result Hud6waDisplay::remind(const NavView& v, double) {
     if (r != kOk || port_.status() == kNavActive || !sent_any_) return r;
     Batch b("remind");
     b.add(kSetVisibility, setVisibility(p_.frame, true));
+    addHides(b, p_);
     log("REMIND type %d: panel on again%s", v.aa_type, shadow_ ? " (shadow: not sent)" : "");
     SubmitResult sr;
     if (!submit(b, &sr)) return sr == kRefused ? kInternal : health(NULL);
@@ -508,6 +554,7 @@ ClusterDisplay::Result Hud6waDisplay::remind(const NavView& v, double) {
 }
 
 bool Hud6waDisplay::clear(std::string* detail) {
+    claim_ = true;                                    // our guidance ends: the next one starts a new session
     Status st = port_.status();
     if (st == kNavActive) {
         log("the factory navigation has the panel: it clears it itself");
@@ -544,6 +591,7 @@ bool Hud6waDisplay::clear(std::string* detail) {
 
 void Hud6waDisplay::forget() {
     sent_any_ = false;
+    claim_ = true;
     fresh_ = true;
     redraw_ = false;
     held_ = false;

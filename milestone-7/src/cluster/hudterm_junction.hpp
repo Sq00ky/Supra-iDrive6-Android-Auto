@@ -302,6 +302,45 @@ inline int tailFor(const Layout& L, int stage, int stages) {
     return L.maxTail * stage / stages;
 }
 
+// The views are laid out on the F20's 6WA (box `from`, canvas `fromH` tall). A cluster with another picture area gets
+// them scaled by toH / fromH round the box centres, widths included, as fitShape does for the arrow.
+inline void fitPicture(Picture& pic, const Rect& from, int fromH, const Rect& to, int toH) {
+    long fx2 = from.x0 + from.x1, fy2 = from.y0 + from.y1, tx2 = to.x0 + to.x1, ty2 = to.y0 + to.y1;
+    if (fx2 == tx2 && fy2 == ty2 && fromH == toH) return;
+    long d = 2L * fromH;
+    for (size_t i = 0; i < pic.size(); ++i)
+        for (size_t k = 0; k < pic[i].poly.pts.size(); ++k) {
+            Point& p = pic[i].poly.pts[k];
+            long x = tx2 * fromH + (2L * p.x - fx2) * toH, y = ty2 * fromH + (2L * p.y - fy2) * toH;
+            p.x = (int16_t)(x >= 0 ? (x + d / 2) / d : -((-x + d / 2) / d));
+            p.y = (int16_t)(y >= 0 ? (y + d / 2) / d : -((-y + d / 2) / d));
+        }
+}
+
+// Where a route picture from drawRoute points: its arrowhead, the tip of thickPath's outline (left edge, wing, tip,
+// wing, right edge), on the canvas or not.
+inline bool routeTipOn(const Picture& route, const Rect& canvas) {
+    if (route.size() < 2 || route[1].poly.pts.size() < 3) return false;
+    const Point& tip = route[1].poly.pts[(route[1].poly.pts.size() - 3) / 2 + 1];
+    return tip.x >= canvas.x0 && tip.x <= canvas.x1 && tip.y >= canvas.y0 && tip.y <= canvas.y1;
+}
+
+// Does the junction view show its way? Laid out on the F20 (box `from`, canvas `fromH` tall) and drawn scaled onto this
+// cluster's picture area (`to`, `toH`) by fitPicture, the route's arrowhead must be on the canvas at every stage: the
+// rule testJunctionGeometry checks for the F20 profile. Where it fails the display draws the plain arrow, so a view with
+// its way cut off never reaches the cluster.
+inline bool junctionFits(const Layout& L, int stages, const Rect& canvas, const Rect& from, int fromH, const Rect& to,
+                         int toH) {
+    const JunctionColours c = { 0, 0, 0 };
+    for (int st = 1; st <= stages; ++st) {
+        Picture r;
+        drawRoute(L, tailFor(L, st, stages), c, kJunctionStyle, r);
+        fitPicture(r, from, fromH, to, toH);
+        if (!routeTipOn(r, canvas)) return false;
+    }
+    return true;
+}
+
 // ---- lanes ----------------------------------------------------------------------------------------------------------
 
 enum { kLaneStroke = 6, kLaneHeadL = 8, kLaneHeadW = 6, kLanePitch = 18, kLaneMargin = 10, kLaneMaxArrows = 24 };
