@@ -130,13 +130,21 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh tsan
 	@echo "[CHECK] all host tests passed"
 
 .PHONY: run-test_favourite_resources
 run-test_favourite_resources:
 	@python3 test_favourite_resources.py
 	@python3 test_favourites_update.py
+
+.PHONY: run-test_rhmi_actions
+run-test_rhmi_actions:
+	@python3 test_rhmi_actions.py
+
+.PHONY: run-test_settings_refresh
+run-test_settings_refresh:
+	@python3 test_settings_refresh.py
 
 $(OUT):
 	@mkdir -p $(OUT)

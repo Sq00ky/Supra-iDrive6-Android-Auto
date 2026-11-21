@@ -47,6 +47,9 @@ Installation instructions can be found in the [install.md file](https://github.c
 ## Building Yourself
 The code needs to be compatible with Armv7LE. I built it with [QNX Momentics](https://archive.org/details/qnxsdp-65.7z) because that's probably what the developers iDrive6 did. Be warned, this is from archive.org. Run it in a VM. I cannot guarntee the safety/security of the software. It is as simple as creating a new project in Momentics, adding all the files to the project folder, right clicking on your project folder, selecting "clean", and then "build". 
 
+The [RHMI menu regression checks and scoped IDEmu results](milestone-7/docs/rhmi-menu-validation.md)
+describe the Auto/Cyrillic action fix and saved Favorites checkbox refresh.
+
 ### Feeling Generous?
 I don't charge for this project, I don't charge for deployments, if this has helped you and you're feeling generous, here's my paypal: https://paypal.me/banananaisu
 Please do not feel obligated to send me anything. I've had a couple people ask, if it makes you feel better, you can buy me a drink. I like Red Wine & Bourbon :) My goal in this was never to make any money. It is to provide a cheap/low cost solution so we don't have to deal with MMI products & don't have to deal with people selling native Android Auto integrations.
