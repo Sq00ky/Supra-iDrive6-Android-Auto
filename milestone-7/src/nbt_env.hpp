@@ -152,6 +152,13 @@ inline bool lciMediaFlagFileSet() { return flagSet(kLciMediaFlagName); }
 inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"), lciMediaFlagFileSet()); }
 // Native audio: the Android Auto track title in the J29 cluster's track list and the thumb-wheel press on Previous /
 // Next title (cluster/ric_media.hpp) come with the same setting (v1.9.116). NBT_KOMBI_TRACKS=1 / 0 wins either way.
+// Native audio: the camera's two-finger gesture becomes AA key 87 (next track, gesture_sniff.hpp) unless the iDrive
+// Settings checkbox "Switch 2 Finger Gesture to Mute" is ticked (flag below, off by default). Tick it when two fingers
+// is set to MUTE in iDrive: the camera sends the same gesture for both, only iDrive knows which one was chosen, and
+// iDrive's mute already silences native audio, so nothing is sent then. NBT_GESTURE_SKIP=1 / 0 wins either way. Read
+// at every gesture, so a change applies at once.
+static const char* const kGestureMuteFlagName = "gesture-mute";
+inline bool gestureSkipEnabled() { return usbSettingOn(getenv("NBT_GESTURE_SKIP"), !flagSet(kGestureMuteFlagName)); }
 inline bool kombiTracksEnabled() { return usbSettingOn(getenv("NBT_KOMBI_TRACKS"), lciMediaKeysEnabled()); }
 // "CarPlay compatibility" (iDrive Settings checkbox, rhmiapp-54-cpcompat; flag kCpCompatFlagName, a hand-made one
 // also counts; NBT_CP_COMPAT=1 / 0 wins either way, same words as NBT_USB). Off by default: for cars that use the
