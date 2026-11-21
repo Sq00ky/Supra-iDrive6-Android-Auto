@@ -8,7 +8,7 @@
 // The fix here does not touch iDrive: a receive-only BPF tap (same mechanism as cluster/ric_media, never sends)
 // sees the camera's UDP datagrams to port 30567 while iDrive still gets every one of them, splits them into PDUs,
 // and a NEW two-finger gesture (not the camera repeating it while the hand is held) is handed to a callback; the
-// daemon sends AA key 87 (next) to the phone when the "Two-finger gesture: next track" setting is on.
+// daemon sends AA key 87 (next) to the phone unless "Switch 2 Finger Gesture to Mute" is ticked.
 // The camera cannot tell us whether the driver set two fingers to MUTE in iDrive: that is what the setting is for.
 // Pure parts (filter, frame parsing, repeat detection) are header-only and host-tested (tests/test_gesture_sniff.cpp).
 #ifndef NBT_GESTURE_SNIFF_HPP
