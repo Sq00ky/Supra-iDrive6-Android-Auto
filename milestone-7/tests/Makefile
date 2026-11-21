@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 # Host tests (Linux g++). From milestone-7: `make check` (or `make -C tests check`).
-#   make -C tests check          build and run every test, then the TSAN run of test_session_lifecycle
+#   make -C tests check          every test, including protoc, -m32 and TSAN; missing tools fail
+#   make -C tests check-native   all except -m32 (run that separately on x86 for an ARM64 host)
 #   make -C tests test_pcm       build one test (binary in tests/build/)
 #   make -C tests run-test_pcm   build and run one test
 #   make -C tests tsan           test_session_lifecycle under ThreadSanitizer only
@@ -58,6 +59,7 @@ SRC_test_tile_process      :=
 SRC_test_favourite_preview :=
 SRC_test_favourite_strip   :=
 SRC_test_ccs_push          :=
+SRC_test_entry_key         :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
 SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
@@ -133,11 +135,18 @@ ARGS_test_j29_golden  := tests/fixtures/j29_golden.txt
 
 TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 
-.PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
+.PHONY: all check check-native tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema run-test_check_tools
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh tsan
+check: check-native run-test_aa_proto32
 	@echo "[CHECK] all host tests passed"
+
+check-native: $(addprefix run-,$(TESTS)) run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh run-test_check_tools tsan
+	@echo "[CHECK] native host tests passed (run-test_aa_proto32 is separate)"
+
+run-test_check_tools: | $(OUT)
+	@python3 test_check_tools.py > $(OUT)/test_check_tools.log 2>&1 \
+	  && echo "[PASS] test_check_tools.py" || { echo "[FAIL] test_check_tools.py"; cat $(OUT)/test_check_tools.log; exit 1; }
 
 .PHONY: run-test_favourite_resources
 run-test_favourite_resources:
@@ -196,15 +205,15 @@ run-test_schema: $(OUT)/dump_messages
 	@if command -v protoc > /dev/null 2>&1; then \
 	  cd $(ROOT) && python3 tests/test_schema.py tests/$(OUT)/dump_messages > tests/$(OUT)/test_schema.log 2>&1 \
 	  && echo "[PASS] test_schema.py" || { echo "[FAIL] test_schema.py"; tail -20 tests/$(OUT)/test_schema.log; exit 1; }; \
-	else echo "[SKIP] test_schema.py: protoc not installed"; fi
+	else echo "[FAIL] test_schema.py: protoc is required (see tests/README.md)"; exit 1; fi
 
-# The car's size_t is 32 bits, and some length bugs only show there. Skipped without a 32-bit toolchain.
+# The car's size_t is 32 bits, and some length bugs only show there. Run separately on x86 for an ARM64 host.
 run-test_aa_proto32: | $(OUT)
 	@if echo 'int main(){std::string s;return (int)s.size();}' | $(HOST_CXX) -m32 -include string -x c++ -o /dev/null - 2>/dev/null; then \
 	  $(HOST_CXX) -m32 $(CXXFLAGS) -o $(OUT)/test_aa_proto32 test_aa_proto.cpp $(call srcs,test_aa_proto) -lpthread \
 	  && cd $(ROOT) && tests/$(OUT)/test_aa_proto32 > tests/$(OUT)/test_aa_proto32.log 2>&1 \
 	  && echo "[PASS] test_aa_proto (32-bit)" || { echo "[FAIL] test_aa_proto (32-bit) (tests/$(OUT)/test_aa_proto32.log)"; exit 1; }; \
-	else echo "[SKIP] test_aa_proto (32-bit): no -m32 toolchain"; fi
+	else echo "[FAIL] test_aa_proto (32-bit): a working -m32 toolchain is required (see tests/README.md)"; exit 1; fi
 
 # 400 session cycles under ThreadSanitizer.
 TSAN_SRCS := test_session_lifecycle.cpp $(call srcs,test_session_lifecycle)
