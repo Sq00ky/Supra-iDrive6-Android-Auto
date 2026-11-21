@@ -1017,6 +1017,7 @@ Leave these unset unless you are testing.
 | `NBT_TOUCH_PROBE=1`, `NBT_TOUCH_PROBE_SECS` | Log raw touch frames only |
 | `NBT_KNOB_RAW=1` | Log every raw controller message |
 | `NBT_MOST_LOG=1` | Log what the MOST client sees, tagged `[MOSTLOG]`: the registry, then for each message type the first 3 and then payload changes, at most 200 lines per type. For working out the car's signals from a drive. With `NBT_KNOB=0` too, the client still starts, for the log alone. The old `NBT_CCS_DEBUG=1` / `NBT_CCS_ALL=1` switch this on |
+| `NBT_FAVOURITE_PROBE=1` | Log every status frame from function block 0x15, tagged `[FavProbe]`, to find out whether and under which function a car sends the favourite keys. Off by default. It takes the MOST client's message tap, so `NBT_MOST_LOG` cannot attach while it is on |
 | `NBT_GEAR_REVERSE` | Gear value for R (default 2; car codes 3 P, 1 N, 2 R, 5 D) |
 | `NBT_NEUTRAL_RESUME_S`, `NBT_GEAR_NEUTRAL` | Manual gearbox: seconds in neutral straight after reverse before Android Auto comes back over the park-assist view (default `5`; `0` = off). Leaving neutral or going back into reverse cancels it; not after you exited Android Auto. Gear value for N (default 1). Log: `[Gear] ... reverse -> neutral`. Not car-verified |
 | `NBT_REVERSE_FOCUS=1`, `NBT_BACK_HOLD_FOCUS=1` | Also tell the phone it lost the screen in reverse / on BACK hold |
