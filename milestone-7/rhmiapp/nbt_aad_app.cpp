@@ -437,6 +437,12 @@ const char* const kKombiMediaFlag   = "kombi-media";
 const unsigned    kActGestureMute   = 474;
 const unsigned    kGestureMuteModel = 475;
 const char* const kGestureMuteFlag  = "gesture-mute";
+// "Nav prompts on their own channel", ON by default: <checkbox action="478" id="481" model="479" textModel="480">. The
+// box is ticked while the marker is ABSENT (src/audio/config.hpp navPromptOwnChannel(), read by nbt-aad at every
+// prompt, so no restart). NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins.
+const unsigned    kActNavPromptOwn  = 478;
+const unsigned    kNavPromptOwnModel = 479;
+const char* const kNavPromptMixFlag = "nav-prompt-mix";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
 const unsigned    kNoLogModel       = 175;   // raBoolModel
 const unsigned    kActSpeechBt      = 174;   // "Prompts on car radio (BT, beta)" checkbox
@@ -2411,6 +2417,21 @@ bool onGestureMuteToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+bool g_navPromptOwnShown = false;
+bool navPromptOwnOn() { return !nbt::flagSet(kNavPromptMixFlag); }
+void showNavPromptOwn(bmw::PluginApp* app) {
+    app->updateModel(kNavPromptOwnModel, navPromptOwnOn());
+    g_navPromptOwnShown = true;
+}
+bool onNavPromptOwnToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    const bool was = navPromptOwnOn();
+    flipFlag(kNavPromptMixFlag, "Nav prompts on their own channel", true);
+    alog("menu: Nav prompts on their own channel %s -> %s (native audio; nbt-aad reads it at every prompt; "
+         "NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins)", was ? "on" : "off", navPromptOwnOn() ? "on" : "off");
+    if (g_runApp) showNavPromptOwn(g_runApp);
+    return true;
+}
+
 bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kAnyDistFlag,
                    "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
@@ -2472,6 +2493,7 @@ void statusRun(void* /*self*/) {
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_kombiMediaShown) showKombiMedia(app);
     if (!g_gestureMuteShown) showGestureMute(app);
+    if (!g_navPromptOwnShown) showNavPromptOwn(app);
     if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
@@ -2857,6 +2879,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActAnyDist, &onAnyDistToggle);
     addAction(self, kActKombiMedia, &onKombiMediaToggle);
     addAction(self, kActGestureMute, &onGestureMuteToggle);
+    addAction(self, kActNavPromptOwn, &onNavPromptOwnToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
     addAction(self, kActSpeechBt, &onSpeechBtToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);

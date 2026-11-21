@@ -209,6 +209,12 @@ int main() {
         CHECK(audioMode() == AUDIO_MODE_BT);                       // default again since v1.8.66
         // Use Native Audio instead of Bluetooth (rhmiapp-45): the flag file picks browser only when neither env is set
         CHECK(audioModeSetting(NULL, -1, true) == AUDIO_MODE_BROWSER);
+        // "Nav prompts on their own channel": on unless the mix marker exists; the env wins either way
+        CHECK(navPromptOwnChannelSetting(NULL, false));
+        CHECK(!navPromptOwnChannelSetting(NULL, true));
+        CHECK(navPromptOwnChannelSetting("", false));
+        CHECK(navPromptOwnChannelSetting("1", true));
+        CHECK(!navPromptOwnChannelSetting("0", false));
         CHECK(audioModeSetting("", -1, true) == AUDIO_MODE_BROWSER);
         CHECK(audioModeSetting(NULL, -1, false) == AUDIO_MODE_BT);
         CHECK(audioModeSetting("bt", -1, true) == AUDIO_MODE_BT);

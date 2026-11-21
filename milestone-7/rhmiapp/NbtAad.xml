@@ -34,6 +34,7 @@
       <raAction id="120"/>
       <raAction id="124"/>
       <raAction id="474"/>
+      <raAction id="478"/>
       <raAction id="132"/>
       <raAction id="136"/>
       <raAction id="137"/>
@@ -165,6 +166,10 @@
       </textIdModel>
       <raBoolModel id="475"/>
       <textIdModel id="476" textId="51">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="479"/>
+      <textIdModel id="480" textId="52">
         <synonyms/>
       </textIdModel>
       <textIdModel id="134" textId="29">
@@ -316,6 +321,7 @@
           <checkbox action="120" id="123" model="121" text="Use Native Audio instead of Bluetooth" textModel="122"/>
           <checkbox action="124" id="127" model="125" text="Native Functionality Media Controls Restore" textModel="126"/>
           <checkbox action="474" id="477" model="475" text="Switch 2 Finger Gesture to Mute" textModel="476"/>
+          <checkbox action="478" id="481" model="479" text="Nav prompts on their own channel" textModel="480"/>
           <checkbox action="159" id="162" model="160" text="CarPlay compatibility" textModel="161"/>
           <checkbox action="248" id="249" model="250" text="Disable Favorites Bar"/>
           <button action="414" id="407" model="400" text="Gauge cluster type"/>

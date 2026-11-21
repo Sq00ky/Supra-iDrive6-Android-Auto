@@ -57,6 +57,17 @@ inline bool nativeAudioFlagSet() {
     return s == 1;
 }
 
+// "Nav prompts on their own channel" (iDrive Settings checkbox, ON by default; ticked while the marker below is absent;
+// NBT_SPEECH_OWN_CHANNEL=1 / 0 wins either way). Browser mode only: on, a nav prompt goes to the car's nav prompt
+// channel (speech_out.hpp) also while Android Auto music plays on the browser source, so it uses the navigation volume
+// like the factory nav; the car mutes the browser source for the prompt. Off = the v1.9.78..v1.9.116 behaviour: while
+// music plays the prompt stays in the browser mix with the music ducked (sabifa, ddb5ad0). Read at every prompt.
+static const char* const kNavPromptMixFlagName = "nav-prompt-mix";
+inline bool navPromptOwnChannelSetting(const char* env, bool mixFlag) { return usbSettingOn(env, !mixFlag); }
+inline bool navPromptOwnChannel() {
+    return navPromptOwnChannelSetting(getenv("NBT_SPEECH_OWN_CHANNEL"), flagSet(kNavPromptMixFlagName));
+}
+
 inline AudioMode audioMode() {
     return audioModeSetting(getenv("NBT_AUDIO_MODE"), envFlag("NBT_AUDIO_BT"), nativeAudioFlagSet());
 }

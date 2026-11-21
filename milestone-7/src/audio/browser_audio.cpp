@@ -286,8 +286,15 @@ void BrowserAudio::onStreamState(uint8_t channel, bool started, uint32_t rate, u
             const uint64_t now = nowMs();
             guidance_to_speech_ = rate && speech_.takesPrompt(now);   // no rate: the mix measures it
             if (guidance_to_speech_ && mediaOnSource(now)) {
-                guidance_to_speech_ = false;
-                printf("[Browser] AA media is on the browser source: nav prompt stays in the mix (media ducked)\n");
+                if (navPromptOwnChannel()) {   // audio/config.hpp: "Nav prompts on their own channel", on by default
+                    printf("[Browser] AA media is on the browser source: nav prompt on its own channel anyway (navigation "
+                           "volume; the car mutes the music for the prompt; \"Nav prompts on their own channel\" off keeps "
+                           "it in the mix)\n");
+                } else {
+                    guidance_to_speech_ = false;
+                    printf("[Browser] AA media is on the browser source: nav prompt stays in the mix (media ducked; "
+                           "\"Nav prompts on their own channel\" is off)\n");
+                }
             }
             if (guidance_to_speech_) stream_[s].in.started = false;
         }
