@@ -84,11 +84,15 @@ static void testNoConsumer() {
 static void testRequiredConsumers() {
     fake_dsi::reset();
     Client c;
-    assert(c.addRoute(0xE5, kAny, kAny, kAny, &handler, NULL));   // a partially registered consumer
+    resetHandler();
+    assert(c.addRoute(0xE5, kAny, kAny, kAny, &handler, NULL));
     assert(!c.requireConsumer("GPS", false));
-    assert(c.requireConsumer("knob", true));                    // a later success must not clear the failure
-    assert(!c.start("X"));
-    assert(!fake_dsi::opened() && fake_dsi::calls.empty());
+    assert(c.requireConsumer("knob", true));
+    assert(c.start("X") && fake_dsi::opened());    // a failed consumer must not block the working routes
+    fake_dsi::attach();
+    respond(93, 0x205D);
+    sendMsg(frame(0, 2, 0, 0xE5, 0, 0xC46, kOpStatus, "x"));
+    assert(g_handled == 1);
     assert(!c.addRoute(0x52, 0, 0x440, kAny, &handler, NULL));
     assert(!c.requireConsumer("GPS", true));
     assert(!c.start("X"));
@@ -461,6 +465,18 @@ static void testRegistryListener() {
     assert(c.state() == kUp);
 }
 
+static void testSetupLimits() {
+    Client c;
+    for (int i = 0; i < Client::kMaxKeys; ++i) assert(c.addDevCtrl((uint16_t)(0x4000 + i)));
+    assert(c.addDevCtrl(0x4000));
+    assert(!c.addDevCtrl(0x5000));
+    for (int i = 0; i < Client::kMaxRegistryListeners; ++i) assert(c.addRegistryListener(&onRegistry, NULL));
+    assert(!c.addRegistryListener(&onRegistry, NULL));
+    for (int i = 0; i < Client::kMaxSendKeys; ++i) assert(c.allowSend((uint8_t)(0x70 + i), 0));
+    assert(c.allowSend(0x70, 0));
+    assert(!c.allowSend(0x80, 0));
+}
+
 int main() {
     testNoConsumer();
     testRequiredConsumers();
@@ -474,6 +490,7 @@ int main() {
     testSend();
     testSendRefusedRegistration();
     testRegistryListener();
+    testSetupLimits();
     printf("test_most_client OK\n");
     return 0;
 }

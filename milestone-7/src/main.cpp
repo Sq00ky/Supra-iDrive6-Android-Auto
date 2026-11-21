@@ -2455,6 +2455,11 @@ int main(int argc, char* argv[]) {
     g_session.setNavStatusCallback(&nbt::kombinav::KombiNav::navStatusCallback, &g_kombiNav);
     g_session.setMediaStatusCallback(&onMediaStatus, NULL);
 
+    if (!tcp_server.start()) {
+        printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
+        return 1;
+    }
+    g_tcp = &tcp_server;
     g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
                                    // g_most starts: NBT_CLUSTER=6wa attaches to it
     g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT);   // idle until the phone plays something
@@ -2467,6 +2472,14 @@ int main(int argc, char* argv[]) {
     // 4b. Android Auto over USB (NBT_USB=1, experimental). Same user data as the TCP server, so its "session
     // active" state also covers a USB phone and the auto-connector stays quiet; startSession() picks the owner.
     nbt::UsbAccessory usb(&onUsbConnected, &tcp_server, &sessionOwner, NULL);
+    if (nbt::usbEnabled()) {
+        const char* usbEnv = getenv("NBT_USB");
+        printf("[Main] Android Auto over USB: on (%s), through %s\n", usbEnv && *usbEnv ? "NBT_USB" : "Settings checkbox",
+               nbt::usbDirectEnabled() ? "io-usb" : "/dev/oap* (NBT_USB_DIRECT=0)");
+        if (usb.start()) g_usb = &usb;
+        else printf("[Main] Android Auto over USB failed to start.\n");
+    }
+
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
     if (nbt::wirelessEnabledForTransport()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
@@ -2554,29 +2567,10 @@ int main(int argc, char* argv[]) {
     if ((nbt::envFlag("NBT_MOST_LOG") == 1 || ccsLogCompat) && !g_mostTrace.attach(g_most))
         printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
     g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
-    int startupExitCode = 0;
-    if (!g_most.start("NBTAAD_MOST")) {
-        printf("[Main] Fatal: required MOST consumers could not start; shutting down.\n");
-        startupExitCode = 1;
-        g_running = 0;
-    }
-    // Accept no phone session until all configured required MOST consumers have registered.
-    if (g_running) {
-        if (!tcp_server.start()) {
-            printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
-            startupExitCode = 1;
-            g_running = 0;
-        } else g_tcp = &tcp_server;
-    }
-    if (g_running && nbt::usbEnabled()) {
-        const char* usbEnv = getenv("NBT_USB");
-        printf("[Main] Android Auto over USB: on (%s), through %s\n", usbEnv && *usbEnv ? "NBT_USB" : "Settings checkbox",
-               nbt::usbDirectEnabled() ? "io-usb" : "/dev/oap* (NBT_USB_DIRECT=0)");
-        if (usb.start()) g_usb = &usb;
-        else printf("[Main] Android Auto over USB failed to start.\n");
-    }
+    if (!g_most.start("NBTAAD_MOST"))
+        printf("[Main] MOST unavailable: continuing Android Auto without MOST features.\n");
 
-    if (g_running && nbt::wirelessEnabledForTransport()) {
+    if (nbt::wirelessEnabledForTransport()) {
         pthread_t wt;
         if (pthread_create(&wt, NULL, &wirelessThread, NULL) == 0) {
             pthread_detach(wt);
@@ -2586,12 +2580,12 @@ int main(int argc, char* argv[]) {
             pthread_t ww;
             if (pthread_create(&ww, NULL, &wfdWatchThread, NULL) == 0) pthread_detach(ww);
         }
-    } else if (g_running) {
+    } else {
         printf("[Main] Wireless off (%s): outbound phone scanner mode.\n",
                nbt::usbEnabled() ? "Android Auto over USB is selected, so Wi-Fi is not offered" : "NBT_WIRELESS=0");
     }
 
-    if (g_running) printf("[Main] Daemon running. Press Ctrl+C to terminate.\n");
+    printf("[Main] Daemon running. Press Ctrl+C to terminate.\n");
 
     // Daemon main loop. The overlay follows the session: up while a phone session is running, down
     // (iDrive visible) otherwise. This is the only place that calls setVisible() while the daemon runs,
@@ -3019,11 +3013,11 @@ int main(int argc, char* argv[]) {
 
     if (g_ctlFd >= 0) close(g_ctlFd);
     unlink(kUiStateFile);   // plugin falls back to the plain "Android Auto" entry
-    if (!startupExitCode) unlink(nbt::dataFile(kBootGuardName).c_str());   // failed startup must keep the bootloop strikes
+    unlink(nbt::dataFile(kBootGuardName).c_str());   // clean exit: the app's autostart bootloop guard starts from zero
     printf("[Main] [%9.3f] nbt-aad shutdown complete (%.2f s)%s.\n", upSec(), upSec() - t0,
            g_cpYielded ? ": yielded to CarPlay (decoder context, windows and window group released)" : "");
     fflush(stdout);
     // Leave without running static destructors: detached threads (DSI sender loops, wireless bring-up) may still
     // be running, and tearing globals down under them crashed at exit (nbt-aad-21: SIGSEGV after "shutdown complete").
-    _exit(startupExitCode);
+    _exit(0);
 }

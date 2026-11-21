@@ -56,7 +56,7 @@ bool Client::requireConsumer(const char* name, bool registered) {
     if (started_) return false;
     if (!registered) {
         requiredOk_ = false;
-        printf("[MOST] required consumer '%s' failed registration\n", name);
+        printf("[MOST] consumer '%s' failed setup\n", name);
     }
     return registered;
 }
@@ -120,10 +120,8 @@ void Client::setRawLog(bool on) { rawLog_ = on; }
 bool Client::start(const char* clientName) {
     if (started_) return false;
     started_ = true;   // even an empty or failed start seals registration
-    if (!requiredOk_) {
-        printf("[MOST] startup refused: required consumers are missing\n");
-        return false;
-    }
+    if (!requiredOk_)
+        printf("[MOST] incomplete consumer setup: continuing with registered consumers; see failures above\n");
     if (router_.size() == 0 && !tap_) {
         printf("[MOST] no consumer attached: client not started\n");
         return true;
