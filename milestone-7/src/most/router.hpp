@@ -5,9 +5,11 @@
 
 // Sends a received message to whoever asked for it: (fblock, inst | any, fkt | any, op | any) -> handlers. Every match
 // runs, in the order added, so a logger and a consumer can share a message. Nothing is deduplicated: the head unit's
-// messages arrive once per receiver, and the decoders compare against their last state. Pure, no allocation.
+// messages arrive once per receiver, and the decoders compare against their last state. Registration may allocate; matching and dispatch do not.
 
 #include "most/msg.hpp"
+#include <new>
+#include <vector>
 
 namespace nbt {
 namespace most {
@@ -17,20 +19,18 @@ typedef void (*Handler)(const View& m, void* user);
 
 class Router {
 public:
-    enum { kMaxRoutes = 16 };
-
-    Router() : n_(0) {}
-
-    // False when full (or with no handler): the caller logs it, because that consumer would stay silent otherwise.
+    // False on allocation failure or with no handler; an unsuccessful append leaves existing routes intact.
     bool add(uint8_t fblock, int inst, int fkt, int op, Handler h, void* user) {
-        if (n_ >= kMaxRoutes || !h) return false;
-        Route& r = routes_[n_++];
+        if (!h || routes_.size() == routes_.max_size()) return false;
+        Route r;
         r.fblock = fblock; r.inst = inst; r.fkt = fkt; r.op = op; r.h = h; r.user = user;
+        try { routes_.push_back(r); }
+        catch (const std::bad_alloc&) { return false; }
         return true;
     }
 
     bool wants(const View& m) const {
-        for (int i = 0; i < n_; ++i)
+        for (size_t i = 0; i < routes_.size(); ++i)
             if (matches(routes_[i], m)) return true;
         return false;
     }
@@ -38,7 +38,7 @@ public:
     // Runs every match and returns how many ran.
     int dispatch(const View& m) const {
         int ran = 0;
-        for (int i = 0; i < n_; ++i) {
+        for (size_t i = 0; i < routes_.size(); ++i) {
             if (!matches(routes_[i], m)) continue;
             routes_[i].h(m, routes_[i].user);
             ++ran;
@@ -46,7 +46,7 @@ public:
         return ran;
     }
 
-    int size() const { return n_; }
+    size_t size() const { return routes_.size(); }
 
 private:
     struct Route {
@@ -61,8 +61,7 @@ private:
                (r.fkt == kAny || r.fkt == m.fkt) && (r.op == kAny || r.op == m.op);
     }
 
-    Route routes_[kMaxRoutes];
-    int n_;
+    std::vector<Route> routes_;
 };
 
 } // namespace most

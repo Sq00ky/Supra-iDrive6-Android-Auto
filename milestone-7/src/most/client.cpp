@@ -41,7 +41,7 @@ const char* linkStateName(LinkState s) {
 }
 
 Client::Client()
-    : nKeys_(0), nListeners_(0), nRegListeners_(0), nSendKeys_(0), tap_(NULL), tapUser_(NULL), infoTap_(NULL), infoTapUser_(NULL), started_(false), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
+    : nKeys_(0), nListeners_(0), nRegListeners_(0), nSendKeys_(0), tap_(NULL), tapUser_(NULL), infoTap_(NULL), infoTapUser_(NULL), started_(false), requiredOk_(true), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
       attached_(false), answered_(false), clientId_(kClientRefused), deviceId_(0), haveComm_(false), comm_(0),
       commOkSeen_(false), longestWindowMs_(0), lastHealthMs_(0) {
     name_[0] = 0;
@@ -50,6 +50,15 @@ Client::Client()
     memset(&lastHealth_, 0, sizeof(lastHealth_));
     pthread_mutex_init(&lock_, NULL);
     pthread_mutex_init(&sendLock_, NULL);
+}
+
+bool Client::requireConsumer(const char* name, bool registered) {
+    if (started_) return false;
+    if (!registered) {
+        requiredOk_ = false;
+        printf("[MOST] required consumer '%s' failed registration\n", name);
+    }
+    return registered;
 }
 
 bool Client::addRoute(uint8_t fblock, int inst, int fkt, int op, Handler h, void* user) {
@@ -110,12 +119,16 @@ void Client::setRawLog(bool on) { rawLog_ = on; }
 
 bool Client::start(const char* clientName) {
     if (started_) return false;
+    started_ = true;   // even an empty or failed start seals registration
+    if (!requiredOk_) {
+        printf("[MOST] startup refused: required consumers are missing\n");
+        return false;
+    }
     if (router_.size() == 0 && !tap_) {
         printf("[MOST] no consumer attached: client not started\n");
         return true;
     }
     snprintf(name_, sizeof(name_), "%s", clientName);
-    started_ = true;
     lastHealthMs_ = nowMs();
     dsi_.setQuiet(!rawLog_);
     dsi_.setQuietTx(!rawLog_);
