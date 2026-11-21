@@ -2507,7 +2507,7 @@ int main(int argc, char* argv[]) {
     // Registered unless NBT_FAVOURITE_PREVIEW=0. The Settings toggle is checked per frame instead
     // (favouriteBarOff), so switching it does not need a daemon restart.
     const bool favouritePreviewEnabled = nbt::envFlag("NBT_FAVOURITE_PREVIEW") != 0;
-    if (nbt::envFlag("NBT_FAVOURITE_PROBE") != 0) {
+    if (nbt::envFlag("NBT_FAVOURITE_PROBE") > 0) {
         if (g_most.setTap(&onFavouriteProbe, NULL))
             printf("[FavProbe] on: every fb=0x15 MOST frame is logged. Touch the favourite keys now.\n");
         else
