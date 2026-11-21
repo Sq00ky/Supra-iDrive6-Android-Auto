@@ -634,6 +634,29 @@ inline std::string mwuCommand(const std::string& body, int timeout_ms, std::stri
 //  3. mwud, p2p_get_cfg then list_groups (no reply on the car - mwud accepts nothing on 9096 there)
 //  4. Connectivity's Wi-Fi persistency: "<device name> CarPlay" -> "DIRECT-03-" + name
 // The result is cached: a resolved name can only change with a reboot/firmware change.
+// Is Wi-Fi Direct usable: does the interface hold a real IPv4 address? A wfd0 that is UP with 0.0.0.0 is no
+// better than a missing one - no phone can join it. This is the measured form of "is wfd0 there".
+inline bool wfdInterfaceHasAddress(const char* ifname, std::string* why = NULL) {
+    char cmd[96];
+    snprintf(cmd, sizeof(cmd), "/sbin/ifconfig %s", ifname ? ifname : "wfd0");
+    FILE* p = popen(cmd, "r");
+    if (!p) p = popen("ifconfig wfd0", "r");
+    if (!p) { if (why) *why = "ifconfig did not run"; return false; }
+    std::string text; char line[512];
+    while (fgets(line, sizeof(line), p)) text += line;
+    pclose(p);
+    if (why) { std::string flat; for (size_t i = 0; i < text.size(); ++i) flat.push_back(text[i] == '\n' ? ' ' : text[i]); *why = wfdTrim(flat); }
+    size_t at = 0;
+    while ((at = text.find("inet ", at)) != std::string::npos) {
+        size_t b = at + 5;
+        while (b < text.size() && text[b] == ' ') ++b;
+        std::string ip;
+        while (b < text.size() && ((text[b] >= '0' && text[b] <= '9') || text[b] == '.')) ip.push_back(text[b++]);
+        if (!ip.empty() && ip != "0.0.0.0") return true;
+        at += 5;
+    }
+    return false;
+}
 inline bool resolveWfdSsid(const char* ifname, std::string& ssid) {
     static std::string cached;
     if (!cached.empty()) {

@@ -47,6 +47,7 @@ SRCS = src/main.cpp \
        src/gcf_client.cpp \
        src/touch_probe.cpp \
        src/dsi_client.cpp \
+       src/favourite_overlay_daemon.cpp \
        src/audio/voice_scenario.cpp \
        src/audio/bt_play.cpp \
        src/most/client.cpp \
@@ -64,6 +65,7 @@ SRCS = src/main.cpp \
        src/cluster/nav_core.cpp \
        src/cluster/hud_terminal.cpp \
        src/cluster/hud6wa_display.cpp \
+       src/cluster/ric_media.cpp \
        src/volume_osd.cpp
 
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.
@@ -80,6 +82,7 @@ check:
 	$(MAKE) -C tests check
 
 all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
+
 
 $(TARGET): $(OBJS)
 	@echo [LINK] $@
@@ -109,7 +112,7 @@ RHMI_LIBS = $(wildcard $(RHMI_LIBDIR)/libAppFramework.A.so $(RHMI_LIBDIR)/libCor
 .PHONY: rhmiapp
 rhmiapp: rhmiapp/libNbtAad.so
 
-rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp
+rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp rhmiapp/overlay_watch.hpp src/favourite_colour.hpp src/favourite_picker.hpp
 	@echo [BUILD] PluginApp $@
 	$(PLUGIN_CXX) $(PLUGIN_CXXFLAGS) -shared -Wl,-soname,libNbtAad.so -o $@ rhmiapp/nbt_aad_app.cpp $(RHMI_LIBS) -Wl,--allow-shlib-undefined -lang-c++
 	@echo [DONE] Built $@ - install with NbtAad.manifest, NbtAad.xml, NbtAad_ALL_*.zip into Plugins/NbtAad
@@ -177,6 +180,13 @@ osd1281probe: tools/osd1281probe.cpp
 # lmrestore: put screen 0's layer render order back after an experiment cleared it.
 lmrestore: tools/lmrestore.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/lmrestore.cpp -lang-c++
+
+# ricprobe: one text model to the KOMBI's list service (SOME/IP 0xB00E), to see whether it takes frames from a second
+# client (see tools/ricprobe.cpp). Not part of `all`.
+ricprobe: tools/ricprobe.cpp src/cluster/ric_list.hpp src/cluster/j29_graph.hpp
+	@echo [CXX] tools/ricprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/ricprobe.cpp -lsocket -lang-c++
+	@echo [DONE] Built $@
 
 # kdprobe: the supported overlay path -- KD window + EGL/GLES surface (see tools/kdprobe.cpp).
 kdprobe: tools/kdprobe.cpp

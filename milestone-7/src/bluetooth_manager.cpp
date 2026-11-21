@@ -116,6 +116,7 @@ double upSecBt() {
 }
 std::string g_phoneAddr;
 uint32_t g_phoneConn = 0;
+bool g_devKnown = false;   // the car has sent its device list at least once (status hint: no "connect phone" before)
 bool g_listAsked = false;
 // Refused phone-opened links in a row (ServiceRequestError, reset by ServiceRequestComplete), and whether the phone's
 // service list was already fetched once for such a run (DSI callback thread only).
@@ -149,6 +150,7 @@ void logServiceList(const uint8_t* pl, uint32_t len, bool withError) {
 }
 
 void updateDevices(DsiClient* c, const std::vector<GapDevice>& d, const char* from) {
+    g_devKnown = true;
     size_t best = d.size();
     for (size_t i = 0; i < d.size(); ++i)
         if (d[i].connection >= 2 && (best == d.size() || d[i].connection > d[best].connection)) best = i;
@@ -163,7 +165,7 @@ void updateDevices(DsiClient* c, const std::vector<GapDevice>& d, const char* fr
     else
         printf("[BluetoothManager] [%9.3f] %s: phone '%s' %s is %s over Bluetooth\n", upSecBt(), from,
                d[best].name.c_str(), addr.c_str(), connName(conn));
-    if (!addr.empty() && conn >= 2) {
+    if (btTrace() && !addr.empty() && conn >= 2) {   // the phone's services: diagnostics only
         std::vector<uint8_t> p;
         DsiClient::putString(p, addr.c_str());
         waitTxIdle();
@@ -179,9 +181,14 @@ void onGapAttached(DsiClient* c, void*) {
         printf("[BluetoothManager] watching the phone's incoming link requests (ServiceRequest): an Android Auto "
                "link is opened by the phone, a BMW Apps link by the car\n");
     }
+    {   // always: whether a phone is connected over Bluetooth decides the iDrive row's "Waiting for Bluetooth
+        // device" (status_hint.hpp). Before v1.9.116 this was NBT_BT_TRACE=1 only, so the row never got it.
+        // DeviceDisconnected stays trace-only: its handler is, and an unhandled inform would reach the SPP state
+        // machine below as if it were the deregister response. DeviceListChanged is always consumed before that.
+        c->setNotification(kInfDeviceListChanged);
+    }
     if (btTrace()) {
-        const uint32_t informs[] = { kInfDeviceDisconnected, kInfDeviceListChanged, kInfServiceDisconnected,
-                                     kInfServiceListChanged };
+        const uint32_t informs[] = { kInfDeviceDisconnected, kInfServiceDisconnected, kInfServiceListChanged };
         for (size_t i = 0; i < sizeof(informs) / sizeof(informs[0]); ++i) c->setNotification(informs[i]);
         printf("[BluetoothManager] NBT_BT_TRACE=1: logging the phone's Bluetooth connection and services\n");
     }
@@ -221,7 +228,9 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
             printf("[BluetoothManager] the car has refused the phone's Android Auto Bluetooth link %u times in a row. "
                    "The phone sees the service and the car turns the link down for this phone: check the phone's "
                    "functions in iDrive (Mobile devices, the phone's settings), delete the phone in iDrive and on the "
-                   "phone and pair it again, with the ignition on and the pairing menu closed\n", g_reqErrRun);
+                   "phone and pair it again, with the ignition on and the pairing menu closed. If it keeps refusing, the car is "
+                   "most likely missing coding: see coding-requirements.md on GitHub (A4A_ANDROID, "
+                   "A4A_WIRELESS_ANDROID); iDrive's Android Auto row says so too\n", g_reqErrRun);
             if (!g_reqErrListAsked && !addr.empty()) {   // which of its services the car has connected (once per run)
                 g_reqErrListAsked = true;
                 g_reqErrListPending = true;
@@ -240,7 +249,7 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
         fflush(stdout);
         return;
     }
-    if (btTrace() && (id == kRspDeviceListGet || id == kInfDeviceListChanged)) {
+    if (id == kRspDeviceListGet || id == kInfDeviceListChanged) {
         std::vector<GapDevice> d;
         uint32_t err = 0;
         if (gapParseDeviceList(pl, len, id == kRspDeviceListGet, d, &err))
@@ -297,7 +306,7 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
             printf("[BluetoothManager] Android Auto Bluetooth service registered again: a connected phone can now open "
                    "the Bluetooth setup link\n");
         setState(SPP_DONE);
-        if (btTrace() && !g_listAsked) {   // who is connected right now (later changes come as informs)
+        if (!g_listAsked) {   // who is connected right now (later changes come as informs); always (status row)
             g_listAsked = true;
             waitTxIdle();
             c->sendRequest(kReqDeviceListGet, std::vector<uint8_t>());
@@ -448,5 +457,10 @@ void BluetoothManager::stop() {
     // connection thread is detached and sending off-thread is unsafe.
     is_registered_ = false;
 }
+
+// For the iDrive status hint (status_hint.hpp): plain word reads, written on the DSI callback thread only.
+int btPhoneConnState() { return g_devKnown ? (int)g_phoneConn : -1; }
+unsigned btRefusedRun() { return g_reqErrRun; }
+void btResetRefusedRun() { g_reqErrRun = 0; g_reqErrListAsked = false; }
 
 } // namespace nbt

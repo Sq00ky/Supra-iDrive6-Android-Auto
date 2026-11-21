@@ -67,13 +67,16 @@
 #include "overlay_watch.hpp"
 #include "entry_key.hpp"
 #include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
+#include "../src/favourite_colour.hpp"
+#include "../src/status_hint.hpp"
+#include <vector>
 #ifdef __QNX__
 #include <sys/slog.h>
 #include <sys/slogcodes.h>
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-85-cluster (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-93 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -241,6 +244,31 @@ const unsigned    kActStart       = 21;      // <raAction id="21"/> row "Start A
 const unsigned    kActStop        = 22;      // <raAction id="22"/> row "Force Stop"
 const unsigned    kActRestart     = 23;      // <raAction id="23"/> row "Restart"
 const unsigned    kStartRowModel  = 31;      // textIdModel of the Start row
+// Status wording (rhmiapp-98): the entry row and the Start row say what nbt-aad is doing. Static text ids, because
+// those rows are textIdModels; the daemon's status token picks which one.
+const unsigned    kTextAaDefault    = 320;
+const unsigned    kTextAaConnecting = 321;
+const unsigned    kTextAaConnected  = 322;
+const unsigned    kTextAaWaiting    = 323;
+const unsigned    kTextAaNoWfd      = 324;
+const unsigned    kTextAaNoCarplay  = 325;
+// 326-331: the measured chain (carplay.ini -> wfd0 -> USB), emitted by the daemon as "state|carplay|wfd|usb|transport"
+const unsigned    kTextAaCarplayWifi = 326;
+const unsigned    kTextAaWfd         = 327;
+const unsigned    kTextAaUsbOnly     = 328;
+const unsigned    kTextAaWifiOk      = 329;
+const unsigned    kTextAaUsbOk       = 330;
+const unsigned    kTextAaConnecting2 = 331;
+const unsigned    kTextAaWaitUsb     = 332;
+const unsigned    kTextAaWaitCarplay = 333;
+const unsigned    kTextAaWaitWfd     = 334;
+const unsigned    kTextAaWaitWfdNet  = 335;   // waiting, Wi-Fi Direct is the network offered (rhmiapp-100)
+const unsigned    kTextAaNoBt        = 336;   // phone on Bluetooth, never opened the Android Auto link: re-pair
+const unsigned    kTextAaNoJoin      = 337;   // phone took the Wi-Fi details, never joined: re-pair
+const unsigned    kTextAaCoding      = 338;
+const unsigned    kTextAaNoWifi      = 340;   // no usable Wi-Fi in the car: use USB (rhmiapp-91)
+const unsigned    kTextAaNoSsid      = 341;   // Wi-Fi Direct up, no group name: set it by hand (rhmiapp-91)
+const unsigned    kTextAaNoPhone     = 339;   // no phone connected over Bluetooth (rhmiapp-90)   // car keeps refusing the link (ServiceRequestError): coding
 const unsigned    kTextStart      = 10;      // "Start Android Auto"
 const unsigned    kTextRowConnecting = 13;   // "Connecting..."
 const unsigned    kTextRowOpen    = 14;      // "Open Android Auto"
@@ -294,6 +322,17 @@ const unsigned    kAboutModel      = 37;
 // choice is one word in /var/opt/aa/cluster; nbt-aad reads it when NBT_CLUSTER is unset. 6WB has no display
 // driver yet, so it is offered with that stated and the daemon says so rather than quietly doing 6WA's job.
 const char* const kClusterFlag       = "cluster";
+// Car manufacturer choice (rhmiapp-96): /var/opt/aa/vehicle -> the daemon exports NBT_VEHICLE at start, and
+// car_config.hpp then skips carplay.ini. "auto" keeps today's behaviour (carplay.ini decides).
+// In the data dir (nbt_paths.hpp), so a package install's daemon finds what this page wrote.
+static nbt::FilePath vehicleChoiceFile() { return nbt::dataFile("vehicle"); }
+const char* const kVehicleNames[5]   = { "auto", "bmw", "toyota", "mini", "rollsroyce" };
+const char* const kVehicleLabels[5]  = { "Auto (carplay.ini)", "BMW", "Toyota", "MINI", "Rolls-Royce" };
+const unsigned    kVehicleActions[5] = { 421, 422, 423, 424, 425 };
+const unsigned    kVehicleModels[5]  = { 450, 451, 452, 453, 454 };
+const unsigned    kVehicleState      = 18;
+const unsigned    kStatusModel       = 430;
+std::string g_vehicleAtEntry;
 const unsigned    kClusterModels[3]  = { 401, 402, 403 };
 const char* const kClusterValues[3]  = { "j29", "6wa", "6wb" };
 const unsigned    kAboutText       = 17;
@@ -332,7 +371,7 @@ const long        kUsbLogRecheckS  = 5;   // stick lookup cache: a stick plugged
 const unsigned    kActWarnings     = 30;
 const unsigned    kWarnModel       = 48;
 const char* const kWarnFlag        = "show-warnings";
-// "Android Auto over USB (beta)" checkbox (rhmiapp-40): <checkbox action="83" id="86" model="84" textModel="85"> on the
+// "Android Auto over USB" checkbox (rhmiapp-40): <checkbox action="83" id="86" model="84" textModel="85"> on the
 // Settings page, off by default. Flag file read by nbt-aad once at start (nbt_env.hpp usbEnabled(); NBT_USB in
 // nbt-aad.env wins either way), so a change applies at the next Start / Restart.
 const unsigned    kActUsbAa        = 83;
@@ -348,7 +387,7 @@ const char* const kPhoneGpsFlag    = "phone-gps";
 const unsigned    kActWfdOnly      = 91;
 const unsigned    kWfdOnlyModel    = 92;
 const char* const kWfdOnlyFlag     = "wifi-direct";
-// "Use Native Audio instead of Bluetooth" and "Media Controls for LCI Steering Wheels" (rhmiapp-45), both off by default:
+// "Use Native Audio instead of Bluetooth" and "Native Functionality Media Controls Restore" (rhmiapp-45), both off by default:
 // <checkbox action="120" id="123" model="121" textModel="122"> and <checkbox action="124" id="127" model="125"
 // textModel="126">. Flag files read by nbt-aad at start (audio/config.hpp nativeAudioFlagSet(), nbt_env.hpp
 // lciMediaKeysEnabled()); NBT_AUDIO_MODE / NBT_AUDIO_BT and NBT_LCI_MEDIA in nbt-aad.env win.
@@ -385,6 +424,12 @@ const unsigned    kActAnyDist       = 167;   // checkbox raAction
 const unsigned    kAnyDistModel     = 170;   // raBoolModel (checkbox state)
 const unsigned    kAnyDistTextModel = 168;   // textIdModel (checkbox label)
 const char* const kAnyDistFlag      = "kombi-nav-anydist";
+// "Song title in gauge cluster", off by default: <checkbox action="470" id="473" model="471" textModel="472">. Flag
+// read by nbt-aad once a second (kombi_nav, cluster/nav_core.hpp mediaEnabledNow()): the song the phone plays is
+// the cluster's idle text (the 6WA's street line) while no turn is up. NBT_KOMBI_MEDIA in nbt-aad.env wins.
+const unsigned    kActKombiMedia    = 470;
+const unsigned    kKombiMediaModel  = 471;
+const char* const kKombiMediaFlag   = "kombi-media";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
 const unsigned    kNoLogModel       = 175;   // raBoolModel
 const unsigned    kActSpeechBt      = 174;   // "Prompts on car radio (BT, beta)" checkbox
@@ -936,6 +981,7 @@ struct DaemonState {
     int overlay;        // 1 = Android Auto on screen, knob goes to the phone; 2 = same, BACK held (v1.8.26+);
                         // 3 = same, MENU / COM / MEDIA / NAV / MAP just went to the phone (v1.8.29+ / v1.8.34+): re-hold;
                         // 4 = same, another car control in the last 3 s; 5 = same, only the knob turned / pushed (v1.9.19+)
+    bool favouritePeek; // optional fourth field: temporarily reveal the native favourite preview
 };
 
 bool pidAlive(int pid) {
@@ -980,16 +1026,18 @@ DaemonState readDaemonState() {
     strcpy(d.state, "idle");
     d.pid = 0;
     d.overlay = 0;
+    d.favouritePeek = false;
     FILE* f = fopen(kStateFile, "r");
     if (f) {
         char st[24] = "";
-        int pid = 0, ov = 0;
-        int n = fscanf(f, "%23s %d %d", st, &pid, &ov);
+        int pid = 0, ov = 0, favourite = 0;
+        int n = fscanf(f, "%23s %d %d %d", st, &pid, &ov, &favourite);
         fclose(f);
         if (n >= 2 && pidAlive(pid)) {
             strcpy(d.state, st);
             d.pid = pid;
             d.overlay = (n >= 3) ? ov : 0;
+            d.favouritePeek = n >= 4 && favourite == 1;
             return d;
         }
     }
@@ -1005,10 +1053,11 @@ DaemonState readDaemonState() {
 bool g_focusKnown = false;     // a focus notification for our menu arrived at least once
 bool g_menuFocused = false;    // focus notification of hmiState 10 (the menu itself)
 bool g_settingsFocused = false; // focus notification of hmiState 14 (the Settings page under it, rhmiapp-39)
+bool g_colourFocused = false;
 // "The driver is in our own UI" (menu or its Settings page). Used by the hold: coming back to either is not a car
 // screen taking over. g_menuFocused alone stays the answer to "is the menu itself on top", which is what the
 // connected-after-Start return to the main menu tests (a driver reading Settings must not be pulled out of it).
-bool inOurMenu() { return g_menuFocused || g_settingsFocused; }
+bool inOurMenu() { return g_menuFocused || g_settingsFocused || g_colourFocused; }
 bool g_wantHome = false;       // Start was pressed: return to the main menu once the phone is connected
 bool g_entryStart = false;     // the Open Android Auto entry started nbt-aad: show it on connect if our menu is on top
 pid_t g_autostartPid = 0;     // automatic launch waiting for its first projection handoff
@@ -1227,7 +1276,7 @@ bool onAaFocus(void*, const bmw::Parcel& p) {
     // knob does not drive iDrive's main menu under the picture until the next poll.
     if (!f && g_runApp && holdEnabled() && g_holding && !callActive()) {
         DaemonState d = readDaemonState();
-        if (d.pid > 0 && d.overlay == 3) fireHold(g_runApp, "a hard key went to Android Auto (immediate)");
+        if (d.pid > 0 && d.overlay == 3 && !d.favouritePeek) fireHold(g_runApp, "a hard key went to Android Auto (immediate)");
     }
     return true;
 }
@@ -1243,7 +1292,7 @@ bool onAaVisible(void*, const bmw::Parcel& p) {
     // Auto, as with CarPlay: bring it to the front. Not in reverse / park assist / a call.
     if (v && !g_holding && holdEnabled() && !callActive() && g_lastGear != kReverseGear && !pdcOwnsScreen()) {
         DaemonState d = readDaemonState();
-        if (d.pid > 0 && !d.overlay && !strcmp(d.state, "connected")) {
+        if (d.pid > 0 && !d.overlay && !d.favouritePeek && !strcmp(d.state, "connected")) {
             alog("hold: iDrive went back to the Android Auto screen: asking nbt-aad to come to the front");
             g_ow.reset(nowMs());
             sendShow();
@@ -1323,6 +1372,20 @@ void stepAsideForOverlay() {
 
 void serviceHold(bmw::PluginApp* app, const DaemonState& d) {
     if (!holdEnabled()) return;
+    static bool favouriteAside = false;
+    if (d.pid > 0 && d.favouritePeek && !strcmp(d.state, "connected")) {
+        // Suspend focus enforcement while the native strip is shown. v2 keeps AA visible;
+        // remember its actual logical visibility so a genuine exit/camera transition is still handled.
+        g_prevOverlay = d.overlay ? 1 : 0;
+        favouriteAside = true;
+        return;
+    }
+    if (favouriteAside) {
+        favouriteAside = false;
+        // Driver navigation or another owner cancelled the peek: remain native, but let BACK/history
+        // re-enter AA through the normal onAaVisible path later. Do not issue a spurious Go Home event.
+        if (!d.overlay) g_holding = false;
+    }
     bool overlay = d.pid > 0 && d.overlay;
     bool rose = overlay && !g_prevOverlay, fell = !overlay && g_prevOverlay;
     g_prevOverlay = overlay ? 1 : 0;
@@ -1775,6 +1838,49 @@ bool onClusterJ29(void*, const bmw::Parcel&) { return onClusterPick(0); }
 bool onCluster6wa(void*, const bmw::Parcel&) { return onClusterPick(1); }
 bool onCluster6wb(void*, const bmw::Parcel&) { return onClusterPick(2); }
 
+// The stored choice, always a known value ("auto" when the file is missing or odd).
+std::string readVehicleChoice() {
+    FILE* f = fopen(vehicleChoiceFile().c_str(), "r");
+    if (!f) return "auto";
+    char v[24] = {0};
+    if (fscanf(f, "%23s", v) != 1) v[0] = 0;
+    fclose(f);
+    for (int i = 0; i < 5; ++i) if (!strcmp(v, kVehicleNames[i])) return std::string(v);
+    return "auto";
+}
+bool writeVehicleChoice(const char* v) {
+    nbt::makeDataDir();
+    const nbt::FilePath nextPath = nbt::dataFile("vehicle.next");
+    const char* next = nextPath.c_str();
+    FILE* f = fopen(next, "w");
+    if (!f) { alog("vehicle: cannot save errno=%d", errno); return false; }
+    bool ok = fprintf(f, "%s\n", v) > 0;
+    if (fclose(f) != 0) ok = false;
+    if (ok && rename(next, vehicleChoiceFile().c_str()) == 0) return true;
+    unlink(next); alog("vehicle: save failed errno=%d", errno);
+    return false;
+}
+void showVehicleChoice(bmw::PluginApp* app) {
+    if (!app) return;
+    const std::string cur = readVehicleChoice();
+    for (int i = 0; i < 5; ++i) app->updateModel(kVehicleModels[i], cur == kVehicleNames[i]);
+    g_vehicleAtEntry = cur;
+}
+template <int Mode> bool onVehiclePick(void*, const bmw::Parcel&) {
+    if (writeVehicleChoice(kVehicleNames[Mode])) {
+        alog("vehicle choice -> %s (nbt-aad reads it at its next start)", kVehicleNames[Mode]);
+        if (g_app) showVehicleChoice(g_app);
+    }
+    return true;
+}
+bool onVehicleFocus(void*, const bmw::Parcel& p) {
+    bool f = false; p.readBool(f);
+    if (f && g_app) showVehicleChoice(g_app);
+    return true;
+}
+
+// Live status line: the daemon writes a short token with every UI-state record, and this turns it into a sentence.
+// The daemon's own state file decides "not running", so the line cannot claim a session that is not there.
 void showAutostart(bmw::PluginApp* app) {
     bool on = autostartOn();
     app->updateModel(kAutostartModel, on);
@@ -1874,7 +1980,7 @@ bool onKombiNavToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-// ---- Android Auto over USB (beta) -------------------------------------------------------------------------------
+// ---- Android Auto over USB -------------------------------------------------------------------------------
 bool g_usbAaShown = false;
 bool usbAaOn() { return nbt::flagSet(kUsbAaFlag); }
 
@@ -1927,7 +2033,7 @@ bool onWfdOnlyToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
-// ---- Use Native Audio instead of Bluetooth / Media Controls for LCI Steering Wheels (rhmiapp-45) -----------------
+// ---- Use Native Audio instead of Bluetooth / Native Functionality Media Controls Restore (rhmiapp-45) -----------------
 bool g_nativeAudioShown = false;
 bool nativeAudioOn() { return nbt::flagSet(kNativeAudioFlag); }
 void showNativeAudio(bmw::PluginApp* app) {
@@ -2104,7 +2210,7 @@ void servicePfOps(bmw::PluginApp* app) {
 }
 
 bool onLciMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    toggleFlagFile(kLciMediaFlag, "Media Controls for LCI Steering Wheels (NBT_LCI_MEDIA in nbt-aad.env wins)");
+    toggleFlagFile(kLciMediaFlag, "Native Functionality Media Controls Restore (NBT_LCI_MEDIA in nbt-aad.env wins)");
     if (g_runApp) showLciMedia(g_runApp);
     return true;
 }
@@ -2272,6 +2378,19 @@ bool onSpeechBtToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+bool g_kombiMediaShown = false;
+bool kombiMediaOn() { return nbt::flagSet(kKombiMediaFlag); }
+void showKombiMedia(bmw::PluginApp* app) {
+    app->updateModel(kKombiMediaModel, kombiMediaOn());
+    g_kombiMediaShown = true;
+}
+bool onKombiMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kKombiMediaFlag,
+                   "Song title in gauge cluster (NBT_KOMBI_MEDIA in nbt-aad.env wins; nbt-aad reads it every second)");
+    if (g_runApp) showKombiMedia(g_runApp);
+    return true;
+}
+
 bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kAnyDistFlag,
                    "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
@@ -2331,6 +2450,7 @@ void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
+    if (!g_kombiMediaShown) showKombiMedia(app);
     if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
@@ -2352,15 +2472,42 @@ void statusRun(void* /*self*/) {
     DaemonState d = readDaemonState();
     bool connecting = !strcmp(d.state, "connecting"), connected = !strcmp(d.state, "connected");
 
-    unsigned want = connecting ? kTextConnecting : kTextDefault;          // the Media/Radio entry row
+    // "state|carplay|wfd|usb|transport", written by the daemon from measured facts. The chain is
+    // carplay.ini -> wfd0 -> USB, so the row names the link that is missing and the setting that fixes it.
+    char rec[72] = {0};
+    { FILE* sf = fopen("/dev/shmem/nbt-aad-status", "r");
+      if (sf) { if (fscanf(sf, "%71s", rec) != 1) rec[0] = 0; fclose(sf); } }
+    char st[24] = {0}, tr[8] = {0};
+    int hasIni = 0, hasWfd = 0, hasUsb = 0;
+    sscanf(rec, "%23[^|]|%d|%d|%d|%7s", st, &hasIni, &hasWfd, &hasUsb, tr);
+    // "net|hint" (status_hint.hpp; absent from an older daemon): the network offered and why a phone is stuck.
+    char net[8] = {0}, hint[8] = {0};
+    { FILE* hf = fopen("/dev/shmem/nbt-aad-hint", "r");
+      if (hf) { char hrec[24] = {0}; if (fscanf(hf, "%23s", hrec) == 1) sscanf(hrec, "%7[^|]|%7s", net, hint); fclose(hf); } }
+    unsigned statusText = kTextAaDefault;
+    if (!strcmp(st, "connected"))       statusText = !strcmp(tr, "usb") ? kTextAaUsbOk : kTextAaWifiOk;
+    else if (!strcmp(st, "connecting")) statusText = !strcmp(hint, "nojoin") ? kTextAaNoJoin : kTextAaConnecting2;
+    else if (d.pid > 0) {
+        // Which link the driver should use: the USB-only setting wins, then carplay.ini, then Wi-Fi Direct.
+        // usbAaOn() is the same flag file the daemon reads, so both sides agree without a second channel.
+        // A hint (stuck on Bluetooth / Wi-Fi / refused by the car) comes before the network name.
+        static const unsigned kWaitText[] = { kTextAaWaitUsb, kTextAaCoding, kTextAaNoJoin, kTextAaNoBt,
+                                              kTextAaWaitWfdNet, kTextAaWaitCarplay, kTextAaWaitWfd, kTextAaUsbOnly,
+                                              kTextAaNoPhone, kTextAaNoWifi, kTextAaNoSsid };
+        statusText = kWaitText[nbt::waitingKind(usbAaOn(), net, hint, hasIni != 0, hasWfd != 0)];
+    }
+    unsigned want = statusText;                                          // the Media/Radio entry row
     if (want != g_shownText) {
         bmw::TextID text(want);
         app->updateModel(kEntryTextModel, text);
         alog("entry text -> %u (%s)", want, want == kTextConnecting ? "connecting" : "default");
         g_shownText = want;
     }
+    // A try that already failed to join: say re-pair (no spinner) even while the phone keeps retrying.
+    if (connecting && statusText == kTextAaNoJoin) connecting = false;
     if (!fileExists(nbt::appFile("spinner.disable").c_str())) setConnectingAnimation(app, connecting);
     unsigned row = connected ? kTextRowOpen : connecting ? kTextRowConnecting : kTextStart;   // our menu's Start row
+    if (!connected && !connecting && statusText != kTextAaDefault) row = statusText;   // waiting or missing link: say why
     if (row != g_shownRow) {
         bmw::TextID text(row);
         app->updateModel(kStartRowModel, text);
@@ -2501,6 +2648,7 @@ time_t g_setSnapTime = 0;
 void settingsPageEntered() {
     if (g_setSnapPending) return;                        // keep the snapshot of the first visit since the last check
     g_setSnap = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
+    if (g_app) showVehicleChoice(g_app);              // remember the manufacturer too, for the restart decision
     g_setSnapPending = true;
     g_setSnapTime = time(NULL);
 }
@@ -2509,7 +2657,12 @@ void settingsBackOnMainPage() {
     if (!g_setSnapPending) return;
     g_setSnapPending = false;
     const std::string now = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
-    const std::string diff = nbt::settingsDiff(kSettingsFlags, kSettingsFlagCount, g_setSnap, now);
+    std::string diff = nbt::settingsDiff(kSettingsFlags, kSettingsFlagCount, g_setSnap, now);
+    const std::string vehicleNow = readVehicleChoice();
+    if (!g_vehicleAtEntry.empty() && vehicleNow != g_vehicleAtEntry) {
+        if (!diff.empty()) diff += ", ";
+        diff += "car manufacturer " + g_vehicleAtEntry + " -> " + vehicleNow;
+    }
     DaemonState d = readDaemonState();
     nbt::SettingsRestart r = nbt::settingsRestartDecide(
         !diff.empty(), envFlagOn("NBT_SETTINGS_RESTART", true), d.pid != 0,
@@ -2540,7 +2693,7 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
     p.readBool(f);
     g_focusKnown = true;
     g_menuFocused = f;
-    if (f) g_settingsFocused = false;   // the menu itself is on top: the Settings page is not (see onSettingsFocus)
+    if (f) { g_settingsFocused = false; g_colourFocused = false; }
     alog("menu state %u focus -> %d", kMenuState, (int)f);
     if (f) g_ow.onOwnState(nbt::OverlayWatch::kMenuState, nowMs());   // iDrive is on our menu (CDS: 50000)
     if (f) settingsBackOnMainPage();                     // back from Settings: restart if a checkbox changed
@@ -2567,6 +2720,42 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 // focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
 // the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
 // counts as "our own UI" for the hold and for the overlay watch.
+// Favourites bar switch (rhmiapp-98): one checkbox on the Settings page, no submenu. It reads
+// "Disable Favorites Bar" and is ticked exactly when the disabled marker exists - the file is the state, the tick
+// only reflects it, the same rule every other row on this page follows.
+void showFavouriteBar(bmw::PluginApp* app) {
+    if (app) app->updateModel(250, fileExists(nbt::favouriteDisabledPath().c_str()));
+}
+bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
+    if(fileExists(nbt::favouriteDisabledPath().c_str()))unlink(nbt::favouriteDisabledPath().c_str());   // unticked: bar back on
+    else {
+        nbt::makeDataDir();int fd=open(nbt::favouriteDisabledPath().c_str(),O_WRONLY|O_CREAT|O_TRUNC,0666);
+        if(fd>=0)close(fd);else alog("favourites bar: cannot save switch errno=%d",errno);
+    }
+    alog("favourites bar %s", fileExists(nbt::favouriteDisabledPath().c_str()) ? "disabled" : "enabled");
+    if(g_app)showFavouriteBar(g_app);
+    return true;
+}
+// HUD Cyrillic switch (NBT_HUD_CYRILLIC): the Settings checkbox writes <data dir>/hud-cyrillic, which the 6WA HUD
+// text path reads (hud6wa_display.cpp). Off by default: the cluster font has to carry the glyphs. The env var still
+// wins, so a hand-set NBT_HUD_CYRILLIC=0 turns it off even with the box ticked.
+void showHudCyrillic(bmw::PluginApp* app) {
+    if (app) app->updateModel(251, nbt::flagSet(nbt::kHudCyrillicFlagName));
+}
+bool onHudCyrillicToggle(void*,const bmw::Parcel&) {
+    const char* n = nbt::kHudCyrillicFlagName;
+    if (nbt::flagSet(n)) {                                        // unticked: the file goes, English-only again
+        unlink(nbt::dataFile(n).c_str());
+        unlink(nbt::appFile(n).c_str());
+    } else {
+        nbt::makeDataDir();
+        int fd=open(nbt::dataFile(n).c_str(),O_WRONLY|O_CREAT|O_TRUNC,0666);
+        if(fd>=0)close(fd);else alog("hud cyrillic: cannot save switch errno=%d",errno);
+    }
+    alog("HUD Cyrillic %s", nbt::flagSet(n) ? "on" : "off");
+    if(g_app)showHudCyrillic(g_app);
+    return true;
+}
 bool onSettingsFocus(void*, const bmw::Parcel& p) {
     bool f = false;
     p.readBool(f);
@@ -2574,6 +2763,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
     g_settingsFocused = f;
     alog("settings state %u focus -> %d", kSettingsState, (int)f);
     if (!f) return true;
+    g_colourFocused=false;
     g_ow.onOwnState(nbt::OverlayWatch::kSettingsState, nowMs());   // iDrive is in our menu, not on a car screen
     settingsPageEntered();                               // checkbox snapshot for the restart on leaving
     if (g_app) {
@@ -2582,6 +2772,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showMenuIdrive(g_app);
         showDriveMode(g_app);
         showKombiNav(g_app);
+        showHudCyrillic(g_app);
         showClusterType(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
@@ -2628,6 +2819,13 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, 411, &onClusterJ29);
     addAction(self, 412, &onCluster6wa);
     addAction(self, 413, &onCluster6wb);
+    addAction(self, 421, &onVehiclePick<0>); addAction(self, 422, &onVehiclePick<1>);
+    addAction(self, 423, &onVehiclePick<2>); addAction(self, 424, &onVehiclePick<3>);
+    addAction(self, 425, &onVehiclePick<4>);
+    {
+        bmw::ActionDelegate veh; veh.object = self; veh.stub = &onVehicleFocus;
+        self->addHandler(kVehicleState, kHandlerFocus, veh);
+    }
     addAction(self, kActWarnings, &onWarningsToggle);
     addAction(self, kActUsbAa, &onUsbAaToggle);
     addAction(self, kActPhoneGps, &onPhoneGpsToggle);
@@ -2636,11 +2834,14 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActLciMedia, &onLciMediaToggle);
     addAction(self, kActCpCompat, &onCpCompatToggle);
     addAction(self, kActAnyDist, &onAnyDistToggle);
+    addAction(self, kActKombiMedia, &onKombiMediaToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
     addAction(self, kActSpeechBt, &onSpeechBtToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
+    addAction(self,248,&onFavouriteBarToggle);
+    addAction(self,421,&onHudCyrillicToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;

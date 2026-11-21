@@ -100,12 +100,14 @@
 #include "bluetooth_manager.hpp"
 #include "wireless_setup.hpp"
 #include "alt_wifi.hpp"
+#include "status_hint.hpp"
 #include "wfd_own.hpp"     // DIRECT mode: nbt-aad's own passphrase on the car's Wi-Fi Direct group
 #include "keyframe_ask.hpp"
 #include "touch_probe.hpp"
 #include "aa_keys.hpp"
 #include "car/ccs_config.hpp"
 #include "car/ccs_input.hpp"
+#include "car/favourite_preview.hpp"
 #include "car/volume_input.hpp"
 #include "car/input_activity.hpp"
 #include "car/gps.hpp"
@@ -123,7 +125,9 @@
 #include "../tools/pf_aa.hpp"
 #include "spp_direction.hpp"
 #include "neutral_resume.hpp"
+#include "tile_process.hpp"
 #include "cluster/nav_core.hpp"
+#include "cluster/ric_media.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -156,6 +160,7 @@ static double upSec() {
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
+static nbt::riclist::KombiMedia g_kombiMedia;   // the track title in the cluster's track list (Native Functionality Media Controls Restore)
 static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
 static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
 static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
@@ -163,6 +168,54 @@ static nbt::car::InputActivity g_carInput;   // any car control the driver touch
 static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
 static nbt::car::CarVehicle g_vehicle;       // the car's wheel speed, gear and parking brake: a consumer of g_most
 static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
+static nbt::car::FavouritePreview g_favouritePreview;
+static volatile sig_atomic_t g_favouritePeek = 0;
+static volatile sig_atomic_t g_favouriteTouchMask = 0;
+static volatile sig_atomic_t g_favouriteInputSerial = 0;
+static volatile sig_atomic_t g_mainWake = 0;   // cuts the main loop's 250 ms sleep short
+// The Settings toggle (rhmiapp-87): the plugin writes /var/opt/aa/favourite-bar.disabled. Checked here, per
+// frame, so the switch works without restarting the daemon (the env only forces the capturer off).
+// The iDrive app's "Disable Favorites Bar" marker, in the data dir (favourite_colour.hpp, nbt_paths.hpp).
+static bool favouriteBarOff() { return access(nbt::dataFile("favourite-bar.disabled").c_str(), F_OK) == 0; }
+namespace nbt { int favouriteOverlayRun(int argc, char** argv); void favouriteOverlayStop(); }
+
+// The favourite strip used to be a second process (nbt-aa-favourites, spawned through TileProcess). It is a thread of
+// this daemon only: the helper binary and its fallback are gone, so an NBTApps package (nbt-aad + the plugin files)
+// has everything.
+static bool g_favInProc = false;
+static pthread_t g_favOverlayThread;
+static bool g_favOverlayRunning = false;
+static void* favouriteOverlayThreadFn(void*) {
+    char a0[] = "nbt-aa-favourites", a1[] = "follow", a2[] = "-", a3[16];
+    snprintf(a3, sizeof(a3), "%d", (int)getpid());
+    char* argv[] = { a0, a1, a2, a3, NULL };          // follow + owner pid: the thread ends with this process
+    nbt::favouriteOverlayRun(4, argv);
+    return NULL;
+}
+
+// NBT_FAVOURITE_PROBE=1: log every status frame from function block 0x15, whatever its function code.
+// The point is to find out whether this car publishes the 8 favourite keys at all, and under which fkt.
+static void onFavouriteProbe(const nbt::most::View& m, nbt::most::MsgClass, void*) {
+    if (m.fblock != 0x15) return;
+    char buf[64]; int n = 0;
+    for (unsigned i = 0; i < m.len && i < 8; ++i) n += snprintf(buf + n, sizeof(buf) - n, "%02x", m.data[i]);
+    if (n == 0) snprintf(buf, sizeof(buf), "-");
+    printf("[FavProbe] inst=0x%02x fkt=0x%03x op=0x%x len=%u data=%s\n",
+           (unsigned)m.inst, (unsigned)m.fkt, (unsigned)m.op, (unsigned)m.len, buf);
+}
+static void onFavouriteTouch(const nbt::most::View& m, void*) {
+    if (favouriteBarOff()) return;
+    if (g_favouritePreview.feed(m.fblock, m.inst, m.fkt, m.op, m.data, m.len, m.rxMs)) {
+        unsigned mask=0;
+        for(unsigned i=0;i<8;++i) if(m.data[i]) mask|=1u<<i;
+        if(mask&&!g_favouriteTouchMask)g_favouriteInputSerial=(sig_atomic_t)(((unsigned)g_favouriteInputSerial+1u)&0x7fffffffu);
+        g_favouriteTouchMask=(sig_atomic_t)mask;
+        g_mainWake = 1;
+        printf("[Favourites] touch rx=%u handled=%u mask=%u%u%u%u%u%u%u%u\n", m.rxMs, upMs(),
+               (unsigned)m.data[0], (unsigned)m.data[1], (unsigned)m.data[2], (unsigned)m.data[3],
+               (unsigned)m.data[4], (unsigned)m.data[5], (unsigned)m.data[6], (unsigned)m.data[7]);
+    }
+}
 
 // ---- Single instance + control port (NBT_CTL=0 disables, NBT_CTL_PORT overrides 52790) -------------------
 // The iDrive menu entry (plugin/libhmiaad.so) simply starts /opt/aa/nbt-aad every time it is selected. The first
@@ -230,7 +283,6 @@ static volatile int g_driveMode = -1;              // last valid mode (-1 = none
 static volatile uint32_t g_dmPeekUntil = 0;        // upMs() until which iDrive keeps the screen (0 = never set)
 static volatile uint32_t g_dmPeekFrom = 0;         // upMs() from which it does (change + NBT_DRIVEMODE_DELAY_MS)
 static volatile sig_atomic_t g_dmShown = 0;        // main loop: currently stepped aside for it
-static volatile sig_atomic_t g_mainWake = 0;       // cuts the main loop's 250 ms sleep short (driving-mode change)
 static bool showDriveModeOn() { return nbt::flagSet(kDriveModeFlag); }
 static int driveModeShowMs() {
     const char* e = getenv("NBT_DRIVEMODE_SHOW_MS");
@@ -476,6 +528,10 @@ static bool ctlClaimOrForward() {
 // credentials and our ip:port, and the phone then opens the TCP session itself.
 static uint16_t g_aaPort = 5277;
 static volatile int g_btLink = 0;              // wireless thread: phone's Bluetooth setup link (/dev/btspp0) is open
+static volatile uint32_t g_btIdleSince = 0;     // wireless thread: waiting for that link since (monoSecs; 0 = not waiting)
+static volatile uint32_t g_noJoinAt = 0;        // wireless thread: phone took the Wi-Fi details, never joined (monoSecs)
+static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
+static volatile int g_apCfgState = -1;   // wireless thread's apCfgState: -1 not checked, 0 no usable Wi-Fi, 1 present
 
 // Menu-entry status for the iDrive plugin (libNbtAad.so polls it once a second): "<state> <pid> <overlay>" in
 // /dev/shmem/nbt-aad-state, state = idle | connecting | connected, overlay = 1 while Android Auto is on screen and
@@ -486,19 +542,48 @@ static volatile int g_btLink = 0;              // wireless thread: phone's Bluet
 // sees the BACK press too and leaves the blank state, and the plugin must not put it back while the hold may still
 // minimize Android Auto (car 2026-10-28, rhmiapp-11: refocus fought the minimize).
 static const char* const kUiStateFile = "/dev/shmem/nbt-aad-state";
-// The iDrive app's "Start automatically" bootloop guard (rhmiapp-20): it records each autostart here and skips the
-// autostart after 3 within 15 min. A clean exit or 10 min of uptime clears it (persistent: survives the reset).
+static void writeStatus(const char* state);    // defined after the session globals it reads
+static unsigned s_statusTick = 0;               // main-loop ticks since the status/hint files were written
+static std::string g_carplayIni;               // carplay.ini path car_config resolved, "" = none
+// Car manufacturer (rhmiapp-96): the Settings page writes /var/opt/aa/vehicle (auto|bmw|toyota|mini|rollsroyce).
+// "auto" means: say nothing and let car_config.hpp read the car's carplay.ini, which is what it already does when
+// NBT_VEHICLE is unset. An explicit NBT_VEHICLE in nbt-aad.env still wins over the file.
+// In the data dir (nbt_paths.hpp): /var/opt/aa on a hand install, the package's data dir with NBTApps.
+static const char* const kStatusFile = "/dev/shmem/nbt-aad-status";
+static void applyVehicleChoice() {
+    if (getenv("NBT_VEHICLE")) { printf("[Car] NBT_VEHICLE from the environment: %s\n", getenv("NBT_VEHICLE")); return; }
+    const nbt::FilePath choicePath = nbt::dataFile("vehicle");
+    const char* kVehicleChoiceFile = choicePath.c_str();
+    FILE* f = fopen(kVehicleChoiceFile, "r");
+    if (!f) return;
+    char v[24] = {0};
+    if (fscanf(f, "%23s", v) != 1) v[0] = 0;
+    fclose(f);
+    if (!v[0] || !strcmp(v, "auto")) { printf("[Car] vehicle: auto (carplay.ini decides)\n"); return; }
+    if (strcmp(v,"bmw") && strcmp(v,"toyota") && strcmp(v,"mini") && strcmp(v,"rollsroyce")) {
+        printf("[Car] %s says '%s', which is not a vehicle; ignoring\n", kVehicleChoiceFile, v);
+        return;
+    }
+    setenv("NBT_VEHICLE", v, 1);
+    printf("[Car] vehicle from %s: %s\n", kVehicleChoiceFile, v);
+}
+
+// A short machine token for the iDrive Settings page: the plugin turns it into a sentence. Written with the same
+// record as the UI state, so the two never disagree about whether nbt-aad is running.
 // <data dir>/bootguard (nbt_paths.hpp).
 static const char* const kBootGuardName = "bootguard";
-static void writeUiState(const char* state, int overlay) {
+static void writeUiState(const char* state, int overlay, bool favouritePeek) {
     // One fixed record, written over the previous bytes before the file is shortened. QNX /dev/shmem
     // has no rename(), and opening with O_TRUNC left a moment where the plugin read nothing and then
     // tried to bind the control port itself.
-    // "%-11.11s %10d %d\n" is 25 bytes for a one-digit overlay (0 shown, 1 on screen, 2 BACK held, 3 menu key, 4 car
+    // The fourth field marks a temporary favourite preview. Older readers ignore it. A paired plugin must
+    // understand it before enabling this feature, or it may treat a preview as an ordinary exit.
+    // The overlay is 0 hidden, 1 on screen, 2 BACK held, 3 menu key, 4 car
     // control, 5 knob turn / push only).
     // fscanf("%23s %d %d") still matches.
-    char rec[32];
-    int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d\n", state ? state : "idle", (int)getpid(), overlay);
+    char rec[48];
+    int n = snprintf(rec, sizeof(rec), "%-11.11s %10d %d %d %u\n", state ? state : "idle", (int)getpid(), overlay,
+                     favouritePeek ? 1 : 0, (unsigned)g_favouriteTouchMask);
     if (n < 0) return;
     int fd = open(kUiStateFile, O_WRONLY | O_CREAT, 0666);
     static bool s_warned = false;
@@ -514,6 +599,7 @@ static void writeUiState(const char* state, int overlay) {
     ssize_t w = write(fd, rec, (size_t)n);
     if (w == n) ftruncate(fd, n);   // drop a longer old record only after the new line is in place
     else if (!s_warned) { printf("[UiState] short write to %s\n", kUiStateFile); s_warned = true; }
+    writeStatus(state);
     close(fd);
 }
 static volatile bool g_sessionActive = false;   // AA session running (set by connect/end callbacks)
@@ -524,6 +610,76 @@ static nbt::VideoManager* g_video = NULL;       // for the session callbacks (va
 // The audio mode (NBT_AUDIO_MODE=bt|browser|a2i, audio/backend.hpp): BtAudio, BrowserAudio or A2iAudio, picked once
 // at start-up. Same lifetime rule as g_video.
 static nbt::AudioBackend* g_audioBackend = NULL;
+
+// Status facts, in the order that decides how a phone can reach nbt-aad:
+//   1. carplay.ini exists (car_config.hpp resolved it, NBT_CARPLAY_INI included) -> the phone joins that network
+//   2. else wfd0 holds an address (measured with ifconfig)                        -> Wi-Fi Direct
+//   3. else                                                                        -> USB is the only way
+// The plugin renders "state|carplay|wfd|usb|transport" as a sentence naming the missing thing.
+static struct { int wfd, usb, at; } s_statusFacts = { -1, -1, 0 };
+static void probeStatusFacts(uint32_t now) {
+    if (s_statusFacts.at && (uint32_t)(now - s_statusFacts.at) < 15000u) return;
+    s_statusFacts.at = (int)now;
+    std::string why;
+    const char* ifn = getenv("NBT_WFD_IF");
+    s_statusFacts.wfd = nbt::wfdInterfaceHasAddress(ifn && *ifn ? ifn : "wfd0", &why) ? 1 : 0;
+    static int loggedWfd = -1;
+    if (loggedWfd != s_statusFacts.wfd) {
+        loggedWfd = s_statusFacts.wfd;
+        printf("[Status] wifi-direct usable=%d (%s)\n", s_statusFacts.wfd, why.c_str());
+    }
+    s_statusFacts.usb = access("/dev/io-usb", F_OK) == 0 ? 1 : 0;
+}
+static uint32_t monoSecs();
+static const char* const kHintFile = "/dev/shmem/nbt-aad-hint";
+static void writeStatus(const char* state) {
+    const char* tok = "waiting-phone";
+    if (!strcmp(state, "connected")) tok = "connected";
+    else if (!strcmp(state, "connecting")) tok = "connecting";
+    probeStatusFacts((uint32_t)upMs());
+    const char* transport = g_owner.get() == nbt::kTransportTcp ? "wifi" : (g_sessionActive ? "usb" : "-");
+    char rec[72];
+    snprintf(rec, sizeof(rec), "%s|%d|%d|%d|%s", tok, g_carplayIni.empty() ? 0 : 1, s_statusFacts.wfd,
+             s_statusFacts.usb, transport);
+    int fd = open(kStatusFile, O_WRONLY | O_CREAT, 0666);
+    if (fd < 0) return;
+    fchmod(fd, 0666);
+    if (write(fd, rec, strlen(rec)) == (ssize_t)strlen(rec)) ftruncate(fd, (off_t)strlen(rec));
+    close(fd);
+
+    // "net|hint" (status_hint.hpp): the network offered to the phone, and why a waiting phone is stuck.
+    const char* net = !nbt::altWifiPrefersCarplay() ? "wfd" : (g_carplayIni.empty() ? "-" : "cp");
+    const char* hint = "-";
+    if (!strcmp(tok, "waiting-phone")) {
+        // DIRECT with wfd0 up but no group name: the passphrase is fine, only NBT_WFD_SSID is missing. Otherwise no
+        // config at all (or DIRECT on a wfd0 without an address): nothing wireless can be offered, use USB.
+        const bool direct = nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT;
+        int wifi = nbt::kHintWifiOk;
+        if (direct && s_statusFacts.wfd == 1 && g_wfdMissing == nbt::WFD_MISSING_SSID) wifi = nbt::kHintWifiNoSsid;
+        else if (g_apCfgState == 0 || (direct && s_statusFacts.wfd == 0)) wifi = nbt::kHintWifiNone;
+        hint = nbt::statusHint(nbt::btRefusedRun(), monoSecs(), g_noJoinAt, g_btIdleSince, nbt::btPhoneConnState(), wifi);
+    } else if (!strcmp(tok, "connecting"))
+        hint = nbt::connectingHint(monoSecs(), g_noJoinAt);
+    static const char* s_lastHint = "-";
+    if (strcmp(hint, s_lastHint)) {
+        printf("[Status] iDrive hint: %s (%s)\n", hint,
+               !strcmp(hint, "coding") ? "the car keeps refusing the phone's Android Auto link: coding-requirements.md"
+               : !strcmp(hint, "nojoin") ? "the phone took the Wi-Fi details but never joined: forget the phone in the car, pair again"
+               : !strcmp(hint, "bt") ? "phone on Bluetooth but no Android Auto link: forget the phone in the car, pair again"
+               : !strcmp(hint, "nowifi") ? "no usable Wi-Fi network in the car (no CarPlay hotspot, no Wi-Fi Direct): use USB"
+               : !strcmp(hint, "nossid") ? "Wi-Fi Direct is up but its group name was not found: set NBT_WFD_SSID"
+               : !strcmp(hint, "nophone") ? "no phone connected over Bluetooth: waiting for a Bluetooth device"
+               : "none");
+        s_lastHint = hint;
+    }
+    snprintf(rec, sizeof(rec), "%s|%s", net, hint);
+    fd = open(kHintFile, O_WRONLY | O_CREAT, 0666);
+    if (fd < 0) return;
+    fchmod(fd, 0666);
+    if (write(fd, rec, strlen(rec)) == (ssize_t)strlen(rec)) ftruncate(fd, (off_t)strlen(rec));
+    close(fd);
+}
+
 
 // Prints the Wi-Fi clients the head unit currently knows on the AP subnet (ARP table), so a log
 // shows whether the phone actually joined the network it was offered: the /24 of the address the daemon listens on
@@ -767,7 +923,6 @@ static int g_wfdOwnFails = 0;
 static nbt::ApInfo g_wfdOwnAp;
 static std::string g_wfdOwnPath;
 static const int kWfdOwnRetrySec = 30;
-static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
 
 static bool wfdOwnMode() {
     return nbt::altWifiMode() == nbt::ALT_WIFI_DIRECT && nbt::wfdOwnPassMode() != nbt::WFD_OWN_NEVER;
@@ -1024,14 +1179,14 @@ static void* wirelessThread(void*) {
             printf("[Wireless] no hold while the phone asks (NBT_SPP_REREG_HOLD_S=0)\n");
     } else
         printf("[Wireless] automatic Bluetooth service re-registration off (NBT_SPP_REREG_S=0)\n");
-    bool idleWait = false;      // waiting for a link; the re-registration timer runs from when this started
+    bool idleWait = false; g_btIdleSince = 0;      // waiting for a link; the re-registration timer runs from when this started
     uint32_t idleStart = 0;
     int apCfgState = -1;        // Wi-Fi hotspot config: -1 not checked yet, 0 none, 1 present
     uint32_t apCfgChecked = 0;
     bool usbHeld = false;       // a phone is on the USB cable (NBT_USB=1): wireless steps aside
     while (g_running) {
         // Nothing to do while a projection session is running; re-arm after it ends.
-        if (g_sessionActive) { idleWait = false; sleep(1); continue; }
+        if (g_sessionActive) { idleWait = false; g_btIdleSince = 0; sleep(1); continue; }
 
         // Watch the access point while idle (every ~2 s): when it comes back after being off, the car was switched
         // off and on again under us -> refresh the firewall and the listener before the phone tries again.
@@ -1041,7 +1196,7 @@ static void* wirelessThread(void*) {
                 if (st == 0) printf("[Wireless] %s has no IP address: the car's Wi-Fi access point is off\n", pollIfn);
                 else if (apState == 0) {
                     recoverWifiPath("the car's Wi-Fi access point came back");
-                    idleWait = false;   // the car woke up: start the re-registration schedule from its first step
+                    idleWait = false; g_btIdleSince = 0;   // the car woke up: start the re-registration schedule from its first step
                 }
                 apState = st;
             }
@@ -1058,7 +1213,7 @@ static void* wirelessThread(void*) {
                                                  "wireless Android Auto available");
             usbHeld = usbPhone;
         }
-        if (usbPhone) { idleWait = false; usleep(500000); continue; }
+        if (usbPhone) { idleWait = false; g_btIdleSince = 0; usleep(500000); continue; }
 
         // No Wi-Fi hotspot config: do not open the phone's Bluetooth links (we would only close them again) and do
         // not re-register the Bluetooth service; look for the config again every kApCfgRecheckSec.
@@ -1070,8 +1225,9 @@ static void* wirelessThread(void*) {
                 if (st == 0 && apCfgState < 0) logNoApConfig(cfg);
                 if (st == 1 && apCfgState == 0) printf("[Wireless] Wi-Fi hotspot config found: wireless Android Auto available\n");
                 apCfgState = st;
+                g_apCfgState = st;
             }
-            if (apCfgState != 1) { idleWait = false; usleep(500000); continue; }
+            if (apCfgState != 1) { idleWait = false; g_btIdleSince = 0; usleep(500000); continue; }
         }
 
         // The SPP node only exists while the phone's Bluetooth link is up: poll for it first and
@@ -1082,7 +1238,7 @@ static void* wirelessThread(void*) {
             if ((quiet++ % 30) == 0)
                 printf("[Wireless] [%9.3f] waiting for %s (%s)\n", upSec(), dev, strerror(errno));
             uint32_t now = monoSecs();
-            if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); }
+            if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); g_btIdleSince = now ? now : 1; }
             else if (g_btMgr && rereg.enabled()) {
                 // Held while the phone asks for the link: checked BEFORE due(), so held time does not use up the
                 // 5 s steps of the schedule (the next round after the hold is still a short one).
@@ -1121,7 +1277,7 @@ static void* wirelessThread(void*) {
             usleep(500000);
             continue;
         }
-        idleWait = false;
+        idleWait = false; g_btIdleSince = 0;
         // Which Wi-Fi this link is offered (NBT_ALT_WIFI, alt_wifi.hpp):
         //   CARPLAY  the car's hotspot from iap2.cfg (iap2_Wifi.cfg as a second passphrase), no DIRECT fallback
         //   DIRECT   the car's Wi-Fi Direct group only, no hotspot fallback
@@ -1183,6 +1339,7 @@ static void* wirelessThread(void*) {
                         close(fd);
                         logNoApConfig(cfg);
                         apCfgState = 0;
+                        g_apCfgState = 0;
                         apCfgChecked = monoSecs();
                         continue;
                     }
@@ -1310,6 +1467,11 @@ static void* wirelessThread(void*) {
                     break;
                 }
                 if (!g_sessionActive && (tick % 10) == 5) logStations("waiting for phone TCP connect");
+                if (!everActive && !g_sessionActive && tick == nbt::kHintJoinWaitS) {
+                    g_noJoinAt = monoSecs();   // iDrive: re-pair now, not after the phone gives up (~36 s + retries)
+                    printf("[Wireless] [%9.3f] phone took the Wi-Fi details %d s ago and has not connected: iDrive says "
+                           "forget the phone in the car and pair again (it keeps trying)\n", upSec(), tick);
+                }
                 if (!everActive && tick > 90) { printf("[Wireless] phone did not connect within 90 s\n"); break; }
                 if (everActive && !wirelessSessionActive()) { printf("[Wireless] session ended, releasing the Bluetooth link\n"); break; }
             }
@@ -1323,7 +1485,10 @@ static void* wirelessThread(void*) {
                 if (wirelessSessionActive()) everActive = true;
                 else usleep(200000);
             }
-            if (!everActive) recoverWifiPath("phone took the Wi-Fi details but did not connect");
+            if (!everActive) {
+                g_noJoinAt = monoSecs();   // iDrive: "Phone not on Wi-Fi: forget phone in car, pair again"
+                recoverWifiPath("phone took the Wi-Fi details but did not connect");
+            }
             if (everActive) {
                 apNoJoin = 0;
             } else if (++apNoJoin >= 2) {
@@ -1499,6 +1664,8 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     printf("[Main] [%9.3f] Android Auto client connected over %s on fd %d. Initializing aasdk session...\n",
            g_sessionStartS, nbt::transportName(t), client_fd);
     g_sessionActive = true;
+    nbt::btResetRefusedRun();   // a working session ends any "car refused the phone" (coding) run
+    g_noJoinAt = 0;
     resetMedia("new session");
     if (server) server->markSessionActive();
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames
@@ -1721,7 +1888,7 @@ static const char* const kMediaFile = "/dev/shmem/nbt-aad-media";
 static nbt::MediaState g_media;
 static pthread_mutex_t g_mediaMutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_mediaKeysToPhone = false;   // set at start-up from the audio mode
-static bool g_wheelMediaKeys = false;     // "Media Controls for LCI Steering Wheels" (nbt_env.hpp lciMediaKeysEnabled())
+static bool g_wheelMediaKeys = false;     // "Native Functionality Media Controls Restore" (nbt_env.hpp lciMediaKeysEnabled())
 static uint32_t g_mediaWriteMs = 0;       // monoMs() of the last record write
 
 // Caller holds g_mediaMutex. One fixed record written over the old bytes before the file is shortened (QNX /dev/shmem
@@ -1746,6 +1913,8 @@ static void resetMedia(const char* why) {
     g_media.clear();
     writeMediaRecordLocked();
     pthread_mutex_unlock(&g_mediaMutex);
+    g_kombiNav.setNowPlaying(std::string());
+    g_kombiMedia.update(std::string(), false);
     printf("[Media] cleared (%s)\n", why);
 }
 
@@ -1756,6 +1925,7 @@ static void onMediaStatus(uint16_t msg_id, const uint8_t* body, size_t len, void
     const bool changed = nbt::mediaMerge(g_media, msg_id, body, len);
     const uint32_t now = monoMs();
     g_media.updatedMs = now;
+    g_kombiMedia.update(nbt::mediaClean(g_media.song), g_media.state == 2);   // 2 = playing
     if (changed) {
         printf("[Media] %s\n", nbt::mediaLine(g_media).c_str());
         if (g_mediaWriteMs == 0 || (uint32_t)(now - g_mediaWriteMs) >= 200) {
@@ -1763,7 +1933,9 @@ static void onMediaStatus(uint16_t msg_id, const uint8_t* body, size_t len, void
             writeMediaRecordLocked();
         }
     }
+    const std::string line = changed ? nbt::mediaClusterLine(g_media) : std::string();
     pthread_mutex_unlock(&g_mediaMutex);
+    if (changed) g_kombiNav.setNowPlaying(line);       // the cluster's idle text, when that setting is on
 }
 
 // One press: a media key acts on the down edge, and the phone expects the release too.
@@ -1885,10 +2057,23 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         }
         return;                                   // st == 2: the hold already minimized AA, swallow the release
     }
+    if (ev.what && !strcmp(ev.what, "MFL_WHEEL")) {   // thumb-wheel press: the row under the cluster list's cursor
+        if (!ev.down) return;
+        if (!g_wheelMediaKeys) {
+            printf("[Media] thumb-wheel press ignored: Native Functionality Media Controls Restore is off\n");
+            return;
+        }
+        std::string why;
+        const int a = g_kombiMedia.wheelPress(&why);
+        if (a == nbt::riclist::kPressNext) sendMediaKey(nbt::AAK_MEDIA_NEXT, "thumb-wheel press on Next title");
+        else if (a == nbt::riclist::kPressPrev) sendMediaKey(nbt::AAK_MEDIA_PREVIOUS, "thumb-wheel press on Previous title");
+        else printf("[KombiMedia] thumb-wheel press: nothing sent (%s)\n", why.c_str());
+        return;   // never reaches the phone as a key of its own
+    }
     if (ev.what && (!strcmp(ev.what, "MFL_NEXT") || !strcmp(ev.what, "MFL_PREV") ||
                     !strcmp(ev.what, "MFL_PLAYPAUSE"))) {   // steering-wheel media keys (car/mfl.hpp)
         if (!g_wheelMediaKeys) {
-            if (ev.down) printf("[Media] %s ignored: Media Controls for LCI Steering Wheels is off\n", ev.what);
+            if (ev.down) printf("[Media] %s ignored: Native Functionality Media Controls Restore is off\n", ev.what);
             return;
         }
         if (ev.down) sendMediaKey(ev.keycode, ev.what);
@@ -1946,7 +2131,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.111-cluster"
+#define NBT_AAD_BUILD "v1.9.116"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -2112,6 +2297,7 @@ int main(int argc, char* argv[]) {
            nbt::confDir());
     if (g_ramLog) printf("  Log: RAM %s (fresh per run, 5 MB cap; NBT_RAM_LOG=0 = off)\n", nbt::ramlog::kDaemonPath);
     nbt::printNbtAadBannerNotice();
+    printf("[Favourites] native key previews, colour settings and release refresh enabled\n");
     printf("====================================================\n");
     printf("----------------------------------------------------\n");
 
@@ -2144,10 +2330,12 @@ int main(int argc, char* argv[]) {
     signal(SIGINT,  signalHandler);
     signal(SIGTERM, signalHandler);
 
+    applyVehicleChoice();
     // Vehicle + panel profile (NBT_VEHICLE / NBT_SCREEN, else the car's carplay.ini, else the display's own size for
     // the screen, else Toyota 1280x480).
     // Parsed here, before any thread starts.
     const nbt::CarConfig& car = nbt::carConfig();
+    g_carplayIni = car.iniPath;                 // "" = no carplay.ini: the status line says so
     printf("[Car] vehicle %s (%s; Manufacturer=%s, logo %s), screen %dx%d (%s), carplay.ini %s%s%s%s\n",
            nbt::carMakeName(car.make), car.vehicleFrom,
            car.manufacturer.empty() ? "-" : car.manufacturer.c_str(), car.oemIcon.empty() ? "-" : car.oemIcon.c_str(), car.screenW, car.screenH, car.screenFrom,
@@ -2188,8 +2376,8 @@ int main(int argc, char* argv[]) {
     g_mediaKeysToPhone = audio_mode != nbt::AUDIO_MODE_BT;
     g_wheelMediaKeys = nbt::lciMediaKeysEnabled();
     printf("[Media] steering-wheel media keys: %s\n",
-           g_wheelMediaKeys ? "on (Media Controls for LCI Steering Wheels)"
-                            : "off (tick Media Controls for LCI Steering Wheels, or NBT_LCI_MEDIA=1)");
+           g_wheelMediaKeys ? "on (Native Functionality Media Controls Restore)"
+                            : "off (tick Native Functionality Media Controls Restore, or NBT_LCI_MEDIA=1)");
     printf("[CarPlay] CarPlay compatibility: %s - yield when CarPlay takes the screen: %s, factory CarPlay decoder "
            "context: %s, CarPlay window after a hand-over: %s\n",
            nbt::cpCompatEnabled() ? "on" : "off (tick CarPlay compatibility, or NBT_CP_COMPAT=1)",
@@ -2274,6 +2462,7 @@ int main(int argc, char* argv[]) {
     g_tcp = &tcp_server;
     g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
                                    // g_most starts: NBT_CLUSTER=6wa attaches to it
+    g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT);   // idle until the phone plays something
     {
         pthread_t t;
         if (pthread_create(&t, NULL, &mediaMailThread, NULL) == 0) pthread_detach(t);
@@ -2314,6 +2503,36 @@ int main(int argc, char* argv[]) {
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
+    }
+    // Registered unless NBT_FAVOURITE_PREVIEW=0. The Settings toggle is checked per frame instead
+    // (favouriteBarOff), so switching it does not need a daemon restart.
+    const bool favouritePreviewEnabled = nbt::envFlag("NBT_FAVOURITE_PREVIEW") != 0;
+    if (nbt::envFlag("NBT_FAVOURITE_PROBE") != 0) {
+        if (g_most.setTap(&onFavouriteProbe, NULL))
+            printf("[FavProbe] on: every fb=0x15 MOST frame is logged. Touch the favourite keys now.\n");
+        else
+            printf("[FavProbe] the message tap is already taken\n");
+    }
+    if (favouritePreviewEnabled) {
+        if (!g_most.addRoute(0x15, 0x0c, 0xc02, nbt::most::kOpStatus, &onFavouriteTouch, NULL))
+            printf("[Favourites] no room for touch route; preview disabled\n");
+        else
+            printf("[Favourites] capture route 15/0C/0C02 registered (preview %s)\n",
+                   favouriteBarOff() ? "off: Settings toggle" : "on");
+    }
+
+    // One binary: the overlay is a thread of this daemon (no helper process any more; NBT_FAVOURITE_INPROC is gone).
+    if (nbt::envFlag("NBT_FAVOURITE_INPROC") == 0)
+        printf("[Favourites] NBT_FAVOURITE_INPROC=0 is no longer used: the overlay is built into nbt-aad\n");
+    g_favInProc = favouritePreviewEnabled;
+    if (g_favInProc) {
+        if (pthread_create(&g_favOverlayThread, NULL, favouriteOverlayThreadFn, NULL) == 0) {
+            g_favOverlayRunning = true;
+            printf("[Favourites] overlay in-process (built into nbt-aad)\n");
+        } else {
+            g_favInProc = false;
+            printf("[Favourites] overlay thread failed to start (errno %d): no favourite bar this run\n", errno);
+        }
     }
     // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
     if (!g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL))
@@ -2420,6 +2639,8 @@ int main(int argc, char* argv[]) {
     if (mic_on) voice.init();
     const char* ui_state = "";
     int ui_overlay = -1;
+    int ui_favouritePeek = -1;
+    int ui_favouriteMask = -1;
     int night_posted = -1;
     // CarPlay hand-off: 2.5 s without an Android Auto session -> decoder context gets CarPlay's settings (an iPhone
     // taking over right away gets an unzoomed picture). Any later Android Auto connection rebuilds the Android Auto
@@ -2461,11 +2682,18 @@ int main(int argc, char* argv[]) {
             if (ki && !knobRecent) g_knobInputMs = 0;
             int ov = g_inputToPhone
                          ? (g_backState == 1 ? 2 : (menuRecent ? 3 : (inputRecent ? 4 : (knobRecent ? 5 : 1)))) : 0;
-            if (strcmp(st, ui_state) != 0 || ov != ui_overlay) {
-                writeUiState(st, ov);
+            // The hint (refused links, Bluetooth state, no-join) changes without a menu state change: refresh the
+            // status and hint files once a second so the iDrive row follows (v1.9.115).
+            if (++s_statusTick >= 4) { s_statusTick = 0; writeStatus(st); }
+            if (strcmp(st, ui_state) != 0 || ov != ui_overlay || ui_favouritePeek != (int)g_favouritePeek ||
+                ui_favouriteMask != (int)g_favouriteTouchMask) {
+                writeUiState(st, ov, g_favouritePeek != 0);
+                s_statusTick = 0;
                 if (strcmp(st, ui_state) != 0) printf("[UiState] iDrive menu entry: %s\n", st);
                 ui_state = st;
                 ui_overlay = ov;
+                ui_favouritePeek = (int)g_favouritePeek;
+                ui_favouriteMask = (int)g_favouriteTouchMask;
             }
         }
         // The A2I uplink is opened on the phone's first mic request and then kept running until the session ends;
@@ -2527,6 +2755,7 @@ int main(int argc, char* argv[]) {
             printf("[Focus] iDrive left the Android Auto screen (hard key): minimizing Android Auto\n");
         }
         if (g_showReq) {                                 // iDrive Android Auto entry selected
+            g_favouritePreview.cancel();
             g_showReq = 0;
             g_userExit = 0;
             g_carExit = 0;
@@ -2589,7 +2818,7 @@ int main(int argc, char* argv[]) {
         // session: only a change from hidden to visible while Android Auto is minimized counts there.
         // NBT_CP_LIVE_RETUNE=0 disables. Not car-verified.
         bool cp_shows = false;
-        if (overlay_on || !act) cp_1280_last = -1;
+        if (overlay_on || !act || g_favouritePeek) cp_1280_last = -1;
         else if (cpLiveRetune() && video.hasWindow() && (++cp_live_ticks % 8) == 0 && !video.decoderInCarPlayMode()) {
             int v = nbt::VideoManager::surface1280Visible();
             cp_shows = v == 1 && (nbt::VideoManager::sharesCarPlaySurface() || cp_1280_last == 0);
@@ -2644,6 +2873,11 @@ int main(int argc, char* argv[]) {
             }
         }
         bool want = (hide_idle ? act : true) && !g_userExit && !reverse && !park && !camera && !dm_peek;
+        bool favouritePeek = favouritePreviewEnabled &&
+            g_favouritePreview.step(monoMs(), want && act, overlay_on, g_most.state() == nbt::most::kUp);
+        if (favouritePeek != (g_favouritePeek != 0))
+            printf("[Favourites] native preview %s\n", favouritePeek ? "shown (touch)" : "finished");
+        g_favouritePeek = favouritePeek ? 1 : 0;
         if (want && act && !overlay_on && (video.decoderInCarPlayMode() || video.decoderParked())) {
             printf("[Main] back to Android Auto after %s: rebuilding the decoder context\n",
                    video.decoderParked() ? "iDrive (overlay had surface 1280)" : "CarPlay");
@@ -2669,6 +2903,12 @@ int main(int argc, char* argv[]) {
         }
         g_inputToPhone = (want && act) ? 1 : 0;
         nbt::setTouchOwned(g_inputToPhone != 0);      // UDP 30567 goes back to the HMI whenever iDrive has the screen
+        const bool previewGeometryChanged = video.setFavouritePreview(want && favouritePeek);
+        if (previewGeometryChanged && !favouritePeek) {
+            // Invalidate captures before removing their composition, so a completing capture
+            // cannot see the old touch state and post the strip again during release.
+            writeUiState(act ? "connected" : ui_state, g_inputToPhone ? 1 : 0, false);
+        }
         if (want != overlay_on || (force_show && want)) {
             // The pill's surface 1281 leaves with the picture (the hide order holds neither), so the decoder stays
             // open: no close/rebuild, no keyframe wait, no grey picture (v1.9.15-v1.9.17 needed those only because the
@@ -2677,6 +2917,15 @@ int main(int argc, char* argv[]) {
             g_volumeOsd.setShown(want);
             overlay_on = want;
             reassert_ticks = want ? 0 : -1;
+        } else if (want && previewGeometryChanged) {
+            video.refreshFavouritePreview();
+        }
+        if (previewGeometryChanged) {
+            // Publish the completed composition now, not on the following 250 ms tick.
+            writeUiState(act ? "connected" : ui_state, g_inputToPhone ? 1 : 0, g_favouritePeek != 0);
+            ui_overlay = g_inputToPhone ? 1 : 0;
+            ui_favouritePeek = (int)g_favouritePeek;
+            ui_favouriteMask = (int)g_favouriteTouchMask;
         }
         force_show = false;
         // Coming back mid-session (iDrive entry, end of park assist / reverse), the iDrive app puts iDrive on its blank
@@ -2726,6 +2975,10 @@ int main(int argc, char* argv[]) {
     // the tester logs (2026-10-29) needed SIGTERM on every Force Stop, so the slow step has to show in the log.
     const double t0 = upSec();
     printf("[Main] [%9.3f] Shutdown requested, stopping subsystems...\n", t0);
+    if (g_favInProc) {
+        nbt::favouriteOverlayStop();
+        if (g_favOverlayRunning) pthread_join(g_favOverlayThread, NULL);
+    }
     g_btMgr = NULL;            // no Bluetooth service re-registration from the wireless thread while shutting down
     g_audioBackend->cancelPending();   // no queued audioconn starts while we tear down
     video.setVisible(false);   // give iDrive back first: any of the stop() calls below may block
@@ -2733,6 +2986,7 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
     if (mic_live) g_audioBackend->stopMic(mic);
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
+    g_kombiMedia.stop();
     g_kombiNav.stop();              // clears a cluster/HUD arrow (one quick attempt)
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);
     tcp_server.stop();         // no more onClientConnected -> no session can start behind our back

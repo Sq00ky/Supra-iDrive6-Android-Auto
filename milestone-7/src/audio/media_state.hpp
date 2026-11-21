@@ -157,6 +157,14 @@ inline std::string mediaRecord(const MediaState& st) {
     return r;
 }
 
+// What a cluster's one text line shows of it (cluster/nav_core.hpp setNowPlaying): the song title while it plays,
+// "" otherwise. Only the title: the 6WA's street text is about 23 characters wide (car, F36), and an artist after
+// the title was cut off mid-word.
+inline std::string mediaClusterLine(const MediaState& st) {
+    if (st.state != 2 || st.song.empty()) return std::string();
+    return st.song;
+}
+
 // One log line: what the phone is playing and where in the track it is.
 inline std::string mediaLine(const MediaState& st) {
     std::string s = st.song.empty() ? std::string("(no metadata)") : st.song;

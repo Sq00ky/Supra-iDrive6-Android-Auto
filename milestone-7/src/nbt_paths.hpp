@@ -46,6 +46,7 @@ static const char* const kHandAppDir     = NBT_HAND_APP_DIR;
 static const char* const kHandDataDir    = NBT_HAND_DATA_DIR;
 static const char* const kDaemonEnvName  = "nbt-aad.env";   // in the conf dir
 static const char* const kPfBackupName   = "pf.bak";        // in the conf dir
+static const char* const kHudCyrillicFlagName = "hud-cyrillic";  // Settings checkbox, read by the 6WA HUD text path
 
 // The decision: 0 = hand install (also before any decision), 1 = package install. A plain int with a constant
 // initialiser, so it is set before any constructor runs, and one object for the whole program or library.
@@ -98,6 +99,10 @@ private:
 inline FilePath appFile(const char* name) { return FilePath(appDir(), name); }
 inline FilePath dataFile(const char* name) { return FilePath(dataDir(), name); }
 inline FilePath confFile(const char* name) { return FilePath(confDir(), name); }
+// The hand install's data dir, whatever this install is. Only for READING something nbt-aad learned from the car
+// (touch-peer): a package install falls back to it so a car moved from a hand install to NBTApps keeps what it knew.
+// Never for settings: a checkbox file left in /var/opt/aa could not be unticked from the package's Settings page.
+inline FilePath handDataFile(const char* name) { return FilePath(NBT_HAND_DATA_DIR, name); }
 
 // A checkbox setting: on while <data dir>/<name> (the checkbox's own file) or <app dir>/<name> (made by hand) exists.
 inline bool flagSet(const char* name) {

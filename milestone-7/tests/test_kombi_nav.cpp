@@ -563,6 +563,93 @@ static void testDepart() {
     }
 }
 
+// J29 idle text: the song title as the road name of our own graph (full the first time, in place after), never the
+// template's "600", cleared when playback stops, replaced by a full graph when a real maneuver arrives.
+static std::string idleRoad(const std::vector<Seen>& s, size_t from, int* dir) {
+    std::string road = "<none>";
+    for (size_t i = from; i < s.size(); ++i) {
+        const Bytes& b = s[i].body;
+        if (s[i].method == 0x0003 && modelType(b) == 3 && modelIndex(b) == 0) road = text0(b, NULL);
+        if (dir && s[i].method == 0x000A && modelType(b) == 15 && modelIndex(b) == 0 && b.size() > 33) *dir = b[33];
+    }
+    return road;
+}
+static void testJ29Idle() {
+    {
+        Rig r(inPlace());
+        assert(r.d.idleText("  Sense\t-  Band Maid ") == "Sense - Band Maid");
+        assert(r.d.idleText(std::string(80, 'x')).size() == 40);
+        r.core.idle("Sense - Band Maid", 0.0);
+        assert(r.k.count() == 97);
+        int dir = -1;
+        std::vector<Seen> s = r.k.seen();
+        assert(idleRoad(s, 0, &dir) == "Sense - Band Maid" && dir == 0);
+        for (size_t i = 0; i < s.size(); ++i)
+            if (s[i].method == 0x000A && modelType(s[i].body) == 29 && modelIndex(s[i].body) == 0)
+                assert(text0(s[i].body, NULL) == "");
+        assert(countLog("IDLE 'Sense - Band Maid'") == 1 && r.core.idleShown());
+        r.core.idle("Sense - Band Maid", 1.0);              // unchanged: nothing sent
+        assert(r.k.count() == 97);
+        r.core.idle("Anklebiters - Paramore", 2.0);         // changed: in-place block
+        size_t n = r.k.count();
+        assert(n > 97 && n < 97 + 40);
+        assert(idleRoad(r.k.seen(), 97, NULL) == "Anklebiters - Paramore");
+        r.feed(one(7, "TEST ST", curPos(800, "0.5", 5)), 3.0);   // a real maneuver: full graph over the idle one
+        assert(r.core.shown() && r.k.count() == n + 97);
+        assert(idleRoad(r.k.seen(), n, NULL) == "TEST ST");
+    }
+    {
+        Rig r(inPlace());
+        r.core.idle("Sense", 0.0);
+        assert(r.k.count() == 97);
+        r.core.idle("", 1.0);                                // playback stopped: the factory cancel
+        assert(!r.core.idleShown() && r.k.count() > 97 && countLog("CLEAR (nothing playing)") == 1);
+    }
+    {
+        setenv("NBT_KOMBI_MEDIA_DIR", "1", 1);
+        setenv("NBT_KOMBI_MEDIA_DIST", "--", 1);
+        Rig r(inPlace());
+        r.core.idle("Sense", 0.0);
+        int dir = -1;
+        std::vector<Seen> s = r.k.seen();
+        assert(idleRoad(s, 0, &dir) == "Sense" && dir == 1);
+        unsetenv("NBT_KOMBI_MEDIA_DIR");
+        unsetenv("NBT_KOMBI_MEDIA_DIST");
+    }
+    {   // search mode: the direction steps every NBT_KOMBI_MEDIA_CYCLE_S with its value in front of the title
+        setenv("NBT_KOMBI_MEDIA_CYCLE", "dir", 1);
+        setenv("NBT_KOMBI_MEDIA_CYCLE_FROM", "11", 1);
+        setenv("NBT_KOMBI_MEDIA_CYCLE_TO", "12", 1);
+        setenv("NBT_KOMBI_MEDIA_CYCLE_S", "5", 1);
+        setenv("NBT_KOMBI_MEDIA_UNIT", "7", 1);
+        Rig r(inPlace());
+        r.core.idle("Sense", 100.0);
+        int dir = -1;
+        assert(idleRoad(r.k.seen(), 0, &dir) == "[d 11] Sense" && dir == 11);
+        std::vector<Seen> s = r.k.seen();
+        for (size_t i = 0; i < s.size(); ++i)
+            if (s[i].method == 0x000A && modelType(s[i].body) == 29 && modelIndex(s[i].body) == 0) {
+                int u = -1;
+                assert(text0(s[i].body, &u) == "" && u == 7);
+            }
+        size_t n = r.k.count();
+        r.core.idle("Sense", 102.0);                        // same step: nothing
+        assert(r.k.count() == n);
+        r.core.idle("Sense", 105.5);                        // next step: in place, direction 12
+        dir = -1;
+        assert(r.k.count() > n && idleRoad(r.k.seen(), n, &dir) == "[d 12] Sense" && dir == 12);
+        n = r.k.count();
+        r.core.idle("Sense", 110.5);                        // wraps to 11
+        dir = -1;
+        assert(idleRoad(r.k.seen(), n, &dir) == "[d 11] Sense" && dir == 11);
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE");
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE_FROM");
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE_TO");
+        unsetenv("NBT_KOMBI_MEDIA_CYCLE_S");
+        unsetenv("NBT_KOMBI_MEDIA_UNIT");
+    }
+}
+
 int main() {
     // "Disable logging": env wins, then the checkbox
     assert(nbt::noLogWanted(NULL, false) == false);
@@ -1142,6 +1229,7 @@ int main() {
     testTimeApproach();
     testRenewedStep();
     testDepart();
+    testJ29Idle();
     printf("test_kombi_nav OK\n");
     return 0;
 }

@@ -9,6 +9,17 @@
 //   distance              -> one in-place distance frame
 //   lane row shown        -> a route-position update the KOMBI checks the lanes against, at most every lane_feed_s
 //   clear                 -> the factory cancel
+//   idle text (now playing, "Song title in gauge cluster", experimental) -> the KOMBI has no free text field, so the
+//                            title goes where a maneuver's road name goes: the full template graph the first time,
+//                            in-place maneuver-0 updates when the title changes. Arrow NBT_KOMBI_MEDIA_DIR (KOMBI
+//                            direction enum, default 0: no arrow, and with the empty distance no distance or unit
+//                            either - car-verified on the J29 2026-11-20; 1 = STRAIGHT_ON), distance text
+//                            NBT_KOMBI_MEDIA_DIST (default empty; the template's own "600" never shows), its unit byte
+//                            NBT_KOMBI_MEDIA_UNIT (default: the template's), at most NBT_KOMBI_MEDIA_CHARS characters
+//                            (default 40, at most 60). A real maneuver replaces it with a full graph.
+//                            Search mode: NBT_KOMBI_MEDIA_CYCLE=dir|unit steps that value from NBT_KOMBI_MEDIA_CYCLE_FROM
+//                            to _TO every NBT_KOMBI_MEDIA_CYCLE_S seconds (default 8) with "[d N]" / "[u N]" in front
+//                            of the title; a value the KOMBI rejects is logged and skipped, never fatal.
 #ifndef CLUSTER_J29_DISPLAY_HPP
 #define CLUSTER_J29_DISPLAY_HPP
 
@@ -41,6 +52,8 @@ public:
     Result showManeuver(const NavView& v, double now, bool isNew, bool first);
     Result updateDistance(const NavView& v, double now);
     Result keepUp(const NavView& v, double now);
+    std::string idleText(const std::string& utf8) const;
+    Result showIdleText(const std::string& line, double now);
     void guidanceGap() { full_next_ = true; }
     bool clear(std::string* detail);
     void forget();
@@ -66,6 +79,20 @@ private:
     double t_pos_;
     bool has_last_pos_;
     double last_pos_;
+    bool idleFrames(int dir, int unit, const std::string& road, bool inplace, std::vector<Frame>& out) const;
+    int idle_dir_;            // the idle text's arrow (KOMBI direction enum)
+    int idle_unit_;           // the idle distance's unit byte, -1 = the template's
+    std::string idle_dist_;   // the idle text's distance text ("" = empty string, not the template's "600")
+    size_t idle_chars_;       // the idle text's length limit
+    int cycle_;               // 0 off, 1 direction, 2 unit (search mode)
+    int cycle_from_, cycle_to_;
+    double cycle_s_;
+    double cycle_t0_;         // < 0: not started
+    int rejected_value_;      // the last cycle value the KOMBI rejected (not resent), -1 = none
+    bool idle_up_;            // our idle graph is on the KOMBI (since the last forget())
+    std::string idle_line_;   // the line it shows
+    int shown_dir_, shown_unit_;
+    double idle_t_;           // when it was last sent
 };
 
 } // namespace kombinav

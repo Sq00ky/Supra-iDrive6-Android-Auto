@@ -161,7 +161,8 @@ bool parsePeer(const char* e, sockaddr_in* out) {
 
 // The touch controller's address, learned from a real touch PDU, is kept here so the next daemon start connects at
 // once (before it, gesture camera PDUs are still swallowed until the screen is touched). In the data dir
-// (nbt_paths.hpp: /var/opt/aa on a hand install).
+// (nbt_paths.hpp: /var/opt/aa on a hand install, the package's data dir with NBTApps, which falls back to the hand
+// install's copy).
 #ifdef NBT_HOST_TEST
 // Host tests: never the real file. test_touch learns its own ephemeral port; kept in /var/opt/aa it made the NEXT run
 // connect to that stale port and miss every frame (test_touch.cpp:90). test_touch removes this one at start.
@@ -170,8 +171,8 @@ FilePath touchPeerFile() { return FilePath("/tmp", "nbt-test-touch-peer"); }
 FilePath touchPeerFile() { return dataFile("touch-peer"); }
 #endif
 
-bool loadPeerFile(sockaddr_in* out) {
-    FILE* f = fopen(touchPeerFile().c_str(), "r");
+static bool loadPeerFrom(const char* path, sockaddr_in* out) {
+    FILE* f = fopen(path, "r");
     if (!f) return false;
     char line[64] = "";
     bool ok = fgets(line, sizeof(line), f) != NULL;
@@ -180,6 +181,24 @@ bool loadPeerFile(sockaddr_in* out) {
     size_t l = strlen(line);
     while (l && (line[l - 1] == '\n' || line[l - 1] == '\r' || line[l - 1] == ' ')) line[--l] = 0;
     return parsePeer(line, out);
+}
+
+void savePeerFile(const sockaddr_in& p);
+
+// The data dir's touch-peer; on a package install (NBTApps) with none yet, the hand install's /var/opt/aa/touch-peer,
+// copied into the package's data dir. Without it a car moved from a hand install to NBTApps swallowed every gesture
+// under Android Auto again until the screen was touched (issue #281).
+bool loadPeerFile(sockaddr_in* out) {
+    if (loadPeerFrom(touchPeerFile().c_str(), out)) return true;
+#ifndef NBT_HOST_TEST
+    if (packaged() && loadPeerFrom(handDataFile("touch-peer").c_str(), out)) {
+        printf("[TouchFwd] no touch-peer in the package's data dir yet: using the hand install's %s, copied to %s\n",
+               handDataFile("touch-peer").c_str(), touchPeerFile().c_str());
+        savePeerFile(*out);
+        return true;
+    }
+#endif
+    return false;
 }
 
 void savePeerFile(const sockaddr_in& p) {

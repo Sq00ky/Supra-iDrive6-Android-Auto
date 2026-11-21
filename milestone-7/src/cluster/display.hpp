@@ -56,10 +56,12 @@ struct Settings {
                            // (NBT_HUD_JUNCTION=0 turns it off)
     double near_m;         // 6WA: the junction view comes in at the main prompt (kApproachTime), or this close
     bool hud_lanes;        // 6WA: the phone's lanes in their own layer (NBT_HUD_LANES=1; off until their place is known)
+    double media_refresh_s; // the idle text's panel is switched on again this often (0 = only when the text changes)
+    double media_show_s;    // the idle text is cleared again this long after it changed (0 = it stays while it plays)
     Settings() : approach(kApproachTime), warn_s(50), main_s(20), mway_warn_m(2000), mway_main_m(1000),
                  approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
                  min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1),
-                 junction(true), near_m(300), hud_lanes(false) {}
+                 junction(true), near_m(300), hud_lanes(false), media_refresh_s(0), media_show_s(0) {}
 };
 
 typedef void (*LogFn)(const char* line, void* user);
@@ -90,6 +92,13 @@ public:
     // The maneuver shown reached its main prompt (kApproachTime): show it again if the cluster can hide it by
     // itself (the 6WA: the driver can dismiss the panel with the stalk button). Nothing by default.
     virtual Result remind(const NavView& v, double now) { (void)v; (void)now; return kOk; }
+    // The idle text: one line of our own while no maneuver is shown (what the phone is playing). idleText() is the
+    // line as this cluster can show it, "" when it has nowhere to put one or none of it can be shown: the state
+    // machine then shows nothing. showIdleText() takes that line on every step with no maneuver up: it is sent when
+    // it changed (or the cluster lost it), and the panel is switched on again every media_refresh_s if that is set.
+    // A maneuver drawn afterwards replaces it; a clear removes it. A cluster without one keeps the defaults.
+    virtual std::string idleText(const std::string& utf8) const { (void)utf8; return std::string(); }
+    virtual Result showIdleText(const std::string& line, double now) { (void)line; (void)now; return kOk; }
     // Guidance went away while a maneuver is shown: a gap, likely a reroute.
     virtual void guidanceGap() = 0;
     // Removes what we drew. True when the cluster confirmed it; detail says why not.
