@@ -88,6 +88,7 @@ SRC_test_neutral_resume    :=
 SRC_test_ric_list          :=
 SRC_test_ric_media         := src/cluster/ric_media.cpp
 SRC_test_ric_sniff         :=
+SRC_test_gesture_sniff     := src/gesture_sniff.cpp
 SRC_test_keyframe_ask      :=
 SRC_test_pcm               := src/audio/pcm_ring.cpp src/audio/resampler.cpp $(SPEEX)
 SRC_test_resampler         := src/audio/resampler.cpp $(SPEEX)
