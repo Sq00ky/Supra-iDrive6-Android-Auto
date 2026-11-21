@@ -1,6 +1,6 @@
 # Runs the host tests on every pull request and every push to main: milestone-7's `make check`, i.e. every test in
 # milestone-7/tests plus the ThreadSanitizer run of test_session_lifecycle - the same command a contributor runs before
-# sending a change. It needs only g++ and the OpenSSL headers: no head unit, no QNX SDP and no secrets.
+# sending a change. Includes protoc and multilib so those tests run too; no head unit, QNX SDP or secrets.
 name: host tests
 
 on:
@@ -25,8 +25,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install the OpenSSL headers
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev
+      - name: Install the complete host-test toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-multilib make python3 libssl-dev protobuf-compiler util-linux
 
       # Ubuntu 24.04 runners randomise mmap with 32 bits, which makes ThreadSanitizer abort with "unexpected memory
       # mapping"; 28 bits is the usual setting for it.
