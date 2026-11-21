@@ -1,0 +1,48 @@
+# The same complete Docker recipe a contributor runs locally; no QNX SDK, head unit or secrets.
+name: host tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    name: ${{ matrix.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [linux, docker]
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Ubuntu 24.04 runners randomise mmap with 32 bits, which makes ThreadSanitizer abort with "unexpected memory
+      # mapping"; 28 bits is the usual setting for it.
+      - name: Let ThreadSanitizer run
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Install the complete Ubuntu toolchain
+        if: matrix.environment == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-multilib make python3 libssl-dev protobuf-compiler util-linux
+
+      - name: Complete host suite on Linux
+        if: matrix.environment == 'linux'
+        run: make -k -C milestone-7 check
+
+      - name: Complete host suite in Docker (native, schema, TSAN and 32-bit)
+        if: matrix.environment == 'docker'
+        run: ./tools/test-host.sh

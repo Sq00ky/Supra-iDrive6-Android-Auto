@@ -75,11 +75,11 @@ CFLAGS = -O2 -Wall -D_QNX_SOURCE -march=armv7-a -mfpu=vfpv3 -mfloat-abi=softfp $
 OBJS = $(SRCS:.cpp=.o) $(CSRCS:.c=.o)
 TARGET = nbt-aad
 
-.PHONY: all clean check
+.PHONY: all clean check check-native
 
 # Host tests with the Linux g++ (tests/Makefile), not qcc.
-check:
-	$(MAKE) -C tests check
+check check-native:
+	$(MAKE) -C tests $@
 
 all: $(TARGET) test_display test_controls plugin rhmiapp wfd_probe pf_aa
 
