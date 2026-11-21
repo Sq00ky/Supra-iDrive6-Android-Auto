@@ -2455,11 +2455,6 @@ int main(int argc, char* argv[]) {
     g_session.setNavStatusCallback(&nbt::kombinav::KombiNav::navStatusCallback, &g_kombiNav);
     g_session.setMediaStatusCallback(&onMediaStatus, NULL);
 
-    if (!tcp_server.start()) {
-        printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
-        return 1;
-    }
-    g_tcp = &tcp_server;
     g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
                                    // g_most starts: NBT_CLUSTER=6wa attaches to it
     g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT);   // idle until the phone plays something
@@ -2472,14 +2467,6 @@ int main(int argc, char* argv[]) {
     // 4b. Android Auto over USB (NBT_USB=1, experimental). Same user data as the TCP server, so its "session
     // active" state also covers a USB phone and the auto-connector stays quiet; startSession() picks the owner.
     nbt::UsbAccessory usb(&onUsbConnected, &tcp_server, &sessionOwner, NULL);
-    if (nbt::usbEnabled()) {
-        const char* usbEnv = getenv("NBT_USB");
-        printf("[Main] Android Auto over USB: on (%s), through %s\n", usbEnv && *usbEnv ? "NBT_USB" : "Settings checkbox",
-               nbt::usbDirectEnabled() ? "io-usb" : "/dev/oap* (NBT_USB_DIRECT=0)");
-        if (usb.start()) g_usb = &usb;
-        else printf("[Main] Android Auto over USB failed to start.\n");
-    }
-
     // 5. Initialize Bluetooth SDP Subsystem (Advertise Wireless AA UUID)
     nbt::BluetoothManager bluetooth;
     if (nbt::wirelessEnabledForTransport()) configureSppDirection();   // before the Bluetooth client attaches (it reads the mode)
@@ -2499,7 +2486,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (nbt::knobEnabled()) {
-        if (!g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session))
+        if (!g_most.requireConsumer("knob", g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session)))
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
@@ -2514,8 +2501,8 @@ int main(int argc, char* argv[]) {
             printf("[FavProbe] the message tap is already taken\n");
     }
     if (favouritePreviewEnabled) {
-        if (!g_most.addRoute(0x15, 0x0c, 0xc02, nbt::most::kOpStatus, &onFavouriteTouch, NULL))
-            printf("[Favourites] no room for touch route; preview disabled\n");
+        if (!g_most.requireConsumer("favourite touch", g_most.addRoute(0x15, 0x0c, 0xc02, nbt::most::kOpStatus, &onFavouriteTouch, NULL)))
+            printf("[Favourites] touch route registration failed.\n");
         else
             printf("[Favourites] capture route 15/0C/0C02 registered (preview %s)\n",
                    favouriteBarOff() ? "off: Settings toggle" : "on");
@@ -2535,10 +2522,10 @@ int main(int argc, char* argv[]) {
         }
     }
     // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
-    if (!g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL))
-        printf("[Main] driver input tracking failed to start: the iDrive app treats every iDrive screen as the car's.\n");
+    if (!g_most.requireConsumer("driver input", g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL)))
+        printf("[Main] driver input tracking failed to register.\n");
     // The car's volume is followed whether or not the knob is: it drives the overlay, not the phone.
-    if (!g_carVolume.attach(g_most, &onCarVolume, NULL))
+    if (!g_most.requireConsumer("volume", g_carVolume.attach(g_most, &onCarVolume, NULL)))
         printf("[Main] car volume input failed to start.\n");
     if (nbt::phoneGpsEnabled()) {
         const char* pg = getenv("NBT_PHONE_GPS");
@@ -2546,8 +2533,8 @@ int main(int argc, char* argv[]) {
                "compass and motion sensors.\n", pg && *pg ? "NBT_PHONE_GPS" : "Settings checkbox");
     } else if (!nbt::carGpsEnabled())
         printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
-    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &onCarCompass,
-                           &g_session))
+    else if (!g_most.requireConsumer("GPS", g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &onCarCompass,
+                           &g_session)))
         printf("[Main] car GPS failed to start.\n");
     nbt::car::CarVehicleCallbacks vehicle;
     vehicle.user = &g_session;
@@ -2557,7 +2544,7 @@ int main(int argc, char* argv[]) {
     else printf("[Main] car gear -> Android Auto off (NBT_CAR_GEAR=0).\n");
     if (nbt::carParkingBrakeEnabled()) vehicle.parkingBrake = &onCarParkingBrake;
     else printf("[Main] car parking brake -> Android Auto off (NBT_CAR_PARKING_BRAKE=0).\n");
-    if (!g_vehicle.attach(g_most, vehicle))
+    if (!g_most.requireConsumer("vehicle sensors", g_vehicle.attach(g_most, vehicle)))
         printf("[Main] car speed, gear and parking brake failed to start.\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.
@@ -2567,10 +2554,29 @@ int main(int argc, char* argv[]) {
     if ((nbt::envFlag("NBT_MOST_LOG") == 1 || ccsLogCompat) && !g_mostTrace.attach(g_most))
         printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
     g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
-    if (!g_most.start("NBTAAD_MOST"))
-        printf("[Main] MOST client failed to start: knob/keys, car GPS, car speed and parking brake disabled.\n");
+    int startupExitCode = 0;
+    if (!g_most.start("NBTAAD_MOST")) {
+        printf("[Main] Fatal: required MOST consumers could not start; shutting down.\n");
+        startupExitCode = 1;
+        g_running = 0;
+    }
+    // Accept no phone session until all configured required MOST consumers have registered.
+    if (g_running) {
+        if (!tcp_server.start()) {
+            printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
+            startupExitCode = 1;
+            g_running = 0;
+        } else g_tcp = &tcp_server;
+    }
+    if (g_running && nbt::usbEnabled()) {
+        const char* usbEnv = getenv("NBT_USB");
+        printf("[Main] Android Auto over USB: on (%s), through %s\n", usbEnv && *usbEnv ? "NBT_USB" : "Settings checkbox",
+               nbt::usbDirectEnabled() ? "io-usb" : "/dev/oap* (NBT_USB_DIRECT=0)");
+        if (usb.start()) g_usb = &usb;
+        else printf("[Main] Android Auto over USB failed to start.\n");
+    }
 
-    if (nbt::wirelessEnabledForTransport()) {
+    if (g_running && nbt::wirelessEnabledForTransport()) {
         pthread_t wt;
         if (pthread_create(&wt, NULL, &wirelessThread, NULL) == 0) {
             pthread_detach(wt);
@@ -2580,12 +2586,12 @@ int main(int argc, char* argv[]) {
             pthread_t ww;
             if (pthread_create(&ww, NULL, &wfdWatchThread, NULL) == 0) pthread_detach(ww);
         }
-    } else {
+    } else if (g_running) {
         printf("[Main] Wireless off (%s): outbound phone scanner mode.\n",
                nbt::usbEnabled() ? "Android Auto over USB is selected, so Wi-Fi is not offered" : "NBT_WIRELESS=0");
     }
 
-    printf("[Main] Daemon running. Press Ctrl+C to terminate.\n");
+    if (g_running) printf("[Main] Daemon running. Press Ctrl+C to terminate.\n");
 
     // Daemon main loop. The overlay follows the session: up while a phone session is running, down
     // (iDrive visible) otherwise. This is the only place that calls setVisible() while the daemon runs,
@@ -3013,11 +3019,11 @@ int main(int argc, char* argv[]) {
 
     if (g_ctlFd >= 0) close(g_ctlFd);
     unlink(kUiStateFile);   // plugin falls back to the plain "Android Auto" entry
-    unlink(nbt::dataFile(kBootGuardName).c_str());   // clean exit: the app's autostart bootloop guard starts from zero
+    if (!startupExitCode) unlink(nbt::dataFile(kBootGuardName).c_str());   // failed startup must keep the bootloop strikes
     printf("[Main] [%9.3f] nbt-aad shutdown complete (%.2f s)%s.\n", upSec(), upSec() - t0,
            g_cpYielded ? ": yielded to CarPlay (decoder context, windows and window group released)" : "");
     fflush(stdout);
     // Leave without running static destructors: detached threads (DSI sender loops, wireless bring-up) may still
     // be running, and tearing globals down under them crashed at exit (nbt-aad-21: SIGSEGV after "shutdown complete").
-    _exit(0);
+    _exit(startupExitCode);
 }

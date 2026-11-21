@@ -491,7 +491,7 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         c.navFrame = p.frame;
         c.logBatches = !shadow_;
         terminal_ = new hudterm::HudTerminal(c);   // never deleted before exit once attached: the client calls it
-        if (!terminal_->attach(*most, !shadow_) || !terminal_->start()) {
+        if (!most->requireConsumer("HUDTerminal", terminal_->attach(*most, !shadow_) && terminal_->start())) {
             printf("[KombiNav] cannot attach the HUDTerminal to the MOST client: cluster arrows disabled\n");
             return false;
         }
@@ -637,6 +637,7 @@ void KombiNav::start(most::Client* most) {
                "shown\n", display_->name());
     if (pthread_create(&thread_, NULL, &KombiNav::workerStub, this) != 0) {
         printf("[KombiNav] cannot start the worker thread: feature disabled\n");
+        if (most && terminal_) most->requireConsumer("HUD worker", false);
         return;
     }
     started_ = true;

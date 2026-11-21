@@ -1,15 +1,28 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
-// Host test: most::Router. Matching, wildcards, every match running in the order added, and the route limit.
+// Host test: most::Router. Matching, wildcards, every match running in the order added, startup allocation failure and allocation-free dispatch.
 #include "most/router.hpp"
 #include <assert.h>
 #include <stdio.h>
 #include <string>
+#include <cstdlib>
+#include <new>
+
+static bool failAllocation;
+void* operator new(size_t n) {
+    if (failAllocation) throw std::bad_alloc();
+    if (void* p = malloc(n)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { free(p); }
+
 
 using namespace nbt::most;
 
 static std::string g_ran;
 static void mark(const View&, void* user) { g_ran += static_cast<const char*>(user); }
+
+static void count(const View&, void* user) { ++*static_cast<int*>(user); }
 
 static View header(uint8_t fblock, uint8_t inst, uint16_t fkt, uint8_t op) {
     View v;
@@ -47,8 +60,21 @@ int main() {
     assert(r.dispatch(header(0x52, 1, 0x440, 0xC)) == 0);                    // wrong instance
 
     assert(!r.add(0x05, 0, 0, 0, NULL, NULL));                               // no handler
-    while (r.size() < Router::kMaxRoutes) assert(r.add(0x05, 0, 0, 0, &mark, a));
-    assert(!r.add(0x05, 0, 0, 0, &mark, a));                                 // full
+    for (int i = 0; i < 256; ++i) assert(r.add(0x05, 0, i, 0, &mark, a));
+    assert(r.size() == 260 && r.wants(header(0x05, 0, 255, 0)));
+
+    Router failed;
+    failAllocation = true;
+    bool added = failed.add(0x77, 0, 0, 0, &mark, a);
+    failAllocation = false;
+    assert(!added && failed.size() == 0);
+    int seen = 0;
+    assert(failed.add(0x77, 0, 0, 0, &count, &seen));           // a failed allocation did not corrupt the table
+    failAllocation = true;
+    while (failed.add(0x05, 0, 0, 0, &count, &seen)) {}        // fail the next growth, independent of vector capacity
+    assert(failed.wants(header(0x77, 0, 0, 0)));
+    assert(failed.dispatch(header(0x77, 0, 0, 0)) == 1 && seen == 1);
+    failAllocation = false;
 
     printf("test_most_router OK\n");
     return 0;
