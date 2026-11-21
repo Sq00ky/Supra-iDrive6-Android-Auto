@@ -158,6 +158,24 @@ static void wheelTests() {
     assert(l.open() && l.cursor() == 2);
     assert(wheelPressAction(l.open(), 5000, l.cursor(), &why) == kPressNext && !*why);
     assert(wheelPressAction(true, kPressSettleMs - 1, 2, &why) == kPressNone && *why);   // the press that opened it
+    {   // no cluster list on the network (BMW F-series, #299): the row from the wheel's last notch, F82 log order
+        WheelTurns t;
+        assert(t.press(1000, &why) == kPressNone && *why);              // a press with no turn before it
+        t.turn(0x7e, 2000); t.turn(0x7f, 2100);                          // one notch down, back to rest
+        assert(t.press(2600, &why) == kPressNext && !*why);
+        t.touch(2700);                                                   // release
+        t.turn(0x80, 4000); t.turn(0x7f, 4100);                          // one notch up
+        assert(t.press(4500, &why) == kPressPrev);
+        t.turn(0x79, 5000); t.turn(0x7f, 5050);                          // a fast spin down
+        assert(t.press(5200, &why) == kPressNext);
+        assert(t.press(9300, &why) == kPressNone && *why);              // > 4 s after the last event: the list closed
+        assert(t.press(9400, &why) == kPressNone);                       // and stays without a row until a new turn
+        t.turn(0x80, 10000);
+        assert(t.press(13900, &why) == kPressPrev);                      // inside 4 s
+        WheelTurns w;
+        w.turn(0x7e, 0xFFFFFF00u);
+        assert(w.press(0x00000100u, &why) == kPressNext);                // across the 32-bit wrap
+    }
     assert(wheelPressAction(true, kPressSettleMs, 2, &why) == kPressNext);
     l.onSniffed(req(0x000B, kListBody), &out);          // one notch up: the next group carries row 0
     l.onSniffed(req(0x0009, kValue70), &out);

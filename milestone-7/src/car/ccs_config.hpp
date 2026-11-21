@@ -11,7 +11,8 @@
 //   NBT_KEY_<SLOT>=n       Android keycode for a hard key, 0 = ignore
 //                          (SLOT = MENU OPTIONS BACK COM MEDIA NAV MAP;
 //                           defaults 3 HOME, 0, 4 BACK, 5 CALL, 65537 MEDIA, 65538 NAV, 65538 NAV)
-//   NBT_PTT_ASSISTANT=1    a long press of the steering-wheel voice button starts the Google Assistant
+//   NBT_PTT_ASSISTANT=0    a long press of the steering-wheel voice button no longer starts the Google Assistant
+//                          (on by default since v1.9.117; a short press always stays iDrive's voice)
 
 #include "car/ccs_decoder.hpp"
 #include "nbt_env.hpp"
@@ -48,8 +49,7 @@ inline CcsConfig readCcsConfig() {
         e = getenv(name);
         if (e && *e) { c.slotSet[s] = true; c.slotKey[s] = (uint32_t)strtoul(e, NULL, 0); }
     }
-    e = getenv("NBT_PTT_ASSISTANT");
-    c.pttAssistant = e && e[0] == '1';
+    c.pttAssistant = envFlag("NBT_PTT_ASSISTANT") != 0;   // on unless NBT_PTT_ASSISTANT=0 (default since v1.9.117)
     return c;
 }
 

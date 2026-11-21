@@ -72,6 +72,40 @@ inline int wheelPressAction(bool listOpen, uint32_t openForMs, int cursor, const
     return a;
 }
 
+// Cars whose cluster is not on vlan73 (BMW F-series: the cluster is on MOST) never show us iDrive's list, so
+// wheelPressAction() has nothing to go on. The row is then taken from the wheel itself (issue #299): on the J29 the
+// list's cursor goes to Next title on the first notch down and to Previous title on the first notch up (the middle
+// row is never selectable), and iDrive closes the list ~4.09 s after the last wheel event. The rotation is MOST 15/02
+// fkt C30: rest 7f, below = down, above = up (F82 log: 7e / 80, each notch returning to 7f).
+class WheelTurns {
+public:
+    enum { kRest = 0x7F, kListMs = 4000 };
+    WheelTurns() : row_(kPressNone), lastMs_(0), any_(false) {}
+    // A new C30 value (only changes are fed).
+    void turn(uint8_t v, uint32_t ms) {
+        if (v < kRest) row_ = kPressNext;
+        else if (v > kRest) row_ = kPressPrev;
+        lastMs_ = ms;
+        any_ = true;
+    }
+    // A press or release also keeps iDrive's list on the display.
+    void touch(uint32_t ms) { if (any_) lastMs_ = ms; }
+    int press(uint32_t ms, const char** why) {
+        const char* w = "";
+        int a = kPressNone;
+        if (!any_ || row_ == kPressNone) w = "no wheel turn before the press";
+        else if ((uint32_t)(ms - lastMs_) > (uint32_t)kListMs) { w = "the last wheel turn was more than 4 s ago"; row_ = kPressNone; }
+        else a = row_;
+        touch(ms);
+        if (why) *why = w;
+        return a;
+    }
+private:
+    int row_;
+    uint32_t lastMs_;
+    bool any_;
+};
+
 class MediaList {
 public:
     enum Mode { kSlot = 0, kList = 1 };
@@ -223,6 +257,9 @@ public:
     // A press of the thumb wheel just arrived (any thread): kPressPrev / kPressNext when the cluster list is up with
     // its cursor on that row, kPressNone otherwise (*why then says why).
     int wheelPress(std::string* why);
+    // Has any packet from iDrive to the KOMBI been seen on the interface since start? False on cars whose cluster is
+    // not on vlan73 (BMW F-series), where a thumb-wheel press falls back to WheelTurns.
+    bool kombiSeen();
 
 private:
     static void* workerStub(void* self);
@@ -238,6 +275,7 @@ private:
     bool show_;
     unsigned answered_;
     bool listOpen_;             // under mu_: what the worker last saw of iDrive's list, for wheelPress()
+    bool kombiSeen_;            // under mu_: a packet to the KOMBI was seen (kombiSeen())
     uint32_t openSinceMs_;
     int cursor_;
 

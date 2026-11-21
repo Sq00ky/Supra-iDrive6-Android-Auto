@@ -44,6 +44,7 @@ private:
     MflDecoder mfl_;
     PttTracker ptt_;
     bool pttAssistant_;
+    int lastRotary_;        // last MFL thumb-wheel rotation value (fkt C30), -1 = none yet
     CcsEventCb cb_;
     void* user_;
     unsigned statusLogged_;    // CCS35up status messages seen, for the first few log lines
