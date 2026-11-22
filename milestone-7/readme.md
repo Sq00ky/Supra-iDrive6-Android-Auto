@@ -11,6 +11,22 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.117 / rhmiapp-94: native audio media controls, nav prompts on their own channel, volume pill labels.**
+> - **Nav prompts in native audio** play on the car's nav prompt channel again while Android Auto music plays
+>   (navigation volume; the car mutes the music for the prompt). **Nav prompts mixed into Music** (Settings, off by
+>   default; `NBT_SPEECH_OWN_CHANNEL`) keeps them in the music mix with the music ducked, the v1.9.78-v1.9.116 way.
+> - **Head-unit previous / next buttons** (MOST 15/0C fkt `C07`: `01` previous, `02` next) are AA media keys in native
+>   audio, defaults of `NBT_MFL_NEXT` / `NBT_MFL_PREV`, behind Native Functionality Media Controls Restore (car-tested, J29).
+> - **Thumb-wheel press on BMW F-series** (#299): with no Ethernet KOMBI on the network, the row comes from the wheel's
+>   last notch (`C30` below `7f` = Next title, above = Previous title, within 4 s).
+> - **Two-finger gesture** (gesture camera, #163): next track in native audio, read with a receive-only capture of the
+>   camera's UDP 30567 PDUs. **Switch 2 Finger Gesture to Mute** (Settings, off by default; `NBT_GESTURE_SKIP`) for cars
+>   where iDrive mutes on two fingers. `NBT_GESTURE_SNIFF=0` / `NBT_GESTURE_IF`.
+> - **PTT long press** starts the Google Assistant by default (`NBT_PTT_ASSISTANT=0` turns it off).
+> - **Volume pill** (@sabifa, #278): iDrive-style bar naming the volume (Entertainment / Navigation / Phone call).
+> - Settings (@FreZZZeR, #305): Car manufacturer -> Auto no longer toggles Cyrillic (action 421/426), and the saved
+>   Favorites bar state shows on entry. @FreZZZeR added to the About contributors.
+>
 > **v1.9.116 / rhmiapp-93: song title in the cluster, native-audio track list behind one setting.**
 > - **Song title in gauge cluster** (PR #288, @bejusxd, opt-in): while no turn is shown, the song the phone plays is
 >   shown in the cluster's navigation area. Which way follows the **Gauge cluster** setting:
