@@ -207,7 +207,7 @@ FrameSource* defaultSource(const std::string& ifname, uint32_t ip) {
 }  // namespace
 
 KombiMedia::KombiMedia()
-    : running_(false), stop_(false), show_(false), answered_(0), listOpen_(false), openSinceMs_(0), cursor_(-1),
+    : running_(false), stop_(false), show_(false), answered_(0), listOpen_(false), kombiSeen_(false), openSinceMs_(0), cursor_(-1),
       port_(30502), ip_(0), index_(kDefaultTextIndex),
       mode_(MediaList::kSlot), src_(NULL), ownSrc_(false), fd_(-1), session_(0x0100), fails_(0) {
     pthread_mutex_init(&mu_, NULL);
@@ -330,6 +330,13 @@ int KombiMedia::wheelPress(std::string* why) {
     return a;
 }
 
+bool KombiMedia::kombiSeen() {
+    pthread_mutex_lock(&mu_);
+    const bool s = kombiSeen_;
+    pthread_mutex_unlock(&mu_);
+    return s;
+}
+
 void* KombiMedia::workerStub(void* self) {
     static_cast<KombiMedia*>(self)->worker();
     return NULL;
@@ -440,7 +447,12 @@ void KombiMedia::worker() {
             TcpSeg seg;
             if (frames[i].empty() || !parseTcp(&frames[i][0], frames[i].size(), &seg)) continue;
             if (seg.dst != ip_) continue;
-            if (packets++ == 0) printf("[KombiMedia] the capture works: first packet to the KOMBI seen\n");
+            if (packets++ == 0) {
+                printf("[KombiMedia] the capture works: first packet to the KOMBI seen\n");
+                pthread_mutex_lock(&mu_);
+                kombiSeen_ = true;
+                pthread_mutex_unlock(&mu_);
+            }
             if (seg.dport != port_) continue;
             ++onPort;
             msgs.clear();

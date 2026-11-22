@@ -25,7 +25,7 @@ int main() {
     clearAll();
     {
         CcsConfig c = readCcsConfig();
-        assert(c.inst == 0x03 && c.ccsInst == 0x01 && !c.invert && !c.pttAssistant);
+        assert(c.inst == 0x03 && c.ccsInst == 0x01 && !c.invert && c.pttAssistant);   // Assistant on by default
         for (int s = 0; s < CCS_SLOTS; ++s) assert(!c.slotSet[s]);
         CcsDecoder d;
         applyCcsConfig(c, d);

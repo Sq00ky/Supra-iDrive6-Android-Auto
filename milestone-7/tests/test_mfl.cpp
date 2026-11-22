@@ -19,13 +19,33 @@ int main() {
     const uint8_t one[1] = { 0x01 };
     const uint8_t two[1] = { 0x02 };
 
-    // ---- defaults: the J29 roller, 511 value 02 = next, 01 = previous
+    // ---- defaults: the wheel's skip buttons (511) and the head unit's buttons (C07): 02 = next, 01 = previous
     {
         unsetenv("NBT_MFL_NEXT"); unsetenv("NBT_MFL_PREV"); unsetenv("NBT_MFL_PLAYPAUSE");
         MflConfig c = readMflConfig();
-        CHECK(c.n == 2);
+        CHECK(c.n == 4);
         CHECK(c.b[0].fkt == 0x511 && c.b[0].value == 0x02 && c.b[0].key == AAK_MEDIA_NEXT);
-        CHECK(c.b[1].fkt == 0x511 && c.b[1].value == 0x01 && c.b[1].key == AAK_MEDIA_PREVIOUS);
+        CHECK(c.b[1].fkt == 0xC07 && c.b[1].value == 0x02 && c.b[1].key == AAK_MEDIA_NEXT);
+        CHECK(c.b[2].fkt == 0x511 && c.b[2].value == 0x01 && c.b[2].key == AAK_MEDIA_PREVIOUS);
+        CHECK(c.b[3].fkt == 0xC07 && c.b[3].value == 0x01 && c.b[3].key == AAK_MEDIA_PREVIOUS);
+    }
+
+    // ---- the head unit's buttons, as the car logged them: 01 00 02 00 = previous, then next
+    {
+        MflConfig c = readMflConfig();
+        c.log = false;
+        MflDecoder d;
+        d.setConfig(c);
+        MflEvent ev[kMflBindings * 2];
+        CHECK(d.feed(0xC07, 0xC, zero, 1, ev, kMflBindings * 2) == 0);
+        int n = d.feed(0xC07, 0xC, one, 1, ev, kMflBindings * 2);
+        CHECK(n == 1 && ev[0].down == 1 && ev[0].keycode == AAK_MEDIA_PREVIOUS && !strcmp(ev[0].what, "MFL_PREV"));
+        n = d.feed(0xC07, 0xC, zero, 1, ev, kMflBindings * 2);
+        CHECK(n == 1 && ev[0].down == 0 && ev[0].keycode == AAK_MEDIA_PREVIOUS);
+        n = d.feed(0xC07, 0xC, two, 1, ev, kMflBindings * 2);
+        CHECK(n == 1 && ev[0].down == 1 && ev[0].keycode == AAK_MEDIA_NEXT && !strcmp(ev[0].what, "MFL_NEXT"));
+        n = d.feed(0xC07, 0xC, zero, 1, ev, kMflBindings * 2);
+        CHECK(n == 1 && ev[0].down == 0 && ev[0].keycode == AAK_MEDIA_NEXT);
     }
 
     // ---- the roller: 00 -> 02 -> 00 -> 02 ... is one press per detent, and 01 is the other direction
@@ -111,7 +131,7 @@ int main() {
 
     // ---- junk in the environment maps nothing rather than fkt 0
     {
-        setenv("NBT_MFL_NEXT", "zz", 1);        // replaces next, prev's default stays
+        setenv("NBT_MFL_NEXT", "zz", 1);        // replaces next; prev (511:1 from above) and play/pause stay
         MflConfig j = readMflConfig();
         CHECK(j.n == 2 && j.b[0].key == AAK_MEDIA_PREVIOUS && j.b[1].key == AAK_MEDIA_PLAY_PAUSE);
         setenv("NBT_MFL_NEXT", "0", 1);
@@ -126,8 +146,8 @@ int main() {
         unsetenv("NBT_KOMBI_TRACKS_PRESS");
         setenv("NBT_KOMBI_TRACKS", "1", 1);
         MflConfig c = readMflConfig();
-        CHECK(c.n == 3);
-        CHECK(c.b[2].fkt == 0xC31 && c.b[2].value < 0 && c.b[2].key == kMflWheelKey && !strcmp(c.b[2].what, "MFL_WHEEL"));
+        CHECK(c.n == 5);
+        CHECK(c.b[4].fkt == 0xC31 && c.b[4].value < 0 && c.b[4].key == kMflWheelKey && !strcmp(c.b[4].what, "MFL_WHEEL"));
         MflDecoder d;
         d.setConfig(c);
         MflEvent ev[2];
@@ -143,15 +163,15 @@ int main() {
         CHECK(d.feed(0xC30, 0xC, rest, 1, ev, 2) == 0);
         CHECK(d.feed(0x511, 0xC, two, 1, ev, 2) == 1 && ev[0].keycode == AAK_MEDIA_NEXT);   // the skip buttons as before
         setenv("NBT_KOMBI_TRACKS_PRESS", "0", 1);
-        CHECK(readMflConfig().n == 2);
+        CHECK(readMflConfig().n == 4);
         setenv("NBT_KOMBI_TRACKS_PRESS", "C40:1", 1);
         c = readMflConfig();
-        CHECK(c.n == 3 && c.b[2].fkt == 0xC40 && c.b[2].value == 1 && c.b[2].key == kMflWheelKey);
+        CHECK(c.n == 5 && c.b[4].fkt == 0xC40 && c.b[4].value == 1 && c.b[4].key == kMflWheelKey);
         unsetenv("NBT_KOMBI_TRACKS_PRESS");
         setenv("NBT_KOMBI_TRACKS", "0", 1);
-        CHECK(readMflConfig().n == 2);
+        CHECK(readMflConfig().n == 4);
         unsetenv("NBT_KOMBI_TRACKS");
-        CHECK(readMflConfig().n == 2);
+        CHECK(readMflConfig().n == 4);
     }
 
     if (fails) { printf("%d check(s) failed\n", fails); return 1; }

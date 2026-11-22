@@ -430,6 +430,20 @@ const char* const kAnyDistFlag      = "kombi-nav-anydist";
 const unsigned    kActKombiMedia    = 470;
 const unsigned    kKombiMediaModel  = 471;
 const char* const kKombiMediaFlag   = "kombi-media";
+// "Switch 2 Finger Gesture to Mute", off by default: <checkbox action="474" id="477" model="475" textModel="476">.
+// Off: in native audio nbt-aad turns the two-finger gesture into next track. On: it sends nothing (two fingers is set
+// to mute in iDrive, which mutes by itself). Flag read by nbt-aad at every gesture (src/nbt_env.hpp
+// gestureSkipEnabled()), so no restart. NBT_GESTURE_SKIP in nbt-aad.env wins.
+const unsigned    kActGestureMute   = 474;
+const unsigned    kGestureMuteModel = 475;
+const char* const kGestureMuteFlag  = "gesture-mute";
+// "Nav prompts mixed into Music", off by default: <checkbox action="478" id="481" model="479" textModel="480">. Ticked =
+// the marker exists = while AA music plays, prompts stay in the music mix (music ducked); unticked = prompts on the
+// car's nav prompt channel (src/audio/config.hpp navPromptOwnChannel(), read by nbt-aad at every prompt, so no
+// restart). NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins.
+const unsigned    kActNavPromptOwn  = 478;
+const unsigned    kNavPromptOwnModel = 479;
+const char* const kNavPromptMixFlag = "nav-prompt-mix";
 const unsigned    kActNoLog         = 173;   // "Disable logging (performance test)" checkbox
 const unsigned    kNoLogModel       = 175;   // raBoolModel
 const unsigned    kActSpeechBt      = 174;   // "Prompts on car radio (BT, beta)" checkbox
@@ -2391,6 +2405,32 @@ bool onKombiMediaToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+bool g_gestureMuteShown = false;
+bool gestureMuteOn() { return nbt::flagSet(kGestureMuteFlag); }
+void showGestureMute(bmw::PluginApp* app) {
+    app->updateModel(kGestureMuteModel, gestureMuteOn());
+    g_gestureMuteShown = true;
+}
+bool onGestureMuteToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kGestureMuteFlag, "Switch 2 Finger Gesture to Mute (native audio; off = two fingers is next track; "
+                                     "nbt-aad reads it at every gesture; NBT_GESTURE_SKIP in nbt-aad.env wins)");
+    if (g_runApp) showGestureMute(g_runApp);
+    return true;
+}
+
+bool g_navPromptOwnShown = false;
+bool navPromptMixOn() { return nbt::flagSet(kNavPromptMixFlag); }
+void showNavPromptOwn(bmw::PluginApp* app) {
+    app->updateModel(kNavPromptOwnModel, navPromptMixOn());
+    g_navPromptOwnShown = true;
+}
+bool onNavPromptOwnToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
+    toggleFlagFile(kNavPromptMixFlag, "Nav prompts mixed into Music (native audio; off = the car's nav prompt channel; "
+                                      "nbt-aad reads it at every prompt; NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins)");
+    if (g_runApp) showNavPromptOwn(g_runApp);
+    return true;
+}
+
 bool onAnyDistToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kAnyDistFlag,
                    "Show directions at any distance (NBT_KOMBI_NAV_APPROACH/_MI in nbt-aad.env win)");
@@ -2451,6 +2491,8 @@ void statusRun(void* /*self*/) {
     if (!app) return;                                   // finalized: stop polling
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_kombiMediaShown) showKombiMedia(app);
+    if (!g_gestureMuteShown) showGestureMute(app);
+    if (!g_navPromptOwnShown) showNavPromptOwn(app);
     if (!g_noLogShown) showNoLog(app);
     if (!g_autostartShown) showAutostart(app);
     if (!g_usbLogShown) showUsbLog(app);
@@ -2836,6 +2878,8 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActCpCompat, &onCpCompatToggle);
     addAction(self, kActAnyDist, &onAnyDistToggle);
     addAction(self, kActKombiMedia, &onKombiMediaToggle);
+    addAction(self, kActGestureMute, &onGestureMuteToggle);
+    addAction(self, kActNavPromptOwn, &onNavPromptOwnToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
     addAction(self, kActSpeechBt, &onSpeechBtToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);

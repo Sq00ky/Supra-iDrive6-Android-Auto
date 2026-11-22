@@ -31,7 +31,7 @@ CcsEvent makeMflCcsEvent(const MflEvent& e) {
 
 } // namespace
 
-CcsInput::CcsInput() : pttAssistant_(false), cb_(NULL), user_(NULL), statusLogged_(0), ccsLogged_(0) {}
+CcsInput::CcsInput() : pttAssistant_(false), lastRotary_(-1), cb_(NULL), user_(NULL), statusLogged_(0), ccsLogged_(0) {}
 
 bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb, void* user) {
     cb_ = cb;
@@ -83,8 +83,8 @@ void CcsInput::onLink(most::LinkState s) {
     }
 }
 
-// The steering-wheel voice button: see car/ptt.hpp. Observe-only unless NBT_PTT_ASSISTANT=1, which sends the Assistant
-// key (AA keycode 84 SEARCH, advertised on input channel 7) after a long press.
+// The steering-wheel voice button: see car/ptt.hpp. A long press sends the Assistant key (AA keycode 84 SEARCH,
+// advertised on input channel 7) unless NBT_PTT_ASSISTANT=0; a short press is only logged (iDrive's voice).
 void CcsInput::onPtt(const most::View& m) {
     if (m.len == 0) return;
     unsigned v = m.data[0];
@@ -97,7 +97,7 @@ void CcsInput::onPtt(const most::View& m) {
     if (r.kind == PttTracker::kCancelled) { printf("[PTT] voice button cancelled\n"); return; }
     bool lng = r.kind == PttTracker::kReleasedLong;
     printf("[PTT] voice button released after %u ms (%s press%s)\n", (unsigned)r.heldMs, lng ? "long" : "short",
-           lng ? (pttAssistant_ ? ": Google Assistant" : "; NBT_PTT_ASSISTANT=1 would start the Assistant") : ": iDrive voice");
+           lng ? (pttAssistant_ ? ": Google Assistant" : ": nothing sent (NBT_PTT_ASSISTANT=0)") : ": iDrive voice");
     if (lng && pttAssistant_ && cb_) {
         CcsEvent ev;
         ev.kind = 1; ev.keycode = AAK_SEARCH; ev.delta = 0; ev.what = "PTT"; ev.cancel = 0;
@@ -110,6 +110,16 @@ void CcsInput::onPtt(const most::View& m) {
 // function the block carries once, so the mapping can be read off a single drive (car/mfl.hpp).
 void CcsInput::onMfl(const most::View& m) {
     if (m.fkt == kFktPttButton1) return;   // pttTramp owns it
+    // Thumb-wheel rotation (fkt C30, rest 7f): each new value goes out as "MFL_ROTARY", delta = value - 7f. Never a key
+    // for the phone: the daemon uses it to tell which row of the cluster's track list a press means (issue #299).
+    if (m.fkt == 0xC30 && m.len >= 1 && (int)m.data[0] != lastRotary_) {
+        lastRotary_ = m.data[0];
+        if (cb_) {
+            CcsEvent r;
+            r.kind = 2; r.keycode = 0; r.down = 0; r.delta = (int)m.data[0] - 0x7F; r.what = "MFL_ROTARY"; r.cancel = 0;
+            cb_(r, user_);
+        }
+    }
     MflEvent ev[2];
     int n = mfl_.feed(m.fkt, m.op, m.len ? m.data : NULL, m.len, ev, 2);
     for (int i = 0; i < n; ++i) {

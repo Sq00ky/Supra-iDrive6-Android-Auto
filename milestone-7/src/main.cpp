@@ -129,6 +129,7 @@
 #include "tile_process.hpp"
 #include "cluster/nav_core.hpp"
 #include "cluster/ric_media.hpp"
+#include "gesture_sniff.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -161,7 +162,9 @@ static double upSec() {
 static uint32_t upMs() { return (uint32_t)(upSec() * 1000.0); }
 static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
-static nbt::riclist::KombiMedia g_kombiMedia;   // the track title in the cluster's track list (Native Functionality Media Controls Restore)
+static nbt::gesture::Sniffer g_gestureSniff;     // two-finger gesture -> next track in native audio (gesture_sniff.hpp)
+static nbt::riclist::KombiMedia g_kombiMedia;
+static nbt::riclist::WheelTurns g_wheelTurns;      // thumb-wheel row from the rotation, when no cluster list is seen (#299)   // the track title in the cluster's track list (Native Functionality Media Controls Restore)
 static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
 static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
 static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the overlay: a consumer of g_most
@@ -1956,6 +1959,17 @@ static void sendMediaKey(uint32_t key, const char* what) {
     g_session.postKeyEvent(key, false);
 }
 
+// The gesture camera's two-finger gesture (capture thread, once per gesture; native audio only). iDrive got the same
+// gesture and skips its own active source, which in native audio is the browser source with nothing behind it.
+static void onCameraGesture(int id, void*) {
+    if (id != 5) return;
+    if (!nbt::gestureSkipEnabled()) {
+        printf("[Gesture] two fingers: nothing sent (\"Switch 2 Finger Gesture to Mute\" is on: iDrive mutes)\n");
+        return;
+    }
+    sendMediaKey(nbt::AAK_MEDIA_NEXT, "two-finger gesture");
+}
+
 static bool mediaCtlPrepare(const char* cmd, std::string& reply) {
     while (*cmd == ' ' || *cmd == '\n' || *cmd == '\r') ++cmd;
     char word[16];
@@ -2066,14 +2080,27 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         }
         return;                                   // st == 2: the hold already minimized AA, swallow the release
     }
+    if (ev.what && !strcmp(ev.what, "MFL_ROTARY")) {   // thumb-wheel turn: only remembered, for the press below
+        g_wheelTurns.turn((uint8_t)(ev.delta + 0x7F), monoMs());
+        return;
+    }
     if (ev.what && !strcmp(ev.what, "MFL_WHEEL")) {   // thumb-wheel press: the row under the cluster list's cursor
-        if (!ev.down) return;
+        if (!ev.down) { g_wheelTurns.touch(monoMs()); return; }
         if (!g_wheelMediaKeys) {
             printf("[Media] thumb-wheel press ignored: Native Functionality Media Controls Restore is off\n");
             return;
         }
         std::string why;
-        const int a = g_kombiMedia.wheelPress(&why);
+        int a = g_kombiMedia.wheelPress(&why);
+        if (a == nbt::riclist::kPressNone && !g_kombiMedia.kombiSeen()) {
+            // No packet to an Ethernet KOMBI ever seen (BMW F-series: the cluster is on MOST): the wheel's last notch.
+            const char* w = "";
+            a = g_wheelTurns.press(monoMs(), &w);
+            printf("[KombiMedia] thumb-wheel press: no cluster list on the network (MOST cluster), row from the wheel's "
+                   "last turn: %s\n", a == nbt::riclist::kPressNext ? "Next title" : a == nbt::riclist::kPressPrev
+                                                                      ? "Previous title" : w);
+            if (a == nbt::riclist::kPressNone) why = w;
+        }
         if (a == nbt::riclist::kPressNext) sendMediaKey(nbt::AAK_MEDIA_NEXT, "thumb-wheel press on Next title");
         else if (a == nbt::riclist::kPressPrev) sendMediaKey(nbt::AAK_MEDIA_PREVIOUS, "thumb-wheel press on Previous title");
         else printf("[KombiMedia] thumb-wheel press: nothing sent (%s)\n", why.c_str());
@@ -2088,7 +2115,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         if (ev.down) sendMediaKey(ev.keycode, ev.what);
         return;   // iDrive's copy of the key is its own business: nothing here acts on it in a non-Bluetooth mode
     }
-    if (ev.what && !strcmp(ev.what, "PTT")) {     // steering-wheel voice button (NBT_PTT_ASSISTANT=1), any screen
+    if (ev.what && !strcmp(ev.what, "PTT")) {     // steering-wheel voice button long press (NBT_PTT_ASSISTANT), any screen
         printf("[PTT] Assistant key %s -> phone\n", ev.down ? "down" : "up");
         s->postKeyEvent(ev.keycode, ev.down != 0);
         return;
@@ -2473,6 +2500,12 @@ int main(int argc, char* argv[]) {
     g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
                                    // g_most starts: NBT_CLUSTER=6wa attaches to it
     g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT);   // idle until the phone plays something
+    if (audio_mode == nbt::AUDIO_MODE_BT)
+        printf("[Gesture] two-finger gesture capture off: audio mode is Bluetooth (iDrive skips the phone itself)\n");
+    else if (nbt::envFlag("NBT_GESTURE_SNIFF") == 0)
+        printf("[Gesture] two-finger gesture capture off (NBT_GESTURE_SNIFF=0)\n");
+    else
+        g_gestureSniff.start(&onCameraGesture, NULL);
     {
         pthread_t t;
         if (pthread_create(&t, NULL, &mediaMailThread, NULL) == 0) pthread_detach(t);
@@ -2996,6 +3029,7 @@ int main(int argc, char* argv[]) {
     printf("[Main] [+%.2f s] overlay hidden\n", upSec() - t0);
     if (mic_live) g_audioBackend->stopMic(mic);
     voice.deactivate("shutdown");   // never leave the car mic scenario active behind us
+    g_gestureSniff.stop();
     g_kombiMedia.stop();
     g_kombiNav.stop();              // clears a cluster/HUD arrow (one quick attempt)
     printf("[Main] [+%.2f s] cluster/HUD arrows stopped\n", upSec() - t0);

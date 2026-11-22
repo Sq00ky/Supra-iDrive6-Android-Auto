@@ -66,6 +66,7 @@ SRCS = src/main.cpp \
        src/cluster/hud_terminal.cpp \
        src/cluster/hud6wa_display.cpp \
        src/cluster/ric_media.cpp \
+       src/gesture_sniff.cpp \
        src/volume_osd.cpp \
        src/volume_pill.cpp
 

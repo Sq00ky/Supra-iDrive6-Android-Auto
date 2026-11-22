@@ -12,6 +12,8 @@
 //      to Android's next (87) / previous (88) / play-pause (85) keys:
 //        NBT_MFL_NEXT=511:2      fkt 511, value 02 is a press
 //        NBT_MFL_PREV=511:1      fkt 511, value 01 is a press
+//      Defaults: next = 511:2,C07:2, previous = 511:1,C07:1 (C07 = the head unit's own previous / next buttons,
+//      01 previous / 02 next, car log 2026-11-20). Setting NBT_MFL_NEXT / _PREV replaces that key's defaults.
 //        NBT_MFL_PLAYPAUSE=C31   any change away from 0 is a press
 //      Each setting is a comma separated list ("511:2,C31"), value in hex like the fkt, no ":value" = any non-zero.
 //      Values are hex as the log prints them.
@@ -33,7 +35,7 @@
 namespace nbt {
 namespace car {
 
-enum { kMflBindings = 6 };
+enum { kMflBindings = 10 };
 
 // The thumb-wheel press is not a key of its own: the daemon asks the cluster list which row the cursor is on
 // (cluster/ric_media.hpp). Its events carry this value, which is never sent to the phone.
@@ -95,10 +97,11 @@ inline void mflDropKey(MflConfig& c, uint32_t key) {
 
 inline MflConfig readMflConfig() {
     MflConfig c;
-    // Defaults from the J29 logs (2026-11-08): the track roller on 15/02 fkt 511, value 02 one way and 01 the other.
-    // Which is "next" is the guess; swap the two settings if the wheel skips backwards.
-    mflParseBindings("511:2", c.b, kMflBindings, &c.n, AAK_MEDIA_NEXT, "MFL_NEXT");
-    mflParseBindings("511:1", c.b, kMflBindings, &c.n, AAK_MEDIA_PREVIOUS, "MFL_PREV");
+    // Defaults: the steering-wheel skip buttons on 15/02 fkt 511 (J29 logs 2026-11-08: 02 = next, car-confirmed; 01 =
+    // previous by symmetry) and the head unit's own previous / next buttons on fkt C07 (car log 2026-11-20: 01 then
+    // 00 = previous, 02 then 00 = next, one pair per press). Same 00 -> value -> 00 shape, so the same decoder.
+    mflParseBindings("511:2,C07:2", c.b, kMflBindings, &c.n, AAK_MEDIA_NEXT, "MFL_NEXT");
+    mflParseBindings("511:1,C07:1", c.b, kMflBindings, &c.n, AAK_MEDIA_PREVIOUS, "MFL_PREV");
     if (getenv("NBT_MFL_NEXT")) {
         mflDropKey(c, AAK_MEDIA_NEXT);
         mflParseBindings(getenv("NBT_MFL_NEXT"), c.b, kMflBindings, &c.n, AAK_MEDIA_NEXT, "MFL_NEXT");
