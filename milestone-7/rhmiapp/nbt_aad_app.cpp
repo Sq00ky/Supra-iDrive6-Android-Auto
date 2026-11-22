@@ -76,7 +76,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-94 (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-95-merge264301 (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
