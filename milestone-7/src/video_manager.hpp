@@ -44,7 +44,11 @@ public:
     static bool cpHandoff();
     // NBT_CP_PURGE=1: destroy the factory CarPlay context (cpvideoctx) as before v1.9.50 instead of detaching it.
     static bool cpPurge();
-    bool prepareForSession();
+    // midStream=true only when returning to an existing AA stream; main also starts the IDR timeout then.
+    // A new session supplies its initial IDR through the normal video handshake.
+    bool prepareForSession(bool midStream = false);
+    // Main thread, after hiding AA: return only a saved, detached factory decoder. No own-context fallback.
+    bool restoreCarPlayDecoder();
     bool retuneForCarPlay();
     bool decoderInCarPlayMode();
     // Closes the decoder context (and with it mm-renderer's winid=1280 window) while iDrive has the screen. Needed once
@@ -52,7 +56,7 @@ public:
     // hides the video. prepareForSession() builds a new context (a new, newest 1280 window) when Android Auto returns.
     void parkDecoder();
     bool decoderParked();
-    // After a parked context is rebuilt the phone is mid-stream: P-frames without their reference decode as grey,
+    // After a parked or handed-back context is rebuilt mid-stream, P-frames without their reference decode as grey,
     // jittery, wrong-colour garbage (G30, v1.9.15). Frames are dropped until the first IDR. releaseKeyframeWait()
     // gives up waiting (the phone never sent one).
     bool waitingForKeyframe();
@@ -124,7 +128,6 @@ private:
     void quiesceWorker();
     bool detachFactoryContext(const char* name);   // decoder_mutex_ held
     bool reattachFactoryContext(const char* why);  // decoder_mutex_ held; our own context already gone
-    void* makeDict(const std::vector<PpsAttr>& attrs);
     bool sendMdevSync();
     bool sendMdevFormat(uint32_t width, uint32_t height, uint32_t fps);
     bool sendMdevConfig(const uint8_t* data, size_t length);

@@ -59,6 +59,8 @@ SRC_test_favourite_preview :=
 SRC_test_favourite_strip   :=
 SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
+SRC_test_cp_handoff        :=
+SRC_test_mmr_restore       :=
 SRC_test_ctl_wizard        :=
 SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
@@ -173,6 +175,9 @@ $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 # dependencies: without this line, a change to the session would not rebuild it.
 $(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
 $(OUT)/test_session_rx_timeout: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
+
+$(OUT)/test_cp_handoff: $(ROOT)/src/cp_handoff.hpp
+$(OUT)/test_mmr_restore: $(ROOT)/src/mmr_restore.hpp
 
 # Frames are not really encrypted in this one, so it can script the phone without a TLS handshake.
 $(OUT)/test_session_bye: CXXFLAGS += -include stub_cryptor.hpp

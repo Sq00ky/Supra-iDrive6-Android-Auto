@@ -104,6 +104,7 @@
 #include "status_hint.hpp"
 #include "wfd_own.hpp"     // DIRECT mode: nbt-aad's own passphrase on the car's Wi-Fi Direct group
 #include "keyframe_ask.hpp"
+#include "cp_handoff.hpp"
 #include "touch_probe.hpp"
 #include "aa_keys.hpp"
 #include "car/ccs_config.hpp"
@@ -888,6 +889,32 @@ static const uint32_t kUsbByeWaitMs = 500;     // of the 3 s before the iDrive a
 // v1.9.57-cpcompat: all of it only with the "CarPlay compatibility" Settings checkbox (nbt_env.hpp cpCompatEnabled());
 // NBT_CP_YIELD=1 / 0 in nbt-aad.env wins for the yield.
 static bool cpYieldEnabled() { return nbt::cpYieldOn(); }
+
+static void yieldToCarPlay() {
+    printf("[Main] CarPlay took the screen while Android Auto is still connected: Android Auto yields to CarPlay "
+           "completely (session ended, decoder context and windows released, nbt-aad stops; the Android Auto "
+           "entry starts it again; CarPlay compatibility / NBT_CP_YIELD)\n");
+    g_userExit = g_carExit = 1;
+    g_session.postVideoFocus(false);
+    g_cpYielded = 1;
+    g_running = 0;
+}
+
+static nbt::CpContext readCpContext() {
+    FILE* f = fopen("/dev/shmem/nbt-aad-gctx", "r");
+    if (!f) return nbt::CpContext();
+    struct stat before, after;
+    char text[512];
+    bool ok = fstat(fileno(f), &before) == 0 && S_ISREG(before.st_mode) &&
+              before.st_size > 0 && (size_t)before.st_size < sizeof(text);
+    size_t n = ok ? fread(text, 1, sizeof(text) - 1, f) : 0;
+    ok = ok && !ferror(f) && fstat(fileno(f), &after) == 0 && before.st_size == after.st_size &&
+         before.st_mtime == after.st_mtime && n == (size_t)after.st_size;
+    fclose(f);
+    if (!ok) return nbt::CpContext();
+    text[n] = 0;
+    return nbt::parseCpContext(text, after.st_mtime);
+}
 static nbt::BluetoothManager* g_btMgr = NULL;   // set once the AA Bluetooth service registration is under way
 
 static uint32_t monoSecs() {
@@ -2691,6 +2718,7 @@ int main(int argc, char* argv[]) {
     int cp_idle_ticks = 0;
     unsigned cp_live_ticks = 0;
     int cp_1280_last = -1;       // surface 1280's visibility at the last CarPlay check while Android Auto was minimized
+    nbt::CpHandoff cp_handoff;
     uint32_t most_health_ms = monoMs();
     while (g_running) {
         for (int w = 0; w < 5 && !g_mainWake && g_running && !driveModePeekDue(); ++w)
@@ -2772,7 +2800,7 @@ int main(int argc, char* argv[]) {
         if ((log_sync_ticks % 20) == 0) serviceUsbLog(false);   // every 5 s: stick plugged in / removed, checkbox
         checkRamLogCap();                                         // every tick: RAM log 5 MB cap
         if (logPersistent() && (log_sync_ticks % 8) == 0) { fflush(stdout); fsync(fileno(stdout)); }
-        if (act && !was_active) { g_userExit = 0; g_carExit = 0; }   // a new phone session comes up in Android Auto
+        if (act && !was_active) { g_userExit = 0; g_carExit = 0; cp_handoff.reset(); }   // a new phone session
         if (g_backState == 1 && (uint32_t)(monoMs() - g_backDownMs) >= backHoldMs()) {
             // Car-side minimize, like reverse: only the overlay goes down. Telling the phone (unrequested UNFOCUSED,
             // NBT_BACK_HOLD_FOCUS=1) can make it ask for the screen right back, which re-showed AA at once.
@@ -2798,6 +2826,7 @@ int main(int argc, char* argv[]) {
             printf("[Focus] iDrive left the Android Auto screen (hard key): minimizing Android Auto\n");
         }
         if (g_showReq) {                                 // iDrive Android Auto entry selected
+            cp_handoff.reset();
             g_favouritePreview.cancel();
             g_showReq = 0;
             g_userExit = 0;
@@ -2868,14 +2897,7 @@ int main(int argc, char* argv[]) {
             cp_1280_last = v;
         }
         if (cp_shows && cpYieldEnabled()) {
-            printf("[Main] CarPlay took the screen while Android Auto is still connected: Android Auto yields to CarPlay "
-                   "completely (session ended, decoder context and windows released, nbt-aad stops; the Android Auto "
-                   "entry starts it again; CarPlay compatibility / NBT_CP_YIELD)\n");
-            g_userExit = 1;
-            g_carExit = 1;                               // nothing may cover CarPlay on the way out
-            g_session.postVideoFocus(false);             // phone stops streaming at once
-            g_cpYielded = 1;
-            g_running = 0;                               // the clean shutdown below releases everything
+            yieldToCarPlay();
         } else if (cp_shows) {
             printf("[Main] CarPlay took the screen while Android Auto is still connected: giving the decoder CarPlay's "
                    "settings (the Android Auto entry brings Android Auto back)\n");
@@ -2924,9 +2946,16 @@ int main(int argc, char* argv[]) {
         if (want && act && !overlay_on && (video.decoderInCarPlayMode() || video.decoderParked())) {
             printf("[Main] back to Android Auto after %s: rebuilding the decoder context\n",
                    video.decoderParked() ? "iDrive (overlay had surface 1280)" : "CarPlay");
-            if (video.decoderParked()) { g_idrWaitMs = monoMs() | 1u; g_idrAsks = 0; }
-            video.prepareForSession();
-            g_session.postVideoFocus(true);
+            if (video.prepareForSession(true)) {
+                g_idrWaitMs = monoMs() | 1u;
+                g_idrAsks = 0;
+                g_session.postVideoFocus(true);
+            } else {
+                printf("[Main] decoder rebuild failed: Android Auto stays hidden; choose its iDrive entry to retry\n");
+                g_userExit = g_carExit = 1;
+                g_idrWaitMs = 0;
+                want = false;
+            }
         }
         // A video frame was lost (queue full, or mdev did not take it): everything up to the phone's next keyframe
         // decodes against the missing one. Ask for a keyframe the way the decoder rebuild above does (video focus off,
@@ -2962,6 +2991,25 @@ int main(int argc, char* argv[]) {
             reassert_ticks = want ? 0 : -1;
         } else if (want && previewGeometryChanged) {
             video.refreshFavouritePreview();
+        }
+        {
+            nbt::CpHandoff::Input h;
+            h.active = act;
+            h.minimized = g_userExit != 0;
+            h.hidden = !overlay_on && !video.isVisible();
+            h.blocked = reverse || park || camera || dm_peek || favouritePeek;
+            h.restoreEnabled = nbt::cpCompatEnabled() && cpLiveRetune() && !nbt::VideoManager::cpPurge();
+            h.factoryMode = video.decoderInCarPlayMode();
+            h.yieldEnabled = nbt::cpCompatEnabled() && cpLiveRetune() && cpYieldEnabled();
+            nbt::CpHandoff::Action a = cp_handoff.step(monoMs(), time(NULL), h, readCpContext());
+            if (g_running && a.restore) {
+                g_idrWaitMs = 0;   // no video-focus retries while the driver has left Android Auto
+                printf("[Main] Android Auto minimized: returning the saved factory decoder\n");
+                if (!video.restoreCarPlayDecoder())
+                    printf("[Main] factory decoder handback failed: no automatic retry while minimized\n");
+                cp_1280_last = -1;   // restored surface visibility is not a CarPlay activation
+            }
+            if (g_running && a.yield) yieldToCarPlay();
         }
         if (previewGeometryChanged) {
             // Publish the completed composition now, not on the following 250 ms tick.
