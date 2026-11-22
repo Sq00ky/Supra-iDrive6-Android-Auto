@@ -50,7 +50,7 @@ class PreviewTest(unittest.TestCase):
                     self.assertEqual(actual, expected)
                     for cell in cells:
                         angle = int(cell.get("data-angle"))
-                        shown = 15 if angle == 1 else 345 if angle == 359 else angle
+                        shown = 30 if angle == 1 else 330 if angle == 359 else angle
                         self.assertEqual(int(cell.get("data-rendered-angle")), shown)
 
     def test_invalid_cli_fails(self):

@@ -107,8 +107,8 @@ inline ShapeSpec shapeFor(int aa_type, bool has_exit_angle, int64_t exit_angle) 
             s.clockwise = kombinav::kombiDirection(aa_type) == 14;
             if (has_exit_angle && exit_angle >= 1 && exit_angle <= 360) s.exit = (int)exit_angle;
             // Keep near-parallel exits readable; raw AA angles remain in NavView and its diagnostic log.
-            if (s.exit > 0 && s.exit < 15) s.exit = 15;
-            if (s.exit > 345 && s.exit < 360) s.exit = 345;
+            if (s.exit > 0 && s.exit < 30) s.exit = 30;
+            if (s.exit > 330 && s.exit < 360) s.exit = 330;
             break;
         case 25: s.angle = -45; break;                            // on ramp
         case 26: s.angle = 45; break;

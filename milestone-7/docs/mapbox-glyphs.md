@@ -30,7 +30,7 @@ draws them; unset or `0` / `off` keeps the parametric shapes, the default look. 
 4. Roundabouts keep the same drawing far and near. A known angle has a radial exit arrow, with the supplied valid
    number in the centre; 360 degrees has separate incoming and returning branches. An unknown angle shows three
    circulation arrows and the supplied number, without inventing an exit direction. Neither the glyph mode nor
-   the exit number changes the angle. Known inputs 1..14 are drawn at 15 degrees and 346..359 at 345; 360 keeps its
+   the exit number changes the angle. Known inputs 1..29 are drawn at 30 degrees and 331..359 at 330; 360 keeps its
    returning branch, and the raw input stays in the diagnostic log. The older low-level `mbxRoundabout()` helper remains covered separately.
 
 ## Arrow wings

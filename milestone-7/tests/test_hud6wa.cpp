@@ -1169,7 +1169,7 @@ static void testKnownRoundabouts() {
             Picture pictures[2];
             for (int cw = 0; cw <= 1; ++cw) {
                 ShapeSpec spec = shapeFor(cw ? 33 : 34, true, angle);
-                assert(spec.exit == (angle < 15 ? 15 : angle > 345 && angle < 360 ? 345 : angle));
+                assert(spec.exit == (angle < 30 ? 30 : angle > 330 && angle < 360 ? 330 : angle));
                 assert(roundaboutPicture(spec, profile, pictures[cw]));
                 checkKnownBase(pictures[cw], spec, profile, p == 0);
                 Picture seven; assert(roundaboutPicture(spec, profile, seven, 7));
@@ -1497,8 +1497,8 @@ static void testKnownRoundaboutDriver() {
 // Rendering clamps near-parallel exits while preserving the phone's original angle and the distinct full circuit.
 static void testRoundaboutAngleLimits() {
     struct Case { bool has; int raw, shown; };
-    const Case cases[] = {{true,1,15},{true,14,15},{true,15,15},{true,16,16},
-                          {true,344,344},{true,345,345},{true,346,345},{true,359,345},{true,360,360},
+    const Case cases[] = {{true,1,30},{true,29,30},{true,30,30},{true,31,31},
+                          {true,329,329},{true,330,330},{true,331,330},{true,359,330},{true,360,360},
                           {true,0,0},{true,-1,0},{true,361,0},{false,1,0},{false,359,0}};
     HudProfile profile = k6wa; fitMeasured(126,77,profile);
     for (int mode = 0; mode < 2; ++mode) {

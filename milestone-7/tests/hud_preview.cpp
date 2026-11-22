@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
     printf("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">\n", width, header + rows * 110, width, header + rows * 110);
     puts("<rect width=\"100%\" height=\"100%\" fill=\"#111\"/><g fill=\"#ddd\" font-family=\"sans-serif\" font-size=\"11\">");
     printf("<text x=\"12\" y=\"20\">F30 126x77 — %s, %s; production polygons (not a photograph of the HUD)</text>\n", mode ? "Mapbox" : "Parametric", stage ? "near route stages" : "plain arrows");
-    if (matrix) printf("<text x=\"12\" y=\"40\">%s: input angles include 1/359 (drawn as 15/345); columns = no number, 1..8.</text>\n", matrix == 1 ? "CCW / right-hand traffic" : "CW / left-hand traffic");
+    if (matrix) printf("<text x=\"12\" y=\"40\">%s: input angles include 1/359 (drawn as 30/330); columns = no number, 1..8.</text>\n", matrix == 1 ? "CCW / right-hand traffic" : "CW / left-hand traffic");
     {
         setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
         for (int n = 0; n < perMode; ++n) {
