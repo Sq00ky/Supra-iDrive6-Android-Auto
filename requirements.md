@@ -24,6 +24,7 @@ The following versions have been tested and confirmed working:
 |Navigation Version|Car Model|Codename|Year|
 |-|-|-|-|
 |NBTevo_S19322I|BMW 1 Series|x|2018|
+|NBTevo_S19322I|BMW 3 Series|F30|2018|
 |NBTevo_S19322I|BMW 4 Series|x|2018|
 |NBTevo_T20454I|BMW X3|G01|2018|
 |NBTevo_T18501I|Toyota Supra|J29|2020|
