@@ -17,7 +17,7 @@
 //               with an optional thin stub for the road not taken (a fork's other branch, the highway on an exit)
 //   u-turn      stem up, a half ring over the top, an arrow down on the side of the turn
 //   roundabout  stem up into a ring, an arrow out of the ring at the exit; the exit's place on the ring follows the
-//               direction of travel and the phone's exit angle (straight across when it sends none)
+//               direction of travel and the phone's exit angle (a directionless ring when no angle is available)
 //   flag        the destination: a pole and a swallow-tailed flag
 
 #include "cluster/hudterm.hpp"
@@ -48,9 +48,9 @@ struct ShapeSpec {
     int angle;        // arrow: degrees, 0 straight on, + right, -180..180; u-turn: -1 left, +1 right
     int stub;         // arrow: the road not taken, degrees like angle, or kNoStub
     bool clockwise;   // roundabout: the direction of travel round it
-    int exit;         // roundabout: degrees from the entry to the exit in the direction of travel, 1..360
+    int exit;         // roundabout: degrees from the entry to the exit in the direction of travel, 1..360; 0 means unknown
     int aa_type;      // the original Android Auto maneuver type, for the Mapbox glyph picker (0 = unset)
-    ShapeSpec() : kind(kShapeArrow), angle(0), stub(kNoStub), clockwise(false), exit(180), aa_type(0) {}
+    ShapeSpec() : kind(kShapeArrow), angle(0), stub(kNoStub), clockwise(false), exit(0), aa_type(0) {}
     bool operator==(const ShapeSpec& o) const {
         return kind == o.kind && angle == o.angle && stub == o.stub && clockwise == o.clockwise && exit == o.exit
             && aa_type == o.aa_type;
@@ -126,7 +126,10 @@ inline std::string describeSpec(const ShapeSpec& s) {
     char b[48];
     switch (s.kind) {
         case kShapeUTurn: snprintf(b, sizeof(b), "u-turn %s", s.angle < 0 ? "left" : "right"); break;
-        case kShapeRoundabout: snprintf(b, sizeof(b), "roundabout %s exit %d", s.clockwise ? "cw" : "ccw", s.exit); break;
+        case kShapeRoundabout:
+            if (s.exit) snprintf(b, sizeof(b), "roundabout %s exit %d", s.clockwise ? "cw" : "ccw", s.exit);
+            else snprintf(b, sizeof(b), "roundabout %s exit unknown", s.clockwise ? "cw" : "ccw");
+            break;
         case kShapeFlag: snprintf(b, sizeof(b), "flag"); break;
         default:
             if (s.stub == kNoStub) snprintf(b, sizeof(b), "arrow %+d", s.angle);
@@ -216,10 +219,12 @@ inline void drawUTurn(const ShapeSpec& s, Shape& out) {
 }
 
 inline void drawRoundabout(const ShapeSpec& s, Shape& out) {
-    const int cx = 500, cy = 420, r0 = 120, r1 = 190, rm = (r0 + r1) / 2;
+    const int cx = 500, cy = 420;
+    const int r0 = s.exit ? 120 : 300, r1 = s.exit ? 190 : 390, rm = (r0 + r1) / 2;
     out.push_back(bar(cx, kBottom, 0, kBottom - (cy + rm), kShaft));
     out.push_back(band(cx, cy, r0, r1, 0, 180, 12));
     out.push_back(band(cx, cy, r0, r1, 180, 360, 12));
+    if (!s.exit) return;   // no angle on the wire: never invent a straight exit
     // The entry is at the bottom (heading 180). Anticlockwise travel (right-hand traffic) reaches the right-hand side
     // first, so its exit heading is 180 - exit; clockwise is 180 + exit.
     int h = s.clockwise ? 180 + s.exit : 180 - s.exit;

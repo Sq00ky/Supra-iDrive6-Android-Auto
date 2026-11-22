@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/hud6wa_display.hpp"
+#include "cluster/hudterm_digits.hpp"
 #include "cluster/mapbox_hud.hpp"   // Mapbox maneuver glyphs (NBT_HUD_GLYPHS); falls back to the parametric shapes
 
+#include <algorithm>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>   // getenv (NBT_HUD_CYRILLIC)
@@ -173,11 +175,37 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
 }
 
 namespace {
-void arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic) {
+void arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
     if (mbxManeuver(spec, p, pic)) return;   // Mapbox glyph/roundabout (NBT_HUD_GLYPHS); else the parametric shape below
     Shape design, fitted;
     drawShape(spec, design);
-    fitShape(design, p.glyph, fitted);
+    Rect box = p.glyph;
+    if (spec.kind == kShapeRoundabout && !spec.exit) {
+        if (exitNumber >= 1 && exitNumber <= 99) {
+            int h = exitNumber > 9 ? 340 : 460;
+            digits::drawNumber(exitNumber, 500, 420 - h / 2, h, design);
+        }
+        if (!getenv("NBT_HUD_GLYPH") && p.canvas.x1 > p.canvas.x0 && p.canvas.y1 > p.canvas.y0) {
+            int cw = p.canvas.x1 - p.canvas.x0 + 1, ch = p.canvas.y1 - p.canvas.y0 + 1;
+            // Keep the car-tested ring size (53 then +25% on a 126x77 HUD) without enlarging ordinary arrows.
+            if (!(cw == 176 && ch == 126) && (k6wa.glyph.x1 >= cw || k6wa.glyph.y1 >= ch)) {
+                int side = std::min(cw, ch) * 25 / 36;
+                if (side > 100) side = 100;
+                int x = p.canvas.x0 + (cw - side) / 2, y = p.canvas.y0 + (ch - side + 1) * 2 / 3;
+                box.x0 = x; box.y0 = y; box.x1 = x + side; box.y1 = y + side;
+            }
+            int w = (box.x1 - box.x0) * 5 / 4, h = (box.y1 - box.y0) * 5 / 4;
+            if (w > p.canvas.x1 - p.canvas.x0) w = p.canvas.x1 - p.canvas.x0;
+            if (h > p.canvas.y1 - p.canvas.y0) h = p.canvas.y1 - p.canvas.y0;
+            int x = (box.x0 + box.x1 - w) / 2, y = (box.y0 + box.y1 - h) / 2;
+            if (x < p.canvas.x0) x = p.canvas.x0;
+            if (y < p.canvas.y0) y = p.canvas.y0;
+            if (x + w > p.canvas.x1) x = p.canvas.x1 - w;
+            if (y + h > p.canvas.y1) y = p.canvas.y1 - h;
+            box.x0 = x; box.y0 = y; box.x1 = x + w; box.y1 = y + h;
+        }
+    }
+    fitShape(design, box, fitted);
     for (size_t i = 0; i < fitted.size(); ++i) {
         Item it;
         it.colour = p.fill;
@@ -414,8 +442,14 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
             what += n;
         }
     } else {
-        arrowPicture(spec, p_, pic);
+        int number = v.has_exit_number && v.exit_number >= 1 && v.exit_number <= 99 ? (int)v.exit_number : 0;
+        arrowPicture(spec, p_, pic, number);
         what = describeSpec(spec);
+        if (spec.kind == kShapeRoundabout && !spec.exit && number) {
+            char n[24];
+            snprintf(n, sizeof(n), " number %d", number);
+            what += n;
+        }
     }
     bool emptyRoute = !junction && route_dirty_;
     Batch b = pictureBatch(isNew ? "maneuver" : "redraw", pic, t, emptyRoute);

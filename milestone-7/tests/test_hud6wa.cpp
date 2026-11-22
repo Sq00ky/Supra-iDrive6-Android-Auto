@@ -167,10 +167,10 @@ static void testShapeFamilies() {
     assert(describeSpec(shapeFor(24, false, 0)) == "arrow +45 stub -20");
     assert(describeSpec(shapeFor(25, false, 0)) == "arrow -40 stub +40");
     for (int t = 39; t <= 42; ++t) assert(describeSpec(shapeFor(t, false, 0)) == "flag");
-    assert(describeSpec(shapeFor(34, false, 0)) == "roundabout ccw exit 180");   // no angle: straight across
+    assert(describeSpec(shapeFor(34, false, 0)) == "roundabout ccw exit unknown");   // no angle: no invented exit
     assert(describeSpec(shapeFor(34, true, 90)) == "roundabout ccw exit 90");
     assert(describeSpec(shapeFor(33, true, 270)) == "roundabout cw exit 270");
-    assert(describeSpec(shapeFor(34, true, 400)) == "roundabout ccw exit 180");  // out of range: ignored
+    assert(describeSpec(shapeFor(34, true, 400)) == "roundabout ccw exit unknown");  // out of range: unknown
     assert(describeSpec(shapeFor(0, false, 0)) == "arrow +0");                    // unknown: straight on
 }
 
@@ -524,8 +524,9 @@ static void testJunctionGeometry() {
                 Layout L;
                 bool has = junctionLayout(t, angles[a] >= 0, angles[a], numbers[n] > 0, numbers[n], k6wa.glyph,
                                           k6wa.canvas.y1, L);
-                if (kombinav::kombiDirection(t) == 10) {
-                    assert(!has);                                // the destination keeps its flag
+                int family = kombinav::kombiDirection(t);
+                if (family == 10 || ((family == 14 || family == 15) && (angles[a] < 1 || angles[a] > 360))) {
+                    assert(!has);   // destination, or unknown roundabout geometry: use the plain picture
                     continue;
                 }
                 assert(has && L.maxTail >= 8 && !L.roads.empty());
@@ -692,6 +693,121 @@ static void testDigits() {
 
 static kombinav::AaLane oneLane(int shape, bool take) {
     return kombinav::AaLane(1, kombinav::LaneDirection(shape, take));
+}
+
+// Missing/invalid roundabout angle is not a straight exit: show only the known exit number.
+static void testUnknownRoundabout() {
+    assert(shapeFor(34, false, 0).exit == 0);
+    assert(describeSpec(shapeFor(34, false, 0)) == "roundabout ccw exit unknown");
+    const int widths[] = { 0, 126, 176, 120 };
+    const int heights[] = { 0, 77, 126, 72 };
+    const Rect expanded[] = { {57, 4, 182, 129}, {29, 9, 95, 75}, {44, 29, 122, 120}, {29, 9, 91, 71} };
+    struct ExitNumber { bool has; int value, shown; };
+    const ExitNumber numbers[] = {
+        {false, 5, 0}, {true, 0, 0}, {true, -1, 0}, {true, 1, 1},
+        {true, 9, 9}, {true, 10, 10}, {true, 99, 99}, {true, 100, 0}
+    };
+    struct ExitAngle { bool has; int value; };
+    const ExitAngle angles[] = { {false, 0}, {false, 90}, {true, -1}, {true, 0}, {true, 361}, {true, 400} };
+    unsetenv("NBT_HUD_CANVAS");
+    for (int mb = 0; mb <= 1; ++mb) {
+        setenv("NBT_HUD_GLYPHS", mb ? "1" : "0", 1);
+        for (int measured = 0; measured < 4; ++measured)
+            for (int pinned = 0; pinned <= 1; ++pinned) {
+                if (pinned) setenv("NBT_HUD_GLYPH", "4 5 34 35", 1);
+                else unsetenv("NBT_HUD_GLYPH");
+                HudProfile profile = k6wa;
+                applyHudEnv(profile);
+                if (measured) fitMeasured(widths[measured], heights[measured], profile);
+                Rect box = pinned ? profile.glyph : expanded[measured];
+                for (int type = 33; type <= 34; ++type)
+                    for (int junction = 0; junction <= 1; ++junction)
+                        for (size_t n = 0; n < sizeof(numbers) / sizeof(numbers[0]); ++n)
+                            for (size_t a = 0; a < sizeof(angles) / sizeof(angles[0]); ++a) {
+                                FakePort port;
+                                Hud6waDisplay display(port, profile, false);
+                                Settings settings = arrows(); settings.junction = junction != 0;
+                                display.setSettings(settings);
+                                NavView v = view(type, "", "580", 1, 580);
+                                v.has_exit_number = numbers[n].has; v.exit_number = numbers[n].value;
+                                v.has_exit_angle = angles[a].has; v.exit_angle = angles[a].value;
+                                Shape design, fitted;
+                                ShapeSpec spec = shapeFor(type, angles[a].has, angles[a].value);
+                                assert(spec.exit == 0);
+                                drawShape(spec, design);
+                                assert(design.size() == 3);   // entry stem and ring halves, no invented exit arrow
+                                int x0 = 1000, x1 = 0;
+                                for (size_t k = 0; k < design.size(); ++k)
+                                    for (size_t j = 0; j < design[k].pts.size(); ++j) {
+                                        x0 = std::min(x0, (int)design[k].pts[j].x);
+                                        x1 = std::max(x1, (int)design[k].pts[j].x);
+                                    }
+                                assert(x1 - x0 == 780);
+                                if (numbers[n].shown) {
+                                    int h = numbers[n].shown > 9 ? 340 : 460;
+                                    digits::drawNumber(numbers[n].shown, 500, 420 - h / 2, h, design);
+                                }
+                                fitShape(design, box, fitted);
+                                for (size_t k = 0; k < fitted.size(); ++k)
+                                    for (size_t j = 0; j < fitted[k].pts.size(); ++j) {
+                                        const Point& pt = fitted[k].pts[j];
+                                        assert(pt.x >= profile.canvas.x0 && pt.x <= profile.canvas.x1);
+                                        assert(pt.y >= profile.canvas.y0 && pt.y <= profile.canvas.y1);
+                                    }
+                                Picture picture;
+                                for (size_t k = 0; k < fitted.size(); ++k) {
+                                    Item item; item.colour = profile.fill; item.poly = fitted[k]; picture.push_back(item);
+                                }
+                                HudTexts texts; texts.distance = "580"; texts.unit = "m";
+                                Batch expected = display.pictureBatch("expected", picture, texts, false);
+                                assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+                                assert(!display.nearShown() && port.batches.size() == 1);
+                                const Batch& actual = port.batches[0];
+                                assert(actual.calls.size() == expected.calls.size());
+                                for (size_t k = 0; k < actual.calls.size(); ++k) {
+                                    assert(actual.calls[k].fkt == expected.calls[k].fkt);
+                                    assert(actual.calls[k].payload == expected.calls[k].payload);
+                                }
+                                Picture unknown;
+                                assert(!mbxManeuver(spec, profile, unknown) && unknown.empty());
+                                Layout layout;
+                                assert(!junctionLayout(type, angles[a].has, angles[a].value, numbers[n].has,
+                                                       numbers[n].value, profile.glyph, profile.canvas.y1, layout));
+                            }
+            }
+    }
+    unsetenv("NBT_HUD_GLYPH");
+    unsetenv("NBT_HUD_GLYPHS");
+
+    // Moving guidance between HUD and cluster must fit the original profile afresh, without accumulating scale.
+    FakePort port;
+    Hud6waDisplay display(port, k6wa, false);
+    display.setSettings(arrows());
+    NavView v = view(34, "", "580", 1, 580);
+    v.has_exit_number = true; v.exit_number = 4;
+    Shape design;
+    drawShape(shapeFor(34, false, 0), design);
+    digits::drawNumber(4, 500, 190, 460, design);
+    const int moves[] = { 1, 2, 1, 3, 1 };
+    for (size_t i = 0; i < sizeof(moves) / sizeof(moves[0]); ++i) {
+        int index = moves[i];
+        port.mw = widths[index]; port.mh = heights[index];
+        assert(display.showManeuver(v, (double)i, i == 0, true) == ClusterDisplay::kOk);
+        assert(!display.nearShown() && port.batches.size() == i + 1);
+        Shape fitted;
+        fitShape(design, expanded[index], fitted);
+        const Batch& actual = port.batches.back();
+        size_t polygons = 0;
+        for (size_t k = 0; k < actual.calls.size(); ++k) {
+            if (actual.calls[k].fkt != kAddPolygon) continue;
+            assert(polygons < fitted.size());
+            const Poly& poly = fitted[polygons];
+            assert(actual.calls[k].payload == addPolygon(display.visibleBuffer(), (uint16_t)polygons,
+                                                        poly.type, poly.pts));
+            ++polygons;
+        }
+        assert(polygons == fitted.size());
+    }
 }
 
 static void testLanes() {
@@ -1581,6 +1697,7 @@ int main() {
     testMapboxRoundaboutExit();
     testJunctionScaled();
     testDigits();
+    testUnknownRoundabout();
     testLanes();
     testJunctionDriver();
     testJunctionFits();
