@@ -318,7 +318,7 @@ const long        kAutostartDelayS = 15;
 // ActiveSeating intro (libActiveSeating StateTutorial::startWidgetInit: DataTableBase(&map, 1), map[0] = TextID(0x58),
 // updateModel(274, table); state property 24 = 3). Plain labels / Richtext labels are one row, cut at ~34 characters.
 const unsigned    kAboutModel      = 37;
-// Gauge cluster type (rhmiapp-82): three radio buttons, BMW's own pattern (SecurityMenu.xml:1159). The
+// HUD profile (rhmiapp-82): three radio buttons, BMW's own pattern (SecurityMenu.xml:1159). The
 // choice is one word in /var/opt/aa/cluster; nbt-aad reads it when NBT_CLUSTER is unset. 6WB has no display
 // driver yet, so it is offered with that stated and the daemon says so rather than quietly doing 6WA's job.
 const char* const kClusterFlag       = "cluster";
@@ -1840,7 +1840,7 @@ int clusterChoice() {
 void showClusterType(bmw::PluginApp* app) {
     const int sel = clusterChoice();
     for (int i = 0; i < 3; ++i) app->updateModel(kClusterModels[i], i == sel);
-    alog("settings: cluster type %s", sel < 0 ? "(unset: NBT_CLUSTER or j29)" : kClusterValues[sel]);
+    alog("settings: HUD profile %s", sel < 0 ? "(unset: NBT_CLUSTER or j29)" : kClusterValues[sel]);
 }
 
 bool onClusterPick(int which) {

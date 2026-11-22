@@ -325,7 +325,7 @@
           <checkbox action="478" id="481" model="479" text="Nav prompts mixed into Music" textModel="480"/>
           <checkbox action="159" id="162" model="160" text="CarPlay compatibility" textModel="161"/>
           <checkbox action="248" id="249" model="250" text="Disable Favorites Bar"/>
-          <button action="414" id="407" model="400" text="Gauge cluster type"/>
+          <button action="414" id="407" model="400" text="HUD profiles"/>
           <separator id="142"/>
           <button action="132" id="135" model="134" text="Install PF Rules"/>
           <button action="136" id="140" model="138" text="Check PF Rules"/>
@@ -350,7 +350,7 @@
           </label>
         </components>
       </hmiState>
-          <hmiState id="54" parentId="14" text="Gauge cluster type" textModel="400">
+          <hmiState id="54" parentId="14" text="HUD profiles" textModel="400">
         <components>
           <radiobutton action="411" id="408" model="401" text="..." textModel="404"/>
           <radiobutton action="412" id="409" model="402" text="..." textModel="405"/>
