@@ -2,8 +2,8 @@
 This document is going to contain a list of "What's missing", "What's left", and "What do we need to do to get there".
 
 ## Roadmap
-Android Auto Improvements
-- Driver side detection
+~~Android Auto Improvements~~
+~~- Driver side detection~~
 - Toggle which side of the road roundabout directions have
 - GPS
 
@@ -24,7 +24,7 @@ Parking Assistant
 
 Carplay Parity Improvements
 - There may be a few bugs remaining that need to be worked out re: Session creation & Session teardown
-- Looking to get off of layer 1280, and put AA on its own dedicated layer.
+~~- Looking to get off of layer 1280, and put AA on its own dedicated layer.~~
 
 Resolution Upscaling
 - Proposed solution to request higher resolution from the phone, and drop a few rows to improve res.
@@ -36,15 +36,16 @@ USB Support
 - There's three possible solutions, a free FSC installer to enable Carplay (possibly WIP), Move to WiFi Direct hotspot,  USB
 
 Bug Fixes
-- Better Bluetooth pairing (re-pair phone seems to consistently work now)
+~~- Better Bluetooth pairing (re-pair phone seems to consistently work now)~~
 - Verifying multi-tap fix
-- Firewall needs to be modified so we don't straight up disable it
+~~- Firewall needs to be modified so we don't straight up disable it~~
 - Better MyBMW/Supra Connect/MINI App Support
 - Installation Failure
 
 One Click USB Update
 - More discussion needs to be done around this
 - Proposed solution is tar containing releases.tar & nbt-aad
+- likely to use 
 
 Lastly... Installer
 - Enable SSH
