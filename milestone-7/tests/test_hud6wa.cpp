@@ -738,18 +738,17 @@ static void samePolygons(const Shape& actual, size_t offset, const Shape& expect
 }
 
 // Frozen from the approved analytic prototype, not from roundaboutPicture(): three identical curved arrows
-// rotated by 120 degrees, then by 35 degrees, followed by a cloned incoming head and its stem. F30 pixels.
+// rotated by 120 degrees, then by 35 degrees, followed by a plain incoming rectangle. F30 pixels.
 static Shape approvedCirculation() {
-    static const int count[] = {29,29,29,3,4};
+    static const int count[] = {29,29,29,4};
     static const int xy[][58] = {
         {66,8,69,9,72,10,75,11,78,13,80,15,83,18,84,20,86,23,87,26,88,30,88,33,88,36,93,38,84,45,78,35,83,36,83,33,83,31,82,28,81,25,80,23,78,21,77,19,75,17,72,16,70,15,68,14,65,13},
         {83,50,81,53,78,55,75,57,72,58,69,59,66,60,63,60,59,60,56,60,53,59,50,57,47,56,43,59,42,48,53,48,50,51,52,53,55,54,57,54,60,55,62,55,65,55,68,54,70,53,73,52,75,51,77,49,78,47},
         {38,44,37,41,36,37,36,34,36,31,37,28,38,24,39,21,41,19,43,16,45,14,48,12,51,10,49,5,60,10,55,20,53,15,51,16,49,18,47,20,45,22,44,24,43,26,42,29,41,31,41,34,41,37,42,39,43,42},
-        {54,69,62,60,70,69},
-        {59,68,65,68,65,76,59,76}
+        {59,55,65,55,65,76,59,76}
     };
     Shape out;
-    for (size_t i = 0; i < 5; ++i) {
+    for (size_t i = 0; i < 4; ++i) {
         Poly poly; poly.type = kPolygon;
         for (int j = 0; j < count[i]; ++j) poly.pts.push_back(shapes::pt(xy[i][2*j], xy[i][2*j+1]));
         out.push_back(poly);
@@ -804,6 +803,11 @@ static void checkCirculation(const Shape& actual, const HudProfile& p, const Rec
             }
         }
     }
+    const Poly& entrance = actual[3];
+    assert(entrance.pts.size() == 4);     // plain attachment: no incoming arrowhead
+    assert(entrance.pts[0].x == entrance.pts[3].x && entrance.pts[1].x == entrance.pts[2].x);
+    assert(entrance.pts[0].y == entrance.pts[1].y && entrance.pts[2].y == entrance.pts[3].y);
+    assert(entrance.pts[0].x < entrance.pts[1].x && entrance.pts[0].y < entrance.pts[3].y);
     for (size_t i = 0; i < actual.size(); ++i) {
         assert(actual[i].type == kPolygon && actual[i].pts.size() >= 3 && actual[i].pts.size() <= 99);
         assert(area2(actual[i].pts) > 0);
@@ -813,13 +817,13 @@ static void checkCirculation(const Shape& actual, const HudProfile& p, const Rec
         }
     }
     int h = layout.side * (number > 9 ? 18 : 24) / 66;
-    if (number < 1 || number > 99 || h < 6) { assert(actual.size() == 5); return; }
+    if (number < 1 || number > 99 || h < 6) { assert(actual.size() == 4); return; }
     if (standardHud) assert(h == (number > 9 ? 18 : 24));
     Shape expected;
     digits::drawNumber(number, layout.cx, layout.cy - h/2, h, expected);
-    assert(actual.size() == 5 + expected.size());
-    samePolygons(actual, 5, expected);   // the central text is upright in both traffic directions
-    Shape body(actual.begin(), actual.begin()+5), caption(actual.begin()+5, actual.end());
+    assert(actual.size() == 4 + expected.size());
+    samePolygons(actual, 4, expected);   // the central text is upright in both traffic directions
+    Shape body(actual.begin(), actual.begin()+4), caption(actual.begin()+4, actual.end());
     Rect before = boundsForTest(body), after = boundsForTest(actual);
     sameRect(before, after);            // a number cannot enlarge, shrink or displace the ring
     const double hole = 20.0 * layout.side / 66 + 1;

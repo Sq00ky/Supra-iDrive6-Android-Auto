@@ -37,20 +37,16 @@ static const Point kOutline2[] = {
     {-4334,-3149}, {-4696,-2576}, {-4984,-1963}, {-5192,-1319}, {-5317,-653},
     {-5357,23}, {-5311,699}, {-5180,1364}, {-4967,2007}
 };
-// The entrance clones the circular arrow's head and shaft width; it does not turn with traffic direction.
+// The plain entrance starts at the ring's inner edge and keeps the same width as its circular shafts.
 static const Point kOutline3[] = {
-    {-1964,8935}, {0,6732}, {1964,8935}
-};
-static const Point kOutline4[] = {
-    {-688,8679}, {688,8679}, {688,10752}, {-688,10752}
+    {-688,5357}, {688,5357}, {688,10752}, {-688,10752}
 };
 struct Outline { const Point* points; size_t count; };
 static const Outline kOutlines[] = {
     {kOutline0, sizeof(kOutline0) / sizeof(kOutline0[0])},
     {kOutline1, sizeof(kOutline1) / sizeof(kOutline1[0])},
     {kOutline2, sizeof(kOutline2) / sizeof(kOutline2[0])},
-    {kOutline3, sizeof(kOutline3) / sizeof(kOutline3[0])},
-    {kOutline4, sizeof(kOutline4) / sizeof(kOutline4[0])}
+    {kOutline3, sizeof(kOutline3) / sizeof(kOutline3[0])}
 };
 enum { kUnit = 256, kSide = 66, kExtentX = 7962, kMinY = -7345, kMaxY = 10752 };
 
