@@ -695,7 +695,84 @@ static kombinav::AaLane oneLane(int shape, bool take) {
     return kombinav::AaLane(1, kombinav::LaneDirection(shape, take));
 }
 
-// Missing/invalid roundabout angle is not a straight exit: show only the known exit number.
+// Read the actual wire polygons so caption checks do not depend on the production layout helper.
+static Shape packetPolygons(const Batch& batch) {
+    Shape out;
+    for (size_t i = 0; i < batch.calls.size(); ++i) {
+        const Call& c = batch.calls[i];
+        if (c.fkt != kAddPolygon) continue;
+        Poly p; p.type = (PolyType)c.payload[4];
+        for (size_t j = 0; j < c.payload[5]; ++j)
+            p.pts.push_back(shapes::pt((int16_t)rdBe16(&c.payload[6 + j * 4]),
+                                      (int16_t)rdBe16(&c.payload[8 + j * 4])));
+        out.push_back(p);
+    }
+    return out;
+}
+
+static Rect boundsForTest(const Shape& s) {
+    assert(!s.empty() && !s[0].pts.empty());
+    Rect b = {s[0].pts[0].x, s[0].pts[0].y, s[0].pts[0].x, s[0].pts[0].y};
+    for (size_t i = 0; i < s.size(); ++i)
+        for (size_t j = 0; j < s[i].pts.size(); ++j) {
+            b.x0 = std::min(b.x0, s[i].pts[j].x); b.x1 = std::max(b.x1, s[i].pts[j].x);
+            b.y0 = std::min(b.y0, s[i].pts[j].y); b.y1 = std::max(b.y1, s[i].pts[j].y);
+        }
+    return b;
+}
+
+static void samePolygons(const Shape& actual, size_t offset, const Shape& expected, int dx = 0, int dy = 0) {
+    assert(actual.size() >= offset + expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const Poly& a = actual[offset + i]; const Poly& e = expected[i];
+        assert(a.type == e.type && a.pts.size() == e.pts.size());
+        for (size_t j = 0; j < e.pts.size(); ++j) {
+            if (a.pts[j].x != e.pts[j].x + dx || a.pts[j].y != e.pts[j].y + dy)
+                fprintf(stderr, "polygon mismatch offset=%u poly=%u point=%u: actual=%d,%d expected=%d,%d\n",
+                        (unsigned)offset, (unsigned)i, (unsigned)j, a.pts[j].x, a.pts[j].y,
+                        e.pts[j].x + dx, e.pts[j].y + dy);
+            assert(a.pts[j].x == e.pts[j].x + dx && a.pts[j].y == e.pts[j].y + dy);
+        }
+    }
+}
+
+static void checkOutsideCaption(const Shape& actual, const Shape& ring, const Rect& canvas, int number,
+                                bool clockwise, bool standardHud = false) {
+    assert(ring.size() == 3);
+    samePolygons(actual, 0, ring);   // number placement must never resize or move the field-tested body
+    for (size_t i = 0; i < actual.size(); ++i) {
+        assert(area2(actual[i].pts) > 0);
+        for (size_t j = 0; j < actual[i].pts.size(); ++j) {
+            const Point& pt = actual[i].pts[j];
+            assert(pt.x >= canvas.x0 && pt.x <= canvas.x1 && pt.y >= canvas.y0 && pt.y <= canvas.y1);
+        }
+    }
+    if (!number) { assert(actual.size() == 3); return; }
+    assert(actual.size() > 3);
+    Shape caption(actual.begin() + 3, actual.end());
+    Rect body = boundsForTest(ring), ink = boundsForTest(caption);
+    assert(ink.x1 <= body.x0 - 2 || ink.x0 >= body.x1 + 2);   // outside, with a visible gap
+    int h = ink.y1 - ink.y0;
+    assert(h >= 6);
+    Shape text;
+    digits::drawNumber(number, 0, 0, h, text);
+    assert(caption.size() == text.size());
+    int dx = caption[0].pts[0].x - text[0].pts[0].x;
+    int dy = caption[0].pts[0].y - text[0].pts[0].y;
+    samePolygons(caption, 0, text, dx, dy);   // LHT changes the side, never mirrors the glyphs
+    if (standardHud) {
+        Shape expected;
+        int height = number > 9 ? 22 : 30;
+        int cx = clockwise ? (number > 9 ? 104 : 99) : (number > 9 ? 20 : 24);
+        digits::drawNumber(number, cx, 72 - height, height, expected);
+        assert(caption.size() == expected.size());
+        samePolygons(caption, 0, expected);
+        assert(h == height);
+        assert(clockwise ? ink.x0 > body.x1 : ink.x1 < body.x0);
+    }
+}
+
+// Missing/invalid roundabout angle is not a straight exit: the body is unchanged, its known number is outside.
 static void testUnknownRoundabout() {
     assert(shapeFor(34, false, 0).exit == 0);
     assert(describeSpec(shapeFor(34, false, 0)) == "roundabout ccw exit unknown");
@@ -735,39 +812,14 @@ static void testUnknownRoundabout() {
                                 ShapeSpec spec = shapeFor(type, angles[a].has, angles[a].value);
                                 assert(spec.exit == 0);
                                 drawShape(spec, design);
-                                assert(design.size() == 3);   // entry stem and ring halves, no invented exit arrow
-                                int x0 = 1000, x1 = 0;
-                                for (size_t k = 0; k < design.size(); ++k)
-                                    for (size_t j = 0; j < design[k].pts.size(); ++j) {
-                                        x0 = std::min(x0, (int)design[k].pts[j].x);
-                                        x1 = std::max(x1, (int)design[k].pts[j].x);
-                                    }
-                                assert(x1 - x0 == 780);
-                                if (numbers[n].shown) {
-                                    int h = numbers[n].shown > 9 ? 340 : 460;
-                                    digits::drawNumber(numbers[n].shown, 500, 420 - h / 2, h, design);
-                                }
+                                assert(design.size() == 3);
+                                Rect designBounds = boundsForTest(design);
+                                assert(designBounds.x1 - designBounds.x0 == 780);
                                 fitShape(design, box, fitted);
-                                for (size_t k = 0; k < fitted.size(); ++k)
-                                    for (size_t j = 0; j < fitted[k].pts.size(); ++j) {
-                                        const Point& pt = fitted[k].pts[j];
-                                        assert(pt.x >= profile.canvas.x0 && pt.x <= profile.canvas.x1);
-                                        assert(pt.y >= profile.canvas.y0 && pt.y <= profile.canvas.y1);
-                                    }
-                                Picture picture;
-                                for (size_t k = 0; k < fitted.size(); ++k) {
-                                    Item item; item.colour = profile.fill; item.poly = fitted[k]; picture.push_back(item);
-                                }
-                                HudTexts texts; texts.distance = "580"; texts.unit = "m";
-                                Batch expected = display.pictureBatch("expected", picture, texts, false);
                                 assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
                                 assert(!display.nearShown() && port.batches.size() == 1);
-                                const Batch& actual = port.batches[0];
-                                assert(actual.calls.size() == expected.calls.size());
-                                for (size_t k = 0; k < actual.calls.size(); ++k) {
-                                    assert(actual.calls[k].fkt == expected.calls[k].fkt);
-                                    assert(actual.calls[k].payload == expected.calls[k].payload);
-                                }
+                                checkOutsideCaption(packetPolygons(port.batches[0]), fitted, profile.canvas,
+                                                    numbers[n].shown, spec.clockwise, measured == 1 && !pinned);
                                 Picture unknown;
                                 assert(!mbxManeuver(spec, profile, unknown) && unknown.empty());
                                 Layout layout;
@@ -787,7 +839,6 @@ static void testUnknownRoundabout() {
     v.has_exit_number = true; v.exit_number = 4;
     Shape design;
     drawShape(shapeFor(34, false, 0), design);
-    digits::drawNumber(4, 500, 190, 460, design);
     const int moves[] = { 1, 2, 1, 3, 1 };
     for (size_t i = 0; i < sizeof(moves) / sizeof(moves[0]); ++i) {
         int index = moves[i];
@@ -796,18 +847,66 @@ static void testUnknownRoundabout() {
         assert(!display.nearShown() && port.batches.size() == i + 1);
         Shape fitted;
         fitShape(design, expanded[index], fitted);
-        const Batch& actual = port.batches.back();
-        size_t polygons = 0;
-        for (size_t k = 0; k < actual.calls.size(); ++k) {
-            if (actual.calls[k].fkt != kAddPolygon) continue;
-            assert(polygons < fitted.size());
-            const Poly& poly = fitted[polygons];
-            assert(actual.calls[k].payload == addPolygon(display.visibleBuffer(), (uint16_t)polygons,
-                                                        poly.type, poly.pts));
-            ++polygons;
-        }
-        assert(polygons == fitted.size());
+        HudProfile profile = k6wa; fitMeasured(widths[index], heights[index], profile);
+        checkOutsideCaption(packetPolygons(port.batches.back()), fitted, profile.canvas, 4, false, index == 1);
     }
+}
+
+static void testUnknownCanvasPins() {
+    unsetenv("NBT_HUD_GLYPH");
+    const char* pins[] = { "70 20 170 120", "10 20 135 96" };
+    const Rect expected[] = { {70,20,170,120}, {39,29,105,95} };
+    for (size_t p = 0; p < sizeof(pins) / sizeof(pins[0]); ++p) {
+        setenv("NBT_HUD_CANVAS", pins[p], 1);
+        HudProfile profile = k6wa; applyHudEnv(profile);
+        for (int type = 33; type <= 34; ++type) {
+            FakePort port; Hud6waDisplay display(port, profile, false); display.setSettings(arrows());
+            NavView v = view(type, "", "80", 1, 80); v.has_exit_number = true; v.exit_number = 7;
+            assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+            Shape design, fitted; drawShape(shapeFor(type, false, 0), design); fitShape(design, expected[p], fitted);
+            checkOutsideCaption(packetPolygons(port.batches.back()), fitted, profile.canvas, 7, type == 33);
+        }
+    }
+    // A glyph pin wins even inside a translated canvas; only the caption is placed in the remaining space.
+    setenv("NBT_HUD_CANVAS", "10 20 135 96", 1);
+    setenv("NBT_HUD_GLYPH", "40 30 70 60", 1);
+    HudProfile profile = k6wa; applyHudEnv(profile);
+    FakePort port; Hud6waDisplay display(port, profile, false); display.setSettings(arrows());
+    NavView v = view(34, "", "80", 1, 80); v.has_exit_number = true; v.exit_number = 12;
+    assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    Shape design, fitted; drawShape(shapeFor(34, false, 0), design); fitShape(design, profile.glyph, fitted);
+    checkOutsideCaption(packetPolygons(port.batches.back()), fitted, profile.canvas, 12, false);
+    unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_CANVAS");
+}
+
+static void testOutsideNumber() {
+    const Rect body = {36,11,88,72}, canvas = {0,0,125,76};
+    const int numbers[] = {1,2,3,4,5,6,7,8,12,99};
+    for (size_t n = 0; n < sizeof(numbers) / sizeof(numbers[0]); ++n)
+        for (int cw = 0; cw <= 1; ++cw) {
+            int number = numbers[n], h = number > 9 ? 22 : 30;
+            Shape caption;
+            assert(digits::drawOutsideNumber(number, body, canvas, 72, h, cw != 0, caption));
+            Shape expected;
+            int cx = cw ? (number > 9 ? 104 : 99) : (number > 9 ? 20 : 24);
+            digits::drawNumber(number, cx, 72 - h, h, expected);
+            assert(caption.size() == expected.size()); samePolygons(caption, 0, expected);
+        }
+    Shape sentinel; digits::drawNumber(7, 10, 10, 8, sentinel);
+    const Shape original = sentinel;
+    const int invalid[] = {-1,0,100};
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        assert(!digits::drawOutsideNumber(invalid[i], body, canvas, 72, 30, false, sentinel));
+        assert(sentinel.size() == original.size()); samePolygons(sentinel, 0, original);
+    }
+    assert(!digits::drawOutsideNumber(5, body, body, 72, 30, false, sentinel));
+    assert(!digits::drawOutsideNumber(5, body, canvas, 72, 5, false, sentinel));
+    assert(sentinel.size() == original.size()); samePolygons(sentinel, 0, original);
+    Shape moved;
+    const Rect againstLeft = {2,11,54,72};
+    assert(digits::drawOutsideNumber(7, againstLeft, canvas, 72, 30, false, moved));
+    Shape expected; digits::drawNumber(7, 65, 42, 30, expected);
+    assert(moved.size() == expected.size()); samePolygons(moved, 0, expected);   // use the other side before shrinking
 }
 
 static void testLanes() {
@@ -1698,6 +1797,8 @@ int main() {
     testJunctionScaled();
     testDigits();
     testUnknownRoundabout();
+    testUnknownCanvasPins();
+    testOutsideNumber();
     testLanes();
     testJunctionDriver();
     testJunctionFits();

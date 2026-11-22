@@ -273,6 +273,20 @@ inline void fitShape(const Shape& in, const Rect& box, Shape& out) {
         }
 }
 
+inline bool shapeBounds(const Shape& shape, Rect& box) {
+    bool found = false;
+    for (size_t i = 0; i < shape.size(); ++i)
+        for (size_t j = 0; j < shape[i].pts.size(); ++j) {
+            const Point& p = shape[i].pts[j];
+            if (!found) { box = Rect{ p.x, p.y, p.x, p.y }; found = true; }
+            if (p.x < box.x0) box.x0 = p.x;
+            if (p.x > box.x1) box.x1 = p.x;
+            if (p.y < box.y0) box.y0 = p.y;
+            if (p.y > box.y1) box.y1 = p.y;
+        }
+    return found;
+}
+
 } // namespace hudterm
 } // namespace nbt
 

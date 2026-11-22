@@ -74,6 +74,31 @@ inline void drawNumber(int n, int cx, int y0, int h, Shape& out) {
     }
 }
 
+// Pixel-space caption outside the white glyph's exclusion box. Mirror the side for left-hand traffic, not the digits.
+// Try both sides at the requested height before shrinking for a tight manual canvas; never move the glyph itself.
+inline bool drawOutsideNumber(int n, const Rect& occupied, const Rect& canvas, int baseline, int wantedHeight,
+                              bool clockwise, Shape& out) {
+    if (n < 1 || n > 99) return false;
+    int h = wantedHeight;
+    if (h > canvas.y1 - canvas.y0) h = canvas.y1 - canvas.y0;
+    for (; h >= 6; --h) {   // below six pixels the polygon stroke cannot reliably retain a full pixel
+        int w = width(h) * (n > 9 ? 2 : 1) + (n > 9 ? gap(h) : 0);
+        int space = h / 10;
+        if (space < 2) space = 2;
+        int y = baseline - h;
+        if (y < canvas.y0) y = canvas.y0;
+        if (y + h > canvas.y1) y = canvas.y1 - h;
+        for (int side = 0; side < 2; ++side) {
+            bool right = clockwise != (side != 0);
+            int x = right ? occupied.x1 + space : occupied.x0 - space - w;
+            if (x < canvas.x0 || x + w > canvas.x1) continue;
+            drawNumber(n, x + w / 2, y, h, out);
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace digits
 } // namespace hudterm
 } // namespace nbt
