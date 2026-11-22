@@ -362,8 +362,9 @@ inline std::string describeCall(const Call& c) {
 // ---- the cluster's copies of our answers ----
 
 // The cluster answers each of our calls twice: to us, and with the same function and handle to the factory
-// navigation's address, in the same millisecond (car, S19). The copy is matched on function and handle within the
-// reply timeout, not on the whole payload: the answer to a text leaves out the 00 00 we send. A real navigation answer
+// navigation's address, in the same millisecond (car, S19); a cold cluster answers late, the copy first. The copy is
+// matched on function and handle within a short window of the call or of our answer (hudterm::Config::copyMs), not on
+// the whole payload: the answer to a text leaves out the 00 00 we send. A real navigation answer
 // that happens to share a function and handle with one of our calls in that window is taken for a copy; the navigation
 // sends many calls at the start of a route, so the next one is seen.
 class RecentCalls {
