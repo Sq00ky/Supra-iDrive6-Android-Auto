@@ -123,21 +123,32 @@ int main() {
     {
         FocusVolumeQuiet q;
         CHECK(!q.quiet(0));
-        q.setBusy(false, 500);   // nothing was in flight: no window
+        q.set(false, false, 500);   // nothing was in flight: no window
         CHECK(!q.quiet(500));
-        q.setBusy(true, 1000);
+        q.set(true, false, 1000);
         CHECK(q.quiet(1000));
         CHECK(q.quiet(9000));
-        q.setBusy(true, 9500);   // still in flight: the window has not started
-        q.setBusy(false, 10000);
+        q.set(true, false, 9500);   // still in flight: the window has not started
+        q.set(false, false, 10000);
         CHECK(q.quiet(11500));
         CHECK(!q.quiet(11501));
-        q.setBusy(false, 12000);
+        q.set(false, false, 12000);
         CHECK(!q.quiet(12000));
-        q.setBusy(true, 13000);
-        q.setBusy(false, 13100);
+        q.set(true, false, 13000);
+        q.set(false, false, 13100);
         CHECK(q.quiet(14600));
         CHECK(!q.quiet(14601));
+    }
+
+    // 10. Volume pill: whether our nav prompt focus is routed, apart from the quiet window.
+    {
+        FocusVolumeQuiet q;
+        CHECK(!q.routed());
+        q.set(false, true, 100);
+        CHECK(q.routed());
+        CHECK(!q.quiet(100));
+        q.set(true, false, 200);
+        CHECK(!q.routed());
     }
 
     if (fails) { printf("test_nav_prompt_policy: %d failure(s)\n", fails); return 1; }

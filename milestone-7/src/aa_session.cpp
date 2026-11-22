@@ -11,6 +11,7 @@
 #include "aa_session.hpp"
 #include "aa_manifest.hpp"
 #include "aa_control_msgs.hpp"
+#include "aa_phone_status.hpp"
 #include "aa_proto.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
@@ -105,6 +106,8 @@ AASession::AASession()
     nav_user_data_ = NULL;
     media_cb_ = NULL;
     media_user_data_ = NULL;
+    phone_cb_ = NULL;
+    phone_user_data_ = NULL;
     mic_open_ = false;
     mic_sent_ = 0;
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
@@ -272,6 +275,11 @@ void AASession::setNavStatusCallback(NavStatusCallback cb, void* user_data) {
 void AASession::setMediaStatusCallback(MediaStatusCallback cb, void* user_data) {
     media_cb_ = cb;
     media_user_data_ = user_data;
+}
+
+void AASession::setPhoneCallCallback(PhoneCallCallback cb, void* user_data) {
+    phone_cb_ = cb;
+    phone_user_data_ = user_data;
 }
 
 bool AASession::micOpen() {
@@ -1467,6 +1475,12 @@ void AASession::sessionLoop() {
                 if (media_cb_)
                     media_cb_(msg_id, frame_data.size() > 2 ? &frame_data[2] : NULL,
                               frame_data.size() > 2 ? frame_data.size() - 2 : 0, media_user_data_);
+            } else if (channel == AA_CH_PHONE_STATUS && msg_id >= 0x8000) {
+                // Phone status: calls and their state. Not an AV channel, so its 0x8001 must not reach the AV start below.
+                if (msg_id == 0x8001 && phone_cb_)
+                    phone_cb_(aaPhoneInCall(frame_data.size() > 2 ? &frame_data[2] : NULL,
+                                            frame_data.size() > 2 ? frame_data.size() - 2 : 0),
+                              phone_user_data_);
             } else if (channel == AA_CH_MEDIA_BROWSER) {
                 // Media browser probe (NBT_AA_BROWSE=1, sdr_builder addMediaBrowserProbe): the phone only opens this
                 // channel if it still serves the service. Log everything it sends, so one drive answers whether a browse

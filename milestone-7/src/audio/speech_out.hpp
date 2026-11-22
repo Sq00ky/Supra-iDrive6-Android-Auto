@@ -78,7 +78,7 @@ private:
     void setFeed(bool on);
     void flush();
     size_t queuedBytes() const;
-    void setFocusBusy(bool busy, uint64_t now);
+    void setFocusState(bool busy, bool routed, uint64_t now);
     void openEndpoint();
     void closeEndpoint();
     uint32_t endpointWrites() const;
