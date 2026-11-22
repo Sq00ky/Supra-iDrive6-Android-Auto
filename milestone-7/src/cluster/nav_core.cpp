@@ -49,8 +49,8 @@ volatile int g_mayShow = 0;   // an arrow may be up: the fatal-signal handler se
 Core::Core(ClusterDisplay& d, const Settings& s, LogFn log, void* log_user)
     : d_(d), s_(s), log_fn_(log), log_user_(log_user), has_shown_(false), last_dist_t_(0), off_(false), off_since_(0),
       no_dist_(false), no_dist_since_(0), last_cancel_ok_(true), stop_(kRunning), have_next_(false), next_since_(0),
-      stage_(kHidden), timed_(false), remind_(false), fallback_(false), drawn_step_seq_(0), has_min_m_(false),
-      min_m_(0), renew_(false), depart_(false), idle_shown_(false), idle_since_(0) {
+      stage_(kHidden), timed_(false), remind_(false), fallback_(false), idle_shown_(false), idle_since_(0),
+      drawn_step_seq_(0), has_min_m_(false), min_m_(0), renew_(false), depart_(false) {
     d_.setSettings(s);
     d_.setLog(log, log_user);
 }
@@ -485,11 +485,17 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         shadow_ = h && *h && strcmp(h, "on") != 0;
         if (shadow_ && strcmp(h, "log") != 0)
             printf("[KombiNav] NBT_HUDTERM=%s unknown (log, on): shadow mode, nothing is sent\n", h);
-        const hudterm::HudProfile& p = hudterm::k6wa;
+        hudterm::HudProfile p = hudterm::k6wa;   // a copy: env can retune the box on the car without a rebuild
+        hudterm::applyHudEnv(p);
+        printf("[KombiNav] HUD 6wa: start canvas %d,%d-%d,%d glyph %d,%d-%d,%d fill %u (fitted to the cluster's own "
+               "picture buffer at start; NBT_HUD_CANVAS/GLYPH/FILL pin it)\n",
+               p.canvas.x0, p.canvas.y0, p.canvas.x1, p.canvas.y1,
+               p.glyph.x0, p.glyph.y0, p.glyph.x1, p.glyph.y1, (unsigned)p.fill);
         hudterm::Config c;
         c.handles = hudterm::handlesOf(p);
         c.navFrame = p.frame;
         c.logBatches = !shadow_;
+        c.measureHandle = shadow_ ? 0 : p.bufA;   // ask the buffer's real size once ready; the display fits the box to it
         terminal_ = new hudterm::HudTerminal(c);   // never deleted before exit once attached: the client calls it
         if (!most->requireConsumer("HUDTerminal", terminal_->attach(*most, !shadow_) && terminal_->start())) {
             printf("[KombiNav] cannot attach the HUDTerminal to the MOST client: cluster arrows disabled\n");

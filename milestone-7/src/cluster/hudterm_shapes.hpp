@@ -49,9 +49,11 @@ struct ShapeSpec {
     int stub;         // arrow: the road not taken, degrees like angle, or kNoStub
     bool clockwise;   // roundabout: the direction of travel round it
     int exit;         // roundabout: degrees from the entry to the exit in the direction of travel, 1..360
-    ShapeSpec() : kind(kShapeArrow), angle(0), stub(kNoStub), clockwise(false), exit(180) {}
+    int aa_type;      // the original Android Auto maneuver type, for the Mapbox glyph picker (0 = unset)
+    ShapeSpec() : kind(kShapeArrow), angle(0), stub(kNoStub), clockwise(false), exit(180), aa_type(0) {}
     bool operator==(const ShapeSpec& o) const {
-        return kind == o.kind && angle == o.angle && stub == o.stub && clockwise == o.clockwise && exit == o.exit;
+        return kind == o.kind && angle == o.angle && stub == o.stub && clockwise == o.clockwise && exit == o.exit
+            && aa_type == o.aa_type;
     }
     bool operator!=(const ShapeSpec& o) const { return !(*this == o); }
 };
@@ -89,6 +91,7 @@ inline int mulTrig(int r, int f) {
 // the 6WA and the J29 read a maneuver the same way.
 inline ShapeSpec shapeFor(int aa_type, bool has_exit_angle, int64_t exit_angle) {
     ShapeSpec s;
+    s.aa_type = aa_type;
     switch (kombinav::kombiDirection(aa_type)) {
         case 2: s.angle = -45; break;                             // slight left, keep left
         case 3: s.angle = 45; break;

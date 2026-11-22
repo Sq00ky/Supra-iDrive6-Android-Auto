@@ -22,6 +22,8 @@
 #include "cluster/hudterm_shapes.hpp"
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 namespace nbt {
 namespace hudterm {
@@ -43,6 +45,9 @@ struct HudProfile {
     size_t streetChars;        // longest street text
     size_t distanceChars;      // longest distance text
     const char* streetPunct;   // punctuation kept in a street name (toClusterText); anything else becomes a space
+    uint16_t hide[8];          // handles the cluster draws itself over the panel during guidance (e.g. 0x15/0x16, the
+    int nHide;                 // narrow strips by the distance): SetVisibility-off'd on every picture and distance
+                               // update. 0 = none; set by NBT_HUD_HIDE "21 22". Same idea as carplay-advanced hud_hide.
 };
 
 // The 6WA, as our F20 showed it:
@@ -65,9 +70,12 @@ const HudProfile k6wa = {
     9, 10,
     4,
     7, 3, 4,
-    { 0, 0, 199, 129 },
-    { 70, 20, 170, 120 },
-    { 4, 22, 68, 48 },
+    { 0, 0, 199, 129 },    // canvas: the F20's (above); a cluster that answers ImageGetSize gets its own (fitMeasured).
+    { 70, 20, 170, 120 },  // glyph: the F20's; moved only where a measured buffer would cut it off (fitMeasured).
+                           // Both stay the fallback for a cluster that does not answer. Pin either at the car:
+                           // NBT_HUD_CANVAS / NBT_HUD_GLYPH "x0 y0 x1 y1".
+    { 0, 0, 183, 16 },     // lanes: the laneA/laneB handles (9/10) measured 184x17; override NBT_HUD_LANES_BOX.
+                           // Lanes draw only with NBT_HUD_LANES=1 (hud_lanes); this is a starting box to tune on the car.
     32,
     8,
     "-./",
@@ -90,7 +98,57 @@ inline HandleSet handlesOf(const HudProfile& p) {
         h.allow(p.laneA);
         h.allow(p.laneB);
     }
+    for (int i = 0; i < p.nHide; i++) h.allow(p.hide[i]);   // the surfaces we SetVisibility-off (NBT_HUD_HIDE)
     return h;
+}
+
+// On-car tuning without a rebuild: the cluster's exact buffer and the arrow's box are hardware, found by eye on the
+// car. NBT_HUD_CANVAS / NBT_HUD_GLYPH = "x0 y0 x1 y1" (inclusive); NBT_HUD_FILL = colour index. Unset -> the measured
+// defaults above. Same idea as the carplay-advanced hud_box switch that fixed CarPlay on this cluster.
+inline bool parseRect(const char* s, Rect& r) {
+    if (!s || !*s) return false;
+    int a, b, c, d;
+    if (sscanf(s, "%d %d %d %d", &a, &b, &c, &d) != 4) return false;
+    r.x0 = (int16_t)a; r.y0 = (int16_t)b; r.x1 = (int16_t)c; r.y1 = (int16_t)d;
+    return true;
+}
+
+inline void applyHudEnv(HudProfile& p) {
+    Rect r;
+    if (parseRect(getenv("NBT_HUD_CANVAS"), r)) p.canvas = r;
+    if (parseRect(getenv("NBT_HUD_GLYPH"), r))  p.glyph = r;
+    if (parseRect(getenv("NBT_HUD_LANES_BOX"), r)) p.lanes = r;
+    const char* f = getenv("NBT_HUD_FILL");
+    if (f && *f) p.fill = (uint8_t)atoi(f);
+    // NBT_HUD_HIDE "21 22": handles (decimal) the cluster draws over the panel itself -> SetVisibility-off each picture.
+    const char* hd = getenv("NBT_HUD_HIDE");
+    if (hd && *hd) {
+        p.nHide = 0;
+        for (const char* s = hd; *s && p.nHide < 8; ) {
+            while (*s && (*s < '0' || *s > '9')) ++s;   // any separator (space, comma): space-free env values are safe
+            if (!*s) break;
+            int v = atoi(s);
+            if (v > 0 && v <= 255) p.hide[p.nHide++] = (uint16_t)v;
+            while (*s >= '0' && *s <= '9') ++s;
+        }
+    }
+}
+
+// Fit the measured buffer, keeping the F20 fallback unless its box is cut off or the measured field is the F30
+// cluster's 176x126. sabifa's factory captures (#264) put the HUD arrow at 37,23..82,68 on 126x77, and the cluster
+// arrow near 50,36..121,113: the same proportional box fits both. Round to the nearest pixel when scaling it.
+// Env pins win; no answer keeps the original F20 profile.
+inline void fitMeasured(int w, int h, HudProfile& p) {
+    if (w <= 0 || h <= 0) return;
+    if (!getenv("NBT_HUD_CANVAS")) {
+        p.canvas.x0 = 0; p.canvas.y0 = 0;
+        p.canvas.x1 = (int16_t)(w - 1); p.canvas.y1 = (int16_t)(h - 1);
+    }
+    bool cut = p.glyph.x0 < 0 || p.glyph.y0 < 0 || p.glyph.x1 >= w || p.glyph.y1 >= h;
+    if ((cut || (w == 176 && h == 126)) && !getenv("NBT_HUD_GLYPH")) {
+        p.glyph.x0 = (int16_t)((w * 37 + 63) / 126); p.glyph.x1 = (int16_t)((w * 82 + 63) / 126);
+        p.glyph.y0 = (int16_t)((h * 23 + 38) / 77);  p.glyph.y1 = (int16_t)((h * 68 + 38) / 77);
+    }
 }
 
 } // namespace hudterm

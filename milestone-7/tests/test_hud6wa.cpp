@@ -11,9 +11,11 @@
 //     sends to 82/00
 // Every road name and distance here is invented.
 #include "cluster/nav_core.hpp"
+#include "cluster/mapbox_hud.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <algorithm>
+#include <math.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +44,11 @@ struct FakePort : public Port {
     int resets;
     Status afterReset;
     std::vector<Batch> batches;
-    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady) {}
+    int mw, mh;              // the picture buffer's size once "measured" (ImageGetSize); 0 = no answer
+    bool claimable;          // claim() takes the HUD from the navigation we yield to
+    int claims;
+    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady), mw(0),
+                 mh(0), claimable(false), claims(0) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
         for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(k6wa)));
@@ -55,6 +61,8 @@ struct FakePort : public Port {
     bool waiting(int) const { return wait; }
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
+    bool measuredSize(int& w, int& h) const { if (!mw) return false; w = mw; h = mh; return true; }
+    bool claim() { ++claims; if (st == kNavActive && claimable) st = kReady; return st == kReady; }
 };
 
 static std::vector<std::string> g_log;
@@ -521,6 +529,8 @@ static void testJunctionGeometry() {
                     continue;
                 }
                 assert(has && L.maxTail >= 8 && !L.roads.empty());
+                assert(junctionFits(L, Hud6waDisplay::kStages, k6wa.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, k6wa.glyph,
+                                    k6wa.canvas.y1 + 1));   // the display's guard agrees (the F20: no scaling)
                 ++views;
                 Picture roads;
                 drawRoads(L, c, kJunctionStyle, roads);
@@ -569,6 +579,93 @@ static void testJunctionGeometry() {
             assert(false);
         }
     }
+}
+
+// Mapbox glyphs (cluster/mapbox_hud.hpp) are opt-in: unset or off draws the parametric shapes the tests above count;
+// on, every maneuver they have a picture for comes as valid convex pieces near the canvas.
+static void testMapboxGlyphs() {
+    Picture none;
+    unsetenv("NBT_HUD_GLYPHS");
+    assert(!mbxManeuver(shapeFor(8, false, 0), k6wa, none) && none.empty());   // default: the parametric shape
+    setenv("NBT_HUD_GLYPHS", "off", 1);
+    assert(!mbxManeuver(shapeFor(8, false, 0), k6wa, none) && none.empty());
+    setenv("NBT_HUD_GLYPHS", "1", 1);
+    int drawn = 0;
+    for (int t = 0; t <= 60; ++t)
+        for (int a = 0; a <= 360; a += 90) {
+            Picture pic;
+            if (!mbxManeuver(shapeFor(t, true, a), k6wa, pic)) continue;
+            char what[48];
+            snprintf(what, sizeof(what), "glyph type %d angle %d", t, a);
+            checkPicture(pic, what);
+            ++drawn;
+        }
+    unsetenv("NBT_HUD_GLYPHS");
+    assert(drawn > 0);
+    printf("  Mapbox glyphs: opt-in, %d pictures valid\n", drawn);
+}
+
+// AA exit angles are measured from the entry, for both traffic directions; CarPlay uses a heading instead.
+static void testMapboxRoundaboutExit() {
+    HudProfile profiles[] = { k6wa, k6wa };
+    fitMeasured(126, 77, profiles[1]);
+    for (size_t p = 0; p < sizeof(profiles) / sizeof(profiles[0]); ++p)
+        for (int cw = 0; cw <= 1; ++cw)
+            for (int angle = 1; angle <= 360; ++angle) {
+                Picture pic;
+                mbxRoundabout(angle, cw != 0, profiles[p], pic);
+                checkPicture(pic, "Mapbox roundabout");
+                rb::P16 c = rb::centre(angle);
+                Point centre = mbxPoint(rb::boxX(c.x), rb::boxY(c.y), cw != 0, profiles[p].glyph);
+                Point tip = centre;
+                long farthest = 0;
+                for (size_t i = 0; i < pic.size(); ++i)
+                    for (size_t j = 0; j < pic[i].poly.pts.size(); ++j) {
+                        Point q = pic[i].poly.pts[j];
+                        long dx = q.x - centre.x, dy = q.y - centre.y, distance = dx * dx + dy * dy;
+                        if (distance > farthest) { farthest = distance; tip = q; }
+                    }
+                double rad = angle * 3.141592653589793 / 180;
+                double x = sin(rad) * (cw ? -1 : 1), y = cos(rad);
+                int dx = tip.x - centre.x, dy = tip.y - centre.y;
+                assert(dx * x + dy * y > 20);
+                assert(fabs(dx * y - dy * x) < 2);
+            }
+}
+
+// sabifa's test (#264), on a 6WA with a HUD (a 120 x 72 picture, the factory arrow box 37,23-82,68): the junction
+// view, laid out on the F20 and scaled onto it, keeps the route's arrowhead on the canvas, the ring and the roads
+// no wider than the factory's here (roads 11, the route 6), and every item a valid call.
+static void testJunctionScaled() {
+    HudProfile p = k6wa;
+    const Rect canvas = { 0, 0, 119, 71 }, glyph = { 37, 23, 82, 68 };
+    p.canvas = canvas;
+    p.glyph = glyph;
+    const JunctionColours c = { 7, 3, 4 };
+    for (int t = 0; t <= 60; ++t) {
+        Layout L;
+        if (!junctionLayout(t, true, 90, true, 2, k6wa.glyph, k6wa.canvas.y1, L)) continue;
+        Picture pic;
+        drawRoads(L, c, kJunctionStyle, pic);
+        drawRoute(L, L.maxTail, c, kJunctionStyle, pic);
+        fitPicture(pic, k6wa.glyph, k6wa.canvas.y1 + 1, p.glyph, p.canvas.y1 + 1);
+        for (size_t i = 0; i < pic.size(); ++i)
+            assert(payloadShapeOk(kAddPolygon, addPolygon(5, (uint16_t)i, pic[i].poly.type, pic[i].poly.pts)));
+        const Poly& route = pic.back().poly;
+        const Point& tip = route.pts[(route.pts.size() - 3) / 2 + 1];
+        if (tip.x < p.canvas.x0 || tip.x > p.canvas.x1 || tip.y < p.canvas.y0 || tip.y > p.canvas.y1) {
+            printf("type %d: route tip at %d,%d off the 120 x 72 canvas\n", t, tip.x, tip.y);
+            assert(false);
+        }
+    }
+    Picture one;
+    Item it;
+    it.colour = 4;
+    it.poly = shapes::bar(120, 129, 0, 100, kJunctionStyle.roadW);    // a road on the F20, 22 wide
+    one.push_back(it);
+    fitPicture(one, k6wa.glyph, k6wa.canvas.y1 + 1, p.glyph, p.canvas.y1 + 1);
+    int w = one[0].poly.pts[3].x - one[0].poly.pts[0].x;
+    assert(w >= 11 && w <= 13);                                     // 22 * 72 / 130
 }
 
 static void testDigits() {
@@ -646,6 +743,82 @@ static size_t fills(const Batch& b) {
 // The near stage through the driver: the arrow first, the junction view (roads in 5/6, route in 7/8) at the main
 // prompt, the route's stages on the way in, held while a route waits, all drawn again after lost work, the route
 // emptied for the next maneuver's arrow, and the clear putting 7/8 back.
+// The display's guard (cluster/hudterm_junction.hpp junctionFits) checks what is drawn: the junction laid out on the
+// F20 and scaled onto the picture area (fitPicture). Counted below on the F30's 126x77 HUD. With the glyph box against
+// the canvas's edge some arrowheads leave it, and near those the display keeps the plain arrow (and says so) instead of
+// a junction view with its way cut off. A buffer measured while a view is up drops that view, laid out for the old one.
+static void testJunctionFits() {
+    const int st = Hud6waDisplay::kStages;
+    HudProfile hud = k6wa;
+    fitMeasured(126, 77, hud);
+    HudProfile edge = hud;
+    const Rect corner = { 95, 46, 125, 76 };                     // the glyph box in the canvas's bottom-right corner
+    edge.glyph = corner;
+    int fits = 0, cut = 0, edgeCut = 0, cutType = -1, cutAngle = 0;
+    for (int t = 0; t <= 60; ++t)
+        for (int a = 0; a <= 360; a += 45) {
+            Layout L;
+            if (!junctionLayout(t, true, a, false, 0, k6wa.glyph, k6wa.canvas.y1, L)) continue;   // as the display does
+            if (junctionFits(L, st, hud.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, hud.glyph, hud.canvas.y1 + 1))
+                ++fits;
+            else
+                ++cut;
+            if (!junctionFits(L, st, edge.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, edge.glyph, edge.canvas.y1 + 1)) {
+                if (cutType < 0) { cutType = t; cutAngle = a; }
+                ++edgeCut;
+            }
+        }
+    assert(fits > 0 && edgeCut > 0);
+
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, edge, false);
+    d.setLog(&logFn, NULL);
+    NavView v = timed(cutType, "Testroad", "300", 7, 280, 19);    // near: the junction view would be due
+    v.has_exit_angle = true;
+    v.exit_angle = cutAngle;
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(!d.nearShown() && logged("junction view would leave the 126x77 picture buffer"));
+
+    g_log.clear();
+    FakePort port2;
+    Hud6waDisplay d2(port2, k6wa, false);
+    d2.setLog(&logFn, NULL);
+    NavView w = timed(8, "Testroad", "300", 7, 280, 19);
+    assert(d2.showManeuver(w, 0, true, true) == ClusterDisplay::kOk && d2.nearShown());   // the F20 field: it fits
+    port2.mw = 126;                                                         // the terminal answers ImageGetSize
+    port2.mh = 77;
+    assert(d2.showManeuver(w, 1, false, false) == ClusterDisplay::kOk);   // whose health check takes the measure
+    assert(logged("HUD picture buffer measured 126x77") && !d2.nearShown());
+    printf("  junctionFits scaled onto 126x77: %d fit, %d plain arrow; box in the corner: %d plain arrow (first type %d"
+           " angle %d); a re-measure drops the view\n", fits, cut, edgeCut, cutType, cutAngle);
+}
+
+// The guidance moves between the HUD (126 x 77) and the cluster (176 x 126) with the iDrive setting, and each
+// measurement is fitted from the profile as given: the factory box scales with either measured field,
+// rather than keeping the HUD's small box or the F20's right-shifted cluster box.
+static void testRefitFromProfile() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    NavView v = view(8, "Testroad", "300", 7, 300);
+    port.mw = 126;
+    port.mh = 77;
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(logged("HUD picture buffer measured 126x77: canvas 0,0-125,76 glyph 37,23-82,68"));
+    port.mw = 176;
+    port.mh = 126;
+    assert(d.showManeuver(v, 1, false, false) == ClusterDisplay::kOk);
+    assert(logged("HUD picture buffer measured 176x126: canvas 0,0-175,125 glyph 52,38-115,111"));
+    g_log.clear();
+    port.mw = 126;
+    port.mh = 77;
+    assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+    assert(logged("HUD picture buffer measured 126x77: canvas 0,0-125,76 glyph 37,23-82,68"));
+    printf("  refit from the profile: HUD 126x77 (factory box), cluster 176x126 (scaled factory box), HUD again\n");
+}
+
 static void testJunctionDriver() {
     g_log.clear();
     FakePort port;
@@ -891,6 +1064,40 @@ static void testStates() {
     // The terminal refused our batch: our data is wrong.
     port.result = kRefused;
     assert(d.showManeuver(view(7, "Testroad", "1", 2, 1000), 4, true, false) == ClusterDisplay::kInternal);
+}
+
+// CarPlay Advanced ended mid-route without its frame-off: the terminal yields for good. A new guidance session of ours
+// takes the HUD once that navigation is quiet (Port::claim) and draws everything afresh, also when the step it missed
+// while yielding already counts as shown. A session that has drawn keeps yielding as before, until it ends.
+static void testClaim() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
+    d.setLog(&logFn, NULL);
+    NavView v = view(8, "Testroad", "200", 1, 200);
+    port.st = kNavActive;
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && port.batches.empty());   // not quiet yet
+    assert(port.claims == 1 && port.st == kNavActive);
+    port.claimable = true;
+    assert(d.updateDistance(view(8, "Testroad", "150", 1, 150), 1) == ClusterDisplay::kOk);     // quiet now: ours
+    assert(port.st == kReady && logged("taken for our new guidance"));
+    assert(d.sameManeuver(v, 2));                             // the missed step is drawn afresh, texts on
+    assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+    assert(port.batches.back().label == "redraw" && port.batches.back().full);
+    bool texts = false;
+    for (size_t i = 0; i < port.batches.back().calls.size(); ++i)
+        texts = texts || (port.batches.back().calls[i].fkt == kSetVisibility && port.batches.back().calls[i].handle() == k6wa.street);
+    assert(texts);
+
+    int claims = port.claims;
+    port.st = kNavActive;                                     // the navigation draws over our session again
+    assert(d.showManeuver(view(7, "Other", "300", 1, 300), 3, true, false) == ClusterDisplay::kOk);
+    assert(port.st == kNavActive && port.claims == claims);   // a session that drew does not take it back
+    std::string detail;
+    assert(d.clear(&detail));                                 // our guidance ends; the next one may take it
+    assert(d.showManeuver(v, 4, true, true) == ClusterDisplay::kOk && port.st == kReady);
+    assert(port.claims == claims + 1 && port.batches.back().label == "maneuver");
 }
 
 static void testShadow() {
@@ -1178,13 +1385,14 @@ static void testCoreIdle() {
 
 // ---- KombiNav with NBT_CLUSTER=6wa ----------------------------------------------------------------------------------
 
+// ImageGetSize is setup, not a drawing: it is also sent when guidance and now-playing are off.
 static size_t hudRequests() {
     size_t n = 0;
     for (size_t i = 0; i < fake_dsi::calls.size(); ++i) {
         const fake_dsi::Call& c = fake_dsi::calls[i];
         if (c.kind != fake_dsi::Call::kRequest || c.id != most::kReqProcessMessage || c.payload.size() < 4) continue;
         most::View v;
-        if (most::parseView(&c.payload[4], c.payload.size() - 4, v) && v.fblock == kFBlock) ++n;
+        if (most::parseView(&c.payload[4], c.payload.size() - 4, v) && v.fblock == kFBlock && v.fkt != kGetSize) ++n;
     }
     return n;
 }
@@ -1310,24 +1518,78 @@ static void testKombiNavUnknownCluster() {
     unsetenv("NBT_CLUSTER");
 }
 
+// The picture-buffer size -> canvas and glyph (cluster/hud6wa_profile.hpp fitMeasured): the canvas is the measured
+// buffer; the glyph box moves only where the F20 profile's would be cut off (to the factory arrow's place on the F30's
+// 126x77 HUD), stays on a buffer it fits, and the profile is left alone on 0x0 (no answer) or an env pin.
+static void testFitMeasured() {
+    unsetenv("NBT_HUD_CANVAS");
+    unsetenv("NBT_HUD_GLYPH");
+    {   // the F30's 126x77 HUD cuts the F20 box off: the factory arrow's box there (MOST capture, sabifa in #264)
+        HudProfile p = k6wa;
+        fitMeasured(126, 77, p);
+        assert(p.canvas.x0 == 0 && p.canvas.y0 == 0 && p.canvas.x1 == 125 && p.canvas.y1 == 76);
+        assert(p.glyph.x0 == 37 && p.glyph.y0 == 23 && p.glyph.x1 == 82 && p.glyph.y1 == 68);
+    }
+    {   // a MINI-sized 120x72 buffer: the same proportions
+        HudProfile p = k6wa;
+        fitMeasured(120, 72, p);
+        assert(p.canvas.x1 == 119 && p.canvas.y1 == 71);
+        assert(p.glyph.x0 == 35 && p.glyph.y0 == 22 && p.glyph.x1 == 78 && p.glyph.y1 == 64);
+    }
+    {   // the F30 cluster also fits the F20 box, but the factory arrow is centred further left (sabifa, #264)
+        HudProfile p = k6wa;
+        fitMeasured(176, 126, p);
+        assert(p.glyph.x0 == 52 && p.glyph.y0 == 38 && p.glyph.x1 == 115 && p.glyph.y1 == 111);
+    }
+    {   // a buffer the F20 box fits (the F20's own): the box it was tuned with stays, only the canvas is the real one
+        HudProfile p = k6wa;
+        fitMeasured(199, 129, p);
+        assert(p.canvas.x1 == 198 && p.canvas.y1 == 128);
+        assert(p.glyph.x0 == k6wa.glyph.x0 && p.glyph.y0 == k6wa.glyph.y0 && p.glyph.x1 == k6wa.glyph.x1 &&
+               p.glyph.y1 == k6wa.glyph.y1);
+    }
+    {   // no answer (0x0, a cluster that refuses ImageGetSize): the F20 profile, as before the measuring
+        HudProfile p = k6wa;
+        fitMeasured(0, 0, p);
+        assert(p.canvas.x1 == k6wa.canvas.x1 && p.glyph.x0 == k6wa.glyph.x0 && p.glyph.y1 == k6wa.glyph.y1);
+    }
+    {   // an env pin wins for its own field; the other is still fitted
+        setenv("NBT_HUD_GLYPH", "1 2 3 4", 1);
+        HudProfile p = k6wa;
+        applyHudEnv(p);                        // as nav_core does before the display sees it
+        fitMeasured(126, 77, p);               // would move the box, but it is pinned
+        assert(p.glyph.x0 == 1 && p.glyph.y0 == 2 && p.glyph.x1 == 3 && p.glyph.y1 == 4);
+        assert(p.canvas.x1 == 125 && p.canvas.y1 == 76);
+        unsetenv("NBT_HUD_GLYPH");
+    }
+    printf("  fitMeasured: F20 box kept where it fits, factory boxes on 126x77/176x126, 0x0 and env pins respected\n");
+}
+
 int main() {
     testShapesInside();
     testShapeFamilies();
     testMirror();
     testRoundaboutExit();
+    testFitMeasured();
     testTexts();
     testShowBatches();
     testClearBatch();
     testHold();
     testRemind();
     testJunctionGeometry();
+    testMapboxGlyphs();
+    testMapboxRoundaboutExit();
+    testJunctionScaled();
     testDigits();
     testLanes();
     testJunctionDriver();
+    testJunctionFits();
+    testRefitFromProfile();
     testJunctionNoOverlay();
     testJunctionLanes();
     testJunctionCore();
     testStates();
+    testClaim();
     testShadow();
     testCore();
     testIdleText();

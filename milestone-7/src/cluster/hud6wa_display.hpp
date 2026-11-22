@@ -113,11 +113,19 @@ private:
     bool routeInOverlay() const { return p_.routeA && p_.routeB; }
     bool lanesOn() const { return s_.hud_lanes && p_.laneA && p_.laneB; }
     hudterm::JunctionColours colours() const;
+    void fitJunction(hudterm::Picture& pic) const {   // F20 layout -> this profile's picture area
+        hudterm::fitPicture(pic, hudterm::k6wa.glyph, hudterm::k6wa.canvas.y1 + 1, p_.glyph, p_.canvas.y1 + 1);
+    }
+    bool junctionShows() const {   // its way on the canvas at every stage, drawn as fitJunction scales it
+        return hudterm::junctionFits(layout_, kStages, p_.canvas, hudterm::k6wa.glyph, hudterm::k6wa.canvas.y1 + 1,
+                                     p_.glyph, p_.canvas.y1 + 1);
+    }
     Result sendRoute();
     Result sendLanes(const NavView& v);
 
     hudterm::Port& port_;
     hudterm::HudProfile p_;
+    hudterm::HudProfile base_;   // as given: each measurement is fitted from it, not from the last fit
     bool shadow_;
     Settings s_;
     LogFn log_fn_;
@@ -126,8 +134,10 @@ private:
     bool fresh_;             // the texts' visibility is not known: the next picture switches them on
     bool redraw_;            // the terminal dropped work since our last picture: draw it again
     bool held_;              // a maneuver waits for the transport's queue: draw it on the next step
+    bool claim_;             // our guidance session has drawn nothing yet: it may take a quiet navigation's HUD
     uint16_t visible_;       // the buffer on show
     uint32_t epoch_;         // the terminal's epoch when our last picture was queued
+    int measured_w_, measured_h_;   // the picture-buffer size last fitted into p_ (0 = still on the profile defaults)
     HudTexts shown_;         // the texts last queued
 
     // the junction view of the maneuver shown

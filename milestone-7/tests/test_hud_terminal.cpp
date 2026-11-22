@@ -86,6 +86,84 @@ static int pumpAnswered(Core& k, uint32_t now) {
 
 // ---- Core ----------------------------------------------------------------------------------------------------------
 
+// The cluster's answer to ImageGetSize for handle h: [handle][w][h], to us or (its copy) to the navigation.
+static Wire sizeAnswer(uint16_t dst, uint16_t h, int w, int ht) {
+    std::vector<uint8_t> p;
+    p.push_back((uint8_t)(h >> 8)); p.push_back((uint8_t)h);
+    p.push_back((uint8_t)(w >> 8)); p.push_back((uint8_t)w);
+    p.push_back((uint8_t)(ht >> 8)); p.push_back((uint8_t)ht);
+    return Wire(kHost, dst, kGetSize, most::kOpResultAck, p);
+}
+
+// The picture-buffer measurement (Config::measureHandle), asked once ready, outside the batches. A cold cluster answers
+// it only after the reply timeout (#264): the core keeps listening and takes the late answer, and the copy to the
+// navigation - before or after ours - is known as ours, not taken for the factory navigation. A size for another
+// handle is not the measurement; an error answer lets it go without failing the terminal.
+static void testMeasure() {
+    Config c = config();
+    c.measureHandle = 5;
+    int w, h;
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5);
+        k.tick(c.replyMs + 1);                                   // no answer in time: still listening, not failed
+        assert(k.status() == kReady && !k.measuredSize(w, h));
+        Wire early = sizeAnswer(kNav, 5, 126, 77), ours = sizeAnswer(kSelf, 5, 126, 77), after = sizeAnswer(kNav, 5, 126, 77);
+        k.onMessage(early.v, c.replyMs + 900);                  // the copy first: ours, not the factory navigation
+        assert(k.status() == kReady);
+        k.onMessage(ours.v, c.replyMs + 900);
+        assert(k.measuredSize(w, h) && w == 126 && h == 77);
+        k.onMessage(after.v, c.replyMs + 950);                  // and a copy right after ours
+        assert(k.status() == kReady);
+    }
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize);
+        Wire other = sizeAnswer(kSelf, 6, 99, 99), ours = sizeAnswer(kSelf, 5, 176, 126);
+        k.onMessage(other.v, 10);                               // not the measured handle: still waiting
+        assert(!k.measuredSize(w, h) && k.status() == kReady);
+        k.onMessage(ours.v, 20);
+        assert(k.measuredSize(w, h) && w == 176 && h == 126);
+    }
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize);
+        std::vector<uint8_t> e;
+        e.push_back(0x05); e.push_back(0x00);
+        Wire err(kHost, kSelf, kGetSize, most::kOpError, e);
+        k.onMessage(err.v, 10);                                 // refused: the defaults stay, the terminal too
+        assert(!k.measuredSize(w, h) && k.status() == kReady);
+    }
+    {
+        Core k = readyCore(c);
+        most::Msg m;
+        assert(k.next(0, m) && m.fkt == kGetSize);
+        Wire hud = sizeAnswer(kSelf, 5, 126, 77), cluster = sizeAnswer(kSelf, 5, 176, 126);
+        k.onMessage(hud.v, 10);
+        assert(k.measuredSize(w, h) && w == 126 && h == 77 && !k.next(20, m));
+        const uint8_t inCluster[] = { 0x01, 0x00, 0xa0, 0x00, 0xe2, 0x02 }, inHud[] = { 0x01, 0x00, 0x5e, 0x00, 0xb8, 0x03 };
+        Wire toCluster(kHost, 0x0140, kGuidanceMovedFkt, 0x2, std::vector<uint8_t>(inCluster, inCluster + 6), kGuidanceFBlock);
+        Wire toHud(kHost, 0x0140, kGuidanceMovedFkt, 0x2, std::vector<uint8_t>(inHud, inHud + 6), kGuidanceFBlock);
+        Wire navAnswer(0x0140, kHost, kGuidanceMovedFkt, most::kOpStatus, std::vector<uint8_t>(inHud, inHud + 6),
+                       kGuidanceFBlock);
+        k.guidanceMoved(toCluster.v);                           // the guidance moved to the cluster
+        assert(k.measuredSize(w, h) && w == 126);               // the last size stands until the answer
+        assert(k.next(30, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5);
+        k.onMessage(cluster.v, 40);
+        assert(k.measuredSize(w, h) && w == 176 && h == 126 && k.stats().remeasures == 1);
+        for (int i = 0; i < 25; ++i) k.guidanceMoved(toCluster.v);   // the same place over and over: nothing moved
+        k.guidanceMoved(navAnswer.v);                           // the navigation's answer, not the cluster
+        assert(k.stats().remeasures == 1 && !k.next(50, m));
+        k.guidanceMoved(toHud.v);                               // and back to the HUD: asked again, once
+        k.guidanceMoved(toHud.v);
+        assert(k.stats().remeasures == 2 && k.next(60, m) && m.fkt == kGetSize && !k.next(61, m));
+    }
+    printf("  measure: a late answer taken, its copies ours, another handle and an error let go, asked again on a move, not on a repeat\n");
+}
+
 static void testStatusAndOffline() {
     Core k(config());
     Status s;
@@ -416,6 +494,28 @@ static void testNavFinishes() {
     Wire on = navCall(kSetVisibility, setVisibility(kFrame, true));
     k.onMessage(on.v, 81000);                             // then on again: a route
     k.tick(200000);
+    assert(k.status() == kNavActive);
+}
+
+// A navigation gone quiet with its route still on screen (CarPlay Advanced after its session ended mid-route) holds the
+// HUD for good on its own; a new guidance of ours may take it once it has been quiet for navQuietMs. One still drawing
+// keeps it, and drawing again takes it back.
+static void testNavClaim() {
+    Core k = readyCore();
+    assert(k.claim(500));                                     // nothing to take: ready
+    Wire on = navAnswer(kSetVisibility, setVisibility(kFrame, true));
+    k.onMessage(on.v, 1000);
+    Wire poly = navAnswer(kAddPolygon, addPolygon(6, 0, kPolygon, std::vector<Point>(3)));
+    k.onMessage(poly.v, 2000);
+    k.tick(120000);
+    assert(k.status() == kNavActive);                         // its route is on screen: no quiet ever releases it
+    Wire poly2 = navAnswer(kAddPolygon, addPolygon(6, 1, kPolygon, std::vector<Point>(3)));
+    k.onMessage(poly2.v, 121000);
+    assert(!k.claim(125999) && k.status() == kNavActive);     // drawn 4999 ms ago: still its HUD
+    Status s;
+    while (k.takeStatusChange(s)) {}
+    assert(k.claim(126000) && k.status() == kReady && k.takeStatusChange(s) && s == kReady);
+    k.onMessage(poly.v, 127000);                              // it draws again: it has the HUD back
     assert(k.status() == kNavActive);
 }
 
@@ -778,6 +878,40 @@ static void testOnClient() {
     assert(t.status() == kOffline);
 }
 
+// The cluster telling the navigation that the guidance moved (0x52/00 0xCFF) reaches the terminal through the client.
+static void testGuidanceMovedOnClient() {
+    fake_dsi::reset();
+    most::Client client;
+    Config c = config();
+    c.measureHandle = 5;
+    HudTerminal t(c);
+    assert(t.attach(client));
+    assert(client.start("T"));
+    fake_dsi::attach();
+    std::vector<uint8_t> resp;
+    most::putLe32(resp, 77);
+    most::putLe16(resp, kSelf);
+    fake_dsi::data(most::kInfoClientResponse, &resp[0], (uint32_t)resp.size());
+    std::vector<uint8_t> reg;
+    most::putLe32(reg, 2);
+    most::putLe16(reg, 0x0140); most::putLe16(reg, most::registryKey(0x52, 0));
+    most::putLe16(reg, kHost); most::putLe16(reg, most::registryKey(0x82, 0));
+    fake_dsi::data(most::kAttrRegistry, &reg[0], (uint32_t)reg.size());
+    assert(t.status() == kReady && t.stats().remeasures == 0);
+
+    most::Msg moved;
+    moved.txType = 0; moved.varTag = 2; moved.varVal = 0; moved.dst = 0x0140; moved.src = kHost;
+    moved.fblock = kGuidanceFBlock; moved.inst = kGuidanceInst; moved.fkt = kGuidanceMovedFkt; moved.opType = 0x2;
+    moved.hdrTag = 0;
+    const uint8_t toCluster[] = { 0x01, 0x00, 0xa0, 0x00, 0xe2, 0x02 };   // as sabifa captured it (#255)
+    moved.data.assign(toCluster, toCluster + sizeof(toCluster));
+    deliver(moved);
+    assert(t.stats().remeasures == 1 && t.status() == kReady);   // asked again, not taken for the navigation
+    for (int i = 0; i < 10; ++i) deliver(moved);                 // repeated many times a second (#264): asked once
+    assert(t.stats().remeasures == 1 && t.status() == kReady);
+    fake_dsi::detach();
+}
+
 // Attached without sending (the shadow mode): the terminal watches, and the client refuses any call to 82/00.
 static void testWatchOnly() {
     fake_dsi::reset();
@@ -813,6 +947,7 @@ static void testWatchOnly() {
 
 int main() {
     testStatusAndOffline();
+    testMeasure();
     testRequestBytes();
     testRefusals();
     testBackToBackAndWindow();
@@ -824,6 +959,7 @@ int main() {
     testOwnAndForeignIgnored();
     testNavTakeoverMidBatch();
     testNavFinishes();
+    testNavClaim();
     testNavWithoutRoute();
     testCleanUpAfterFrameOff();
     testLateErrorAfterTakeover();
@@ -834,6 +970,7 @@ int main() {
     testThreaded();
     testOnClient();
     testWatchOnly();
+    testGuidanceMovedOnClient();
     printf("test_hud_terminal: all passed\n");
     return 0;
 }

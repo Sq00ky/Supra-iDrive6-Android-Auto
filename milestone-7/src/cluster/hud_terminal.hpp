@@ -71,7 +71,10 @@ struct Config {
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // calls in one batch
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false) {}
+    uint16_t measureHandle;  // ImageGetSize is asked for this handle once the terminal is ready, for the driver to fit
+                             // its box to the cluster's real buffer (0 = don't; the shadow mode leaves it 0)
+    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false),
+               measureHandle(0) {}
 };
 
 // What a batch draws: its own slot's waiting batch is the only one it may take the place of or merge into.
@@ -99,6 +102,7 @@ const char* submitResultName(SubmitResult r);
 struct TerminalStats {
     uint32_t batches, batchesDone, batchesDropped, replaced, merged, refused;
     uint32_t calls, answers, copies, strays, navMsgs, timeouts, errors, lateErrors;
+    uint32_t remeasures;     // the guidance moved (kGuidanceMovedFkt): the picture buffer asked again
 };
 
 class Core {
@@ -110,6 +114,8 @@ public:
     void setHost(uint16_t host, uint32_t now);
     void onMessage(const most::View& m, uint32_t now);
     void tick(uint32_t now);                  // timeouts and the end of the navigation's route
+    void guidanceMoved(const most::View& m);  // the cluster's kGuidanceMovedFkt: on a new place, measure again
+    bool claim(uint32_t now);                 // a new guidance of ours: a quiet navigation's HUD is ours (Port)
     void reset(uint32_t now);                 // leave kFailed
 
     SubmitResult submit(const Batch& b, uint32_t now);
@@ -124,6 +130,8 @@ public:
     bool waiting(int slot) const;
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
     uint16_t host() const { return host_; }
+    // The cluster's answer to the measureHandle ImageGetSize, once it has arrived; false until then.
+    bool measuredSize(int& w, int& h) const;
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
     // A status change since the last call, for the listener.
@@ -162,6 +170,17 @@ private:
     uint32_t tag_;
     uint32_t epoch_;
     TerminalStats stats_;
+
+    // The one-shot picture-buffer measurement (cfg_.measureHandle). Sent outside the batch queue and not tracked in
+    // inFlight_, so no answer keeps the defaults instead of failing the terminal; a late one is still taken.
+    bool measureDue_;        // ready, not yet asked this ready-session
+    bool measureInFlight_;   // asked, waiting for the answer
+    bool measureLate_;       // past the reply timeout, and still listening
+    uint32_t measureSentMs_;
+    bool haveSize_;
+    int sizeW_, sizeH_;
+    std::vector<uint8_t> movedTo_;   // the last place the cluster named in kGuidanceMovedFkt
+    bool haveMovedTo_;
 };
 
 // What a HUDTerminal cluster driver needs from the transport: HudTerminal, or a test's fake.
@@ -177,6 +196,13 @@ public:
     virtual void reset() = 0;                     // leave kFailed
     // Until everything submitted is answered: true then; false on the timeout or once the status leaves kReady.
     virtual bool waitIdle(uint32_t ms) = 0;
+    // The cluster's picture-buffer size (ImageGetSize), once it has arrived; false until then, or when the transport
+    // does not measure. A driver fits its box to it. Default false: a test fake need not implement it.
+    virtual bool measuredSize(int& w, int& h) const { (void)w; (void)h; return false; }
+    // A new guidance of ours meets a navigation we yield to: take the HUD over when that navigation has been quiet for
+    // navQuietMs, even with its route still on screen (Core::claim). True when the terminal is then ready. Default
+    // false: a test fake need not implement it.
+    virtual bool claim() { return false; }
 };
 
 // A Core on its own thread. attach() before the client's start(). The listener runs on the terminal's thread with no
@@ -203,6 +229,8 @@ public:
     uint32_t epoch() const;
     bool waiting(int slot) const;
     bool waitIdle(uint32_t ms);
+    bool measuredSize(int& w, int& h) const;
+    bool claim();
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop
 
@@ -210,12 +238,14 @@ public:
     void onMessage(const most::View& m);
     void onLink(bool up, uint16_t self);
     void onRegistry(const std::vector<most::RegistryEntry>& reg);
+    void onGuidanceMoved(const most::View& m);    // the cluster's kGuidanceMovedFkt to the navigation
 
 private:
     static void* threadMain(void* self);
     static void msgTramp(const most::View& m, void* self);
     static void linkTramp(most::LinkState s, void* self);
     static void regTramp(const std::vector<most::RegistryEntry>& reg, void* self);
+    static void movedTramp(const most::View& m, void* self);
     static bool clientSend(const most::Msg& m, void* self);
     void run();
     void wake();
