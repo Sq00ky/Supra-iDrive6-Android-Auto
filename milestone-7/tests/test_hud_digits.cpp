@@ -54,7 +54,7 @@ static bool painted(const Shape& shape, double x, double y) {
 
 // Keep the selected source silhouette stable, including its hand-adjusted chamfers.
 static void sourceInvariants() {
-    const uint32_t expected[] = {0x4a31c0c5U,0xa6b37cf6U,0x0eac5812U,0x68a8f06aU,0x287ef366U,
+    const uint32_t expected[] = {0x4a31c0c5U,0x71cd15eaU,0x0eac5812U,0x68a8f06aU,0x287ef366U,
                                  0x70d1048bU,0xe6dad667U,0xaaff3b5aU,0x10f36489U,0x8426e42fU};
     for (int d=0;d<10;++d) {
         const digits::Glyph& gl=digits::glyph(d);
@@ -68,11 +68,11 @@ static void sourceInvariants() {
         for (size_t p=0;p<source.size();++p) valid(source[p]);
     }
     const digits::Glyph& one=digits::glyph(1);
-    assert(one.xy[0][0]==0&&one.xy[0][1]==28&&one.xy[0][2]==48&&one.xy[0][3]==0);
-    assert(one.xy[0][4]-one.xy[0][18]==28); // stem width
-    assert(one.xy[0][8]-one.xy[0][14]==92); // foot width
+    assert(one.xy[0][0]==16&&one.xy[0][1]==28&&one.xy[0][2]==44&&one.xy[0][3]==0); // original 45-degree hook
+    assert(one.xy[0][4]-one.xy[0][16]==28); // stem width
+    assert(one.xy[0][8]-one.xy[0][12]==92); // foot width
     // The owner's new free-end bevels are true 45-degree edges in the logical cell.
-    const int chamfers[][6]={{0,0,0,160,20,180},{1,0,28,180,8,160},{2,0,80,152,100,172},{3,0,20,180,0,160},{5,0,0,172,20,152},
+    const int chamfers[][6]={{0,0,0,160,20,180},{1,0,16,28,44,0},{2,0,80,152,100,172},{3,0,20,180,0,160},{5,0,0,172,20,152},
                              {6,0,80,0,100,20},{8,0,0,160,20,180},{9,1,0,160,20,180}};
     for (size_t k=0;k<sizeof(chamfers)/sizeof(chamfers[0]);++k) {
         const int* edge=chamfers[k];const digits::Glyph& gl=digits::glyph(edge[0]);bool found=false;

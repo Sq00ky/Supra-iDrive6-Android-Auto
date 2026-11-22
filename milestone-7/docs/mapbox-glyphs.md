@@ -30,20 +30,23 @@ draws them; unset or `0` / `off` keeps the parametric shapes, the default look. 
 4. Roundabouts keep the same drawing far and near. A known angle has a radial exit arrow, with the supplied valid
    number in the centre; 360 degrees has separate incoming and returning branches. An unknown angle shows three
    circulation arrows and the supplied number, without inventing an exit direction. Neither the glyph mode nor
-   the exit number changes the angle. The older low-level `mbxRoundabout()` helper remains covered separately.
+   the exit number changes the angle. Known inputs 1..14 are drawn at 15 degrees and 346..359 at 345; 360 keeps its
+   returning branch, and the raw input stays in the diagnostic log. The older low-level `mbxRoundabout()` helper remains covered separately.
 
 ## Arrow wings
 
 The lateral protrusion beyond the shaft is reduced by 30%. The return edge of each wing meets the shaft axis at
 80 degrees. The tip, neck, shaft and longitudinal length retain their original coordinates. This applies to straight,
 slight, normal and sharp turns, U-turns, forks, merges and ramps, plus the older Mapbox roundabout helper. The shared
-ring renderer uses its own compact radial head. Destination and unused drawings are unchanged. Pixel rounding
+ring renderer uses the same wing rules on a compact radial head. Destination and unused drawings are unchanged. Pixel rounding
 introduces a small angular error at the HUD's final size.
 
 The automatic F30 fit uses the original bounds through `mbxOriginalBounds()`. Refitting to the narrower wing bounds
 would enlarge or move the whole icon. Near views retain their roads and route tips, with the same wing proportions.
 Sharp turns and U-turns use single smooth body contours with fractional source coordinates retained until fitting.
 Off-ramps keep a constant-width join where the diagonal shaft enters the head.
+On the automatic F30 near view, ramps also have a longer straight section after the bend, keeping the head clear of
+the main road. The shared roundabout exit has an 8-pixel external shaft instead of 6; its circle diameter is retained.
 
 Regenerate the committed data from the repository root, using Python's standard library only:
 

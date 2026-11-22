@@ -99,12 +99,23 @@ inline RingLayout ringLayout(const HudProfile& p) {
 }
 
 namespace ring {
-enum { kOuter = 6732, kInner = 4620, kHalfShaft = 1056, kExitBase = 8268, kExitTip = 11788, kHalfHead = 2560 };
+enum { kOuter = 6732, kInner = 4620, kHalfShaft = 1056, kExitBase = 8780, kExitTip = 12300,
+       kHalfHead = kHalfShaft + ((2560-kHalfShaft)*7+5)/10, kReturnBase = 8512, kReturnTip = 12032 };
 
 inline Point radial(int angle, int along, int across) {
     int s = isin(angle), c = icos(angle);
     return shapes::pt(rounded((long)along * s + (long)across * c, 4096),
                       rounded((long)along * c - (long)across * s, 4096));
+}
+
+// Ordinary Mapbox proportions: 70% wing protrusion, 80-degree return edge, and an 8px external shaft (was 6px).
+inline void exitHead(int angle, Point head[5]) {
+    const int fold = wingFold(kHalfHead, kHalfShaft);
+    head[0] = radial(angle, kExitBase-fold, -kHalfHead);
+    head[1] = radial(angle, kExitTip, 0);
+    head[2] = radial(angle, kExitBase-fold, kHalfHead);
+    head[3] = radial(angle, kExitBase, kHalfShaft);
+    head[4] = radial(angle, kExitBase, -kHalfShaft);
 }
 
 // A half-degree sample is interpolated before scaling, in Q8 rather than canvas pixels.
@@ -124,10 +135,28 @@ inline Point canvasPoint(const Point& q, const RingLayout& l, bool clockwise) {
 inline void addPoint(Poly& poly, Point p) {
     if (poly.pts.empty() || p.x != poly.pts.back().x || p.y != poly.pts.back().y) poly.pts.push_back(p);
 }
+inline int64_t turn(const Point& a, const Point& b, const Point& c) {
+    return (int64_t)(b.x-a.x)*(c.y-a.y)-(int64_t)(b.y-a.y)*(c.x-a.x);
+}
+inline bool crosses(const Point& a, const Point& b, const Point& c, const Point& d) {
+    int64_t x = turn(a,b,c), y = turn(a,b,d), u = turn(c,d,a), v = turn(c,d,b);
+    return ((x < 0 && y > 0) || (x > 0 && y < 0)) && ((u < 0 && v > 0) || (u > 0 && v < 0));
+}
 inline void addKnown(const ShapeSpec& spec, const RingLayout& l, const Point* q, size_t n,
-                     uint8_t colour, Picture& pic) {
+                     uint8_t colour, Picture& pic, bool foldedExit = false) {
     Poly poly; poly.type = kPolygon;
-    for (size_t i = 0; i < n; ++i) addPoint(poly, canvasPoint(q[i], l, spec.clockwise));
+    Point fitted[7];
+    bool repair = foldedExit && n == 7, left = false, right = false;
+    if (repair) {
+        for (size_t i = 0; i < 7; ++i) fitted[i] = canvasPoint(q[i], l, spec.clockwise);
+        // A subpixel neck can round past its wing on a tiny canvas; retain the wing and tip, dropping only that neck.
+        left = crosses(fitted[0],fitted[1],fitted[2],fitted[3]);
+        right = crosses(fitted[3],fitted[4],fitted[5],fitted[6]);
+    }
+    for (size_t i = 0; i < n; ++i) {
+        if ((i == 1 && left) || (i == 5 && right)) continue;
+        addPoint(poly, repair ? fitted[i] : canvasPoint(q[i], l, spec.clockwise));
+    }
     if (poly.pts.size() > 1 && poly.pts.front().x == poly.pts.back().x && poly.pts.front().y == poly.pts.back().y)
         poly.pts.pop_back();
     append(poly, colour, pic);
@@ -150,11 +179,10 @@ inline void addBand(const ShapeSpec& spec, const RingLayout& l, int first2, int 
 inline Rect knownBounds(const ShapeSpec& spec) {
     Rect b = { -kOuter, -kOuter, kOuter, kOuter };
     if (spec.exit == 360) {
-        b.y1 = 45 * kUnit;
+        b.y1 = kReturnTip;
         return b;
     }
-    Point q[] = { radial(spec.exit, kExitTip, 0), radial(spec.exit, kExitBase, -kHalfHead),
-                  radial(spec.exit, kExitBase, kHalfHead) };
+    Point q[5]; exitHead(spec.exit, q);
     for (size_t i = 0; i < sizeof(q) / sizeof(q[0]); ++i) {
         if (spec.clockwise) q[i].x = (int16_t)-q[i].x;
         if (q[i].x < b.x0) b.x0 = q[i].x;
@@ -218,19 +246,20 @@ inline void knownPicture(const ShapeSpec& spec, const HudProfile& p, const RingL
         // Full circuit C: separate parallel entry and exit; only this exit is allowed off the radial normal.
         Point input[] = { {1792-kHalfShaft,4620}, {1792+kHalfShaft,4620},
                           {1792+kHalfShaft,11520}, {1792-kHalfShaft,11520} };
-        Point outgoing[] = { {-2048-kHalfShaft,4620}, {-2048-kHalfShaft,8000}, {-4608,8000},
-                             {-2048,11520}, {512,8000}, {-2048+kHalfShaft,8000},
+        const int base = kReturnBase, fold = wingFold(kHalfHead, kHalfShaft);
+        Point outgoing[] = { {-2048-kHalfShaft,4620}, {-2048-kHalfShaft,base},
+                             shapes::pt(-2048-kHalfHead,base-fold), {-2048,kReturnTip},
+                             shapes::pt(-2048+kHalfHead,base-fold), {-2048+kHalfShaft,base},
                              {-2048+kHalfShaft,4620} };
         addKnown(spec, l, input, 4, p.fill, pic);
-        addKnown(spec, l, outgoing, 7, p.fill, pic);
+        addKnown(spec, l, outgoing, 7, p.fill, pic, true);
         return;
     }
     addBand(spec, l, 360, spec.exit > 180 ? 0 : 360 - 2 * spec.exit, p.fill, pic);
     if (spec.exit > 180) addBand(spec, l, 0, 360 - 2 * spec.exit, p.fill, pic);
-    Point head[] = { radial(spec.exit, kExitTip, 0), radial(spec.exit, kExitBase, -kHalfHead),
-                     radial(spec.exit, kExitBase, kHalfHead) };
-    Point tip = canvasPoint(head[0], l, spec.clockwise);
-    Point base0 = canvasPoint(head[1], l, spec.clockwise), base1 = canvasPoint(head[2], l, spec.clockwise);
+    Point head[5]; exitHead(spec.exit, head);
+    Point tip = canvasPoint(head[1], l, spec.clockwise);
+    Point base0 = canvasPoint(head[0], l, spec.clockwise), base1 = canvasPoint(head[2], l, spec.clockwise);
     int half = offset(kHalfShaft, l.side), left = l.cx - half, right = l.cx + half;
     RingLayout base = ringLayout(p);
     int footer = base.cy + offset(kMaxY, base.side);
@@ -245,10 +274,9 @@ inline void knownPicture(const ShapeSpec& spec, const HudProfile& p, const RingL
         append(input, p.fill, pic);
     }
     // The same shaft and head form one filled polygon, leaving room for eight hide handles within a 32-call batch.
-    Point outgoing[] = { radial(spec.exit, kInner, -kHalfShaft), radial(spec.exit, kExitBase, -kHalfShaft),
-                         head[1], head[0], head[2], radial(spec.exit, kExitBase, kHalfShaft),
+    Point outgoing[] = { radial(spec.exit, kInner, -kHalfShaft), head[4], head[0], head[1], head[2], head[3],
                          radial(spec.exit, kInner, kHalfShaft) };
-    addKnown(spec, l, outgoing, 7, p.fill, pic);
+    addKnown(spec, l, outgoing, 7, p.fill, pic, true);
 }
 } // namespace ring
 

@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // Render the production driver's serialized polygons, without a car or a second implementation of the glyphs.
 #include "cluster/hud6wa_display.hpp"
+#include "cluster/hudterm_shapes.hpp"
 #include <map>
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,14 +76,14 @@ int main(int argc, char** argv) {
         {0, 5}, {0, 12}, {0, 99}, {90, 12}, {180, 99}
     };
     const int ringCases = (int)(sizeof(rings) / sizeof(rings[0]));
-    const int matrixAngles[] = { 0, 45, 90, 135, 180, 225, 270, 315, 360 };
-    const int perMode = matrix ? 81 : 61 + 2 * ringCases;
+    const int matrixAngles[] = { 0, 1, 45, 90, 135, 180, 225, 270, 315, 359, 360 };
+    const int perMode = matrix ? 9 * (int)(sizeof(matrixAngles)/sizeof(matrixAngles[0])) : 61 + 2 * ringCases;
     const int columns = matrix ? 9 : 8, rows = (perMode + columns - 1) / columns;
     const int width = columns * 148, header = matrix ? 66 : 46;
     printf("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">\n", width, header + rows * 110, width, header + rows * 110);
     puts("<rect width=\"100%\" height=\"100%\" fill=\"#111\"/><g fill=\"#ddd\" font-family=\"sans-serif\" font-size=\"11\">");
     printf("<text x=\"12\" y=\"20\">F30 126x77 — %s, %s; production polygons (not a photograph of the HUD)</text>\n", mode ? "Mapbox" : "Parametric", stage ? "near route stages" : "plain arrows");
-    if (matrix) printf("<text x=\"12\" y=\"40\">%s: rows = no angle, 45..360; columns = no number, 1..8. Numbers do not determine angles.</text>\n", matrix == 1 ? "CCW / right-hand traffic" : "CW / left-hand traffic");
+    if (matrix) printf("<text x=\"12\" y=\"40\">%s: input angles include 1/359 (drawn as 15/345); columns = no number, 1..8.</text>\n", matrix == 1 ? "CCW / right-hand traffic" : "CW / left-hand traffic");
     {
         setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
         for (int n = 0; n < perMode; ++n) {
@@ -102,10 +103,14 @@ int main(int argc, char** argv) {
             Settings settings; settings.junction = stage != 0; d.setSettings(settings);
             if (d.showManeuver(v, 0, true, true) != ClusterDisplay::kOk) return 1;
             if (stage && stage < 4) { v.step_m = stage * 10; d.sameManeuver(v, 1); if (d.keepUp(v, 1) != ClusterDisplay::kOk) return 1; }
+            ShapeSpec rendered = shapeFor(type, v.has_exit_angle, v.exit_angle);
             int cell = n;
-            printf("<g data-type=\"%d\" data-has-angle=\"%d\" data-angle=\"%d\" data-has-number=\"%d\" data-number=\"%d\" transform=\"translate(%d,%d)\"><text x=\"0\" y=\"11\">type %d", type, (int)v.has_exit_angle, angle, (int)v.has_exit_number, number, 10 + cell % columns * 148, header - 10 + cell / columns * 110, type);
+            printf("<g data-type=\"%d\" data-has-angle=\"%d\" data-angle=\"%d\" data-rendered-angle=\"%d\" data-has-number=\"%d\" data-number=\"%d\" transform=\"translate(%d,%d)\"><text x=\"0\" y=\"11\">type %d", type, (int)v.has_exit_angle, angle, rendered.exit, (int)v.has_exit_number, number, 10 + cell % columns * 148, header - 10 + cell / columns * 110, type);
             if (extra >= 0 || matrix) {
-                if (v.has_exit_angle) printf(" a%d", angle); else printf(" a?");
+                if (v.has_exit_angle) {
+                    printf(" a%d", angle);
+                    if (rendered.exit != angle) printf(" to%d", rendered.exit);
+                } else printf(" a?");
                 if (v.has_exit_number) printf(" #%d", number); else printf(" #none");
             }
             if (stage) printf(" %s%d", d.nearShown() ? "near" : "arrow", d.routeStage());

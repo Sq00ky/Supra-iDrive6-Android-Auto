@@ -1561,10 +1561,12 @@ the near-view route, with each cell labelled when the driver falls back to an ar
 production driver's serialized polygons and double-buffer switches; it does not reproduce the geometry itself.
 These are geometry previews, not photographs or a simulation of the cluster's fonts, colours or MOST timing.
 
-On an automatically measured 126x77 HUD, static maneuver drawings use their visible bounds in a 53x53 box,
-with one scale for both axes. Roundabouts use a fixed 66x66 family box so their ring does not change size with
-the exit angle. Explicit canvas/glyph pins and other buffer profiles retain their own geometry. Junction
-selection and timing are unchanged. The full drawing batch admits 64 commands (a complete Mapbox picture
+On an automatically measured 126x77 HUD, ordinary static drawings use a 53x53 box with one scale for both axes;
+Mapbox retains its original fitting bounds when its wings are narrowed. Near ramps have a longer shaft after the
+bend so their heads clear the main road. Roundabouts share one far/near drawing with a fixed circle diameter;
+known exits have an 8px external shaft and the same Mapbox wing rules. Explicit canvas/glyph pins and other buffer
+profiles retain their own ramp geometry. Junction selection and timing are unchanged. The full drawing batch
+admits 64 commands (a complete Mapbox picture
 can require 55); the in-flight window remains eight. Passing host geometry/transport tests does not establish
 the readability of every maneuver or admission of a greater-than-32-command packet on a real head unit.
 

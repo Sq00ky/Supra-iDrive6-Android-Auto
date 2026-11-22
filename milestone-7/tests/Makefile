@@ -64,6 +64,7 @@ SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
 SRC_test_hud_digits        :=
+SRC_test_hud_ramps         :=
 SRC_test_mapbox_wings      := tests/mapbox_wings_other_tu.cpp
 SRC_test_j29_golden        := $(SRC_KOMBI_NAV)
 SRC_test_frame_queue       :=

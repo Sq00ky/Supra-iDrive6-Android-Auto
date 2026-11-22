@@ -119,6 +119,9 @@ inline Point offsetAt(const Path& p, size_t i, int off) {
 
 } // namespace junction
 
+// cot(80 degrees), used by ordinary and roundabout exit wings at their own coordinate scale.
+inline int wingFold(int wing, int neck) { return ((wing - neck) * 722 + 2048) / 4096; }
+
 // The path as one polygon w wide, with an arrowhead headL long and 2 * headW wide at its end when headL > 0: the left
 // edge forward, the head, the right edge back. 2 * points (+ 3 with a head).
 inline Poly thickPath(const Path& p, int w, int headL = 0, int headW = 0) {
@@ -245,6 +248,16 @@ inline bool junctionLayout(int aa_type, bool has_exit_angle, int64_t exit_angle,
     return true;
 }
 
+// On the measured HUD, leave a visible straight shaft between a ramp's bend and its broad arrowhead.
+// The caller opts in for that profile; roads, bend, tail stages and all other maneuver families stay unchanged.
+inline void lengthenRampRoute(int aa_type, Layout& layout) {
+    const int family = kombinav::kombiDirection(aa_type);
+    if (family != 25 && family != 26 && family != 28 && family != 29) return;
+    if (layout.route.pts.size() < 2 || layout.route.heads.empty()) return;
+    const Point& bend = layout.route.pts[layout.route.pts.size() - 2];
+    layout.route.pts.back() = shapes::along(bend.x, bend.y, layout.route.heads.back(), 54, 0);
+}
+
 // The roads: every dark edge first, then every grey road over them (two colour changes), and a roundabout's exit
 // number in the ring in the route's colour. A ring is two half rings that overlap: a polygon can't have a hole.
 inline void drawRoads(const Layout& L, const JunctionColours& c, const JunctionStyle& st, Picture& out) {
@@ -295,7 +308,7 @@ inline void drawRoute(const Layout& L, int tail, const JunctionColours& c, const
         int neck = st.routeCore / 2;
         int wing = mapboxWings ? neck + ((st.headW - neck) * 7 + 5) / 10 : st.headW;
         // cot(80 degrees): move only the wings, keeping the tip, neck and stem in place.
-        int fold = mapboxWings ? ((wing - neck) * 722 + 2048) / 4096 : 0;
+        int fold = mapboxWings ? wingFold(wing, neck) : 0;
         // A broad head may overlap the incoming stem on a sharp turn. Paint their union as simple polygons.
         for (int pass = 0; pass < 2; ++pass) {
             int edge = pass ? 0 : st.edgeHead;

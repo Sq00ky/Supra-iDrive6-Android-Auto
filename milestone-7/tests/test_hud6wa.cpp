@@ -1077,12 +1077,13 @@ static void checkKnownBase(const Picture& picture, const ShapeSpec& spec, const 
         assert(entry.y0 == l.cy+roundForTest(inner));
         assert(entry.y1 > bounds.y1);   // the incoming bar must remain visible outside the circular body after fitting
         double a = spec.exit*3.141592653589793/180, dx = sin(a)*(spec.clockwise ? -1 : 1), dy = cos(a);
-        double nx = -dy, ny = dx, base = (26.296875+6)*scale, tip = (26.296875+19.75)*scale;
+        double nx = -dy, ny = dx, base = (26.296875+8)*scale, tip = (26.296875+21.75)*scale;
+        double wingBase = base-(186.0/256)*scale;
         const double points[] = {inner*dx+4.125*scale*nx, inner*dy+4.125*scale*ny,
                                  base*dx+4.125*scale*nx, base*dy+4.125*scale*ny,
-                                 base*dx+10*scale*nx, base*dy+10*scale*ny,
+                                 wingBase*dx+8.23828125*scale*nx, wingBase*dy+8.23828125*scale*ny,
                                  tip*dx, tip*dy,
-                                 base*dx-10*scale*nx, base*dy-10*scale*ny,
+                                 wingBase*dx-8.23828125*scale*nx, wingBase*dy-8.23828125*scale*ny,
                                  base*dx-4.125*scale*nx, base*dy-4.125*scale*ny,
                                  inner*dx-4.125*scale*nx, inner*dy-4.125*scale*ny};
         nearPointSet(head, expectedPolygon(points, 7, l));
@@ -1093,7 +1094,7 @@ static void checkKnownBase(const Picture& picture, const ShapeSpec& spec, const 
             if (r > radius2) { radius2 = r; farthest = i; }
         }
         double x = head.pts[farthest].x-l.cx, y = head.pts[farthest].y-l.cy;
-        assert(fabs(x*dy-y*dx) <= 1.5);   // strict normal axis, including 1..4 and 356..359; never an arbitrary tilt
+        assert(fabs(x*dy-y*dx) <= 1.5);   // strict normal axis at the displayed angle, including clamped boundary inputs
         assert(fabs(x*dx+y*dy-tip) <= 1.0 && x*dx+y*dy > outer+10*scale);
         if (f30)
             for (size_t i = 0; i < picture.size(); ++i)
@@ -1104,13 +1105,13 @@ static void checkKnownBase(const Picture& picture, const ShapeSpec& spec, const 
                         assert(u*u+v*v < radius2);   // an entrance footer cannot paint over the downward tip
                 }
     } else if (f30) {
-        assert(l.cx == 62 && l.cy == 31 && l.side == 66 && picture.size() == 4);
+        assert(l.cx == 62 && l.cy == 29 && l.side == 66 && picture.size() == 4);
         const int mirror = spec.clockwise ? -1 : 1;
         const double input[] = {2.875*mirror,18,11.125*mirror,18,
                                 11.125*mirror,45,2.875*mirror,45};
-        const double output[] = {-12.125*mirror,18,-12.125*mirror,31.25,
-                                 -18.0*mirror,31.25,-8.0*mirror,45,2.0*mirror,31.25,
-                                 -3.875*mirror,31.25,-3.875*mirror,18};
+        const double output[] = {-12.125*mirror,18,-12.125*mirror,33.25,
+                                 -16.23828125*mirror,32.5234375,-8.0*mirror,47,0.23828125*mirror,32.5234375,
+                                 -3.875*mirror,33.25,-3.875*mirror,18};
         nearPointSet(picture[2].poly, expectedPolygon(input, 4, l), 0);
         nearPointSet(head, expectedPolygon(output, 7, l), 0);   // the sole nonnormal exception: approved C360
     }
@@ -1168,7 +1169,7 @@ static void testKnownRoundabouts() {
             Picture pictures[2];
             for (int cw = 0; cw <= 1; ++cw) {
                 ShapeSpec spec = shapeFor(cw ? 33 : 34, true, angle);
-                assert(spec.exit == angle);
+                assert(spec.exit == (angle < 15 ? 15 : angle > 345 && angle < 360 ? 345 : angle));
                 assert(roundaboutPicture(spec, profile, pictures[cw]));
                 checkKnownBase(pictures[cw], spec, profile, p == 0);
                 Picture seven; assert(roundaboutPicture(spec, profile, seven, 7));
@@ -1493,6 +1494,39 @@ static void testKnownRoundaboutDriver() {
     assert(port.batches.size() == 6 && display.nearShown() && port.batches.back().label == "route");
 }
 
+// Rendering clamps near-parallel exits while preserving the phone's original angle and the distinct full circuit.
+static void testRoundaboutAngleLimits() {
+    struct Case { bool has; int raw, shown; };
+    const Case cases[] = {{true,1,15},{true,14,15},{true,15,15},{true,16,16},
+                          {true,344,344},{true,345,345},{true,346,345},{true,359,345},{true,360,360},
+                          {true,0,0},{true,-1,0},{true,361,0},{false,1,0},{false,359,0}};
+    HudProfile profile = k6wa; fitMeasured(126,77,profile);
+    for (int mode = 0; mode < 2; ++mode) {
+        setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+        for (int type = 33; type <= 34; ++type)
+            for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i)
+                for (int numbered = 0; numbered < 2; ++numbered) {
+                    const Case& c = cases[i];
+                    assert(shapeFor(type,c.has,c.raw).exit == c.shown);
+                    NavView input = timed(type,"Ring Road","100",1,100,8);
+                    input.has_exit_angle = c.has; input.exit_angle = c.raw;
+                    input.has_exit_number = numbered != 0; input.exit_number = 1;
+                    FakePort rawPort, shownPort;
+                    Hud6waDisplay rawDisplay(rawPort,profile,false), shownDisplay(shownPort,profile,false);
+                    assert(rawDisplay.showManeuver(input,0,true,true) == ClusterDisplay::kOk);
+                    assert(input.has_exit_angle == c.has && input.exit_angle == c.raw);
+                    NavView shown = input; shown.has_exit_angle = c.shown != 0; shown.exit_angle = c.shown;
+                    assert(shownDisplay.showManeuver(shown,0,true,true) == ClusterDisplay::kOk);
+                    assert(rawPort.batches.size() == 1 && shownPort.batches.size() == 1);
+                    const Batch& a = rawPort.batches[0]; const Batch& b = shownPort.batches[0];
+                    assert(a.calls.size() == b.calls.size());
+                    for (size_t k = 0; k < a.calls.size(); ++k)
+                        assert(a.calls[k].fkt == b.calls[k].fkt && a.calls[k].payload == b.calls[k].payload);
+                }
+    }
+    unsetenv("NBT_HUD_GLYPHS");
+}
+
 // The near stage through the driver: the arrow first, the junction view (roads in 5/6, route in 7/8) at the main
 // prompt, the route's stages on the way in, held while a route waits, all drawn again after lost work, the route
 // emptied for the next maneuver's arrow, and the clear putting 7/8 back.
@@ -1740,6 +1774,17 @@ static bool simplePolygon(const Poly& polygon) {
     return true;
 }
 
+// Pixel rounding must not fold an exit neck across its own head on a constrained manual canvas.
+static void testSmallRoundaboutExits() {
+    HudProfile p = k6wa; p.canvas = p.glyph = Rect{0,0,17,17};
+    for (int type = 33; type <= 34; ++type)
+        for (int angle = 1; angle <= 360; ++angle) {
+            Picture picture;
+            assert(roundaboutPicture(shapeFor(type,true,angle),p,picture));
+            for (size_t i = 0; i < picture.size(); ++i) assert(simplePolygon(picture[i].poly));
+        }
+}
+
 static void testNearPolygonsSimple() {
     unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
     for (int mode = 0; mode < 2; ++mode)
@@ -1783,6 +1828,7 @@ static void testReadableNearArrows() {
             for (int type = 0; type <= 60; ++type) {
                 Layout layout;
                 if (!junctionLayout(type, true, 90, false, 0, k6wa.glyph, k6wa.canvas.y1, layout) || layout.ring) continue;
+                lengthenRampRoute(type, layout);
                 HudProfile profile = k6wa; fitMeasured(126, 77, profile);
                 if (!overlay) profile.routeA = profile.routeB = 0;
                 bool fits = junctionFits(layout, Hud6waDisplay::kStages, profile.canvas, k6wa.glyph,
@@ -1867,7 +1913,7 @@ static void testReadableNearArrows() {
             }
     unsetenv("NBT_HUD_GLYPHS");
     assert(checked == 752);
-    printf("  F30 near arrows: %u serialized stages, readable strokes/heads, unchanged roads, tips and overlays\n", checked);
+    printf("  F30 near arrows: %u serialized stages, readable strokes/heads, unchanged roads and overlays\n", checked);
 }
 
 static void testNearArrowCompatibility() {
@@ -2574,11 +2620,13 @@ int main() {
     testKnownRoundabouts();
     testKnownEntryVisibility();
     testKnownRoundaboutDriver();
+    testRoundaboutAngleLimits();
     testReadableHudArrows();
     testReadableHudCompatibility();
     testGlyphBatchBudget();
     testLanes();
     testJunctionDriver();
+    testSmallRoundaboutExits();
     testNearPolygonsSimple();
     testReadableNearArrows();
     testNearArrowCompatibility();

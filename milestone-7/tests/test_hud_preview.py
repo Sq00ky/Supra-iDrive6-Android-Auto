@@ -38,16 +38,20 @@ class PreviewTest(unittest.TestCase):
 
     def test_ring_angle_and_number_are_independent(self):
         expected = {(int(angle != 0), angle, int(number != 0), number)
-                    for angle in (0, 45, 90, 135, 180, 225, 270, 315, 360) for number in range(9)}
+                    for angle in (0, 1, 45, 90, 135, 180, 225, 270, 315, 359, 360) for number in range(9)}
         for direction, type_ in (("ccw", 34), ("cw", 32)):
             for mode in range(2):
                 for stage in range(5):
                     cells = render(stage, mode, direction)
-                    self.assertEqual(len(cells), 81)
+                    self.assertEqual(len(cells), 99)
                     self.assertEqual({int(c.get("data-type")) for c in cells}, {type_})
                     actual = {tuple(int(c.get(key)) for key in
                               ("data-has-angle", "data-angle", "data-has-number", "data-number")) for c in cells}
                     self.assertEqual(actual, expected)
+                    for cell in cells:
+                        angle = int(cell.get("data-angle"))
+                        shown = 15 if angle == 1 else 345 if angle == 359 else angle
+                        self.assertEqual(int(cell.get("data-rendered-angle")), shown)
 
     def test_invalid_cli_fails(self):
         for args in (("-1",), ("5",), ("x",), ("0", "2"), ("0", "0", "x"), ("0", "0", "cw", "extra")):
