@@ -164,6 +164,23 @@ static void testMeasure() {
     printf("  measure: a late answer taken, its copies ours, another handle and an error let go, asked again on a move, not on a repeat\n");
 }
 
+static void testReplyBarrier() {
+    Core k = readyCore();
+    Batch b("ordered");
+    b.add(kSetVisibility, setVisibility(1, true));
+    b.add(kSetVisibility, setVisibility(2, true));
+    b.add(kTextareaSetText, setText(2, "A"), true);
+    b.add(kTextareaSetText, setText(3, "B"));
+    assert(k.submit(b, 0) == kQueued);
+    most::Msg first, second, text;
+    assert(k.next(1, first) && k.next(1, second) && !k.next(1, text));
+    k.onMessage(answer(second).v, 2);
+    assert(!k.next(2, text));
+    k.onMessage(answer(first).v, 3);
+    assert(k.next(3, text) && text.fkt == kTextareaSetText);
+    assert(k.next(3, text) && text.fkt == kTextareaSetText);
+}
+
 static void testStatusAndOffline() {
     Core k(config());
     Status s;
@@ -659,6 +676,22 @@ static void testTimeoutAndReset() {
     assert(k.status() == kReady && k.host() == 0x0124);
 }
 
+static void testMediaTextTimeout() {
+    Core k = readyCore();
+    Batch media("media-text");
+    media.add(kTextareaSetText, setText(3, "Song"), false, true);
+    assert(k.submit(media, 0) == kQueued);
+    most::Msg text;
+    assert(k.next(0, text));
+    assert(k.submit(batchOf(1), 10) == kQueued);
+    k.tick(1500);
+    assert(k.status() == kReady && k.stats().timeouts == 1);
+    Wire late = answer(text);
+    k.onMessage(late.v, 1501);
+    assert(k.stats().strays == 1);
+    assert(pumpAnswered(k, 1502) == 1 && !k.busy());
+}
+
 static void testErrorAnswers() {
     Core k = readyCore();
     assert(k.submit(batchOf(1), 0) == kQueued);
@@ -948,6 +981,7 @@ static void testWatchOnly() {
 int main() {
     testStatusAndOffline();
     testMeasure();
+    testReplyBarrier();
     testRequestBytes();
     testRefusals();
     testBackToBackAndWindow();
@@ -964,6 +998,7 @@ int main() {
     testCleanUpAfterFrameOff();
     testLateErrorAfterTakeover();
     testTimeoutAndReset();
+    testMediaTextTimeout();
     testErrorAnswers();
     testLinkDropKeepsNav();
     testLateAnswerAfterLinkDrop();

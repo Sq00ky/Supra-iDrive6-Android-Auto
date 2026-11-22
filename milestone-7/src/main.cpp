@@ -164,6 +164,7 @@ static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
 static nbt::gesture::Sniffer g_gestureSniff;     // two-finger gesture -> next track in native audio (gesture_sniff.hpp)
 static nbt::riclist::KombiMedia g_kombiMedia;
+static bool g_useProfileWheelPolicy = false;
 static nbt::riclist::WheelTurns g_wheelTurns;      // thumb-wheel row from the rotation, when no cluster list is seen (#299)   // the track title in the cluster's track list (Native Functionality Media Controls Restore)
 static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
 static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
@@ -2091,8 +2092,8 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
             return;
         }
         std::string why;
-        int a = g_kombiMedia.wheelPress(&why);
-        if (a == nbt::riclist::kPressNone && !g_kombiMedia.kombiSeen()) {
+        int a = g_kombiMedia.wheelPress(&why, ev.delta);
+        if (a == nbt::riclist::kPressNone && !g_useProfileWheelPolicy && !g_kombiMedia.kombiSeen()) {
             // No packet to an Ethernet KOMBI ever seen (BMW F-series: the cluster is on MOST): the wheel's last notch.
             const char* w = "";
             a = g_wheelTurns.press(monoMs(), &w);
@@ -2112,7 +2113,11 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
             if (ev.down) printf("[Media] %s ignored: Native Functionality Media Controls Restore is off\n", ev.what);
             return;
         }
-        if (ev.down) sendMediaKey(ev.keycode, ev.what);
+        if (ev.down) {
+            if (ev.keycode == nbt::AAK_MEDIA_NEXT || ev.keycode == nbt::AAK_MEDIA_PREVIOUS)
+                g_kombiMedia.directTrackKeySeen();
+            sendMediaKey(ev.keycode, ev.what);
+        }
         return;   // iDrive's copy of the key is its own business: nothing here acts on it in a non-Bluetooth mode
     }
     if (ev.what && !strcmp(ev.what, "PTT")) {     // steering-wheel voice button long press (NBT_PTT_ASSISTANT), any screen
@@ -2499,7 +2504,12 @@ int main(int argc, char* argv[]) {
     g_tcp = &tcp_server;
     g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
                                    // g_most starts: NBT_CLUSTER=6wa attaches to it
-    g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT);   // idle until the phone plays something
+    char clusterFlag[24];
+    const char* profile = nbt::clusterProfile(clusterFlag, sizeof(clusterFlag));
+    const bool f15Wheel = car.make == nbt::MAKE_BMW && !strcmp(profile, "6wa-f15");
+    // An explicit fallback setting or a measured BMW profile selects the two-second roll-and-press policy.
+    g_useProfileWheelPolicy = f15Wheel || getenv("NBT_MFL_WHEEL_FALLBACK");
+    g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT, NULL, f15Wheel);
     if (audio_mode == nbt::AUDIO_MODE_BT)
         printf("[Gesture] two-finger gesture capture off: audio mode is Bluetooth (iDrive skips the phone itself)\n");
     else if (nbt::envFlag("NBT_GESTURE_SNIFF") == 0)

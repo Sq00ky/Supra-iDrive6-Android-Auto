@@ -81,6 +81,10 @@ struct NavMessages {
         int64_t st;
         return has_status && pbInt(span(status), 1, st) && st == 1;
     }
+    bool guidanceEnded() const {
+        int64_t st;
+        return has_status && pbInt(span(status), 1, st) && st == 2;
+    }
     static PbSpan span(const std::vector<uint8_t>& v) {
         return v.empty() ? PbSpan(NULL, 0) : PbSpan(&v[0], v.size());
     }

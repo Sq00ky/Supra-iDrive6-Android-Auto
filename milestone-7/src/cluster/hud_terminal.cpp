@@ -82,12 +82,16 @@ void Core::dropWork(uint32_t now) {
     inFlight_.clear();
 }
 
-// An answer to a call dropped within replyMs: taken off the list. Older entries are let go.
-bool Core::takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now) {
+void Core::expireDropped(uint32_t now) {
     size_t k = 0;
     for (size_t i = 0; i < dropped_.size(); ++i)
         if (left(dropped_[i].sentMs, cfg_.replyMs, now) > 0) dropped_[k++] = dropped_[i];
     dropped_.resize(k);
+}
+
+// An answer to a call dropped within replyMs: taken off the list. Older entries are let go.
+bool Core::takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now) {
+    expireDropped(now);
     for (size_t i = 0; i < dropped_.size(); ++i) {
         if (dropped_[i].fkt != fkt || (byHandle && dropped_[i].handle != handle)) continue;
         dropped_.erase(dropped_.begin() + i);
@@ -235,12 +239,14 @@ bool Core::merge(Batch& into, const Batch& b) {
     for (size_t i = 0; i < b.calls.size(); ++i) {
         const Call& c = b.calls[i];
         size_t k = 0;
-        if (c.fkt == kTextareaSetText)
-            while (k < m.calls.size() && !(m.calls[k].fkt == kTextareaSetText && m.calls[k].handle() == c.handle())) ++k;
+        if (c.fkt == kTextareaSetText || c.fkt == kPotentiometerSetValue)
+            while (k < m.calls.size() && !(m.calls[k].fkt == c.fkt && m.calls[k].handle() == c.handle())) ++k;
         else
             k = m.calls.size();
-        if (k < m.calls.size()) m.calls[k].payload = c.payload;
-        else m.calls.push_back(c);
+        if (k < m.calls.size()) {
+            m.calls[k].payload = c.payload;
+            m.calls[k].allowTimeout = c.allowTimeout;
+        } else m.calls.push_back(c);
     }
     if (m.calls.size() > cfg_.maxBatch) return false;
     into = m;
@@ -268,6 +274,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
     }
     if (!haveCurrent_ || nextCall_ >= current_.calls.size()) return false;
     const Call& c = current_.calls[nextCall_];
+    if (c.afterReplies && !inFlight_.empty()) return false;
     if (!buildCall(host_, c, tag_, cfg_.handles, out)) {   // checked at submit: only a host change could do this
         fail("a queued call no longer builds", now);
         return false;
@@ -279,6 +286,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
     f.fkt = c.fkt;
     f.handle = c.handle();
     f.sentMs = now;
+    f.allowTimeout = c.allowTimeout;
     inFlight_.push_back(f);
     recent_.add(c.fkt, f.handle, now);
     ++stats_.calls;
@@ -363,8 +371,9 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
                          matched ? "" : " (matches no call in flight)");
         for (size_t k = 0; k < m.len && k < 12 && n < (int)sizeof(why) - 4; ++k)
             n += snprintf(why + n, sizeof(why) - n, " %02x", m.data[k]);
-        if (m.fkt == kTextareaSetText && matched) {   // the cluster's font refused a text (a glyph it lacks): cosmetic —
-            printf("[HudTerm] %s: text refused, guidance kept\n", why);   // keep the arrow up instead of failing.
+        if (matched && (m.fkt == kTextareaSetText || m.fkt == kPotentiometerSetValue)) {
+            printf("[HudTerm] %s: %s refused, guidance kept\n", why,
+                   m.fkt == kTextareaSetText ? "text" : "distance bar");
             finishIfDone(now);                          // matched only: an unrelated error still fails the terminal
             return;
         }
@@ -452,12 +461,21 @@ void Core::tick(uint32_t now) {
         printf("[HudTerm] no answer to ImageGetSize in %u ms: still listening, the defaults meanwhile\n",
                (unsigned)cfg_.replyMs);
     }
-    if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
+    while (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
+        InFlight f = inFlight_.front();
         ++stats_.timeouts;
         char why[96];
-        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
-                 inFlight_[0].handle, cfg_.replyMs);
-        fail(why, now);
+        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms", f.fkt, fktName(f.fkt), f.handle, cfg_.replyMs);
+        if (!f.allowTimeout) {
+            fail(why, now);
+            break;
+        }
+        printf("[HudTerm] %s, skipped optional media text\n", why);
+        inFlight_.erase(inFlight_.begin());
+        f.sentMs = now;
+        expireDropped(now);
+        dropped_.push_back(f);
+        finishIfDone(now);
     }
     if (navActive_ && !routeOn_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
         navActive_ = false;

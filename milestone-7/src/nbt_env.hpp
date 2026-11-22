@@ -160,6 +160,12 @@ inline bool lciMediaKeysEnabled() { return usbSettingOn(getenv("NBT_LCI_MEDIA"),
 static const char* const kGestureMuteFlagName = "gesture-mute";
 inline bool gestureSkipEnabled() { return usbSettingOn(getenv("NBT_GESTURE_SKIP"), !flagSet(kGestureMuteFlagName)); }
 inline bool kombiTracksEnabled() { return usbSettingOn(getenv("NBT_KOMBI_TRACKS"), lciMediaKeysEnabled()); }
+
+inline const char* clusterProfile(char* flag, size_t size) {
+    const char* profile = getenv("NBT_CLUSTER");
+    if (!(profile && *profile) && flagText("cluster", flag, size)) profile = flag;
+    return profile && *profile ? profile : "j29";
+}
 // "CarPlay compatibility" (iDrive Settings checkbox, rhmiapp-54-cpcompat; flag kCpCompatFlagName, a hand-made one
 // also counts; NBT_CP_COMPAT=1 / 0 wins either way, same words as NBT_USB). Off by default: for cars that use the
 // factory CarPlay as well as Android Auto (issue #156). On = the three CarPlay fixes: Android Auto yields

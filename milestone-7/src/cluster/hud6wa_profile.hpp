@@ -48,6 +48,9 @@ struct HudProfile {
     uint16_t hide[8];          // handles the cluster draws itself over the panel during guidance (e.g. 0x15/0x16, the
     int nHide;                 // narrow strips by the distance): SetVisibility-off'd on every picture and distance
                                // update. 0 = none; set by NBT_HUD_HIDE "21 22". Same idea as carplay-advanced hud_hide.
+    bool singlePicture;        // draw on bufB until the other buffer is visually verified
+    bool panelBeforeText;      // the panel must be visible while writing or clearing text
+    uint16_t distanceBar;      // factory potentiometer, 0 when this layout has no known handle
 };
 
 // The 6WA, as our F20 showed it:
@@ -79,6 +82,28 @@ const HudProfile k6wa = {
     32,
     8,
     "-./",
+    {0}, 0, false, false, 0,
+};
+
+// Separately opt-in F15 HUD layout, verified on the user's vehicle. Keep 6WA's F20 profile untouched.
+// Panel 0x01, factory arrow buffers 0x04/0x05 (start on verified 0x05), and three confirmed ASCII text handles.
+// Only the verified glyph box is treated as drawable; overlay and lane drawing stay disabled pending tests.
+const HudProfile k6waF15 = {
+    "6wa-f15",
+    0x01,
+    0x0C, 0x10, 0x0D,
+    0x04, 0x05,
+    0, 0,
+    0, 0,
+    4,
+    7, 3, 4,
+    { 35, 20, 136, 110 },
+    { 35, 20, 136, 110 },
+    { 0, 0, 0, 0 },
+    32,
+    8,
+    "-./",
+    {0}, 0, true, true, 0x13,
 };
 
 // The handles a profile lets the driver use: nothing else can be sent (cluster/hudterm.hpp buildCall).
@@ -90,6 +115,7 @@ inline HandleSet handlesOf(const HudProfile& p) {
     h.allow(p.unit);
     h.allow(p.bufA);
     h.allow(p.bufB);
+    if (p.distanceBar) h.allow(p.distanceBar);
     if (p.routeA && p.routeB) {
         h.allow(p.routeA);
         h.allow(p.routeB);
@@ -145,7 +171,7 @@ inline void fitMeasured(int w, int h, HudProfile& p) {
         p.canvas.x1 = (int16_t)(w - 1); p.canvas.y1 = (int16_t)(h - 1);
     }
     bool cut = p.glyph.x0 < 0 || p.glyph.y0 < 0 || p.glyph.x1 >= w || p.glyph.y1 >= h;
-    if ((cut || (w == 176 && h == 126)) && !getenv("NBT_HUD_GLYPH")) {
+    if ((cut || (!p.singlePicture && w == 176 && h == 126)) && !getenv("NBT_HUD_GLYPH")) {
         p.glyph.x0 = (int16_t)((w * 37 + 63) / 126); p.glyph.x1 = (int16_t)((w * 82 + 63) / 126);
         p.glyph.y0 = (int16_t)((h * 23 + 38) / 77);  p.glyph.y1 = (int16_t)((h * 68 + 38) / 77);
     }

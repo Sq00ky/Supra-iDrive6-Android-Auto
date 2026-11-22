@@ -53,7 +53,7 @@ const uint16_t kGuidanceMovedFkt = 0xCFF;
 enum Fkt {
     kSetVisibility = 0x204, kIsVisible = 0x205, kSwitchVisibility = 0x20E, kTextareaSetText = 0x210,
     kSetLineColor = 0x218, kSetLineWidth = 0x219, kSetFillColor = 0x21B, kSetFillMode = 0x21C, kAddPolygon = 0x21D,
-    kAddCircle = 0x21E, kRemoveAllItems = 0x220, kGetSize = 0xC04, kAddCircleDiameter = 0xC09
+    kAddCircle = 0x21E, kRemoveAllItems = 0x220, kPotentiometerSetValue = 0x227, kGetSize = 0xC04, kAddCircleDiameter = 0xC09
 };
 enum PolyType { kPolyline = 2, kPolygon = 3 };
 enum { kMaxPoints = 99, kMaxTextChars = 32, kMaxHandle = 255 };
@@ -81,7 +81,7 @@ inline const char* fktName(uint16_t f) {
         case 0x21F: return "ImageRemoveItem";
         case kRemoveAllItems: return "ImageRemoveAllItems";
         case 0x226: return "PotentiometerSetType";
-        case 0x227: return "PotentiometerSetValue";
+        case kPotentiometerSetValue: return "PotentiometerSetValue";
         case 0x229: return "PotentiometerSetRange";
         case 0x22B: return "FrameAddItem";
         case 0x300: return "TerminalInterface";
@@ -134,6 +134,13 @@ inline std::vector<uint8_t> switchVisibility(uint16_t hide, uint16_t show) {
     std::vector<uint8_t> p; putBe16(p, hide); putBe16(p, show); return p;
 }
 inline std::vector<uint8_t> removeAllItems(uint16_t h) { std::vector<uint8_t> p; putBe16(p, h); return p; }
+inline std::vector<uint8_t> setBarValue(uint16_t h, uint8_t value) {
+    std::vector<uint8_t> p;
+    putBe16(p, h);
+    putBe32(p, value);
+    p.push_back(0x02);
+    return p;
+}
 inline std::vector<uint8_t> getSize(uint16_t h) { std::vector<uint8_t> p; putBe16(p, h); return p; }
 inline std::vector<uint8_t> setFillColor(uint16_t h, uint8_t colour) { return handleAnd(h, colour); }
 inline std::vector<uint8_t> setLineColor(uint16_t h, uint8_t colour) { return handleAnd(h, colour); }
@@ -270,6 +277,7 @@ inline bool payloadShapeOk(uint16_t fkt, const std::vector<uint8_t>& p) {
         case kSetVisibility: return n == 3 && p[2] <= 1;
         case kRemoveAllItems: case kGetSize: return n == 2;
         case kSwitchVisibility: return n == 4;
+        case kPotentiometerSetValue: return n == 7 && p[2] == 0 && p[3] == 0 && p[4] == 0 && p[6] == 0x02;
         case kSetFillColor: case kSetLineColor: case kSetLineWidth: case kSetFillMode: return n == 3;
         case kAddCircle: case kAddCircleDiameter: {
             if (n != 19 || (p[4] != kPolyline && p[4] != kPolygon)) return false;
@@ -291,8 +299,11 @@ inline bool payloadShapeOk(uint16_t fkt, const std::vector<uint8_t>& p) {
 struct Call {
     uint16_t fkt;
     std::vector<uint8_t> payload;
-    Call() : fkt(0) {}
-    Call(uint16_t f, const std::vector<uint8_t>& p) : fkt(f), payload(p) {}
+    bool afterReplies;
+    bool allowTimeout;       // an idle media label can be skipped if the HUD ignores it
+    Call() : fkt(0), afterReplies(false), allowTimeout(false) {}
+    Call(uint16_t f, const std::vector<uint8_t>& p, bool barrier = false, bool optional = false)
+        : fkt(f), payload(p), afterReplies(barrier), allowTimeout(optional) {}
     uint16_t handle() const { return payload.size() >= 2 ? rdBe16(&payload[0]) : 0; }
 };
 

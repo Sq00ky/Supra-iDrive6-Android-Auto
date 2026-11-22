@@ -87,7 +87,9 @@ struct Batch {
     uint8_t slot;            // Slot; kSlotAll (a clear) replaces every waiting batch
     Batch() : full(false), slot(kSlotMain) {}
     explicit Batch(const char* l, bool f = false, uint8_t s = kSlotMain) : label(l), full(f), slot(s) {}
-    void add(uint16_t fkt, const std::vector<uint8_t>& p) { calls.push_back(Call(fkt, p)); }
+    void add(uint16_t fkt, const std::vector<uint8_t>& p, bool afterReplies = false, bool allowTimeout = false) {
+        calls.push_back(Call(fkt, p, afterReplies, allowTimeout));
+    }
 };
 
 enum SubmitResult {
@@ -139,7 +141,7 @@ public:
     TerminalStats stats() const { return stats_; }
 
 private:
-    struct InFlight { uint16_t fkt, handle; uint32_t sentMs; };
+    struct InFlight { uint16_t fkt, handle; uint32_t sentMs; bool allowTimeout; };
 
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
@@ -147,6 +149,7 @@ private:
     void fail(const char* why, uint32_t now);
     void refresh(const char* why, uint32_t now);
     void dropWork(uint32_t now);
+    void expireDropped(uint32_t now);
     bool takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now);
     void finishIfDone(uint32_t now);
 
