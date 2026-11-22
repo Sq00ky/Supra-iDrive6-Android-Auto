@@ -176,7 +176,7 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
 
 namespace {
 bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
-    if (spec.kind == kShapeRoundabout && !spec.exit) return roundaboutPicture(spec, p, pic, exitNumber);
+    if (spec.kind == kShapeRoundabout) return roundaboutPicture(spec, p, pic, exitNumber);
     if (mbxManeuver(spec, p, pic)) return true;   // Mapbox glyph/roundabout; else the parametric shape below
     Shape design, fitted;
     drawShape(spec, design);
@@ -278,8 +278,9 @@ bool Hud6waDisplay::nearDue(const NavView& v, double* m) const {
 }
 
 void Hud6waDisplay::startManeuver(const NavView& v) {
-    has_layout_ = s_.junction && junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
-                                                v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
+    has_layout_ = s_.junction && shapeFor(v.aa_type, v.has_exit_angle, v.exit_angle).kind != kShapeRoundabout &&
+                  junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
+                                 v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
     if (has_layout_ && !junctionShows()) {   // drawn scaled onto this buffer, its way would still be cut off
         has_layout_ = false;
         log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
@@ -423,7 +424,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
         if (!arrowPicture(spec, p_, pic, number))
             log("exit number %d omitted: no room for a readable number in this canvas", number);
         what = describeSpec(spec);
-        if (spec.kind == kShapeRoundabout && !spec.exit && number) {
+        if (spec.kind == kShapeRoundabout && number) {
             char n[24];
             snprintf(n, sizeof(n), " number %d", number);
             what += n;
