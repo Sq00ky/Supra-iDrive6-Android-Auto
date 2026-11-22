@@ -33,6 +33,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <vector>
 
 namespace nbt {
 
@@ -544,6 +545,89 @@ inline const char* const* wfdPersistPaths() {
     return p;
 }
 inline size_t wfdPersistPathCount() { return 1; }
+
+// ---- derived name: "DIRECT-03-" + brand + last 5 of the VIN ------------------------------------------------------------
+// Connectivity builds the group name exactly so (CWlanWiFiDirectCfg::startUp, proven on two units): the coded brand,
+// mixed case (BMW, MINI, BMWi, Toyota, Rolls-Royce), and the VIN's last five characters. The last resort when no file,
+// mwud or the connection manager names the group: the brand comes from the Car manufacturer setting (car_config.hpp
+// carMakeName), so a wrong setting (or a BMW i, coded "BMWi") gives a name the car does not run and the phone never finds.
+// VIN sources, local first (all read-only, values never sent anywhere):
+//   NBT_VIN                                  the whole VIN (or at least its last 5), set by hand
+//   pers_NBTCarHUSwt / SWT (software-update records)   last 7 per record, "\x01<7 chars>\x01" (both dumps)
+//   /var/opt/nav/vin.bin                     last 7, raw (BMW with navigation)
+//   hu-jacinto's coding-controller persistency   the full VIN in a length-prefixed record (Supra)
+inline bool wfdVinChar(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z' && c != 'I' && c != 'O' && c != 'Q');
+}
+// The software-update records' VIN tail: every "\x01" + 7 VIN chars + "\x01"; the most frequent wins.
+inline bool wfdVinTailFromSwt(const std::string& b, std::string& tail) {
+    std::vector<std::string> seen;
+    std::vector<int> count;
+    for (size_t i = 0; i + 8 < b.size(); ++i) {
+        if (b[i] != '\x01' || b[i + 8] != '\x01') continue;
+        bool ok = true;
+        for (size_t k = 1; k <= 7 && ok; ++k) ok = wfdVinChar(b[i + k]);
+        if (!ok) continue;
+        const std::string t = b.substr(i + 1, 7);
+        size_t j = 0;
+        while (j < seen.size() && seen[j] != t) ++j;
+        if (j == seen.size()) { seen.push_back(t); count.push_back(0); }
+        ++count[j];
+    }
+    int best = -1;
+    for (size_t j = 0; j < seen.size(); ++j)
+        if (best < 0 || count[j] > count[best]) best = (int)j;
+    if (best < 0) return false;
+    tail = seen[best];
+    return true;
+}
+// A whole VIN in a blob: 17 VIN chars with no letter or digit on either side; the last one wins.
+inline bool wfdVinFromBlob(const std::string& b, std::string& vin) {
+    bool found = false;
+    size_t run = 0;
+    for (size_t i = 0; i <= b.size(); ++i) {
+        const bool v = i < b.size() && wfdVinChar(b[i]);
+        const bool alnum = i < b.size() && isalnum((unsigned char)b[i]);
+        if (v) { ++run; continue; }
+        if (run == 17 && !alnum) { vin = b.substr(i - 17, 17); found = true; }
+        run = 0;
+    }
+    return found;
+}
+inline std::string wfdSsidFromBrandVin(const std::string& brand, const std::string& vinTail) {
+    if (brand.empty() || vinTail.size() < 5) return std::string();
+    return "DIRECT-03-" + wfdNoSpaces(brand) + vinTail.substr(vinTail.size() - 5);
+}
+inline const char* const* wfdSwtPaths() {
+    static const char* const p[] = {
+        "/var/opt/sys/persistence/early/pers_NBTCarHUSwt", "/var/opt/sys/persistence/kiss/SWT",
+        "/fs/sda1/opt/sys/persistence/early/pers_NBTCarHUSwt", "/fs/sda1/bkup.cs/SWT",
+    };
+    return p;
+}
+inline size_t wfdSwtPathCount() { return 4; }
+// The VIN's tail (at least 5 chars), and where it came from.
+inline bool wfdVinTail(std::string& tail, std::string& from) {
+    const char* e = getenv("NBT_VIN");
+    if (e && strlen(e) >= 5) {
+        std::string v;
+        for (const char* p = e; *p; ++p) v.push_back((char)toupper((unsigned char)*p));
+        tail = v; from = "NBT_VIN";
+        return true;
+    }
+    std::string text;
+    for (size_t i = 0; i < wfdSwtPathCount(); ++i)
+        if (readWholeFile(wfdSwtPaths()[i], text) && wfdVinTailFromSwt(text, tail)) { from = wfdSwtPaths()[i]; return true; }
+    if (readWholeFile("/var/opt/nav/vin.bin", text) && text.size() >= 7) {
+        std::string t = text.substr(0, 7);
+        bool ok = true;
+        for (size_t k = 0; k < t.size() && ok; ++k) ok = wfdVinChar(t[k]);
+        if (ok) { tail = t; from = "/var/opt/nav/vin.bin"; return true; }
+    }
+    static const char* const jac = "/net/hu-jacinto/var/opt/sys/persistence/early/pers_NbtEvoJacintoDiagHUHighAppCodingController";
+    if (readWholeFile(jac, text) && wfdVinFromBlob(text, tail)) { from = jac; return true; }
+    return false;
+}
 
 // One request/reply on mwud's command channel (default 127.0.0.1:9096): 8-byte header {u32_le body_len; u32_le
 // status} + newline-separated key=value body. No authentication; any local process may drive it (it is the same

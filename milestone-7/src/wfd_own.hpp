@@ -196,13 +196,19 @@ inline std::string wfdWatchVerdict(const WfdWatchState& base, const WfdWatchStat
 // The head-unit ladder (alt_wifi.hpp resolveWfdSsid: NBT_WFD_SSID, ifconfig, mwud, the WLAN persistency) first; when it
 // has nothing (Y24073J: no ssid line, mwud refuses with errno 261, no persistency), the car's connection manager's
 // stored group name (getPersistedGroupList). Only a DIRECT-xx-<name> counts. `source` says which one answered.
+// Last: the derived name (alt_wifi.hpp wfdSsidFromBrandVin, Car manufacturer + last 5 of the VIN).
 inline bool wfdPickSsid(bool ladderOk, const std::string& ladder, const std::string& connMngr, std::string& ssid,
-                        std::string& source) {
+                        std::string& source, const std::string& derived = std::string()) {
     std::string dn;
     if (ladderOk && !ladder.empty()) { ssid = ladder; source = "head unit"; return true; }
     if (!connMngr.empty() && wfdDeviceNameFromSsid(connMngr, dn)) {
         ssid = connMngr;
         source = "the car's connection manager";
+        return true;
+    }
+    if (!derived.empty() && wfdDeviceNameFromSsid(derived, dn)) {
+        ssid = derived;
+        source = "derived: Car manufacturer + last 5 of the VIN";
         return true;
     }
     ssid.clear();
@@ -222,7 +228,7 @@ inline std::string wfdMissingText(WfdMissing m, bool ownTried) {
                                 : "no usable Wi-Fi Direct passphrase (/var/opt/conn/WFDPass.conf, then "
                                   "/fs/sda1/opt/conn/WFDPass.conf)";
     std::string ssid = "no Wi-Fi Direct group name (not from the head unit's files, mwud or the car's connection manager; "
-                       "NBT_WFD_SSID=DIRECT-03-<brand><last5> pins one)";
+                       "no VIN to derive it from; NBT_WFD_SSID=DIRECT-03-<brand><last5> or NBT_VIN pins one)";
     switch (m) {
     case WFD_MISSING_PASS: return pass + "; the group name is known";
     case WFD_MISSING_SSID: return "the passphrase is fine, but " + ssid;

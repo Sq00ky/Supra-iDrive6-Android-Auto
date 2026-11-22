@@ -55,6 +55,14 @@ int runWfdOwnCommand(int argc, char** argv) {
     }
     if (ssid.empty() && resolveWfdSsid("wfd0", ssid))
         printf("[WfdOwn] group name from the head unit's files: '%s'\n", ssid.c_str());
+    if (ssid.empty()) {   // the daemon puts the derived name here at start (main.cpp, Car manufacturer + VIN)
+        const char* d = getenv("NBT_WFD_DERIVED_SSID");
+        if (d && *d) {
+            ssid = d;
+            printf("[WfdOwn] group name derived: '%s' (Car manufacturer + last 5 of the VIN; the car refuses it if the "
+                   "manufacturer setting is wrong)\n", d);
+        }
+    }
     if (!wfdDeviceNameFromSsid(ssid, dev)) {
         printf("[WfdOwn] no group name of the form DIRECT-xx-<name> ('%s'): set NBT_WFD_SSID\n", ssid.c_str());
         printf("wfd-own-result: ok=0 ssid=\n");

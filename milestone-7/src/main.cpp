@@ -1318,7 +1318,15 @@ static void* wirelessThread(void*) {
             if (!ownUsed && havePass) {
                 const bool ladderOk = nbt::resolveWfdSsid(wfdIfn, ladderSsid);
                 if (!ladderOk) nbt::wfdSsidFromConnMngr(cmSsid);
-                haveSsid = nbt::wfdPickSsid(ladderOk, ladderSsid, cmSsid, wfdSsid, ssidFrom);
+                const char* derived = getenv("NBT_WFD_DERIVED_SSID");
+                haveSsid = nbt::wfdPickSsid(ladderOk, ladderSsid, cmSsid, wfdSsid, ssidFrom, derived ? derived : "");
+                if (haveSsid && !ladderOk && cmSsid.empty()) {
+                    static std::string shown;
+                    if (shown != wfdSsid) {
+                        shown = wfdSsid;
+                        printf("[Wireless] Wi-Fi Direct SSID: '%s' (%s)\n", wfdSsid.c_str(), ssidFrom.c_str());
+                    }
+                }
             }
             g_wfdMissing = ownUsed ? nbt::WFD_MISSING_NOTHING : nbt::wfdMissing(havePass, havePass && haveSsid);
             if (ownUsed) {
@@ -2400,6 +2408,19 @@ int main(int argc, char* argv[]) {
            car.manufacturer.empty() ? "-" : car.manufacturer.c_str(), car.oemIcon.empty() ? "-" : car.oemIcon.c_str(), car.screenW, car.screenH, car.screenFrom,
            car.iniPath.empty() ? "not found" : car.iniPath.c_str(),
            car.coded.empty() ? "" : " (coded: ", car.coded.c_str(), car.coded.empty() ? "" : ")");
+    {   // Wi-Fi Direct's last resort: the group name derived from the Car manufacturer and the VIN (alt_wifi.hpp)
+        std::string tail, from;
+        if (nbt::wfdVinTail(tail, from)) {
+            const std::string d = nbt::wfdSsidFromBrandVin(nbt::carMakeName(car.make), tail);
+            setenv("NBT_WFD_DERIVED_SSID", d.c_str(), 1);   // the --wfd-own child inherits it
+            printf("[Wireless] Wi-Fi Direct name if the car names none: '%s' (brand %s from %s, last 5 of the VIN from %s)%s\n",
+                   d.c_str(), nbt::carMakeName(car.make), car.vehicleFrom, from.c_str(),
+                   strcmp(car.vehicleFrom, "default") == 0 ? ": Car manufacturer is Auto and there is no carplay.ini, "
+                                                             "so Toyota is assumed - pick the manufacturer if that is wrong" : "");
+        } else {
+            printf("[Wireless] Wi-Fi Direct name: no VIN found to derive it from (NBT_VIN sets it)\n");
+        }
+    }
     printf("[Car] display (LayerManager screen 0): %dx%d, CarPlay picture coded %dx%d\n",
            car.dispW, car.dispH, car.iniW, car.iniH);
     if (nbt::vidNative())
