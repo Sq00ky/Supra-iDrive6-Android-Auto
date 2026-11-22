@@ -89,6 +89,7 @@
 #include "audio/browser_audio.hpp"
 #include "volume.hpp"
 #include "volume_osd.hpp"
+#include "volume_pill.hpp"
 #include "audio/bt_audio.hpp"
 #include "audio/mic_uplink.hpp"
 #include "video_manager.hpp"
@@ -1605,6 +1606,13 @@ static void onAudioState(uint8_t channel, bool started, uint32_t rate, uint32_t 
 static double g_sessionStartS = 0;   // upSec() of the last onClientConnected
 static int g_shortSessions = 0;      // sessions in a row that ended within kShortSessionS of connecting
 static const double kShortSessionS = 15.0;
+// Android Auto reports a call (phone status channel): the knob then sets the call volume. Session thread writes.
+static volatile bool g_phoneInCall = false;
+static void onPhoneCall(bool inCall, void*) {
+    if (inCall != g_phoneInCall) printf("[Phone] %s\n", inCall ? "call active" : "no call");
+    g_phoneInCall = inCall;
+}
+
 static void onSessionEnded(void* user_data) {
     nbt::UsbAccessory* usb = g_usb;
     const nbt::AASession::Outcome outcome = g_session.outcome();
@@ -1630,6 +1638,7 @@ static void onSessionEnded(void* user_data) {
     if (g_audioBackend) g_audioBackend->onSessionEnded();
     g_kombiNav.onSessionEnded();   // the worker clears a cluster/HUD arrow
     resetMedia("session ended");   // the iDrive app must not show the last track of a session that is over
+    g_phoneInCall = false;
 }
 
 // UsbAccessory: no new USB session (and no accessory switch) while a phone is already connected, and a USB bridge
@@ -1753,11 +1762,11 @@ static bool volGainEnabled() {
     return v != 0;
 }
 
-static void volumeApply(int pct, bool setGain) {
+static void volumeApply(int pct, bool setGain, nbt::PillLabel label) {
     const int p = nbt::volumeClampPct(pct);
     if (setGain && volGainEnabled() && g_browserAudio) g_browserAudio->setMediaGain(nbt::volumePctToGain(p));
-    g_volumeOsd.setPct(p);
-    printf("[Volume] %d%% (%d dB)%s\n", p, nbt::volumePctToDb(p),
+    g_volumeOsd.setLevel(p, label);
+    printf("[Volume] %d%% (%d dB) %s%s\n", p, nbt::volumePctToDb(p), nbt::pillLabelName(label),
            (setGain && volGainEnabled()) ? " [mixer]" : "");
 }
 
@@ -1798,8 +1807,8 @@ static void onCarInput(const char* what, void*) {
 // Car volume level (AudioMaster FBlock 0x20 fkt 0x0C08, car-verified 2026-11-03, car/volume_level.hpp): mirror it on
 // the overlay. This is the value the amplifier actually applied, so the pill always matches what the driver hears.
 // From g_carVolume on the DSI callback thread.
-static void onCarVolume(int level, int max, void*) {
-    const int pct = nbt::car::VolumeLevel::percent(level, max);
+static void onCarVolume(const nbt::car::CarVolume& v, void*) {
+    const int pct = nbt::car::VolumeLevel::percent(v.level, v.max);
     struct timespec ts;   // 64-bit ms, same base as SpeechOut (monoMs() wraps at 32 bit)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     const uint64_t now = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
@@ -1808,7 +1817,7 @@ static void onCarVolume(int level, int max, void*) {
         return;
     }
     g_carInputMs = monoMs() | 1u;   // iDrive draws its own volume bar: that is the driver, not the car
-    volumeApply(pct, false);
+    volumeApply(pct, false, nbt::pillLabelFor(nbt::focusVolumeQuiet().routed(), g_phoneInCall));
 }
 
 static uint32_t g_idrWaitMs = 0;   // decoder rebuilt on the way back: waiting for the phone's keyframe since
@@ -2481,6 +2490,7 @@ int main(int argc, char* argv[]) {
     g_session.setMicRequestCallback(&onMicRequest, NULL);
     g_session.setNavStatusCallback(&nbt::kombinav::KombiNav::navStatusCallback, &g_kombiNav);
     g_session.setMediaStatusCallback(&onMediaStatus, NULL);
+    g_session.setPhoneCallCallback(&onPhoneCall, NULL);
 
     if (!tcp_server.start()) {
         printf("[Main] Fatal: Failed to start TCP server on port %u\n", (unsigned)g_aaPort);
@@ -2540,7 +2550,7 @@ int main(int argc, char* argv[]) {
     // Registered unless NBT_FAVOURITE_PREVIEW=0. The Settings toggle is checked per frame instead
     // (favouriteBarOff), so switching it does not need a daemon restart.
     const bool favouritePreviewEnabled = nbt::envFlag("NBT_FAVOURITE_PREVIEW") != 0;
-    if (nbt::envFlag("NBT_FAVOURITE_PROBE") != 0) {
+    if (nbt::envFlag("NBT_FAVOURITE_PROBE") > 0) {
         if (g_most.setTap(&onFavouriteProbe, NULL))
             printf("[FavProbe] on: every fb=0x15 MOST frame is logged. Touch the favourite keys now.\n");
         else

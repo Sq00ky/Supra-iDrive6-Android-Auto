@@ -107,7 +107,8 @@ bool SpeechFocus::release(uint64_t now) {
 
 void SpeechFocus::syncBusy(uint64_t now) {
     const NavPromptPolicy::State st = policy_.state();
-    port_.setFocusBusy(st == NavPromptPolicy::BUILDING || st == NavPromptPolicy::RELEASING || removes_ > 0, now);
+    port_.setFocusState(st == NavPromptPolicy::BUILDING || st == NavPromptPolicy::RELEASING || removes_ > 0,
+                        policy_.mayPlay(), now);
 }
 
 void SpeechFocus::openEndpoint(uint64_t now) {

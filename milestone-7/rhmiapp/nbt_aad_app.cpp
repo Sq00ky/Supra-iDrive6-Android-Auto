@@ -2815,6 +2815,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showDriveMode(g_app);
         showKombiNav(g_app);
         showHudCyrillic(g_app);
+        showFavouriteBar(g_app);
         showClusterType(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
@@ -2885,7 +2886,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
     addAction(self,248,&onFavouriteBarToggle);
-    addAction(self,421,&onHudCyrillicToggle);
+    addAction(self,426,&onHudCyrillicToggle);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;

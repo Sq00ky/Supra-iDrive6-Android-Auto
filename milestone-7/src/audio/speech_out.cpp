@@ -264,7 +264,7 @@ void SpeechOut::cancelPending() { route_.cancelPending(); }
 void SpeechOut::setFeed(bool on) { speech_->setFeedEnabled(on); }
 void SpeechOut::flush() { speech_->flush(); }
 size_t SpeechOut::queuedBytes() const { return speech_->queuedBytes(); }
-void SpeechOut::setFocusBusy(bool busy, uint64_t now) { focusVolumeQuiet().setBusy(busy, now); }
+void SpeechOut::setFocusState(bool busy, bool routed, uint64_t now) { focusVolumeQuiet().set(busy, routed, now); }
 
 void SpeechOut::openEndpoint() {
     ep_want_ = true;

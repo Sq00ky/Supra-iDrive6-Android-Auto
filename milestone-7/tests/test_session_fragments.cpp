@@ -25,6 +25,14 @@ static void navigation(uint16_t id, const uint8_t* body, size_t n, void* user) {
     pthread_mutex_unlock(&received.mutex);
 }
 
+static void phoneCall(bool inCall, void* user) {
+    assert(inCall);
+    Received& received = *static_cast<Received*>(user);
+    pthread_mutex_lock(&received.mutex);
+    ++received.count;
+    pthread_mutex_unlock(&received.mutex);
+}
+
 static void readExact(int fd, unsigned char* data, size_t n) {
     size_t got = 0;
     while (got < n) {
@@ -34,14 +42,16 @@ static void readExact(int fd, unsigned char* data, size_t n) {
     }
 }
 
-static void frame(int fd, unsigned flags, const unsigned char* data, size_t n) {
-    unsigned char buf[32] = { 10, (unsigned char)flags, 0, (unsigned char)n };
+static void frameOn(int fd, unsigned char channel, unsigned flags, const unsigned char* data, size_t n) {
+    unsigned char buf[32] = { channel, (unsigned char)flags, 0, (unsigned char)n };
     size_t off = 4;
     if (flags == 1) { buf[4] = buf[5] = buf[6] = 0; buf[7] = 4; off = 8; }
     assert(off + n <= sizeof(buf));
     memcpy(buf + off, data, n);
     assert(write(fd, buf, off + n) == (ssize_t)(off + n));
 }
+
+static void frame(int fd, unsigned flags, const unsigned char* data, size_t n) { frameOn(fd, 10, flags, data, n); }
 
 static void checkpoint(int fd, Received& received, unsigned expected) {
     // PingResponse is sent by the session thread after all preceding frames were
@@ -63,15 +73,24 @@ static void checkpoint(int fd, Received& received, unsigned expected) {
 static void run(const char* scenario) {
     int sv[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
-    Received received;
+    Received received, phone;
     nbt::AASession session;
     session.setNavStatusCallback(navigation, &received);
+    session.setPhoneCallCallback(phoneCall, &phone);
     assert(session.start(sv[0]));
     unsigned char version[12];
     readExact(sv[1], version, sizeof(version));
     const unsigned char head[] = { 0x80, 6 }, tail[] = { 8, 1 }, whole[] = { 0x80, 6, 8, 1 };
 
-    if (!strcmp(scenario, "orphan")) {
+    if (!strcmp(scenario, "phone")) {
+        // Phone status (ch 11, 0x8001: a ringing call) reaches its own callback, not the AV start handler.
+        const unsigned char status[] = { 0x80, 0x01, 0x0A, 0x02, 0x08, 0x04 };
+        frameOn(sv[1], 11, 3, status, sizeof(status));
+        checkpoint(sv[1], received, 0);
+        pthread_mutex_lock(&phone.mutex);
+        assert(phone.count == 1);
+        pthread_mutex_unlock(&phone.mutex);
+    } else if (!strcmp(scenario, "orphan")) {
         // MIDDLE must not manufacture a FIRST for the following LAST.
         frame(sv[1], 0, head, 2);
         frame(sv[1], 2, tail, 2);
@@ -106,7 +125,7 @@ static void run(const char* scenario) {
 int main(int argc, char** argv) {
     alarm(20);
     signal(SIGPIPE, SIG_IGN);
-    const char* const scenarios[] = { "orphan", "bulk", "valid" };
+    const char* const scenarios[] = { "orphan", "bulk", "valid", "phone" };
     for (size_t i = 0; i < sizeof(scenarios) / sizeof(scenarios[0]); ++i) {
         if (argc == 1 || (argc == 2 && !strcmp(argv[1], scenarios[i]))) {
             run(scenarios[i]);
