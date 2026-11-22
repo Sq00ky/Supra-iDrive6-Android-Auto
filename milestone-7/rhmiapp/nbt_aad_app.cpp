@@ -437,9 +437,10 @@ const char* const kKombiMediaFlag   = "kombi-media";
 const unsigned    kActGestureMute   = 474;
 const unsigned    kGestureMuteModel = 475;
 const char* const kGestureMuteFlag  = "gesture-mute";
-// "Nav prompts on their own channel", ON by default: <checkbox action="478" id="481" model="479" textModel="480">. The
-// box is ticked while the marker is ABSENT (src/audio/config.hpp navPromptOwnChannel(), read by nbt-aad at every
-// prompt, so no restart). NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins.
+// "Nav prompts mixed into Music", off by default: <checkbox action="478" id="481" model="479" textModel="480">. Ticked =
+// the marker exists = while AA music plays, prompts stay in the music mix (music ducked); unticked = prompts on the
+// car's nav prompt channel (src/audio/config.hpp navPromptOwnChannel(), read by nbt-aad at every prompt, so no
+// restart). NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins.
 const unsigned    kActNavPromptOwn  = 478;
 const unsigned    kNavPromptOwnModel = 479;
 const char* const kNavPromptMixFlag = "nav-prompt-mix";
@@ -2418,16 +2419,14 @@ bool onGestureMuteToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 }
 
 bool g_navPromptOwnShown = false;
-bool navPromptOwnOn() { return !nbt::flagSet(kNavPromptMixFlag); }
+bool navPromptMixOn() { return nbt::flagSet(kNavPromptMixFlag); }
 void showNavPromptOwn(bmw::PluginApp* app) {
-    app->updateModel(kNavPromptOwnModel, navPromptOwnOn());
+    app->updateModel(kNavPromptOwnModel, navPromptMixOn());
     g_navPromptOwnShown = true;
 }
 bool onNavPromptOwnToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
-    const bool was = navPromptOwnOn();
-    flipFlag(kNavPromptMixFlag, "Nav prompts on their own channel", true);
-    alog("menu: Nav prompts on their own channel %s -> %s (native audio; nbt-aad reads it at every prompt; "
-         "NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins)", was ? "on" : "off", navPromptOwnOn() ? "on" : "off");
+    toggleFlagFile(kNavPromptMixFlag, "Nav prompts mixed into Music (native audio; off = the car's nav prompt channel; "
+                                      "nbt-aad reads it at every prompt; NBT_SPEECH_OWN_CHANNEL in nbt-aad.env wins)");
     if (g_runApp) showNavPromptOwn(g_runApp);
     return true;
 }
