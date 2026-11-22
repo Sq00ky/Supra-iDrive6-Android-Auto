@@ -9,15 +9,17 @@ draws them; unset or `0` / `off` keeps the parametric shapes, the default look. 
 
 - **`src/cluster/mapbox_glyphs.hpp`** — the glyph data: `struct Piece { unsigned char tone, n; short p[8][2]; }`
   and the `kArrow*` / `kFork` / `kMerge` / `kOfframp` / `kArrive` / `kDestination` / `kStarting` / `kRbArrow`
-  / `kLane*` tables. **CC0**, from Mapbox's `ManeuversStyleKit.swift` (mapbox-navigation-ios v0.40.0); copied
-  verbatim from the CarPlay plugin's `hudglyphs.h` (the same set the CarPlay HUD uses), only the namespace
-  changed to `nbt::hudterm::mbx`. Points are in the **6WA box** (x 70..170, y 20..120); `tone` 0 = route, 1 = context.
+  / `kLane*` tables. **CC0**, from Mapbox's `ManeuversStyleKit.swift` (mapbox-navigation-ios v0.40.0), originally
+  copied from the CarPlay plugin's `hudglyphs.h`. The production arrows have adapted wings; the original
+  attribution is retained. Points are in the **6WA box** (x 70..170, y 20..120); `tone` 0 = route, 1 = context.
 - **`src/cluster/mapbox_hud.hpp`** — the drawing + the maneuver → glyph picker.
+- **`src/cluster/hudterm_ring.hpp`** — the shared known/unknown-angle roundabout drawings, used in both glyph modes.
 
 ## How it works
 
-1. `mbxManeuver(aa_type, profile, pic)` is called first in `arrowPicture()` (`hud6wa_display.cpp`). The maneuver
-   reaches it as `ShapeSpec::aa_type` (set by `shapeFor`), so no call signatures changed.
+1. `arrowPicture()` (`hud6wa_display.cpp`) sends roundabouts to the shared ring renderer first. For ordinary
+   maneuvers, `mbxManeuver(spec, profile, pic)` selects Mapbox when enabled; otherwise the parametric drawing is used.
+   The maneuver reaches it as `ShapeSpec::aa_type` (set by `shapeFor`).
 2. `mbxGlyphForFamily(kombiDirection(aa_type))` picks the glyph by the **same families** the parametric path uses
    (`kombiDirection()` in `nav_msg.hpp`): straight, slight/normal/sharp turn, U-turn, fork, off-ramp, on-ramp/merge,
    destination. The **left** variants are the right glyph **mirrored** (x reflected around the 6WA centre, 120).
@@ -25,18 +27,52 @@ draws them; unset or `0` / `off` keeps the parametric shapes, the default look. 
    `hud_box` uses, `x0 + (x-70)*(x1-x0)/100` — so the arrow lands exactly where the car-tuned box is. Division is by
    the constant extent (100) only, so no `__aeabi` integer-divide is emitted (keep it that way). `tone` 0 → the fill
    colour (`profile.fill`, our `NBT_HUD_FILL=5` orange), 1 → the context tone (`profile.road`, grey).
-4. No glyph for a family (**roundabout**) → `mbxManeuver` returns false and `arrowPicture` draws the parametric shape.
+4. Roundabouts keep the same drawing far and near. A known angle has a radial exit arrow, with the supplied valid
+   number in the centre; 360 degrees has separate incoming and returning branches. An unknown angle shows three
+   circulation arrows and the supplied number, without inventing an exit direction. Neither the glyph mode nor
+   the exit number changes the angle. The older low-level `mbxRoundabout()` helper remains covered separately.
+
+## Arrow wings
+
+The lateral protrusion beyond the shaft is reduced by 30%. The return edge of each wing meets the shaft axis at
+80 degrees. The tip, neck, shaft and longitudinal length retain their original coordinates. This applies to straight,
+slight, normal and sharp turns, U-turns, forks, merges and ramps, plus the older Mapbox roundabout helper. The shared
+ring renderer uses its own compact radial head. Destination and unused drawings are unchanged. Pixel rounding
+introduces a small angular error at the HUD's final size.
+
+The automatic F30 fit uses the original bounds through `mbxOriginalBounds()`. Refitting to the narrower wing bounds
+would enlarge or move the whole icon. Near views retain their roads and route tips, with the same wing proportions.
+Sharp turns and U-turns use single smooth body contours with fractional source coordinates retained until fitting.
+Off-ramps keep a constant-width join where the diagonal shaft enters the head.
+
+Regenerate the committed data from the repository root, using Python's standard library only:
+
+```sh
+git show cd1d9f8:milestone-7/src/cluster/mapbox_glyphs.hpp > /tmp/mapbox-original.hpp
+python3 tools/gen_mapbox_wings.py /tmp/mapbox-original.hpp
+```
+
+The generator verifies its original input and updates the derived header and test fixtures. The tests run against
+the committed data without requiring Git history, network access or a font library.
+
+## Visual review and tests
+
+From `milestone-7`, run `make -C tests hud-preview hud-matrix` to generate the production driver's serialized
+polygons for both glyph modes and all four near-route stages, plus the far view. The ordinary sheets include every
+Android Auto type 0 through 60 and two-digit exit numbers. The ring matrices independently vary angle (absent or
+45 through 360 degrees), number (absent or 1 through 8), and traffic direction.
+
+`make check` also checks the catalog coverage, visible arrow size, mirrored shapes, near-stage transitions, packet
+budgets, geometric digit contours and the Mapbox wing anchors. A two-translation-unit regression ensures the curved
+body lookup does not depend on the address of a header-local glyph array. See `hud-digits.md` for digit tests.
 
 ## Not done / how to extend
 
-- **Roundabout** stays parametric (`drawRoundabout`). To use the Mapbox roundabout, port the CarPlay plugin's
-  `hudshapes.h` roundabout: `kRbArrow` + the `arc()`/`polar()`/`boxX()`/`boxY()` helpers (Mapbox's 512-unit canvas,
-  `boxX(v)=70+((v*25+64)>>7)`), with the exit arrow rotated to `ShapeSpec::exit` (the exit angle AA already gives us).
 - **Ferry** has no glyph → folds to the straight glyph via `kombiDirection` (unchanged from before).
 - **Lanes**: the `kLane*` tables are in `mapbox_glyphs.hpp` but the lane strip still uses its own drawing; wire them
   in `lanesBatch` if wanted.
-- **Regenerate / update glyphs**: run the CarPlay plugin's `tools/hud_glyphs.py` against the Mapbox SVGs to produce a
-  new `hudglyphs.h`, then copy it over `mapbox_glyphs.hpp` and re-apply the namespace change.
+- **Update the source artwork**: import the CarPlay plugin's `tools/hud_glyphs.py` output, preserve its attribution,
+  and review the wing anchors before adapting a new version. The wing generator rejects an unexpected source file.
 
 ## Build & deploy
 

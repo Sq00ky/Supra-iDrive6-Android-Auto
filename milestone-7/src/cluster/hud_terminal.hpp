@@ -69,11 +69,11 @@ struct Config {
     uint32_t replyMs;        // per call, and the copy window
     uint32_t navQuietMs;     // quiet after the frame went off before the navigation counts as finished
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
-    unsigned maxBatch;       // calls in one batch
+    unsigned maxBatch;       // a full Mapbox picture needs up to 55 calls including texts, hides and route cleanup
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
     uint16_t measureHandle;  // ImageGetSize is asked for this handle once the terminal is ready, for the driver to fit
                              // its box to the cluster's real buffer (0 = don't; the shadow mode leaves it 0)
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32), logBatches(false),
+    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(64), logBatches(false),
                measureHandle(0) {}
 };
 

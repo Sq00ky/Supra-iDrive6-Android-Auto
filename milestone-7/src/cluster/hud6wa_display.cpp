@@ -175,9 +175,88 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
 }
 
 namespace {
+// The F30 HUD was checked at this size; other buffers and hand-tuned boxes keep their own geometry.
+bool readableHud(const HudProfile& p) {
+    return !getenv("NBT_HUD_CANVAS") && !getenv("NBT_HUD_GLYPH") && p.canvas.x0 == 0 && p.canvas.y0 == 0
+        && p.canvas.x1 == 125 && p.canvas.y1 == 76 && p.glyph.x0 == 37 && p.glyph.y0 == 23
+        && p.glyph.x1 == 82 && p.glyph.y1 == 68;
+}
+
+void drawHudRoute(const Layout& layout, int tail, const HudProfile& profile, const JunctionColours& colours,
+                  Picture& picture) {
+    JunctionStyle style = kJunctionStyle;
+    bool readable = readableHud(profile) && !layout.ring;
+    if (readable) {
+        int heading = layout.route.heads.empty() ? 0 : layout.route.heads.back();
+        // Match the far icon's visual weight without enlarging its roads or moving its on-canvas tip.
+        if (mbxEnabled()) {
+            if (heading == -135 || heading == 135) {
+                style.routeW = 20; style.routeCore = 16;
+            }
+            style.headL = 34; style.headW = heading == 180 ? 22 : 27;
+        } else {
+            style.routeW = 24; style.routeCore = 20;
+            style.headL = 28; style.headW = heading == 180 ? 19 : 23;
+        }
+    }
+    drawRoute(layout, tail, colours, style, picture, readable ? kJunctionStyle.headL : -1, mbxEnabled());
+}
+
+void readableArrow(const ShapeSpec& spec, const HudProfile& p, Picture& pic) {
+    HudProfile design = p;
+    design.glyph = Rect{ 0, 0, kDesign, kDesign };
+    Picture source;
+    if (!mbxManeuver(spec, design, source)) {
+        Shape shape;
+        drawShape(spec, shape);
+        for (size_t i = 0; i < shape.size(); ++i) {
+            Item item; item.colour = p.fill; item.poly = shape[i]; source.push_back(item);
+        }
+    }
+    Rect bounds = { kDesign, kDesign, 0, 0 };
+    for (size_t i = 0; i < source.size(); ++i)
+        for (size_t j = 0; j < source[i].poly.pts.size(); ++j) {
+            const Point& pt = source[i].poly.pts[j];
+            bounds.x0 = std::min(bounds.x0, pt.x); bounds.x1 = std::max(bounds.x1, pt.x);
+            bounds.y0 = std::min(bounds.y0, pt.y); bounds.y1 = std::max(bounds.y1, pt.y);
+        }
+    Rect original;
+    if (mbxEnabled() && mbxOriginalBounds(kombinav::kombiDirection(spec.aa_type), original)) {
+        Point lo = mbxPoint(original.x0, original.y0, false, design.glyph);
+        Point hi = mbxPoint(original.x1, original.y1, false, design.glyph);
+        bounds = Rect{ lo.x, lo.y, hi.x, hi.y };
+    }
+    int extent = std::max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
+    if (extent <= 0) return;
+    const Rect box = { 36, 16, 89, 69 };
+    int side = box.x1 - box.x0;
+    long denominator = 2L * extent;
+    for (size_t i = 0; i < source.size(); ++i) {
+        Item item = source[i];
+        for (size_t j = 0; j < item.poly.pts.size(); ++j) {
+            Point& pt = item.poly.pts[j];
+            long x = (long)(box.x0 + box.x1) * extent + (2L * pt.x - bounds.x0 - bounds.x1) * side;
+            long y = (long)(box.y0 + box.y1) * extent + (2L * pt.y - bounds.y0 - bounds.y1) * side;
+            pt.x = (int16_t)((x + denominator / 2) / denominator);
+            pt.y = (int16_t)((y + denominator / 2) / denominator);
+        }
+        long area = 0;
+        for (size_t j = 0; j < item.poly.pts.size(); ++j) {
+            const Point& a = item.poly.pts[j];
+            const Point& b = item.poly.pts[j + 1 < item.poly.pts.size() ? j + 1 : 0];
+            area += (long)a.x * b.y - (long)b.x * a.y;
+        }
+        if (area) pic.push_back(item);   // a tessellation sliver can vanish after rounding to HUD pixels
+    }
+}
+
 bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
     if (spec.kind == kShapeRoundabout) return roundaboutPicture(spec, p, pic, exitNumber);
-    if (mbxManeuver(spec, p, pic)) return true;   // Mapbox glyph/roundabout; else the parametric shape below
+    if (readableHud(p)) {
+        readableArrow(spec, p, pic);
+        return true;
+    }
+    if (mbxManeuver(spec, p, pic)) return true;   // Mapbox ordinary glyph; else the parametric shape below
     Shape design, fitted;
     drawShape(spec, design);
     Rect box = p.glyph;
@@ -325,7 +404,7 @@ ClusterDisplay::Result Hud6waDisplay::sendRoute() {
     if (!shadow_ && port_.waiting(kSlotRoute)) return kOk;   // drawn on a later step, from the newest stage
     Picture pic;
     int tail = tailFor(layout_, stage_, kStages);
-    drawRoute(layout_, tail, colours(), kJunctionStyle, pic);
+    drawHudRoute(layout_, tail, p_, colours(), pic);
     fitJunction(pic);
     Batch b = routeBatch(pic);
     log("ROUTE stage %d/%d, tail %d | %u calls%s", stage_, (int)kStages, tail, (unsigned)b.calls.size(),
@@ -411,7 +490,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     std::string what;
     if (junction) {
         drawRoads(layout_, colours(), kJunctionStyle, pic);
-        if (!routeInOverlay()) drawRoute(layout_, tailFor(layout_, stage_, kStages), colours(), kJunctionStyle, pic);
+        if (!routeInOverlay()) drawHudRoute(layout_, tailFor(layout_, stage_, kStages), p_, colours(), pic);
         fitJunction(pic);
         what = "junction view, " + describeSpec(spec);
         if (layout_.exitNumber) {

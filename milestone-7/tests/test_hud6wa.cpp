@@ -674,7 +674,7 @@ static void testDigits() {
     for (int n = 0; n <= 9; ++n) {
         Shape s;
         digits::drawNumber(n, 50, 10, 18, s);
-        assert(s.size() == (n == 0 || n == 6 || n == 8 || n == 9 ? 2u : 1u));
+        assert(s.size() == (n == 0 || n == 4 || n == 6 || n == 8 || n == 9 ? 2u : 1u));
         for (size_t i = 0; i < s.size(); ++i) {
             assert(s[i].pts.size() >= 3 && area2(s[i].pts) > 0);
             for (size_t k = 0; k < s[i].pts.size(); ++k)
@@ -853,8 +853,9 @@ static void testUnknownRoundabout() {
     const Rect expanded[] = {{57,4,182,129},{29,9,95,75},{44,29,122,120},{29,9,91,71}};
     struct ExitNumber { bool has; int value, shown; };
     const ExitNumber numbers[] = {
-        {false,5,0},{true,0,0},{true,-1,0},{true,1,1},
-        {true,9,9},{true,10,10},{true,99,99},{true,100,0}
+        {false, 5, 0}, {true, 0, 0}, {true, -1, 0}, {true, 1, 1},
+        {true, 2, 2}, {true, 3, 3}, {true, 4, 4}, {true, 5, 5}, {true, 6, 6}, {true, 7, 7}, {true, 8, 8},
+        {true, 9, 9}, {true, 10, 10}, {true, 12, 12}, {true, 99, 99}, {true, 100, 0}
     };
     struct ExitAngle { bool has; int value; };
     const ExitAngle angles[] = {{false,0},{false,90},{true,-1},{true,0},{true,361},{true,400}};
@@ -893,7 +894,7 @@ static void testUnknownRoundabout() {
                             }
             }
     }
-    assert(cases == 3072);
+    assert(cases == 6144);
     unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_GLYPHS");
 
     // Refit from the original profile as guidance moves HUD -> cluster -> HUD -> MINI -> HUD.
@@ -1231,6 +1232,161 @@ static void testKnownEntryVisibility() {
     unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
 }
 
+// Read the actual serialized picture, so these checks cover arrowPicture and the real terminal batch.
+static Picture batchPicture(const Batch& batch) {
+    Picture picture;
+    uint8_t colour = 0;
+    for (size_t i = 0; i < batch.calls.size(); ++i) {
+        const Call& call = batch.calls[i];
+        if (call.fkt == kSetFillColor) colour = call.payload[2];
+        if (call.fkt != kAddPolygon) continue;
+        Item item; item.colour = colour; item.poly.type = (PolyType)call.payload[4];
+        unsigned n = call.payload[5];
+        assert(call.payload.size() == 6 + n * 4);
+        for (unsigned j = 0; j < n; ++j)
+            item.poly.pts.push_back(shapes::pt((int16_t)rdBe16(&call.payload[6 + j * 4]),
+                                              (int16_t)rdBe16(&call.payload[8 + j * 4])));
+        picture.push_back(item);
+    }
+    return picture;
+}
+
+static Rect pictureBounds(const Picture& picture) {
+    assert(!picture.empty());
+    Rect box = { 32767, 32767, -32768, -32768 };
+    for (size_t i = 0; i < picture.size(); ++i)
+        for (size_t j = 0; j < picture[i].poly.pts.size(); ++j) {
+            const Point& pt = picture[i].poly.pts[j];
+            box.x0 = std::min(box.x0, pt.x); box.x1 = std::max(box.x1, pt.x);
+            box.y0 = std::min(box.y0, pt.y); box.y1 = std::max(box.y1, pt.y);
+        }
+    return box;
+}
+
+static void testReadableHudArrows() {
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
+    HudProfile profile = k6wa; fitMeasured(126, 77, profile);
+    for (int mode = 0; mode < 2; ++mode) {
+        setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+        FakePort port; Hud6waDisplay display(port, profile, false);
+        for (int type = 0; type <= 60; ++type) {
+            ShapeSpec spec = shapeFor(type, true, 90);
+            if (spec.kind == kShapeRoundabout) continue;
+            Picture pic = batchPicture(display.showBatch(true, HudTexts(), spec));
+            Rect box = pictureBounds(pic);
+            Rect originalBounds;
+            bool adapted = mode && mbxOriginalBounds(kombinav::kombiDirection(type), originalBounds);
+            // Narrower wings retain the old fit; recentering their new bounds would move the unchanged stem and tip.
+            if (std::max(box.x1 - box.x0, box.y1 - box.y0) < (adapted ? 48 : 52))
+                fprintf(stderr, "small glyph: mode%d type%d adapted%d bounds%d,%d-%d,%d items%u\n",
+                        mode, type, adapted, box.x0, box.y0, box.x1, box.y1, (unsigned)pic.size());
+            assert(std::max(box.x1 - box.x0, box.y1 - box.y0) >= (adapted ? 48 : 52));
+            if (!adapted) assert(abs(box.x0 + box.x1 - 125) <= 1 && abs(box.y0 + box.y1 - 85) <= 1);
+            for (size_t i = 0; i < pic.size(); ++i) {
+                assert(area2(pic[i].poly.pts) > 0);
+                for (size_t j = 0; j < pic[i].poly.pts.size(); ++j) {
+                    const Point& pt = pic[i].poly.pts[j];
+                    assert(pt.x >= 36 && pt.x <= 89 && pt.y >= 16 && pt.y <= 69);
+                }
+            }
+            HudProfile design = profile; design.glyph = Rect{ 0, 0, 1000, 1000 };
+            Picture source;
+            if (!mbxManeuver(spec, design, source)) {
+                Shape shape; drawShape(spec, shape);
+                for (size_t i = 0; i < shape.size(); ++i) {
+                    Item item; item.colour = profile.fill; item.poly = shape[i]; source.push_back(item);
+                }
+            }
+            Rect original = pictureBounds(source);
+            long ow = original.x1 - original.x0, oh = original.y1 - original.y0;
+            assert(labs((box.x1 - box.x0) * oh - (box.y1 - box.y0) * ow) <= std::max(ow, oh));
+        }
+        const int pairs[][2] = { {5, 6}, {7, 8}, {9, 10}, {11, 12}, {23, 24}, {25, 26}, {27, 28} };
+        for (size_t pair = 0; pair < sizeof(pairs) / sizeof(pairs[0]); ++pair) {
+            Picture left = batchPicture(display.showBatch(true, HudTexts(), shapeFor(pairs[pair][0], false, 0)));
+            Picture right = batchPicture(display.showBatch(true, HudTexts(), shapeFor(pairs[pair][1], false, 0)));
+            for (size_t i = 0; i < left.size(); ++i)
+                for (size_t j = 0; j < left[i].poly.pts.size(); ++j) {
+                    const Point& a = left[i].poly.pts[j];
+                    bool found = false;
+                    for (size_t k = 0; k < right.size() && !found; ++k)
+                        for (size_t l = 0; l < right[k].poly.pts.size(); ++l) {
+                            const Point& b = right[k].poly.pts[l];
+                            if (left[i].colour == right[k].colour && abs(a.x + b.x - 125) <= 1
+                                && abs(a.y - b.y) <= 1) found = true;
+                        }
+                    assert(found);
+                }
+        }
+    }
+    unsetenv("NBT_HUD_GLYPHS");
+    printf("  F30 static arrows: visible size, aspect ratio and mirrors in both styles\n");
+}
+
+static void testReadableHudCompatibility() {
+    for (int mode = 0; mode < 2; ++mode)
+        for (int layout = 0; layout < 6; ++layout) {
+            setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+            if (layout == 3) setenv("NBT_HUD_GLYPH", "4 5 34 35", 1);
+            else unsetenv("NBT_HUD_GLYPH");
+            if (layout == 4) setenv("NBT_HUD_CANVAS", "0 0 125 76", 1);
+            else unsetenv("NBT_HUD_CANVAS");
+            HudProfile profile = k6wa; applyHudEnv(profile);
+            if (layout == 1) fitMeasured(176, 126, profile);
+            if (layout == 2) fitMeasured(120, 72, profile);
+            if (layout >= 3) fitMeasured(126, 77, profile);
+            if (layout == 5) profile.glyph = Rect{5, 6, 30, 35};
+            FakePort port; Hud6waDisplay display(port, profile, false);
+            for (int type = 0; type <= 60; ++type) {
+                ShapeSpec spec = shapeFor(type, true, 90);
+                if (spec.kind == kShapeRoundabout) continue;   // shared ring renderer is tested separately
+                Picture pic;
+                if (!mbxManeuver(spec, profile, pic)) {
+                    Shape source, fitted; drawShape(spec, source); fitShape(source, profile.glyph, fitted);
+                    for (size_t i = 0; i < fitted.size(); ++i) {
+                        Item item; item.colour = profile.fill; item.poly = fitted[i]; pic.push_back(item);
+                    }
+                }
+                Batch expected = display.pictureBatch("legacy", pic, HudTexts(), false);
+                Batch actual = display.showBatch(true, HudTexts(), spec);
+                assert(actual.calls.size() == expected.calls.size());
+                for (size_t i = 0; i < actual.calls.size(); ++i)
+                    assert(actual.calls[i].fkt == expected.calls[i].fkt && actual.calls[i].payload == expected.calls[i].payload);
+            }
+        }
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_GLYPHS");
+    printf("  F20, cluster, MINI and manually pinned ordinary pictures retain their fitting\n");
+}
+
+static void testGlyphBatchBudget() {
+    unsigned largest = 0;
+    const int widths[] = {0, 126, 176, 120}, heights[] = {0, 77, 126, 72};
+    for (int mode = 0; mode < 2; ++mode) {
+        setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+        for (int layout = 0; layout < 4; ++layout) {
+            HudProfile profile = k6wa;
+            if (layout) fitMeasured(widths[layout], heights[layout], profile);
+            profile.nHide = 8;
+            for (int i = 0; i < profile.nHide; ++i) profile.hide[i] = 21 + i;
+            FakePort port; Hud6waDisplay display(port, profile, false);
+            for (int type = 0; type <= 60; ++type)
+                for (int angle = 0; angle <= 360; angle += 90) {
+                    // showBatch uses the production fitter; add the worst-case previous-route cleanup to that picture.
+                    Batch normal = display.showBatch(true, HudTexts(), shapeFor(type, true, angle));
+                    Batch complete = display.pictureBatch("budget", batchPicture(normal), HudTexts(), true);
+                    Config config; config.handles = handlesOf(profile);
+                    hudterm::Core terminal(config);
+                    terminal.setLink(true, 0x2077, 0); terminal.setHost(0x0123, 0);
+                    assert(terminal.submit(complete, 0) == kQueued);
+                    largest = std::max(largest, (unsigned)complete.calls.size());
+                }
+        }
+    }
+    unsetenv("NBT_HUD_GLYPHS");
+    assert(largest > 32 && largest <= Config().maxBatch);
+    printf("  production glyph batches: maximum %u calls with fresh texts, eight hides and old-route cleanup\n", largest);
+}
+
 static void testLanes() {
     std::vector<kombinav::AaLane> lanes;
     lanes.push_back(oneLane(1, false));
@@ -1532,6 +1688,244 @@ static void testJunctionDriver() {
     sh.setLog(&logFn, NULL);
     assert(sh.showManeuver(close, 0, true, true) == ClusterDisplay::kOk && ps.batches.empty());
     assert(logged("ROUTE stage 4/4") && logged("[shadow] 21D ImageAddPolygon h7"));
+}
+
+static void samePictureItems(const Picture& actual, const Picture& expected, size_t offset = 0) {
+    assert(actual.size() >= offset + expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        assert(actual[offset + i].colour == expected[i].colour);
+        assert(addPolygon(5, (uint16_t)i, actual[offset + i].poly.type, actual[offset + i].poly.pts)
+            == addPolygon(5, (uint16_t)i, expected[i].poly.type, expected[i].poly.pts));
+    }
+}
+
+static bool insidePolygon(const Poly& polygon, double x, double y) {
+    bool inside = false;
+    size_t previous = polygon.pts.size() - 1;
+    for (size_t i = 0; i < polygon.pts.size(); previous = i++) {
+        const Point& a = polygon.pts[i]; const Point& b = polygon.pts[previous];
+        if ((a.y > y) != (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+}
+
+// Measure the incoming stroke from serialized far polygons, including Mapbox's convex-piece tessellation.
+static int farStroke(const Picture& picture) {
+    int pixels = 0, longest = 0;
+    for (int x = 0; x < 126; ++x) {
+        bool painted = false;
+        for (size_t i = 0; i < picture.size() && !painted; ++i)
+            painted = picture[i].colour == k6wa.fill && insidePolygon(picture[i].poly, x + 0.5, 66.5);
+        if (painted) { ++pixels; longest = std::max(longest, pixels); }
+        else pixels = 0;
+    }
+    return longest;   // a U-turn's descending head may also touch this row, separately from the incoming stem
+}
+
+static long crossForTest(const Point& a, const Point& b, const Point& c) {
+    return (long)(b.x - a.x) * (c.y - a.y) - (long)(b.y - a.y) * (c.x - a.x);
+}
+
+static bool simplePolygon(const Poly& polygon) {
+    size_t n = polygon.pts.size();
+    for (size_t i = 0; i < n; ++i)
+        for (size_t j = i + 2; j < n; ++j) {
+            if (i == 0 && j + 1 == n) continue;
+            const Point& a = polygon.pts[i]; const Point& b = polygon.pts[i + 1 < n ? i + 1 : 0];
+            const Point& c = polygon.pts[j]; const Point& d = polygon.pts[j + 1 < n ? j + 1 : 0];
+            long x = crossForTest(a, b, c), y = crossForTest(a, b, d);
+            long u = crossForTest(c, d, a), v = crossForTest(c, d, b);
+            if (((x < 0 && y > 0) || (x > 0 && y < 0)) && ((u < 0 && v > 0) || (u > 0 && v < 0))) return false;
+        }
+    return true;
+}
+
+static void testNearPolygonsSimple() {
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
+    for (int mode = 0; mode < 2; ++mode)
+        for (int overlay = 0; overlay < 2; ++overlay)
+            for (int type = 9; type <= 12; ++type) {
+                setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+                HudProfile profile = k6wa; fitMeasured(126, 77, profile);
+                if (!overlay) profile.routeA = profile.routeB = 0;
+                FakePort port; Hud6waDisplay display(port, profile, false);
+                NavView maneuver = timed(type, "Testroad", "100", 1, 100, 5);
+                assert(display.showManeuver(maneuver, 0, true, true) == ClusterDisplay::kOk && display.nearShown());
+                Layout layout; assert(junctionLayout(type, false, 0, false, 0, k6wa.glyph, k6wa.canvas.y1, layout));
+                for (int stage = 4; stage >= 1; --stage) {
+                    if (stage != 4) {
+                        maneuver.step_m = stage * 25;
+                        if (overlay) assert(display.keepUp(maneuver, 5 - stage) == ClusterDisplay::kOk);
+                        else {
+                            assert(display.sameManeuver(maneuver, 5 - stage));
+                            assert(display.showManeuver(maneuver, 5 - stage, false, false) == ClusterDisplay::kOk);
+                        }
+                    }
+                    Picture route = batchPicture(port.batches.back());
+                    size_t start = overlay ? 0 : layout.roads.size() * 2;
+                    for (size_t i = start; i < route.size(); ++i) {
+                        if (!simplePolygon(route[i].poly))
+                            fprintf(stderr, "self-intersecting near polygon: mode%d overlay%d type%d stage%d item%u\n",
+                                    mode, overlay, type, stage, (unsigned)i);
+                        assert(simplePolygon(route[i].poly));
+                    }
+                }
+            }
+    unsetenv("NBT_HUD_GLYPHS");
+    printf("  sharp turns and U-turns: serialized near polygons have no strict self-intersections\n");
+}
+
+static void testReadableNearArrows() {
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
+    unsigned checked = 0;
+    for (int mode = 0; mode < 2; ++mode)
+        for (int overlay = 0; overlay < 2; ++overlay)
+            for (int type = 0; type <= 60; ++type) {
+                Layout layout;
+                if (!junctionLayout(type, true, 90, false, 0, k6wa.glyph, k6wa.canvas.y1, layout) || layout.ring) continue;
+                HudProfile profile = k6wa; fitMeasured(126, 77, profile);
+                if (!overlay) profile.routeA = profile.routeB = 0;
+                bool fits = junctionFits(layout, Hud6waDisplay::kStages, profile.canvas, k6wa.glyph,
+                                         k6wa.canvas.y1 + 1, profile.glyph, 77);
+                setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+                FakePort port; Hud6waDisplay display(port, profile, false);
+                NavView maneuver = timed(type, "Testroad", "4000", 1, 4000, 500);
+                assert(display.showManeuver(maneuver, 0, true, true) == ClusterDisplay::kOk && !display.nearShown());
+                int incoming = farStroke(batchPicture(port.batches[0]));
+                assert(incoming >= 6);
+                maneuver.step_m = 100; maneuver.step_s = 5;
+                bool changed = display.sameManeuver(maneuver, 1);
+                assert(changed == fits);
+                if (!fits) continue;
+                assert(display.showManeuver(maneuver, 1, false, false) == ClusterDisplay::kOk && display.nearShown());
+                JunctionColours colours = { profile.edge, profile.road, profile.route };
+                Picture roads; drawRoads(layout, colours, kJunctionStyle, roads);
+                fitPicture(roads, k6wa.glyph, k6wa.canvas.y1 + 1, profile.glyph, 77);
+                for (int stage = 4; stage >= 1; --stage) {
+                    if (stage != 4) {
+                        maneuver.step_m = stage * 25;
+                        if (overlay) assert(display.keepUp(maneuver, 6 - stage) == ClusterDisplay::kOk);
+                        else {
+                            assert(display.sameManeuver(maneuver, 6 - stage));
+                            assert(display.showManeuver(maneuver, 6 - stage, false, false) == ClusterDisplay::kOk);
+                        }
+                    }
+                    assert(display.routeStage() == stage);
+                    assert(port.batches.size() == (size_t)(overlay ? 7 - stage : 6 - stage));
+                    Picture actual;
+                    if (overlay) {
+                        Picture actualRoads = batchPicture(port.batches[1]);
+                        assert(actualRoads.size() == roads.size()); samePictureItems(actualRoads, roads);
+                        actual = batchPicture(port.batches.back());
+                        assert(port.batches.back().slot == kSlotRoute);
+                    } else {
+                        Picture combined = batchPicture(port.batches.back());
+                        samePictureItems(combined, roads);
+                        actual.assign(combined.begin() + roads.size(), combined.end());
+                        assert(port.batches.back().slot == kSlotMain);
+                    }
+                    assert(actual.size() == 4);   // edge body/head, then fill body/head: each is a simple polygon
+                    Picture previous;
+                    drawRoute(layout, tailFor(layout, stage, 4), colours, kJunctionStyle, previous);
+                    fitPicture(previous, k6wa.glyph, k6wa.canvas.y1 + 1, profile.glyph, 77);
+                    for (size_t layer = 0; layer < 2; ++layer) {
+                        const Poly& path = actual[layer * 2].poly; const Poly& head = actual[layer * 2 + 1].poly;
+                        const Poly& old = previous[layer].poly;
+                        assert(path.pts.size() + 3 == old.pts.size() && head.pts.size() == (size_t)(mode ? 5 : 3));
+                        assert(area2(path.pts) > 0 && area2(head.pts) > 0);
+                        assert(simplePolygon(path) && simplePolygon(head));
+                        size_t n = (old.pts.size() - 3) / 2;
+                        assert(head.pts[1].x == old.pts[n + 1].x && head.pts[1].y == old.pts[n + 1].y);
+                        assert(abs(path.pts[0].x + path.pts.back().x - old.pts[0].x - old.pts.back().x) <= 1);
+                        assert(path.pts[0].y == old.pts[0].y && path.pts.back().y == old.pts.back().y);
+                        for (size_t i = 0; i < head.pts.size(); ++i)
+                            assert(head.pts[i].x >= 0 && head.pts[i].x <= 125 && head.pts[i].y >= 0 && head.pts[i].y <= 76);
+                    }
+                    const Poly& fill = actual[2].poly; const Poly& head = actual[3].poly;
+                    double width = hypot(head.pts[0].x - head.pts[2].x, head.pts[0].y - head.pts[2].y);
+                    double baseX = (head.pts[0].x + head.pts[2].x) / 2.0;
+                    double baseY = (head.pts[0].y + head.pts[2].y) / 2.0;
+                    double length = hypot(head.pts[1].x - baseX, head.pts[1].y - baseY);
+                    int stroke = abs(fill.pts[0].x - fill.pts.back().x);
+                    bool uturn = type == 11 || type == 12;
+                    assert(stroke >= (mode ? 6 : 11));
+                    assert(width >= (uturn ? (mode ? 20 : 22) : (mode ? 24 : 26)) && length >= (mode ? 19 : 15));
+                    assert(abs(stroke - incoming) <= 5);
+                    if (mode && (type == 9 || type == 10)) {
+                        assert(abs(stroke - incoming) <= 1);
+                    }
+                    if (uturn) {
+                        int wing = type == 11 ? std::max(head.pts[0].x, head.pts[2].x)
+                                              : std::min(head.pts[0].x, head.pts[2].x);
+                        int stem = type == 11 ? std::min(fill.pts[0].x, fill.pts.back().x)
+                                              : std::max(fill.pts[0].x, fill.pts.back().x);
+                        int gap = type == 11 ? stem - wing : wing - stem;
+                        assert(gap >= 2);   // keep the U-turn's inner opening visible at every tail stage
+                    }
+                    ++checked;
+                }
+            }
+    unsetenv("NBT_HUD_GLYPHS");
+    assert(checked == 752);
+    printf("  F30 near arrows: %u serialized stages, readable strokes/heads, unchanged roads, tips and overlays\n", checked);
+}
+
+static void testNearArrowCompatibility() {
+    const int widths[] = {0, 176, 120, 126, 126}, heights[] = {0, 126, 72, 77, 77};
+    for (int mode = 0; mode < 2; ++mode)
+        for (int choice = 0; choice < 5; ++choice) {
+            setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+            if (choice == 3) setenv("NBT_HUD_GLYPH", "37 23 82 68", 1); else unsetenv("NBT_HUD_GLYPH");
+            if (choice == 4) setenv("NBT_HUD_CANVAS", "0 0 125 76", 1); else unsetenv("NBT_HUD_CANVAS");
+            HudProfile profile = k6wa; applyHudEnv(profile);
+            if (choice) fitMeasured(widths[choice], heights[choice], profile);
+            for (int type = 0; type <= 60; ++type) {
+                Layout layout;
+                if (!junctionLayout(type, true, 90, false, 0, k6wa.glyph, k6wa.canvas.y1, layout) || layout.ring) continue;
+                FakePort port; Hud6waDisplay display(port, profile, false);
+                NavView v = timed(type, "Testroad", "100", 1, 100, 5);
+                bool fits = junctionFits(layout, 4, profile.canvas, k6wa.glyph, k6wa.canvas.y1 + 1,
+                                         profile.glyph, profile.canvas.y1 + 1);
+                assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+                assert(display.nearShown() == fits);
+                if (!fits) continue;
+                JunctionColours colours = { profile.edge, profile.road, profile.route };
+                Picture roads; drawRoads(layout, colours, kJunctionStyle, roads);
+                fitPicture(roads, k6wa.glyph, k6wa.canvas.y1 + 1, profile.glyph, profile.canvas.y1 + 1);
+                Picture actualRoads = batchPicture(port.batches[0]);
+                assert(actualRoads.size() == roads.size()); samePictureItems(actualRoads, roads);
+                for (int stage = 4; stage >= 1; --stage) {
+                    if (stage != 4) {
+                        v.step_m = stage * 25;
+                        assert(display.keepUp(v, 5 - stage) == ClusterDisplay::kOk);
+                    }
+                    Picture expected;
+                    drawRoute(layout, tailFor(layout, stage, 4), colours, kJunctionStyle, expected);
+                    fitPicture(expected, k6wa.glyph, k6wa.canvas.y1 + 1, profile.glyph, profile.canvas.y1 + 1);
+                    Picture actual = batchPicture(port.batches.back());
+                    if (!mode) {
+                        assert(actual.size() == expected.size()); samePictureItems(actual, expected);
+                    } else {
+                        assert(actual.size() == 4 && expected.size() == 2);
+                        for (size_t layer = 0; layer < 2; ++layer) {
+                            const Poly& old = expected[layer].poly;
+                            const Poly& body = actual[layer * 2].poly;
+                            const Poly& head = actual[layer * 2 + 1].poly;
+                            size_t n = (old.pts.size() - 3) / 2;
+                            assert(body.pts.size() == n * 2 && head.pts.size() == 5);
+                            assert(actual[layer * 2].colour == expected[layer].colour);
+                            for (size_t i = 0; i < body.pts.size(); ++i) {
+                                const Point& point = old.pts[i < n ? i : i + 3];
+                                assert(body.pts[i].x == point.x && body.pts[i].y == point.y);
+                            }
+                            assert(head.pts[1].x == old.pts[n + 1].x && head.pts[1].y == old.pts[n + 1].y);
+                        }
+                    }
+                }
+            }
+        }
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_GLYPHS");
+    printf("  other profiles and manual pins: parametric routes unchanged, Mapbox tips and stems unchanged\n");
 }
 
 // A profile without a route overlay: the route goes into the picture with its roads, and each stage redraws them.
@@ -2180,8 +2574,14 @@ int main() {
     testKnownRoundabouts();
     testKnownEntryVisibility();
     testKnownRoundaboutDriver();
+    testReadableHudArrows();
+    testReadableHudCompatibility();
+    testGlyphBatchBudget();
     testLanes();
     testJunctionDriver();
+    testNearPolygonsSimple();
+    testReadableNearArrows();
+    testNearArrowCompatibility();
     testJunctionFits();
     testRefitFromProfile();
     testJunctionNoOverlay();

@@ -1554,6 +1554,20 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine). `make check` builds
 `test_session_lifecycle` under ThreadSanitizer; `make -C tests run-test_pcm` runs one. Each test's sources are
 listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 
+To review every maneuver picture at the measured F30 HUD resolution, run `make -C tests hud-preview` on Linux.
+The ten SVG sheets under `tests/build/hud-arrows-{0,1}-{0..4}.svg` cover types 0..60, both rendering styles,
+both roundabout directions, exit angles and numbered rings. Stage 0 shows plain arrows; stages 1..4 exercise
+the near-view route, with each cell labelled when the driver falls back to an arrow. The renderer reads the
+production driver's serialized polygons and double-buffer switches; it does not reproduce the geometry itself.
+These are geometry previews, not photographs or a simulation of the cluster's fonts, colours or MOST timing.
+
+On an automatically measured 126x77 HUD, static maneuver drawings use their visible bounds in a 53x53 box,
+with one scale for both axes. Roundabouts use a fixed 66x66 family box so their ring does not change size with
+the exit angle. Explicit canvas/glyph pins and other buffer profiles retain their own geometry. Junction
+selection and timing are unchanged. The full drawing batch admits 64 commands (a complete Mapbox picture
+can require 55); the in-flight window remains eight. Passing host geometry/transport tests does not establish
+the readability of every maneuver or admission of a greater-than-32-command packet on a real head unit.
+
 | Test | Covers |
 |---|---|
 | `test_sdr`, `test_sdr_drop` | Service discovery, channel drop list, audio mode, system-audio sink |
