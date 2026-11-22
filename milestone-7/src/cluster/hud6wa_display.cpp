@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "cluster/hud6wa_display.hpp"
 #include "cluster/hudterm_digits.hpp"
+#include "cluster/hudterm_ring.hpp"
 #include "cluster/mapbox_hud.hpp"   // Mapbox maneuver glyphs (NBT_HUD_GLYPHS); falls back to the parametric shapes
 
 #include <stdarg.h>
@@ -175,27 +176,19 @@ Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const H
 
 namespace {
 bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
+    if (spec.kind == kShapeRoundabout && !spec.exit) return roundaboutPicture(spec, p, pic, exitNumber);
     if (mbxManeuver(spec, p, pic)) return true;   // Mapbox glyph/roundabout; else the parametric shape below
     Shape design, fitted;
     drawShape(spec, design);
     Rect box = p.glyph;
-    if (spec.kind == kShapeRoundabout && !spec.exit) box = ringGlyphBox(p);
     fitShape(design, box, fitted);
-    bool numbered = true;
-    if (spec.kind == kShapeRoundabout && !spec.exit && exitNumber >= 1 && exitNumber <= 99) {
-        Rect occupied;
-        bool haveBounds = shapeBounds(fitted, occupied);
-        int height = (box.y1 - box.y0) * (exitNumber > 9 ? 340 : 460) / kDesign;
-        numbered = haveBounds && digits::drawOutsideNumber(exitNumber, occupied, p.canvas, occupied.y1, height,
-                                                           spec.clockwise, fitted);
-    }
     for (size_t i = 0; i < fitted.size(); ++i) {
         Item it;
         it.colour = p.fill;
         it.poly = fitted[i];
         pic.push_back(it);
     }
-    return numbered;
+    return true;
 }
 }
 
@@ -428,7 +421,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     } else {
         int number = v.has_exit_number && v.exit_number >= 1 && v.exit_number <= 99 ? (int)v.exit_number : 0;
         if (!arrowPicture(spec, p_, pic, number))
-            log("exit number %d omitted: no room outside the ring in this canvas", number);
+            log("exit number %d omitted: no room for a readable number in this canvas", number);
         what = describeSpec(spec);
         if (spec.kind == kShapeRoundabout && !spec.exit && number) {
             char n[24];
