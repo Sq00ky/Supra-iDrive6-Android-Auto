@@ -200,13 +200,13 @@ int main(int argc, char** argv) {
         assert(g_seq.empty());                     // BACK stays down: that was no release
     }
 
-    // No room on the client: attach reports it.
+    // Growing beyond the former route limit is supported; device-controller keys still have their own limit.
     {
         Client c;
         CcsInput in;
-        for (int i = 0; i < Router::kMaxRoutes; ++i)
+        for (int i = 0; i < 128; ++i)
             assert(c.addRoute(0x05, 0, i, kAny, &noRoute, NULL));
-        assert(!in.attach(c, CcsConfig(), &onEvent, &g_seq));
+        assert(in.attach(c, CcsConfig(), &onEvent, &g_seq));
     }
     {
         Client c;

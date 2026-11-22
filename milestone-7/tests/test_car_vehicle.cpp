@@ -454,41 +454,27 @@ static void testSignalsOff() {
     assert(v3.attach(c3, CarVehicleCallbacks()));
 }
 
-// How many free routes the three signals together need: speed 621 and 626, gear 228, brake CB5.
-enum { kVehicleRoutes = 4 };
-
-// With no room, every callback stays silent even for the routes that fitted. freeRoutes is how many are left for it.
-static void checkNoRoom(int freeRoutes) {
+static void testRegistration() {
     resetCaptured();
     Client c;
-    int added = 0;
-    while (added < Router::kMaxRoutes - freeRoutes) {
-        assert(c.addRoute(0x77, kAny, kAny, kAny, &noHandler, NULL));
-        ++added;
-    }
+    for (int i = 0; i < 128; ++i) assert(c.addRoute(0x77, kAny, i, kAny, &noHandler, NULL));
     CarVehicle v;
-    assert(!v.attach(c, allCallbacks()));
+    assert(v.attach(c, allCallbacks()));
     startClient(c);
     const uint8_t forward[2] = { 0x06, 0x40 };
     send(kCarSpeedFkt, kOpStatus, forward, 2);
     sendByte(kVehicleGearFkt, 3);
     sendByte(kParkingBrakeFkt, 2);
-    v.gearFromApp(3);
-    assert(g_speeds.empty() && g_gears.empty() && g_brakes.empty());
+    assert(g_speeds.size() == 1 && g_gears.size() == 1 && g_brakes.size() == 1);
     fake_dsi::detach();
-}
 
-static void testNoRoom() {
-    for (int freeRoutes = 0; freeRoutes < kVehicleRoutes; ++freeRoutes) checkNoRoom(freeRoutes);
-}
-
-// Exactly enough room is enough, so the counts above are right.
-static void testExactRoom() {
     resetCaptured();
-    Client c;
-    for (int i = 0; i < Router::kMaxRoutes - kVehicleRoutes; ++i) assert(c.addRoute(0x77, kAny, kAny, kAny, &noHandler, NULL));
-    CarVehicle v;
-    assert(v.attach(c, allCallbacks()));
+    Client sealed;
+    assert(sealed.start("T"));
+    CarVehicle late;
+    assert(!late.attach(sealed, allCallbacks()));
+    late.gearFromApp(3);
+    assert(g_speeds.empty() && g_gears.empty() && g_brakes.empty());
 }
 
 int main() {
@@ -506,8 +492,7 @@ int main() {
     testGearAndBrake();
     testGearFromApp();
     testSignalsOff();
-    testNoRoom();
-    testExactRoom();
+    testRegistration();
     printf("test_car_vehicle OK\n");
     return 0;
 }

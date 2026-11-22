@@ -119,11 +119,13 @@ int main() {
         assert(g_levels.size() == 1 && g_levels[0] == 12);
     }
 
-    // No room on the client: attach reports it.
+    // No fixed route capacity; registration is sealed by start().
     {
         Client c;
         VolumeInput v;
-        for (int i = 0; i < Router::kMaxRoutes; ++i) assert(c.addRoute(0x05, 0, i, kAny, &noRoute, NULL));
+        for (int i = 0; i < 128; ++i) assert(c.addRoute(0x05, 0, i, kAny, &noRoute, NULL));
+        assert(v.attach(c, &onVolume, &g_levels));
+        assert(c.start("T"));
         assert(!v.attach(c, &onVolume, &g_levels));
     }
 

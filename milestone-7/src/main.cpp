@@ -2542,7 +2542,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (nbt::knobEnabled()) {
-        if (!g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session))
+        if (!g_most.requireConsumer("knob", g_ccs.attach(g_most, nbt::car::readCcsConfig(), &onKnobEvent, &g_session)))
             printf("[Main] iDrive knob input failed to start.\n");
     } else {
         printf("[Main] iDrive knob input off (NBT_KNOB=0).\n");
@@ -2557,8 +2557,8 @@ int main(int argc, char* argv[]) {
             printf("[FavProbe] the message tap is already taken\n");
     }
     if (favouritePreviewEnabled) {
-        if (!g_most.addRoute(0x15, 0x0c, 0xc02, nbt::most::kOpStatus, &onFavouriteTouch, NULL))
-            printf("[Favourites] no room for touch route; preview disabled\n");
+        if (!g_most.requireConsumer("favourite touch", g_most.addRoute(0x15, 0x0c, 0xc02, nbt::most::kOpStatus, &onFavouriteTouch, NULL)))
+            printf("[Favourites] touch route registration failed.\n");
         else
             printf("[Favourites] capture route 15/0C/0C02 registered (preview %s)\n",
                    favouriteBarOff() ? "off: Settings toggle" : "on");
@@ -2578,10 +2578,10 @@ int main(int argc, char* argv[]) {
         }
     }
     // Driver input for the screen hand-over (overlay 4): attached whether or not the knob drives the phone.
-    if (!g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL))
-        printf("[Main] driver input tracking failed to start: the iDrive app treats every iDrive screen as the car's.\n");
+    if (!g_most.requireConsumer("driver input", g_carInput.attach(g_most, nbt::car::readCcsConfig(), &onCarInput, NULL)))
+        printf("[Main] driver input tracking failed to register.\n");
     // The car's volume is followed whether or not the knob is: it drives the overlay, not the phone.
-    if (!g_carVolume.attach(g_most, &onCarVolume, NULL))
+    if (!g_most.requireConsumer("volume", g_carVolume.attach(g_most, &onCarVolume, NULL)))
         printf("[Main] car volume input failed to start.\n");
     if (nbt::phoneGpsEnabled()) {
         const char* pg = getenv("NBT_PHONE_GPS");
@@ -2589,8 +2589,8 @@ int main(int argc, char* argv[]) {
                "compass and motion sensors.\n", pg && *pg ? "NBT_PHONE_GPS" : "Settings checkbox");
     } else if (!nbt::carGpsEnabled())
         printf("[Main] car GPS -> Android Auto off (NBT_CAR_GPS=0).\n");
-    else if (!g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &onCarCompass,
-                           &g_session))
+    else if (!g_most.requireConsumer("GPS", g_gps.attach(g_most, nbt::car::readGpsAccuracyOverrideE3(), &onCarLocation, &onCarSatellites, &onCarCompass,
+                           &g_session)))
         printf("[Main] car GPS failed to start.\n");
     nbt::car::CarVehicleCallbacks vehicle;
     vehicle.user = &g_session;
@@ -2600,7 +2600,7 @@ int main(int argc, char* argv[]) {
     else printf("[Main] car gear -> Android Auto off (NBT_CAR_GEAR=0).\n");
     if (nbt::carParkingBrakeEnabled()) vehicle.parkingBrake = &onCarParkingBrake;
     else printf("[Main] car parking brake -> Android Auto off (NBT_CAR_PARKING_BRAKE=0).\n");
-    if (!g_vehicle.attach(g_most, vehicle))
+    if (!g_most.requireConsumer("vehicle sensors", g_vehicle.attach(g_most, vehicle)))
         printf("[Main] car speed, gear and parking brake failed to start.\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.
@@ -2611,7 +2611,7 @@ int main(int argc, char* argv[]) {
         printf("[Main] NBT_MOST_LOG: could not attach to the MOST client.\n");
     g_most.setRawLog(getenv("NBT_KNOB_RAW") != NULL);
     if (!g_most.start("NBTAAD_MOST"))
-        printf("[Main] MOST client failed to start: knob/keys, car GPS, car speed and parking brake disabled.\n");
+        printf("[Main] MOST unavailable: continuing Android Auto without MOST features.\n");
 
     if (nbt::wirelessEnabledForTransport()) {
         pthread_t wt;

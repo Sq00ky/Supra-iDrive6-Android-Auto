@@ -653,31 +653,22 @@ static void testSpeedOnEachFix() {
     assert(g_fixes[0].has_bearing && g_fixes[0].bearing_e6 == 60468750);
 }
 
-// Full client: attach() says so and the consumer stays out.
 static void noRoute(const View&, void*) {}
-static void testFull() {
-    fake_dsi::reset();
-    Client c;
-    while (c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) {}
-    CarGps gps;
-    assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
-}
-
-// Room for one route only: attach() fails, and what got through stays silent.
-static void testOneRouteFits() {
+static void testManyRoutes() {
     fake_dsi::reset();
     g_fixes.clear();
+    g_sats.clear();
+    g_compass.clear();
     Client c;
-    int added = 0;
-    while (added < Router::kMaxRoutes - 1 && c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) ++added;
-    assert(added == Router::kMaxRoutes - 1);
+    for (int i = 0; i < 128; ++i) assert(c.addRoute(0x01, kAny, i, kAny, &noRoute, NULL));
     CarGps gps;
-    assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
+    assert(gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
     assert(c.start("NBTAAD_MOST"));
     fake_dsi::attach();
     registered();
+    sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
     sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
-    assert(g_fixes.empty());
+    assert(g_fixes.size() == 1);
 }
 
 // fkt 0x203. Made up: only the layout is real. Heading raw 192 is 90 degrees, altitude 100 m, speed 0.
@@ -842,25 +833,13 @@ static void testHeadingConsumer() {
     assert(g_compass.size() == 3 && g_compass[2] == 270000000);
 }
 
-// Room for the first two routes only: attach() fails, and none of the three callbacks ever runs.
-static void testTwoRoutesFit() {
+// A started client cannot gain new consumers.
+static void testLateRegistration() {
     fake_dsi::reset();
-    g_fixes.clear();
-    g_sats.clear();
-    g_compass.clear();
     Client c;
-    int added = 0;
-    while (added < Router::kMaxRoutes - 2 && c.addRoute(0x01, kAny, kAny, kAny, &noRoute, NULL)) ++added;
-    assert(added == Router::kMaxRoutes - 2);
+    assert(c.start("T"));
     CarGps gps;
     assert(!gps.attach(c, 10000, &onFix, &onSats, &onCompass, &g_fixes));
-    assert(c.start("NBTAAD_MOST"));
-    fake_dsi::attach();
-    registered();
-    sendCarStatus(kStatusCapture, sizeof(kStatusCapture));
-    sendStatus(0x52, 0x00, 0x440, kOpStatus, kCapture, sizeof(kCapture), 0x2022);
-    sendStatus(kCarStatusFBlock, kCarStatusInst, kCarHeadingFkt, kOpStatus, kHeadingMsg, sizeof(kHeadingMsg), 0x200B);
-    assert(g_fixes.empty() && g_sats.empty() && g_compass.empty());
 }
 
 int main() {
@@ -878,12 +857,11 @@ int main() {
     testGeoid();
     testAltitude();
     testSpeedOnEachFix();
-    testFull();
-    testOneRouteFits();
+    testManyRoutes();
     testHeadingDecode();
     testHeadingFilter();
     testHeadingConsumer();
-    testTwoRoutesFit();
+    testLateRegistration();
     printf("test_car_gps OK\n");
     return 0;
 }

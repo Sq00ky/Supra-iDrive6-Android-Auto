@@ -77,6 +77,9 @@ SRC_test_mfl               :=
 SRC_test_mmr_launch        :=
 SRC_test_mmr_pps           :=
 SRC_test_most_client       := src/most/client.cpp tests/fake_dsi_client.cpp
+SRC_test_most_consumers    := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp \
+                             src/car/ccs_input.cpp src/car/input_activity.cpp src/car/volume_input.cpp \
+                             src/car/gps.cpp src/car/geoid.cpp src/car/vehicle.cpp
 SRC_test_most_msg          :=
 SRC_test_most_reassembler  :=
 SRC_test_most_registry     :=

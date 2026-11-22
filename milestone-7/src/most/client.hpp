@@ -74,7 +74,9 @@ public:
 
     Client();
 
-    // Before start() only. All return false when full or already started.
+    // Setup only: registration closes on the first start() attempt, including an empty or failed start.
+    // Report configured consumer setup failures without blocking the other consumers.
+    bool requireConsumer(const char* name, bool registered);
     bool addRoute(uint8_t fblock, int inst, int fkt, int op, Handler h, void* user);
     bool addDevCtrl(uint16_t key);            // a key added twice is sent once; request 1 is skipped with no keys
     bool addLinkListener(LinkCb cb, void* user);
@@ -84,7 +86,8 @@ public:
     bool setInfoTap(InfoTapCb cb, void* user);
     void setRawLog(bool on);                  // log every raw DSI event (very noisy)
 
-    // Opens the DSI connection. With no consumer attached it does nothing and returns true. False: DSI open failed.
+    // Opens DSI for the registered consumers; failures reported above do not block it. No consumers is a no-op.
+    // False on DSI open failure or a repeated start.
     bool start(const char* clientName);
 
     LinkState state() const;
@@ -131,6 +134,7 @@ private:
     InfoTapCb infoTap_;
     void* infoTapUser_;
     bool started_;
+    bool requiredOk_;
     bool rawLog_;
     char name_[32];
 
