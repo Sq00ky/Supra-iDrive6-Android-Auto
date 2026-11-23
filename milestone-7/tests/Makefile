@@ -26,6 +26,7 @@ SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/clus
 
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_aa_frames         :=
+SRC_test_aa_local_media    :=
 SRC_test_aa_proto          := src/wireless_setup.cpp
 SRC_test_favourite_bitmap :=
 SRC_test_favourite_composition :=

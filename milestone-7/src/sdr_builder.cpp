@@ -5,6 +5,7 @@
 #include "nbt_env.hpp"
 #include "audio/config.hpp"
 #include "car_config.hpp"
+#include "radio/radio_tile_config.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -317,7 +318,7 @@ ProtoWriter encode(const VendorExtensionService& s) {
 ProtoWriter encode(const AaChannel& c) {
     enum {
         F_ID = 1, F_SENSOR_SOURCE = 2, F_MEDIA_SINK = 3, F_INPUT_SOURCE = 4, F_MICROPHONE = 5, F_BLUETOOTH = 6,
-        F_NAV_STATUS = 8, F_MEDIA_PLAYBACK = 9, F_PHONE_STATUS = 10, F_MEDIA_BROWSER = 11, F_VENDOR_EXTENSION = 12
+        F_NAV_STATUS = 8, F_MEDIA_PLAYBACK = 9, F_PHONE_STATUS = 10, F_MEDIA_BROWSER = 11, F_VENDOR_EXTENSION = 12, F_LOCAL_MEDIA = 16
     };
     enum { F_BLUETOOTH_ADDRESS = 1 };
     ProtoWriter w;
@@ -333,6 +334,7 @@ ProtoWriter encode(const AaChannel& c) {
     case AaChannel::PHONE_STATUS:     w.message(F_PHONE_STATUS, ProtoWriter()); break;
     case AaChannel::MEDIA_BROWSER:    w.message(F_MEDIA_BROWSER, ProtoWriter()); break;
     case AaChannel::VENDOR_EXTENSION: w.message(F_VENDOR_EXTENSION, encode(c.vendorExtension)); break;
+    case AaChannel::LOCAL_MEDIA:      w.message(F_LOCAL_MEDIA, ProtoWriter()); break;
     case AaChannel::BLUETOOTH: {
         ProtoWriter bluetooth;
         bluetooth.string(F_BLUETOOTH_ADDRESS, c.bluetoothAddress);
@@ -471,6 +473,7 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id) {
     addSystemAudioSink(m);
     limitGuidanceOffers(m);
     addMediaBrowserProbe(m);
+    addRadioTile(m, radioTileEnabled());
     return m;
 }
 
@@ -486,6 +489,13 @@ int addMediaBrowserProbe(ServiceDiscovery& manifest) {
     manifest.channels.push_back(AaChannel(AA_CH_MEDIA_BROWSER, AaChannel::MEDIA_BROWSER));
     printf("[SDR] channel %u: media browser probe (NBT_AA_BROWSE=1), empty config - every message on it is logged\n",
            (unsigned)AA_CH_MEDIA_BROWSER);
+    return 1;
+}
+
+int addRadioTile(ServiceDiscovery& m, bool on) {
+    if (!on || findChannel(m, AA_CH_LOCAL_MEDIA)) return 0;
+    m.channels.push_back(AaChannel(AA_CH_LOCAL_MEDIA, AaChannel::LOCAL_MEDIA));
+    printf("[SDR] channel %u: car local media (NBT_RADIO_TILE=1), empty config\n", (unsigned)AA_CH_LOCAL_MEDIA);
     return 1;
 }
 

@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "sdr_builder.hpp"
 #include "nbt_env.hpp"
+#include "radio/radio_tile_config.hpp"
 #include "dhu_sdp.h"
 #include <stdio.h>
 #include <stdlib.h>
