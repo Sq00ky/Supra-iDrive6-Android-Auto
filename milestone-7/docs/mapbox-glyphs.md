@@ -57,7 +57,12 @@ Sharp turns and U-turns use single smooth body contours with fractional source c
 Off-ramps keep a constant-width join where the diagonal shaft enters the head.
 On the automatic F30 near view, Mapbox U-turn road, border and route bodies use concentric circular edges sampled every
 5 degrees. Q12 coordinates are rounded once onto the final HUD grid; heads, tips and straight leg endpoints stay
-in place. Each body has at most 78 points before native deduplication, within the 99-point terminal limit.
+in place. Each body has at most 78 points before native deduplication, within the 99-point terminal limit. Convex
+boundary cleanup removes native-grid teeth without moving retained vertices. Parametric U-turns keep their selected
+outer contour exactly and apply the cleanup only to the inner boundary. Near sharp turns in both styles round each
+boundary's corner with a quadratic curve, set back by at most six native pixels and half the adjacent segment.
+Their straight endpoints and arrowheads stay fixed. This finishing is limited to automatic F30 near views;
+far drawings, other profiles and explicit canvas/glyph pins retain their existing geometry.
 On the automatic F30 near view, sharp turns and ramps have a longer straight section after the bend. Sharp-turn
 heads clear the incoming stem by at least 3 native pixels, including the border; ramp heads clear the main road. The shared roundabout exit has an 8-pixel external shaft instead of 6; its circle diameter is retained.
 

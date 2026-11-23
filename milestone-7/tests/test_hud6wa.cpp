@@ -1975,11 +1975,55 @@ static void checkSmoothUTurn(const Poly& poly, int width) {
         if (a.y > cy+0.6) continue;
         double r = hypot(a.x-cx,a.y-cy);
         assert(std::min(fabs(r-inner),fabs(r-outer)) <= 0.8);
-        if (b.y <= cy+0.6) assert(hypot(a.x-b.x,a.y-b.y) <= 3.0);
+        if (b.y <= cy+0.6) {
+            const double target = fabs(r-inner) < fabs(r-outer) ? inner : outer;
+            for (int sample = 1; sample <= 3; ++sample) {
+                double t = sample/4.0;
+                assert(fabs(hypot(a.x+t*(b.x-a.x)-cx,a.y+t*(b.y-a.y)-cy)-target) <= 1.0);
+            }
+        }
         ++curved;
     }
-    assert(curved >= 24);
+    assert(curved >= 10);
     assert(simplePolygon(poly));
+}
+
+// The selected outside of parametric U-turns is frozen; curved edges must have no backward pixel teeth.
+static void checkBendContours(const Poly& actual, const Poly& original, int type, int mode) {
+    const size_t n = original.pts.size()/2;
+    const Point& a = original.pts[n-1]; const Point& b = original.pts[n];
+    size_t split = actual.pts.size();
+    for (size_t i = 0; i+1 < actual.pts.size(); ++i)
+        if (actual.pts[i].x == a.x && actual.pts[i].y == a.y &&
+            actual.pts[i+1].x == b.x && actual.pts[i+1].y == b.y) { split = i+1; break; }
+    assert(split < actual.pts.size());
+    assert(actual.pts.front().x == original.pts.front().x && actual.pts.front().y == original.pts.front().y);
+    assert(actual.pts.back().x == original.pts.back().x && actual.pts.back().y == original.pts.back().y);
+    for (int side = 0; side < 2; ++side) {
+        const size_t begin = side ? split : 0, end = side ? actual.pts.size() : split;
+        const bool uturn = type == 11 || type == 12;
+        const bool inner = type == 11 ? side == 0 : side == 1;
+        if (uturn && !mode && !inner) {
+            assert(end-begin == n);
+            for (size_t i = 0; i < n; ++i) {
+                const Point& old = original.pts[side*n+i]; const Point& now = actual.pts[begin+i];
+                assert(old.x == now.x && old.y == now.y);
+            }
+        } else {
+            assert(end-begin >= 3);
+            long expected = uturn ? (inner ? -1 : 1) :
+                ((long)(original.pts[side*n+1].x-original.pts[side*n].x) *
+                        (original.pts[side*n+2].y-original.pts[side*n+1].y) -
+                 (long)(original.pts[side*n+1].y-original.pts[side*n].y) *
+                        (original.pts[side*n+2].x-original.pts[side*n+1].x));
+            for (size_t i = begin+2; i < end; ++i) {
+                const Point& p = actual.pts[i-2]; const Point& q = actual.pts[i-1]; const Point& r = actual.pts[i];
+                long cross = (long)(q.x-p.x)*(r.y-q.y)-(long)(q.y-p.y)*(r.x-q.x);
+                assert(expected < 0 ? cross < 0 : cross > 0);
+            }
+        }
+    }
+    assert(actual.pts.size() <= 99 && simplePolygon(actual));
 }
 
 static void testReadableNearArrows() {
@@ -2024,15 +2068,23 @@ static void testReadableNearArrows() {
                     if (overlay) {
                         Picture actualRoads = batchPicture(port.batches[1]);
                         assert(actualRoads.size() == roads.size());
-                        if (mode && (type == 11 || type == 12)) {
-                            checkSmoothUTurn(actualRoads[0].poly,22); checkSmoothUTurn(actualRoads[1].poly,16);
+                        if (type >= 9 && type <= 12) {
+                            for (size_t i = 0; i < roads.size(); ++i)
+                                checkBendContours(actualRoads[i].poly,roads[i].poly,type,mode);
+                            if (mode && type >= 11) {
+                                checkSmoothUTurn(actualRoads[0].poly,22); checkSmoothUTurn(actualRoads[1].poly,16);
+                            }
                         } else samePictureItems(actualRoads, roads);
                         actual = batchPicture(port.batches.back());
                         assert(port.batches.back().slot == kSlotRoute);
                     } else {
                         Picture combined = batchPicture(port.batches.back());
-                        if (mode && (type == 11 || type == 12)) {
-                            checkSmoothUTurn(combined[0].poly,22); checkSmoothUTurn(combined[1].poly,16);
+                        if (type >= 9 && type <= 12) {
+                            for (size_t i = 0; i < roads.size(); ++i)
+                                checkBendContours(combined[i].poly,roads[i].poly,type,mode);
+                            if (mode && type >= 11) {
+                                checkSmoothUTurn(combined[0].poly,22); checkSmoothUTurn(combined[1].poly,16);
+                            }
                         } else samePictureItems(combined, roads);
                         actual.assign(combined.begin() + roads.size(), combined.end());
                         assert(port.batches.back().slot == kSlotMain);
@@ -2041,12 +2093,24 @@ static void testReadableNearArrows() {
                     Picture previous;
                     drawRoute(layout, tailFor(layout, stage, 4), colours, kJunctionStyle, previous);
                     fitPicture(previous, k6wa.glyph, k6wa.canvas.y1 + 1, profile.glyph, 77);
+                    Picture originalBodies;
+                    if (type >= 9 && type <= 12) {
+                        JunctionStyle style = kJunctionStyle;
+                        style.routeW = mode ? (type <= 10 ? 20 : 16) : 24;
+                        style.routeCore = mode ? (type <= 10 ? 16 : 12) : 20;
+                        style.headL = mode ? 34 : 28;
+                        style.headW = type >= 11 ? (mode ? 22 : 19) : (mode ? 27 : 23);
+                        drawRoute(layout,tailFor(layout,stage,4),colours,style,originalBodies,19,mode != 0);
+                        fitPicture(originalBodies,k6wa.glyph,k6wa.canvas.y1+1,profile.glyph,77);
+                    }
                     for (size_t layer = 0; layer < 2; ++layer) {
                         const Poly& path = actual[layer * 2].poly; const Poly& head = actual[layer * 2 + 1].poly;
                         const Poly& old = previous[layer].poly;
                         assert(head.pts.size() == (size_t)(mode ? 5 : 3));
                         if (mode && (type == 11 || type == 12))
                             checkSmoothUTurn(path,layer ? 12 : 16);
+                        if (type >= 9 && type <= 12)
+                            checkBendContours(path,originalBodies[layer*2].poly,type,mode);
                         else assert(path.pts.size() + 3 == old.pts.size());
                         assert(area2(path.pts) > 0 && area2(head.pts) > 0);
                         assert(simplePolygon(path) && simplePolygon(head));
