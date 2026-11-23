@@ -34,7 +34,42 @@ static bool containsBytes(const std::vector<uint8_t>& d, const uint8_t* s, size_
     for (size_t i = 0; i + n <= d.size(); ++i) if (memcmp(&d[i], s, n) == 0) return true;
     return false;
 }
+static int countChannelId(const ServiceDiscovery& m, int id) {
+    int n = 0;
+    for (size_t i = 0; i < m.channels.size(); ++i) if (m.channels[i].id == id) ++n;
+    for (size_t i = 0; i < m.trailingChannels.size(); ++i) if (m.trailingChannels[i].id == id) ++n;
+    return n;
+}
+static void testRadioTileOff() {
+    unsetenv("NBT_RADIO_TILE");
+    ServiceDiscovery unset = sessionManifest(dhuIdentity());
+    assert(!radioTileEnabled() && countChannelId(unset, 18) == 0);
+    setenv("NBT_RADIO_TILE", "0", 1);
+    ServiceDiscovery zero = sessionManifest(dhuIdentity());
+    assert(!radioTileEnabled() && countChannelId(zero, 18) == 0);
+    assert(serializeManifest(zero) == serializeManifest(unset));
+    const std::vector<uint8_t> before = serializeManifest(zero);
+    assert(addRadioTile(zero, false) == 0 && serializeManifest(zero) == before);
+    unsetenv("NBT_RADIO_TILE");
+    printf("radio tile off OK\n");
+}
+static void testRadioTileOn() {
+    const uint8_t ch18[] = { 0x08, 0x12, 0x82, 0x01, 0x00 };
+    unsetenv("NBT_RADIO_TILE");
+    const std::vector<uint8_t> plain = serializeManifest(sessionManifest(dhuIdentity()));
+    setenv("NBT_RADIO_TILE", "1", 1);
+    assert(radioTileEnabled());
+    ServiceDiscovery on = sessionManifest(dhuIdentity());
+    unsetenv("NBT_RADIO_TILE");
+    const std::vector<uint8_t> bytes = serializeManifest(on);
+    assert(countChannelId(on, 18) == 1 && containsBytes(bytes, ch18, sizeof ch18));
+    assert(bytes.size() == plain.size() + sizeof ch18 + 2);
+    assert(addRadioTile(on, true) == 0 && countChannelId(on, 18) == 1 && serializeManifest(on) == bytes);
+    printf("radio tile on OK\n");
+}
 int main() {
+    testRadioTileOff();
+    testRadioTileOn();
     // The reference manifest is byte for byte what Google's Desktop Head Unit sends.
     {
         const std::vector<uint8_t> dhu(kDhuSdpProtobuf, kDhuSdpProtobuf + kDhuSdpProtobufLen);
