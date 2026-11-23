@@ -55,8 +55,8 @@ The automatic F30 fit uses the original bounds through `mbxOriginalBounds()`. Re
 would enlarge or move the whole icon. Near views retain their roads and route tips, with the same wing proportions.
 Sharp turns and U-turns use single smooth body contours with fractional source coordinates retained until fitting.
 Off-ramps keep a constant-width join where the diagonal shaft enters the head.
-On the automatic F30 near view, ramps also have a longer straight section after the bend, keeping the head clear of
-the main road. The shared roundabout exit has an 8-pixel external shaft instead of 6; its circle diameter is retained.
+On the automatic F30 near view, sharp turns and ramps have a longer straight section after the bend. Sharp-turn
+heads clear the incoming stem by at least 3 native pixels, including the border; ramp heads clear the main road. The shared roundabout exit has an 8-pixel external shaft instead of 6; its circle diameter is retained.
 
 Regenerate the committed data from the repository root, using Python's standard library only:
 

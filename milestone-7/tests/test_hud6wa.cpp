@@ -1971,7 +1971,7 @@ static void testReadableNearArrows() {
             for (int type = 0; type <= 60; ++type) {
                 Layout layout;
                 if (!junctionLayout(type, true, 90, false, 0, k6wa.glyph, k6wa.canvas.y1, layout) || layout.ring) continue;
-                lengthenRampRoute(type, layout);
+                lengthenHudRoute(type, layout);
                 HudProfile profile = k6wa; fitMeasured(126, 77, profile);
                 if (!overlay) profile.routeA = profile.routeB = 0;
                 bool fits = junctionFits(layout, Hud6waDisplay::kStages, profile.canvas, k6wa.glyph,
@@ -2042,6 +2042,14 @@ static void testReadableNearArrows() {
                     assert(abs(stroke - incoming) <= 5);
                     if (mode && (type == 9 || type == 10)) {
                         assert(abs(stroke - incoming) <= 1);
+                    }
+                    if (type == 9 || type == 10) {
+                        const Poly& borderStem = actual[0].poly;
+                        Shape borderHead(1,actual[1].poly);
+                        Rect b = boundsForTest(borderHead);
+                        int left = std::min(borderStem.pts.front().x,borderStem.pts.back().x);
+                        int right = std::max(borderStem.pts.front().x,borderStem.pts.back().x);
+                        assert((type == 9 ? left-b.x1 : b.x0-right) >= 3);
                     }
                     if (uturn) {
                         int wing = type == 11 ? std::max(head.pts[0].x, head.pts[2].x)

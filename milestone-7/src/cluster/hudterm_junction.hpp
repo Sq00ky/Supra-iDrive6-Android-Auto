@@ -248,14 +248,15 @@ inline bool junctionLayout(int aa_type, bool has_exit_angle, int64_t exit_angle,
     return true;
 }
 
-// On the measured HUD, leave a visible straight shaft between a ramp's bend and its broad arrowhead.
-// The caller opts in for that profile; roads, bend, tail stages and all other maneuver families stay unchanged.
-inline void lengthenRampRoute(int aa_type, Layout& layout) {
+// On the measured HUD, separate sharp-turn and ramp heads from the incoming stem/bend.
+// The caller opts in for that profile; roads, bends and tail stages keep their original geometry.
+inline void lengthenHudRoute(int aa_type, Layout& layout) {
     const int family = kombinav::kombiDirection(aa_type);
-    if (family != 25 && family != 26 && family != 28 && family != 29) return;
+    const bool sharp = family == 4 || family == 5;
+    if (!sharp && family != 25 && family != 26 && family != 28 && family != 29) return;
     if (layout.route.pts.size() < 2 || layout.route.heads.empty()) return;
     const Point& bend = layout.route.pts[layout.route.pts.size() - 2];
-    layout.route.pts.back() = shapes::along(bend.x, bend.y, layout.route.heads.back(), 54, 0);
+    layout.route.pts.back() = shapes::along(bend.x, bend.y, layout.route.heads.back(), sharp ? 64 : 54, 0);
 }
 
 // The roads: every dark edge first, then every grey road over them (two colour changes), and a roundabout's exit

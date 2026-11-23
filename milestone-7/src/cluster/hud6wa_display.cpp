@@ -360,7 +360,7 @@ void Hud6waDisplay::startManeuver(const NavView& v) {
     has_layout_ = s_.junction && shapeFor(v.aa_type, v.has_exit_angle, v.exit_angle).kind != kShapeRoundabout &&
                   junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
                                  v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
-    if (has_layout_ && readableHud(p_)) lengthenRampRoute(v.aa_type, layout_);
+    if (has_layout_ && readableHud(p_)) lengthenHudRoute(v.aa_type, layout_);
     if (has_layout_ && !junctionShows()) {   // drawn scaled onto this buffer, its way would still be cut off
         has_layout_ = false;
         log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
