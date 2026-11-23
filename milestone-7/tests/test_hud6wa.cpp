@@ -2011,6 +2011,13 @@ static void checkBendContours(const Poly& actual, const Poly& original, int type
             }
         } else {
             assert(end-begin >= 3);
+            if (!uturn) {
+                const Point& p = original.pts[side*n]; const Point& q = original.pts[side*n+1];
+                const Point& r = original.pts[side*n+2];
+                if (std::max(abs(p.x-q.x),abs(p.y-q.y)) >= 4 &&
+                    std::max(abs(r.x-q.x),abs(r.y-q.y)) >= 4)
+                    assert(end-begin >= 4);   // the former three-point sharp corner must fail this regression
+            }
             long expected = uturn ? (inner ? -1 : 1) :
                 ((long)(original.pts[side*n+1].x-original.pts[side*n].x) *
                         (original.pts[side*n+2].y-original.pts[side*n+1].y) -
