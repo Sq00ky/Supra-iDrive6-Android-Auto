@@ -48,6 +48,7 @@ SRC_test_audio_route       := src/audio/audio_route.cpp
 SRC_test_bcl_detect        := src/wireless_setup.cpp
 SRC_test_boot_guard        :=
 SRC_test_overlay_watch     :=
+SRC_test_most_tuner        :=
 SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
