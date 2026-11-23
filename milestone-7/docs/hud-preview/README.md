@@ -1,18 +1,17 @@
 # HUD maneuver review images
 
-These images capture the production renderer at `3d2b99d` on the measured 126x77 F30 HUD. The sharp-turn before/after uses `43f916d` as its baseline; the AA9–AA12 contour comparison uses `6b98e61`. Parametric U-turns retain their selected outside exactly; their inner boundary is cleaned. The captions are in English; polygon coordinates and colours are copied from the serialized driver output without alteration. The display is enlarged for review.
+These images contain the current production driver's serialized polygon coordinates and colour roles, enlarged for review. Both selectable glyph modes share the [unified artwork](../hud-unified.md) on the automatically measured 126x77 F30 profile.
 
-- [Bend contours before/after](bend-contours-before-after.png): AA9–AA12 in both styles, near stage 4. Sharp-turn boundaries have rounded corners; U-turn boundaries have no backward rounding teeth. Heads and straight endpoints retain their positions.
-- [Sharp turns before/after](sharp-turns-before-after.png): AA9/AA10, both glyph styles, near stage 4. The same head clearance is checked at all four near stages.
-- [Far/near comparison](maneuvers-far-near.png): normal turn, sharp turn and U-turn, at far / near 1 / near 4.
-- [CCW roundabouts](roundabouts-ccw.png) and [CW roundabouts](roundabouts-cw.png): absent/known angles independently combined with absent/1..8 exit numbers. The ring picture is the same far and near.
+- [Complete ordinary-arrow catalog](unified-all-arrows.png): all 18 representative forms, far and near stage 4, plus all nine lane shapes. The lane SVG sheets also show both selected and unselected colours.
+- [Contour details](unified-contour-details.png): sharp turns with 12 native outside facets, U-turns and the destination's 16-facet window.
+- [CCW roundabouts](roundabouts-ccw.png) and [CW roundabouts](roundabouts-cw.png): independently absent/known angles and absent/1..8 exit numbers. Their geometry and digit data are retained.
 
-To generate all 30 production SVG sheets, run from the repository root on a configured Linux host:
+From the repository root on a configured Linux host:
 
 ```sh
 make -C milestone-7/tests hud-preview hud-matrix
 ```
 
-See [Mapbox glyphs](../mapbox-glyphs.md) and [digit outlines](../hud-digits.md) for the renderer and its regressions. These are previews of integer polygons, not photographs or an emulation of the cluster's palette, rasterization, fonts or MOST timing. Physical HUD readability remains to be checked.
+This generates 32 production SVG sheets with 2,906 cells: every Android Auto type 0..60, both glyph modes, far and all four near stages, two-digit exit examples, both ring traffic directions and lane guidance. `make check` verifies coverage and compares ordinary/lane contours against frozen accepted-artwork hashes.
 
-These sheets cover maneuver pictures. Lane guidance is a separate feature: the optional 6WA lane layer is disabled by default and is outside this catalog.
+The preview follows actual double-buffer visibility and route updates. It is not a photograph or an emulation of the cluster's palette, rasterization, fonts or MOST timing. The destination uses a solid body followed by a dark window mask; its physical masking behaviour remains to be checked on the car. Lane guidance is optional and remains disabled by default. No deployment was performed for these images.

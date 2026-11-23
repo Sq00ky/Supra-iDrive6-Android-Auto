@@ -1,9 +1,8 @@
 # Mapbox maneuver glyphs on the 6WA HUD
 
-Draw the polished Mapbox maneuver glyphs on the cluster HUD instead of the parametric shapes
-(`hudterm_shapes.hpp` `drawShape`). Opt-in: `NBT_HUD_GLYPHS=1` (or `on` / `yes` / `true`) in `nbt-aad.env`
-draws them; unset or `0` / `off` keeps the parametric shapes, the default look. Car-verified on the F30 6WA cluster,
-18.11.2026.
+The automatically measured **126x77 F30 profile** now uses the [unified maneuver artwork](hud-unified.md) in both glyph modes, including the optional lane layer. The shared roundabout renderer and digit shapes are unchanged.
+
+For other profiles and explicit canvas/glyph pins, `NBT_HUD_GLYPHS=1` (or `on` / `yes` / `true`) selects the adapted Mapbox glyphs; unset or `0` / `off` keeps the legacy parametric look. The following sections describe that retained renderer. The earlier Mapbox version was car-verified on the F30 6WA on 18.11.2026; the new unified artwork has not been checked on the car.
 
 ## Files
 
@@ -51,20 +50,9 @@ slight, normal and sharp turns, U-turns, forks, merges and ramps, plus the older
 known-angle ring renderer uses the same wing rules on a compact radial head. Destination and unused drawings are unchanged. Pixel rounding
 introduces a small angular error at the HUD's final size.
 
-The automatic F30 fit uses the original bounds through `mbxOriginalBounds()`. Refitting to the narrower wing bounds
-would enlarge or move the whole icon. Near views retain their roads and route tips, with the same wing proportions.
-Sharp turns and U-turns use single smooth body contours with fractional source coordinates retained until fitting.
-Off-ramps keep a constant-width join where the diagonal shaft enters the head.
-On the automatic F30 near view, Mapbox U-turn road, border and route bodies use concentric circular edges sampled every
-5 degrees. Q12 coordinates are rounded once onto the final HUD grid; heads, tips and straight leg endpoints stay
-in place. Each body has at most 78 points before native deduplication, within the 99-point terminal limit. Convex
-boundary cleanup removes native-grid teeth without moving retained vertices. Parametric U-turns keep their selected
-outer contour exactly and apply the cleanup only to the inner boundary. Near sharp turns in both styles round each
-boundary's corner with a quadratic curve, set back by at most six native pixels and half the adjacent segment.
-Their straight endpoints and arrowheads stay fixed. This finishing is limited to automatic F30 near views;
-far drawings, other profiles and explicit canvas/glyph pins retain their existing geometry.
-On the automatic F30 near view, sharp turns and ramps have a longer straight section after the bend. Sharp-turn
-heads clear the incoming stem by at least 3 native pixels, including the border; ramp heads clear the main road. The shared roundabout exit has an 8-pixel external shaft instead of 6; its circle diameter is retained.
+The legacy Mapbox path fits its source bounds through `mbxOriginalBounds()`. Refitting to the narrower wing bounds would enlarge or move the whole icon. Its sharp turns and U-turns retain fractional source coordinates until fitting; off-ramps keep a constant-width head join. See the unified-artwork document for the automatic F30 replacement and its native-grid contours.
+
+The shared roundabout exit retains its 8-pixel external shaft and circle diameter.
 
 Regenerate the committed data from the repository root, using Python's standard library only:
 
@@ -93,8 +81,7 @@ while allowing denser sampling of the circular bands. See `hud-digits.md` for di
 ## Not done / how to extend
 
 - **Ferry** has no glyph → folds to the straight glyph via `kombiDirection` (unchanged from before).
-- **Lanes**: the `kLane*` tables are in `mapbox_glyphs.hpp` but the lane strip still uses its own drawing; wire them
-  in `lanesBatch` if wanted.
+- **Lanes**: the `kLane*` Mapbox tables remain unused. The automatic F30 lane strip uses the unified artwork; other profiles retain their legacy drawing.
 - **Update the source artwork**: import the CarPlay plugin's `tools/hud_glyphs.py` output, preserve its attribution,
   and review the wing anchors before adapting a new version. The wing generator rejects an unexpected source file.
 

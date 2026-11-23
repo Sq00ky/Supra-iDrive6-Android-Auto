@@ -139,7 +139,7 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh run-test_hud_preview tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh run-test_hud_preview run-test_hud_unified tsan
 	@echo "[CHECK] all host tests passed"
 
 .PHONY: run-test_favourite_resources
@@ -156,14 +156,20 @@ run-test_settings_refresh:
 	@python3 test_settings_refresh.py
 
 # Review the production driver's far arrow and all four near-route stages at native HUD resolution.
-.PHONY: hud-preview hud-matrix run-test_hud_preview
+.PHONY: hud-preview hud-matrix run-test_hud_preview run-test_hud_unified
 hud-preview: $(OUT)/hud_preview
 	@for mode in 0 1; do for stage in 0 1 2 3 4; do $(OUT)/hud_preview $$stage $$mode > $(OUT)/hud-arrows-$$mode-$$stage.svg || exit 1; done; done
+	@for mode in 0 1; do $(OUT)/hud_preview 0 $$mode lanes > $(OUT)/hud-lanes-$$mode.svg || exit 1; done
 	@echo "HUD preview sheets: $(OUT)/hud-arrows-{0,1}-{0..4}.svg"
 
 hud-matrix: $(OUT)/hud_preview
 	@for direction in ccw cw; do for mode in 0 1; do for stage in 0 1 2 3 4; do $(OUT)/hud_preview $$stage $$mode $$direction > $(OUT)/hud-rings-$$direction-$$mode-$$stage.svg || exit 1; done; done; done
 	@echo "Ring matrices: $(OUT)/hud-rings-{ccw,cw}-{0,1}-{0..4}.svg"
+
+run-test_hud_unified: $(OUT)/hud_preview
+	@python3 $(ROOT)/tools/gen_unified_hud.py --check
+	@python3 test_hud_unified.py $(OUT)/hud_preview > $(OUT)/test_hud_unified.log 2>&1 \
+	  && echo "[PASS] test_hud_unified.py" || { echo "[FAIL] test_hud_unified.py"; cat $(OUT)/test_hud_unified.log; exit 1; }
 
 run-test_hud_preview: $(OUT)/hud_preview
 	@python3 test_hud_preview.py $(OUT)/hud_preview > $(OUT)/test_hud_preview.log 2>&1 \

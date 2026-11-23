@@ -3,6 +3,7 @@
 #include "cluster/hud6wa_display.hpp"
 #include "cluster/hudterm_digits.hpp"
 #include "cluster/hudterm_ring.hpp"
+#include "cluster/hud_unified.hpp"
 #include "cluster/mapbox_hud.hpp"   // Mapbox maneuver glyphs (NBT_HUD_GLYPHS); falls back to the parametric shapes
 
 #include <stdarg.h>
@@ -182,206 +183,15 @@ bool readableHud(const HudProfile& p) {
         && p.glyph.x1 == 82 && p.glyph.y1 == 68;
 }
 
-JunctionStyle hudRouteStyle(const Layout& layout, const HudProfile& profile) {
-    JunctionStyle style = kJunctionStyle;
-    bool readable = readableHud(profile) && !layout.ring;
-    if (readable) {
-        int heading = layout.route.heads.empty() ? 0 : layout.route.heads.back();
-        // Match the far icon's visual weight without enlarging its roads or moving its on-canvas tip.
-        if (mbxEnabled()) {
-            if (heading == -135 || heading == 135) {
-                style.routeW = 20; style.routeCore = 16;
-            }
-            style.headL = 34; style.headW = heading == 180 ? 22 : 27;
-        } else {
-            style.routeW = 24; style.routeCore = 20;
-            style.headL = 28; style.headW = heading == 180 ? 19 : 23;
-        }
-    }
-    return style;
-}
-
-void drawHudRoute(const Layout& layout, int tail, const HudProfile& profile, const JunctionColours& colours,
+void drawHudRoute(const Layout& layout, int tail, const HudProfile&, const JunctionColours& colours,
                   Picture& picture) {
-    JunctionStyle style = hudRouteStyle(layout, profile);
-    bool readable = readableHud(profile) && !layout.ring;
-    drawRoute(layout, tail, colours, style, picture, readable ? kJunctionStyle.headL : -1, mbxEnabled());
-}
-
-// Keep each curved boundary convex after pixel rounding: a staircase must not turn back into the stroke.
-std::vector<Point> convexBend(const std::vector<Point>& points, int sign) {
-    std::vector<Point> out;
-    for (size_t i = 0; i < points.size(); ++i) {
-        const Point& p = points[i];
-        if (!out.empty() && p.x == out.back().x && p.y == out.back().y) continue;
-        while (out.size() > 1) {
-            const Point& a = out[out.size()-2]; const Point& b = out.back();
-            long cross = (long)(b.x-a.x)*(p.y-b.y) - (long)(b.y-a.y)*(p.x-b.x);
-            if (cross*sign > 0) break;
-            out.pop_back();
-        }
-        out.push_back(p);
-    }
-    return out;
-}
-
-// Round the sole corner of one sharp-turn boundary; the original straight endpoints remain fixed.
-std::vector<Point> roundedSharpBend(const std::vector<Point>& points) {
-    const Point& a = points[0]; const Point& b = points[1]; const Point& c = points[2];
-    const long unit = 4096;
-    int da = std::max(abs(a.x-b.x),abs(a.y-b.y)), dc = std::max(abs(c.x-b.x),abs(c.y-b.y));
-    if (!da || !dc) return points;
-    long fa = std::min(2048,6*4096/da), fc = std::min(2048,6*4096/dc);
-    long px = b.x*unit+(a.x-b.x)*fa, py = b.y*unit+(a.y-b.y)*fa;
-    long qx = b.x*unit+(c.x-b.x)*fc, qy = b.y*unit+(c.y-b.y)*fc;
-    std::vector<Point> curve(1,a);
-    for (int i = 0; i <= 12; ++i) {
-        long x = (12-i)*(12-i)*px + 2*i*(12-i)*b.x*unit + i*i*qx;
-        long y = (12-i)*(12-i)*py + 2*i*(12-i)*b.y*unit + i*i*qy;
-        const long d = 144*unit;
-        curve.push_back(shapes::pt(x >= 0 ? (x+d/2)/d : -((-x+d/2)/d),
-                                   y >= 0 ? (y+d/2)/d : -((-y+d/2)/d)));
-    }
-    curve.push_back(c);
-    long cross = (long)(b.x-a.x)*(c.y-b.y) - (long)(b.y-a.y)*(c.x-b.x);
-    return convexBend(curve,cross > 0 ? 1 : -1);
-}
-
-Poly finishNativeBend(const Poly& source, int heading) {
-    const size_t n = source.pts.size()/2;
-    std::vector<Point> left(source.pts.begin(),source.pts.begin()+n);
-    std::vector<Point> right(source.pts.begin()+n,source.pts.end());
-    if (heading == 180) {
-        // Preserve the selected parametric outside exactly; only the concave inner edge needs cleanup.
-        if (left.front().x > right.front().x) left = convexBend(left,-1);
-        else right = convexBend(right,-1);
-    } else {
-        left = roundedSharpBend(left); right = roundedSharpBend(right);
-    }
-    Poly out; out.type = source.type; out.pts = left;
-    out.pts.insert(out.pts.end(),right.begin(),right.end());
-    return out;
-}
-
-// Concentric U-turn edges sampled before the one conversion to native HUD coordinates.
-Poly smoothUTurnStroke(const Layout& layout, int startY, int endY, int width, const HudProfile& profile) {
-    const Point& in = layout.route.pts.front();
-    const Point& end = layout.route.pts.back();
-    int side = end.x > in.x ? 1 : -1, cx = (in.x + end.x) / 2, cy = in.y;
-    int radius = (end.x - in.x) * side / 2, half = width / 2;
-    const long unit = 4096, fromH = k6wa.canvas.y1 + 1, toH = profile.canvas.y1 + 1;
-    const long divisor = 2 * fromH * unit;
-    Poly poly; poly.type = kPolygon;
-    auto add = [&](long x, long y) {
-        long nx = (profile.glyph.x0 + profile.glyph.x1) * fromH * unit +
-                  (2*x - (k6wa.glyph.x0 + k6wa.glyph.x1)*unit) * toH;
-        long ny = (profile.glyph.y0 + profile.glyph.y1) * fromH * unit +
-                  (2*y - (k6wa.glyph.y0 + k6wa.glyph.y1)*unit) * toH;
-        Point p = shapes::pt(nx >= 0 ? (nx+divisor/2)/divisor : -((-nx+divisor/2)/divisor),
-                             ny >= 0 ? (ny+divisor/2)/divisor : -((-ny+divisor/2)/divisor));
-        if (poly.pts.empty() || p.x != poly.pts.back().x || p.y != poly.pts.back().y) poly.pts.push_back(p);
-    };
-    add((in.x-half)*unit, startY*unit);
-    for (int i = 0; i <= 36; ++i) {
-        int bearing = -side*90 + side*i*5, r = radius+side*half;
-        add(cx*unit+r*isin(bearing), cy*unit-r*icos(bearing));
-    }
-    add((end.x+half)*unit, endY*unit);
-    size_t split = poly.pts.size();
-    add((end.x-half)*unit, endY*unit);
-    for (int i = 0; i <= 36; ++i) {
-        int bearing = side*90 - side*i*5, r = radius-side*half;
-        add(cx*unit+r*isin(bearing), cy*unit-r*icos(bearing));
-    }
-    add((in.x+half)*unit, startY*unit);
-    std::vector<Point> left(poly.pts.begin(),poly.pts.begin()+split);
-    std::vector<Point> right(poly.pts.begin()+split,poly.pts.end());
-    poly.pts = convexBend(left,side);
-    right = convexBend(right,-side);
-    poly.pts.insert(poly.pts.end(),right.begin(),right.end());
-    return poly;
-}
-
-// Fit the same circular edges for the road, border and route so early rounding cannot leave a grey fringe.
-void finishHudBends(const Layout& layout, int tail, const HudProfile& profile, Picture& picture, bool roads) {
-    if (!readableHud(profile) || layout.ring || layout.route.heads.empty() || layout.roads.size() != 1) return;
-    const int heading = layout.route.heads.back();
-    if (heading != 180 && heading != -135 && heading != 135) return;
-    const bool circular = mbxEnabled() && heading == 180;
-    size_t routeOffset = 0;
-    if (roads) {
-        const Path& road = layout.roads[0];
-        picture[0].poly = circular ? smoothUTurnStroke(layout, road.pts.front().y, road.pts.back().y,
-                                           kJunctionStyle.roadW, profile) : finishNativeBend(picture[0].poly,heading);
-        picture[1].poly = circular ? smoothUTurnStroke(layout, road.pts.front().y, road.pts.back().y,
-                                           kJunctionStyle.roadCore, profile) : finishNativeBend(picture[1].poly,heading);
-        routeOffset = 2;
-    }
-    if (picture.size() == routeOffset + 4) {
-        if (tail > layout.maxTail) tail = layout.maxTail;
-        if (tail < 8) tail = 8;
-        JunctionStyle style = hudRouteStyle(layout, profile);
-        int startY = layout.ey+tail, endY = layout.route.pts.back().y;
-        picture[routeOffset].poly = circular ? smoothUTurnStroke(layout, startY, endY, style.routeW, profile)
-                                            : finishNativeBend(picture[routeOffset].poly,heading);
-        picture[routeOffset+2].poly = circular ? smoothUTurnStroke(layout, startY, endY, style.routeCore, profile)
-                                              : finishNativeBend(picture[routeOffset+2].poly,heading);
-    }
-}
-
-void readableArrow(const ShapeSpec& spec, const HudProfile& p, Picture& pic) {
-    HudProfile design = p;
-    design.glyph = Rect{ 0, 0, kDesign, kDesign };
-    Picture source;
-    if (!mbxManeuver(spec, design, source)) {
-        Shape shape;
-        drawShape(spec, shape);
-        for (size_t i = 0; i < shape.size(); ++i) {
-            Item item; item.colour = p.fill; item.poly = shape[i]; source.push_back(item);
-        }
-    }
-    Rect bounds = { kDesign, kDesign, 0, 0 };
-    for (size_t i = 0; i < source.size(); ++i)
-        for (size_t j = 0; j < source[i].poly.pts.size(); ++j) {
-            const Point& pt = source[i].poly.pts[j];
-            bounds.x0 = std::min(bounds.x0, pt.x); bounds.x1 = std::max(bounds.x1, pt.x);
-            bounds.y0 = std::min(bounds.y0, pt.y); bounds.y1 = std::max(bounds.y1, pt.y);
-        }
-    Rect original;
-    if (mbxEnabled() && mbxOriginalBounds(kombinav::kombiDirection(spec.aa_type), original)) {
-        Point lo = mbxPoint(original.x0, original.y0, false, design.glyph);
-        Point hi = mbxPoint(original.x1, original.y1, false, design.glyph);
-        bounds = Rect{ lo.x, lo.y, hi.x, hi.y };
-    }
-    int extent = std::max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
-    if (extent <= 0) return;
-    const Rect box = { 36, 16, 89, 69 };
-    int side = box.x1 - box.x0;
-    long denominator = 2L * extent;
-    for (size_t i = 0; i < source.size(); ++i) {
-        Item item = source[i];
-        for (size_t j = 0; j < item.poly.pts.size(); ++j) {
-            Point& pt = item.poly.pts[j];
-            long x = (long)(box.x0 + box.x1) * extent + (2L * pt.x - bounds.x0 - bounds.x1) * side;
-            long y = (long)(box.y0 + box.y1) * extent + (2L * pt.y - bounds.y0 - bounds.y1) * side;
-            pt.x = (int16_t)((x + denominator / 2) / denominator);
-            pt.y = (int16_t)((y + denominator / 2) / denominator);
-        }
-        long area = 0;
-        for (size_t j = 0; j < item.poly.pts.size(); ++j) {
-            const Point& a = item.poly.pts[j];
-            const Point& b = item.poly.pts[j + 1 < item.poly.pts.size() ? j + 1 : 0];
-            area += (long)a.x * b.y - (long)b.x * a.y;
-        }
-        if (area) pic.push_back(item);   // a tessellation sliver can vanish after rounding to HUD pixels
-    }
+    drawRoute(layout, tail, colours, kJunctionStyle, picture, -1, mbxEnabled());
 }
 
 bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
     if (spec.kind == kShapeRoundabout) return roundaboutPicture(spec, p, pic, exitNumber);
     if (readableHud(p)) {
-        readableArrow(spec, p, pic);
-        return true;
+        return unified::far(spec.aa_type, p, pic);
     }
     if (mbxManeuver(spec, p, pic)) return true;   // Mapbox ordinary glyph; else the parametric shape below
     Shape design, fitted;
@@ -487,7 +297,6 @@ void Hud6waDisplay::startManeuver(const NavView& v) {
     has_layout_ = s_.junction && shapeFor(v.aa_type, v.has_exit_angle, v.exit_angle).kind != kShapeRoundabout &&
                   junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
                                  v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
-    if (has_layout_ && readableHud(p_)) lengthenHudRoute(v.aa_type, layout_);
     if (has_layout_ && !junctionShows()) {   // drawn scaled onto this buffer, its way would still be cut off
         has_layout_ = false;
         log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
@@ -526,15 +335,14 @@ void Hud6waDisplay::updateStage(const NavView& v) {
     stage_ = stage_ == 0 || q < stage_ ? q : stage_;
 }
 
-ClusterDisplay::Result Hud6waDisplay::sendRoute() {
+ClusterDisplay::Result Hud6waDisplay::sendRoute(int type) {
     if (!near_ || !near_shown_ || !routeInOverlay() || redraw_ || held_ || stage_ == 0 || stage_ == stage_shown_)
         return kOk;
     if (!shadow_ && port_.waiting(kSlotRoute)) return kOk;   // drawn on a later step, from the newest stage
     Picture pic;
     int tail = tailFor(layout_, stage_, kStages);
-    drawHudRoute(layout_, tail, p_, colours(), pic);
-    fitJunction(pic);
-    finishHudBends(layout_, tail, p_, pic, false);
+    if (readableHud(p_)) unified::route(type,p_,stage_,pic);
+    else { drawHudRoute(layout_,tail,p_,colours(),pic); fitJunction(pic); }
     Batch b = routeBatch(pic);
     log("ROUTE stage %d/%d, tail %d | %u calls%s", stage_, (int)kStages, tail, (unsigned)b.calls.size(),
         shadow_ ? " (shadow: not sent)" : "");
@@ -551,7 +359,10 @@ ClusterDisplay::Result Hud6waDisplay::sendRoute() {
 ClusterDisplay::Result Hud6waDisplay::sendLanes(const NavView& v) {
     if (!lanesOn() || redraw_ || held_) return kOk;
     Picture pic;
-    bool draw = !v.lanes.empty() && drawLanes(v.lanes, p_.lanes, p_.road, p_.route, pic);
+    bool unifiedLanes = readableHud(p_) && !getenv("NBT_HUD_LANES_BOX") &&
+                        p_.lanes.x0 == 0 && p_.lanes.y0 == 0 && p_.lanes.x1 == 183 && p_.lanes.y1 == 16;
+    bool draw = !v.lanes.empty() && (unifiedLanes ? unified::lanes(v.lanes,p_.lanes,p_.road,p_.route,pic)
+                                                : drawLanes(v.lanes,p_.lanes,p_.road,p_.route,pic));
     if (!draw) {
         if (!lanes_dirty_) return kOk;
         pic.clear();
@@ -618,10 +429,14 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     Picture pic;
     std::string what;
     if (junction) {
-        drawRoads(layout_, colours(), kJunctionStyle, pic);
-        if (!routeInOverlay()) drawHudRoute(layout_, tailFor(layout_, stage_, kStages), p_, colours(), pic);
-        fitJunction(pic);
-        finishHudBends(layout_, tailFor(layout_, stage_, kStages), p_, pic, true);
+        if (readableHud(p_)) {
+            unified::roads(v.aa_type,p_,true,pic);
+            if (!routeInOverlay()) unified::route(v.aa_type,p_,stage_,pic);
+        } else {
+            drawRoads(layout_,colours(),kJunctionStyle,pic);
+            if (!routeInOverlay()) drawHudRoute(layout_,tailFor(layout_,stage_,kStages),p_,colours(),pic);
+            fitJunction(pic);
+        }
         what = "junction view, " + describeSpec(spec);
         if (layout_.exitNumber) {
             char n[24];
@@ -660,7 +475,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     if (emptyRoute) route_dirty_ = false;
     if (!junction) stage_shown_ = 0;
     else if (!routeInOverlay()) stage_shown_ = stage_;
-    r = sendRoute();
+    r = sendRoute(v.aa_type);
     if (r != kOk) return r;
     return sendLanes(v);
 }
@@ -757,7 +572,7 @@ ClusterDisplay::Result Hud6waDisplay::keepUp(const NavView& v, double) {
     Result r = health(NULL);
     if (r != kOk || port_.status() == kNavActive) return r;
     updateStage(v);
-    r = sendRoute();
+    r = sendRoute(v.aa_type);
     if (r != kOk) return r;
     return sendLanes(v);
 }

@@ -17,6 +17,7 @@
 #include "kombi_nav_test_util.hpp"
 #include <algorithm>
 #include <utility>
+#include <map>
 #include <math.h>
 #include <assert.h>
 #include <stdio.h>
@@ -1287,64 +1288,50 @@ static Rect pictureBounds(const Picture& picture) {
     return box;
 }
 
+static void samePictureItems(const Picture& actual, const Picture& expected, size_t offset = 0);
+
 static void testReadableHudArrows() {
     unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
-    HudProfile profile = k6wa; fitMeasured(126, 77, profile);
+    HudProfile profile = k6wa; fitMeasured(126,77,profile);
+    std::map<int,Picture> baseline;
     for (int mode = 0; mode < 2; ++mode) {
-        setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
-        FakePort port; Hud6waDisplay display(port, profile, false);
+        setenv("NBT_HUD_GLYPHS",mode ? "1" : "0",1);
+        FakePort port; Hud6waDisplay display(port,profile,false);
         for (int type = 0; type <= 60; ++type) {
-            ShapeSpec spec = shapeFor(type, true, 90);
+            ShapeSpec spec = shapeFor(type,true,90);
             if (spec.kind == kShapeRoundabout) continue;
-            Picture pic = batchPicture(display.showBatch(true, HudTexts(), spec));
-            Rect box = pictureBounds(pic);
-            Rect originalBounds;
-            bool adapted = mode && mbxOriginalBounds(kombinav::kombiDirection(type), originalBounds);
-            // Narrower wings retain the old fit; recentering their new bounds would move the unchanged stem and tip.
-            if (std::max(box.x1 - box.x0, box.y1 - box.y0) < (adapted ? 48 : 52))
-                fprintf(stderr, "small glyph: mode%d type%d adapted%d bounds%d,%d-%d,%d items%u\n",
-                        mode, type, adapted, box.x0, box.y0, box.x1, box.y1, (unsigned)pic.size());
-            assert(std::max(box.x1 - box.x0, box.y1 - box.y0) >= (adapted ? 48 : 52));
-            if (!adapted) assert(abs(box.x0 + box.x1 - 125) <= 1 && abs(box.y0 + box.y1 - 85) <= 1);
+            Picture pic = batchPicture(display.showBatch(true,HudTexts(),spec));
+            if (!mode) baseline[type] = pic; else samePictureItems(pic,baseline[type]);
+            Rect bounds = pictureBounds(pic);
+            assert(std::max(bounds.x1-bounds.x0,bounds.y1-bounds.y0) >= 40);
             for (size_t i = 0; i < pic.size(); ++i) {
-                assert(area2(pic[i].poly.pts) > 0);
+                assert(area2(pic[i].poly.pts) > 0 && pic[i].poly.pts.size() <= 99);
                 for (size_t j = 0; j < pic[i].poly.pts.size(); ++j) {
-                    const Point& pt = pic[i].poly.pts[j];
-                    assert(pt.x >= 36 && pt.x <= 89 && pt.y >= 16 && pt.y <= 69);
+                    const Point& q = pic[i].poly.pts[j];
+                    assert(q.x >= 0 && q.x <= 125 && q.y >= 0 && q.y <= 76);
                 }
             }
-            HudProfile design = profile; design.glyph = Rect{ 0, 0, 1000, 1000 };
-            Picture source;
-            if (!mbxManeuver(spec, design, source)) {
-                Shape shape; drawShape(spec, shape);
-                for (size_t i = 0; i < shape.size(); ++i) {
-                    Item item; item.colour = profile.fill; item.poly = shape[i]; source.push_back(item);
-                }
+            if (spec.kind == kShapeFlag) {
+                assert(pic.size() == 2 && pic[0].colour == profile.fill && pic[1].colour == profile.edge);
+                assert(pic[0].poly.pts.size() == 18 && pic[1].poly.pts.size() == 16);
             }
-            Rect original = pictureBounds(source);
-            long ow = original.x1 - original.x0, oh = original.y1 - original.y0;
-            assert(labs((box.x1 - box.x0) * oh - (box.y1 - box.y0) * ow) <= std::max(ow, oh));
         }
-        const int pairs[][2] = { {5, 6}, {7, 8}, {9, 10}, {11, 12}, {23, 24}, {25, 26}, {27, 28} };
-        for (size_t pair = 0; pair < sizeof(pairs) / sizeof(pairs[0]); ++pair) {
-            Picture left = batchPicture(display.showBatch(true, HudTexts(), shapeFor(pairs[pair][0], false, 0)));
-            Picture right = batchPicture(display.showBatch(true, HudTexts(), shapeFor(pairs[pair][1], false, 0)));
-            for (size_t i = 0; i < left.size(); ++i)
+        const int pairs[][2] = {{5,6},{7,8},{9,10},{11,12},{13,14},{21,22},{25,26},{27,28}};
+        for (size_t pair = 0; pair < sizeof(pairs)/sizeof(pairs[0]); ++pair) {
+            const Picture& left = baseline[pairs[pair][0]]; const Picture& right = baseline[pairs[pair][1]];
+            assert(left.size() == right.size());
+            for (size_t i = 0; i < left.size(); ++i) {
+                assert(left[i].colour == right[i].colour && left[i].poly.pts.size() == right[i].poly.pts.size());
                 for (size_t j = 0; j < left[i].poly.pts.size(); ++j) {
                     const Point& a = left[i].poly.pts[j];
-                    bool found = false;
-                    for (size_t k = 0; k < right.size() && !found; ++k)
-                        for (size_t l = 0; l < right[k].poly.pts.size(); ++l) {
-                            const Point& b = right[k].poly.pts[l];
-                            if (left[i].colour == right[k].colour && abs(a.x + b.x - 125) <= 1
-                                && abs(a.y - b.y) <= 1) found = true;
-                        }
-                    assert(found);
+                    const Point& b = right[i].poly.pts[right[i].poly.pts.size()-1-j];
+                    assert(a.x+b.x == 124 && a.y == b.y);
                 }
+            }
         }
     }
     unsetenv("NBT_HUD_GLYPHS");
-    printf("  F30 static arrows: visible size, aspect ratio and mirrors in both styles\n");
+    printf("  unified F30 arrows: identical modes, native bounds, exact mirrors and 16-facet pin window\n");
 }
 
 static void testReadableHudCompatibility() {
@@ -1747,36 +1734,13 @@ static void testJunctionDriver() {
     assert(logged("ROUTE stage 4/4") && logged("[shadow] 21D ImageAddPolygon h7"));
 }
 
-static void samePictureItems(const Picture& actual, const Picture& expected, size_t offset = 0) {
+static void samePictureItems(const Picture& actual, const Picture& expected, size_t offset) {
     assert(actual.size() >= offset + expected.size());
     for (size_t i = 0; i < expected.size(); ++i) {
         assert(actual[offset + i].colour == expected[i].colour);
         assert(addPolygon(5, (uint16_t)i, actual[offset + i].poly.type, actual[offset + i].poly.pts)
             == addPolygon(5, (uint16_t)i, expected[i].poly.type, expected[i].poly.pts));
     }
-}
-
-static bool insidePolygon(const Poly& polygon, double x, double y) {
-    bool inside = false;
-    size_t previous = polygon.pts.size() - 1;
-    for (size_t i = 0; i < polygon.pts.size(); previous = i++) {
-        const Point& a = polygon.pts[i]; const Point& b = polygon.pts[previous];
-        if ((a.y > y) != (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
-    }
-    return inside;
-}
-
-// Measure the incoming stroke from serialized far polygons, including Mapbox's convex-piece tessellation.
-static int farStroke(const Picture& picture) {
-    int pixels = 0, longest = 0;
-    for (int x = 0; x < 126; ++x) {
-        bool painted = false;
-        for (size_t i = 0; i < picture.size() && !painted; ++i)
-            painted = picture[i].colour == k6wa.fill && insidePolygon(picture[i].poly, x + 0.5, 66.5);
-        if (painted) { ++pixels; longest = std::max(longest, pixels); }
-        else pixels = 0;
-    }
-    return longest;   // a U-turn's descending head may also touch this row, separately from the incoming stem
 }
 
 static long crossForTest(const Point& a, const Point& b, const Point& c) {
@@ -1963,206 +1927,86 @@ static void testNearPolygonsSimple() {
     printf("  sharp turns and U-turns: serialized near polygons have no strict self-intersections\n");
 }
 
-// Check native curved edges against independent circles, including border/road agreement.
-static void checkSmoothUTurn(const Poly& poly, int width) {
-    const double scale = 77.0/130, cx = 59.5, cy = 45.5-10*scale;
-    const double inner = (16-width/2)*scale, outer = (16+width/2)*scale;
-    unsigned curved = 0;
-    assert(poly.pts.size() <= 99);
-    for (size_t i = 0; i < poly.pts.size(); ++i) {
-        const Point& a = poly.pts[i];
-        const Point& b = poly.pts[i+1 < poly.pts.size() ? i+1 : 0];
-        if (a.y > cy+0.6) continue;
-        double r = hypot(a.x-cx,a.y-cy);
-        assert(std::min(fabs(r-inner),fabs(r-outer)) <= 0.8);
-        if (b.y <= cy+0.6) {
-            const double target = fabs(r-inner) < fabs(r-outer) ? inner : outer;
-            for (int sample = 1; sample <= 3; ++sample) {
-                double t = sample/4.0;
-                assert(fabs(hypot(a.x+t*(b.x-a.x)-cx,a.y+t*(b.y-a.y)-cy)-target) <= 1.0);
-            }
-        }
-        ++curved;
-    }
-    assert(curved >= 10);
-    assert(simplePolygon(poly));
-}
-
-// The selected outside of parametric U-turns is frozen; curved edges must have no backward pixel teeth.
-static void checkBendContours(const Poly& actual, const Poly& original, int type, int mode) {
-    const size_t n = original.pts.size()/2;
-    const Point& a = original.pts[n-1]; const Point& b = original.pts[n];
-    size_t split = actual.pts.size();
-    for (size_t i = 0; i+1 < actual.pts.size(); ++i)
-        if (actual.pts[i].x == a.x && actual.pts[i].y == a.y &&
-            actual.pts[i+1].x == b.x && actual.pts[i+1].y == b.y) { split = i+1; break; }
-    assert(split < actual.pts.size());
-    assert(actual.pts.front().x == original.pts.front().x && actual.pts.front().y == original.pts.front().y);
-    assert(actual.pts.back().x == original.pts.back().x && actual.pts.back().y == original.pts.back().y);
-    for (int side = 0; side < 2; ++side) {
-        const size_t begin = side ? split : 0, end = side ? actual.pts.size() : split;
-        const bool uturn = type == 11 || type == 12;
-        const bool inner = type == 11 ? side == 0 : side == 1;
-        if (uturn && !mode && !inner) {
-            assert(end-begin == n);
-            for (size_t i = 0; i < n; ++i) {
-                const Point& old = original.pts[side*n+i]; const Point& now = actual.pts[begin+i];
-                assert(old.x == now.x && old.y == now.y);
-            }
-        } else {
-            assert(end-begin >= 3);
-            if (!uturn) {
-                const Point& p = original.pts[side*n]; const Point& q = original.pts[side*n+1];
-                const Point& r = original.pts[side*n+2];
-                if (std::max(abs(p.x-q.x),abs(p.y-q.y)) >= 4 &&
-                    std::max(abs(r.x-q.x),abs(r.y-q.y)) >= 4)
-                    assert(end-begin >= 4);   // the former three-point sharp corner must fail this regression
-            }
-            long expected = uturn ? (inner ? -1 : 1) :
-                ((long)(original.pts[side*n+1].x-original.pts[side*n].x) *
-                        (original.pts[side*n+2].y-original.pts[side*n+1].y) -
-                 (long)(original.pts[side*n+1].y-original.pts[side*n].y) *
-                        (original.pts[side*n+2].x-original.pts[side*n+1].x));
-            for (size_t i = begin+2; i < end; ++i) {
-                const Point& p = actual.pts[i-2]; const Point& q = actual.pts[i-1]; const Point& r = actual.pts[i];
-                long cross = (long)(q.x-p.x)*(r.y-q.y)-(long)(q.y-p.y)*(r.x-q.x);
-                assert(expected < 0 ? cross < 0 : cross > 0);
-            }
-        }
-    }
-    assert(actual.pts.size() <= 99 && simplePolygon(actual));
-}
-
 static void testReadableNearArrows() {
     unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
+    std::map<int,Picture> scenes;
     unsigned checked = 0;
-    for (int mode = 0; mode < 2; ++mode)
-        for (int overlay = 0; overlay < 2; ++overlay)
-            for (int type = 0; type <= 60; ++type) {
-                Layout layout;
-                if (!junctionLayout(type, true, 90, false, 0, k6wa.glyph, k6wa.canvas.y1, layout) || layout.ring) continue;
-                lengthenHudRoute(type, layout);
-                HudProfile profile = k6wa; fitMeasured(126, 77, profile);
-                if (!overlay) profile.routeA = profile.routeB = 0;
-                bool fits = junctionFits(layout, Hud6waDisplay::kStages, profile.canvas, k6wa.glyph,
-                                         k6wa.canvas.y1 + 1, profile.glyph, 77);
-                setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
-                FakePort port; Hud6waDisplay display(port, profile, false);
-                NavView maneuver = timed(type, "Testroad", "4000", 1, 4000, 500);
-                assert(display.showManeuver(maneuver, 0, true, true) == ClusterDisplay::kOk && !display.nearShown());
-                int incoming = farStroke(batchPicture(port.batches[0]));
-                assert(incoming >= 6);
-                maneuver.step_m = 100; maneuver.step_s = 5;
-                bool changed = display.sameManeuver(maneuver, 1);
-                assert(changed == fits);
-                if (!fits) continue;
-                assert(display.showManeuver(maneuver, 1, false, false) == ClusterDisplay::kOk && display.nearShown());
-                JunctionColours colours = { profile.edge, profile.road, profile.route };
-                Picture roads; drawRoads(layout, colours, kJunctionStyle, roads);
-                fitPicture(roads, k6wa.glyph, k6wa.canvas.y1 + 1, profile.glyph, 77);
-                for (int stage = 4; stage >= 1; --stage) {
-                    if (stage != 4) {
-                        maneuver.step_m = stage * 25;
-                        if (overlay) assert(display.keepUp(maneuver, 6 - stage) == ClusterDisplay::kOk);
-                        else {
-                            assert(display.sameManeuver(maneuver, 6 - stage));
-                            assert(display.showManeuver(maneuver, 6 - stage, false, false) == ClusterDisplay::kOk);
-                        }
+    for (int mode = 0; mode < 2; ++mode) for (int overlay = 0; overlay < 2; ++overlay)
+        for (int type = 0; type <= 60; ++type) {
+            ShapeSpec spec = shapeFor(type,false,0);
+            if (spec.kind == kShapeRoundabout || spec.kind == kShapeFlag) continue;
+            setenv("NBT_HUD_GLYPHS",mode ? "1" : "0",1);
+            HudProfile profile = k6wa; fitMeasured(126,77,profile);
+            if (!overlay) profile.routeA = profile.routeB = 0;
+            FakePort port; Hud6waDisplay display(port,profile,false);
+            NavView v = timed(type,"Testroad","4000",1,4000,500);
+            assert(display.showManeuver(v,0,true,true) == ClusterDisplay::kOk && !display.nearShown());
+            Picture far = batchPicture(port.batches.back());
+            assert(far.size() >= 4);
+            const Poly& farBody = far[far.size()-2].poly;
+            const Poly& farEdge = far[far.size()-4].poly;
+            int farCap = -32768;
+            for (size_t i = 0; i < farBody.pts.size(); ++i) farCap = std::max(farCap,(int)farBody.pts[i].y);
+            v.step_m = 100; v.step_s = 5;
+            assert(display.sameManeuver(v,1));
+            assert(display.showManeuver(v,1,false,false) == ClusterDisplay::kOk && display.nearShown());
+            int previousCap = 32767;
+            for (int stage = 4; stage >= 1; --stage) {
+                if (stage != 4) {
+                    v.step_m = stage*25;
+                    if (overlay) assert(display.keepUp(v,6-stage) == ClusterDisplay::kOk);
+                    else {
+                        assert(display.sameManeuver(v,6-stage));
+                        assert(display.showManeuver(v,6-stage,false,false) == ClusterDisplay::kOk);
                     }
-                    assert(display.routeStage() == stage);
-                    assert(port.batches.size() == (size_t)(overlay ? 7 - stage : 6 - stage));
-                    Picture actual;
-                    if (overlay) {
-                        Picture actualRoads = batchPicture(port.batches[1]);
-                        assert(actualRoads.size() == roads.size());
-                        if (type >= 9 && type <= 12) {
-                            for (size_t i = 0; i < roads.size(); ++i)
-                                checkBendContours(actualRoads[i].poly,roads[i].poly,type,mode);
-                            if (mode && type >= 11) {
-                                checkSmoothUTurn(actualRoads[0].poly,22); checkSmoothUTurn(actualRoads[1].poly,16);
-                            }
-                        } else samePictureItems(actualRoads, roads);
-                        actual = batchPicture(port.batches.back());
-                        assert(port.batches.back().slot == kSlotRoute);
-                    } else {
-                        Picture combined = batchPicture(port.batches.back());
-                        if (type >= 9 && type <= 12) {
-                            for (size_t i = 0; i < roads.size(); ++i)
-                                checkBendContours(combined[i].poly,roads[i].poly,type,mode);
-                            if (mode && type >= 11) {
-                                checkSmoothUTurn(combined[0].poly,22); checkSmoothUTurn(combined[1].poly,16);
-                            }
-                        } else samePictureItems(combined, roads);
-                        actual.assign(combined.begin() + roads.size(), combined.end());
-                        assert(port.batches.back().slot == kSlotMain);
-                    }
-                    assert(actual.size() == 4);   // edge body/head, then fill body/head: each is a simple polygon
-                    Picture previous;
-                    drawRoute(layout, tailFor(layout, stage, 4), colours, kJunctionStyle, previous);
-                    fitPicture(previous, k6wa.glyph, k6wa.canvas.y1 + 1, profile.glyph, 77);
-                    Picture originalBodies;
-                    if (type >= 9 && type <= 12) {
-                        JunctionStyle style = kJunctionStyle;
-                        style.routeW = mode ? (type <= 10 ? 20 : 16) : 24;
-                        style.routeCore = mode ? (type <= 10 ? 16 : 12) : 20;
-                        style.headL = mode ? 34 : 28;
-                        style.headW = type >= 11 ? (mode ? 22 : 19) : (mode ? 27 : 23);
-                        drawRoute(layout,tailFor(layout,stage,4),colours,style,originalBodies,19,mode != 0);
-                        fitPicture(originalBodies,k6wa.glyph,k6wa.canvas.y1+1,profile.glyph,77);
-                    }
-                    for (size_t layer = 0; layer < 2; ++layer) {
-                        const Poly& path = actual[layer * 2].poly; const Poly& head = actual[layer * 2 + 1].poly;
-                        const Poly& old = previous[layer].poly;
-                        assert(head.pts.size() == (size_t)(mode ? 5 : 3));
-                        if (mode && (type == 11 || type == 12))
-                            checkSmoothUTurn(path,layer ? 12 : 16);
-                        if (type >= 9 && type <= 12)
-                            checkBendContours(path,originalBodies[layer*2].poly,type,mode);
-                        else assert(path.pts.size() + 3 == old.pts.size());
-                        assert(area2(path.pts) > 0 && area2(head.pts) > 0);
-                        assert(simplePolygon(path) && simplePolygon(head));
-                        size_t n = (old.pts.size() - 3) / 2;
-                        assert(head.pts[1].x == old.pts[n + 1].x && head.pts[1].y == old.pts[n + 1].y);
-                        assert(abs(path.pts[0].x + path.pts.back().x - old.pts[0].x - old.pts.back().x) <= 1);
-                        assert(path.pts[0].y == old.pts[0].y && path.pts.back().y == old.pts.back().y);
-                        for (size_t i = 0; i < head.pts.size(); ++i)
-                            assert(head.pts[i].x >= 0 && head.pts[i].x <= 125 && head.pts[i].y >= 0 && head.pts[i].y <= 76);
-                    }
-                    const Poly& fill = actual[2].poly; const Poly& head = actual[3].poly;
-                    double width = hypot(head.pts[0].x - head.pts[2].x, head.pts[0].y - head.pts[2].y);
-                    double baseX = (head.pts[0].x + head.pts[2].x) / 2.0;
-                    double baseY = (head.pts[0].y + head.pts[2].y) / 2.0;
-                    double length = hypot(head.pts[1].x - baseX, head.pts[1].y - baseY);
-                    int stroke = abs(fill.pts[0].x - fill.pts.back().x);
-                    bool uturn = type == 11 || type == 12;
-                    assert(stroke >= (mode ? 6 : 11));
-                    assert(width >= (uturn ? (mode ? 20 : 22) : (mode ? 24 : 26)) && length >= (mode ? 19 : 15));
-                    assert(abs(stroke - incoming) <= 5);
-                    if (mode && (type == 9 || type == 10)) {
-                        assert(abs(stroke - incoming) <= 1);
-                    }
-                    if (type == 9 || type == 10) {
-                        const Poly& borderStem = actual[0].poly;
-                        Shape borderHead(1,actual[1].poly);
-                        Rect b = boundsForTest(borderHead);
-                        int left = std::min(borderStem.pts.front().x,borderStem.pts.back().x);
-                        int right = std::max(borderStem.pts.front().x,borderStem.pts.back().x);
-                        assert((type == 9 ? left-b.x1 : b.x0-right) >= 3);
-                    }
-                    if (uturn) {
-                        int wing = type == 11 ? std::max(head.pts[0].x, head.pts[2].x)
-                                              : std::min(head.pts[0].x, head.pts[2].x);
-                        int stem = type == 11 ? std::min(fill.pts[0].x, fill.pts.back().x)
-                                              : std::max(fill.pts[0].x, fill.pts.back().x);
-                        int gap = type == 11 ? stem - wing : wing - stem;
-                        assert(gap >= 2);   // keep the U-turn's inner opening visible at every tail stage
-                    }
-                    ++checked;
                 }
+                assert(display.routeStage() == stage);
+                Picture route,roads;
+                if (overlay) { roads = batchPicture(port.batches[1]); route = batchPicture(port.batches.back()); }
+                else {
+                    Picture full = batchPicture(port.batches.back());
+                    assert(full.size() >= 4);
+                    roads.assign(full.begin(),full.end()-4); route.assign(full.end()-4,full.end());
+                }
+                assert(route.size() == 4 && route[0].colour == profile.edge && route[1].colour == profile.edge);
+                assert(route[2].colour == profile.route && route[3].colour == profile.route);
+                samePictureItems(Picture(1,route[1]),Picture(1,far[far.size()-3]));
+                samePictureItems(Picture(1,route[3]),Picture(1,far.back()));
+                const Poly& body = route[2].poly; int cap = -32768;
+                assert(body.pts.size() == farBody.pts.size());
+                for (size_t i = 0; i < body.pts.size(); ++i) if (farBody.pts[i].y == farCap) cap = body.pts[i].y;
+                assert(cap <= previousCap); previousCap = cap;
+                if (stage == 4) assert(cap-farCap == 16);
+                int delta = cap-farCap, moved = 0;
+                for (size_t i = 0; i < body.pts.size(); ++i) {
+                    assert(body.pts[i].x == farBody.pts[i].x);
+                    int d = body.pts[i].y-farBody.pts[i].y;
+                    assert(d == 0 || d == delta);
+                    if (d) ++moved;
+                }
+                assert(!delta || moved == 2);
+                assert(route[0].poly.pts.size() == farEdge.pts.size());
+                for (size_t i = 0; i < farEdge.pts.size(); ++i) {
+                    assert(route[0].poly.pts[i].x == farEdge.pts[i].x);
+                    int d = route[0].poly.pts[i].y-farEdge.pts[i].y;
+                    assert(d == 0 || d == delta);
+                }
+                for (size_t i = 0; i < route.size(); ++i) {
+                    assert(simplePolygon(route[i].poly) && route[i].poly.pts.size() <= 99);
+                    if (i%2) for (size_t j = 0; j < route[i].poly.pts.size(); ++j) {
+                        const Point& p = route[i].poly.pts[j];
+                        assert(p.x >= 0 && p.x <= 125 && p.y >= 0 && p.y <= 76);
+                    }
+                }
+                Picture full = roads; full.insert(full.end(),route.begin(),route.end());
+                int key = type*5+stage;
+                if (!mode && !overlay) scenes[key] = full; else samePictureItems(full,scenes[key]);
+                ++checked;
             }
-    unsetenv("NBT_HUD_GLYPHS");
+        }
     assert(checked == 752);
-    printf("  F30 near arrows: %u serialized stages, readable strokes/heads, unchanged roads and overlays\n", checked);
+    unsetenv("NBT_HUD_GLYPHS");
+    printf("  unified F30 near: %u stages, equal modes/overlay/fused, fixed heads/curves, all tail-border vertices move\n",checked);
 }
 
 static void testNearArrowCompatibility() {
@@ -2272,6 +2116,59 @@ static void testJunctionLanes() {
     assert(d.keepUp(v, 5) == ClusterDisplay::kOk && port.batches.size() == 4);
     std::string detail;
     assert(d.clear(&detail) && port.batches.back().calls.size() == 14);
+}
+
+// The measured F30 lane layer uses the same native artwork, within the terminal's 64-call admission limit.
+static void testUnifiedLanes() {
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_LANES_BOX");
+    unsigned largest = 0;
+    for (int n = 1; n <= 8; ++n) for (int shape = 0; shape <= 10; ++shape) {
+        FakePort port; port.mw = 126; port.mh = 77;
+        Hud6waDisplay display(port,k6wa,false); Settings settings; settings.hud_lanes = true;
+        display.setSettings(settings);
+        NavView v = timed(8,"Testroad","1000",1,1000,100);
+        int perLane = 24/n;
+        v.lanes.assign(n,kombinav::AaLane(perLane,kombinav::LaneDirection(shape,false)));
+        v.lanes[0][0].highlighted = true;
+        assert(display.showManeuver(v,0,true,true) == ClusterDisplay::kOk);
+        const Batch& batch = port.batches.back();
+        assert(batch.slot == kSlotLanes);
+        Picture actual = batchPicture(batch);
+        assert(actual.size() == (size_t)n*perLane*2);
+        for (size_t i = 0; i < actual.size(); ++i)
+            for (size_t j = 0; j < actual[i].poly.pts.size(); ++j) {
+                const Point& p = actual[i].poly.pts[j];
+                assert(p.x >= 0 && p.x <= 183 && p.y >= 0 && p.y <= 16);
+            }
+        Config config; config.handles = handlesOf(k6wa); hudterm::Core terminal(config);
+        terminal.setLink(true,0x2077,0); terminal.setHost(0x0123,0);
+        assert(terminal.submit(batch,0) == kQueued);
+        largest = std::max(largest,(unsigned)batch.calls.size());
+        assert(display.keepUp(v,1) == ClusterDisplay::kOk && port.batches.size() == 2);
+        if (shape == 0 || shape == 10) {
+            // Unrecognised shapes keep the straight fallback, including its selected colour.
+            for (size_t i = 0; i < v.lanes.size(); ++i)
+                for (size_t j = 0; j < v.lanes[i].size(); ++j) v.lanes[i][j].shape = 1;
+            assert(display.keepUp(v,2) == ClusterDisplay::kOk);
+            samePictureItems(batchPicture(port.batches.back()),actual);
+        }
+    }
+    assert(largest == 53);
+    for (int choice = 0; choice < 3; ++choice) {
+        HudProfile profile = k6wa;
+        if (choice == 0) fitMeasured(176,126,profile);
+        if (choice == 1) { fitMeasured(126,77,profile); profile.lanes = Rect{2,0,181,16}; }
+        if (choice == 2) { fitMeasured(126,77,profile); setenv("NBT_HUD_LANES_BOX","0 0 183 16",1); }
+        FakePort port; Hud6waDisplay display(port,profile,false);
+        Settings settings; settings.hud_lanes = true; display.setSettings(settings);
+        NavView v = timed(8,"Testroad","1000",1,1000,100); v.lanes.push_back(oneLane(6,true));
+        assert(display.showManeuver(v,0,true,true) == ClusterDisplay::kOk);
+        Picture expected; assert(drawLanes(v.lanes,profile.lanes,profile.road,profile.route,expected));
+        Picture actual = batchPicture(port.batches.back()); assert(actual.size() == expected.size());
+        samePictureItems(actual,expected);
+        unsetenv("NBT_HUD_LANES_BOX");
+    }
+    printf("  unified lanes: all shapes/fallback, up to 24 arrows / 53 calls, custom boxes and other profiles unchanged\n");
 }
 
 // Through the state machine: the arrow at the warning, the junction view at the main prompt (in place of the reminder:
@@ -2886,6 +2783,7 @@ int main() {
     testRefitFromProfile();
     testJunctionNoOverlay();
     testJunctionLanes();
+    testUnifiedLanes();
     testJunctionCore();
     testStates();
     testClaim();
