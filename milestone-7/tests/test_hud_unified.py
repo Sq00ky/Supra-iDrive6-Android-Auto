@@ -4,6 +4,7 @@
 """Golden accepted contours read back from production MOST commands, not the design generator."""
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -52,6 +53,27 @@ def simple(p):
             assert not touches(a,b,p[j],p[(j+1)%len(p)]),p
 
 
+def chain(p, start, end):
+    first=p.index(start); p=p[first:]+p[:first]
+    return p[:p.index(end)+1]
+
+
+def point_segment_distance(p,a,b):
+    dx,dy=b[0]-a[0],b[1]-a[1]
+    t=max(0,min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/(dx*dx+dy*dy)))
+    return math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy)
+
+
+def sharp_elbow_width(body):
+    inside=chain(body,(69,44),(63,45))
+    tail=next(p for p in body if p[0]==79 and p[1]>=55)
+    outside=chain(body,(43,51),tail)
+    # For disjoint line segments the shortest distance has an endpoint on at least one segment.
+    return min(min(point_segment_distance(a,c,d),point_segment_distance(b,c,d),
+                   point_segment_distance(c,a,b),point_segment_distance(d,a,b))
+               for a,b in zip(inside,inside[1:]) for c,d in zip(outside,outside[1:]))
+
+
 class UnifiedTest(unittest.TestCase):
     def test_approved_native_contours_and_all_stages(self):
         baseline = {}
@@ -78,10 +100,14 @@ class UnifiedTest(unittest.TestCase):
                         turns=[cross(hole[i-1],hole[i],hole[(i+1)%16])for i in range(16)]
                         self.assertTrue(all(x>0 for x in turns) or all(x<0 for x in turns))
                     if t==9:
-                        body=ink[0]; a=body.index((53,41)); b=body.index((79,45))
-                        arc=body[a:b+1] if a<b else body[a:]+body[:b+1]
-                        self.assertEqual(len(arc)-1,12)
-                        self.assertTrue(all(cross(arc[i-1],arc[i],arc[i+1])>0 for i in range(1,len(arc)-1)))
+                        body=ink[0]
+                        self.assertEqual(chain(body,(69,44),(63,45)),
+                                         [(69,44),(68,42),(67,42),(65,43),(63,45)])
+                        self.assertGreaterEqual(sharp_elbow_width(body),9.8)
+                        tail=next(p for p in body if p[0]==79 and p[1]>=55)
+                        outer=chain(body,(43,51),tail)
+                        self.assertTrue(all(cross(outer[i-1],outer[i],outer[i+1])>0
+                                            for i in range(1,len(outer)-1)))
 
     def test_approved_lane_shapes_both_colours(self):
         baseline={}
@@ -99,6 +125,33 @@ class UnifiedTest(unittest.TestCase):
                 wire=[ET.tostring(p)for p in polys]
                 if mode:self.assertEqual(wire,baseline[shape,selected])
                 else:baseline[shape,selected]=wire
+
+    def test_lane_width_symmetry_and_outside_cuts(self):
+        for mode in range(2):
+            cells=render(0,mode,'lanes')
+            for selected in range(2):
+                drawings={int(c.get('data-shape')):[points(p) for p in c.findall('.//s:polygon',NS)]
+                          for c in cells if int(c.get('data-highlight'))==selected}
+                for shape in (4,5,6,7):
+                    body,head=drawings[shape]
+                    foot=[x for x,y in body if y==15]
+                    self.assertEqual(len(foot),2)
+                    self.assertEqual(abs(foot[0]-foot[1]),2)
+                for left,right in ((4,5),(6,7)):
+                    for a,b in zip(drawings[left],drawings[right]):
+                        self.assertEqual({(182-x,y)for x,y in a},set(b))
+                for shape in (4,5):
+                    head=drawings[shape][1]
+                    self.assertEqual({(x,14-y)for x,y in head},set(head))
+                head=drawings[6][1]
+                self.assertEqual({(99-y,99-x)for x,y in head},set(head))
+                body=drawings[6][0]
+                # Two flat diagonal edges: x+y=100 and97 (3/sqrt(2), about2.12 native px).
+                self.assertTrue({(92,8),(87,13),(86,11),(92,5)}<=set(body))
+                self.assertIn((95,7),body)
+                self.assertNotIn((95,6),body)
+                self.assertIn((95,7),drawings[4][0])
+                self.assertNotIn((95,6),drawings[4][0])
 
 
 if __name__=='__main__': unittest.main()

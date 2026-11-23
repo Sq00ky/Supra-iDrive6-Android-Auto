@@ -1,5 +1,5 @@
 {
-  "description": "Frozen approved v4 artwork, with the later accepted 12-facet AA9/AA10 outside-corner revision. Hashes ignore polygon start and winding, not coordinates.",
+  "description": "Frozen user-approved native contours. Polygon hashes ignore the start vertex and winding, not coordinates. Includes the accepted sharp elbows and two-pixel Lane4-7 feet.",
   "main": {
     "2-far": {
       "body": "b38900638eeb5c1caa3ca4bf9f156de7324b9ae1485621b7a00f5f892c2ed30c",
@@ -42,19 +42,19 @@
       "head": "58aa833381640b93d26c2760c218891dcb7bb3edcc5162f9415c1ecf82ede4e5"
     },
     "9-far": {
-      "body": "dfa1f3d67b0714a8517210969d7ca5574d94dd5185f8036759fffa004bf184e7",
+      "body": "14102016aa86a1e5d6348bc2841f047f5f9e755068533a2d085f238bfdf546ac",
       "head": "6f23def4e3841e12901c0b8f84391938a437266207784d17861c7ea779bad885"
     },
     "9-near": {
-      "body": "afe55736904ede6c30680d368712d2049b614f3294c1a9bbd4e7ddf451674a25",
+      "body": "f937cea3b0550728626af8492edf1afeda81a08e8b4fbe9dee5c3620dd0f07e2",
       "head": "6f23def4e3841e12901c0b8f84391938a437266207784d17861c7ea779bad885"
     },
     "10-far": {
-      "body": "d8dbf119e91eda3df826c58d812b3442a87fcbe4ec483277bd4a71d8f2533d52",
+      "body": "dcff6a32906bc2fd3d7290b10d01ad3a6dd45b4ab84e937fd99ff2c4969d355b",
       "head": "934ad8e8f3ad53a02f9d0d5c057b3679d552065daa6a1182903c0b6ff42f937e"
     },
     "10-near": {
-      "body": "55fc7b8cb96efa1c43b0610e0a1d055f8bb43fe4f35b0150fa0b5b499fe01d87",
+      "body": "8ee4f91fb2ca9cb72b777f523dac37d02bd322548c43a00177d8ed748f891947",
       "head": "934ad8e8f3ad53a02f9d0d5c057b3679d552065daa6a1182903c0b6ff42f937e"
     },
     "11-far": {
@@ -160,20 +160,20 @@
       "head": "7cd1fb973549413d553865259928106ef8cbdf12ca204ae7339f4385124225df"
     },
     "4": {
-      "body": "79100865c2697b4e4b3a34d87e21abea2f5e981541e17ca59fdd8abe07d2766a",
+      "body": "293514fba9ee96215649548a4cdc42cd5ca7e5ab78d9f3ddda23cbdb0872710f",
       "head": "c80042d0bbf0606f9bf2aaecd9362e1e5329f623aa925e0006448f4e3262c0ea"
     },
     "5": {
-      "body": "e1523664676686aead14fd85003fd13a5c02b49e0e12086eb796523ce3491af7",
+      "body": "3ba5d4e8b4c841de3c1c5b72baa10c1b9d6a856a9454ddb986cddc352df949f8",
       "head": "55c26a947e4f45b19248aa49d63c892b4df8bff88c34f82b782dfe9a4fa738a5"
     },
     "6": {
-      "body": "c8fc37fc53062b69bbf9ad3621d7ba00195fb32fabecc208410bb1a1756aaac1",
-      "head": "f64de6190bb96b53f2b46ef2bf9cfa39ed2eb59ccf46ff1ea295339b9e95b4fd"
+      "body": "8c9205b6ed0534dd77740c8fdb0baad6d022368548822424d9f772593f223865",
+      "head": "bd457d20f5bbf3eb50363e1897d30aa25cf2be774aabb3976bc417308fb43d06"
     },
     "7": {
-      "body": "d4a6c14084e837b4d5e95233dd0f374c44f9285ee1824aa45c683f1e6ae4d72b",
-      "head": "e4a6b265b8c4207f3f5dbda126657815638ebb6918f5e4ea551cca890cc91db3"
+      "body": "519a5938d22616e4a15b1cb3c19a9c4ef9937c16d51aef59384cc5860b3040c2",
+      "head": "f583aa2fea5b7d4b1b7550d4dc2676d7511d12d73a1568ae805c472fc90407f0"
     },
     "8": {
       "body": "96d966dae3c016c993dc486f4c098346f4c381514fb15483e3b89c1f6184ac9e",

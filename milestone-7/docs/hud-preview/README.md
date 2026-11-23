@@ -3,7 +3,8 @@
 These images contain the current production driver's serialized polygon coordinates and colour roles, enlarged for review. Both selectable glyph modes share the [unified artwork](../hud-unified.md) on the automatically measured 126x77 F30 profile.
 
 - [Complete ordinary-arrow catalog](unified-all-arrows.png): all 18 representative forms, far and near stage 4, plus all nine lane shapes. The lane SVG sheets also show both selected and unselected colours.
-- [Contour details](unified-contour-details.png): sharp turns with 12 native outside facets, U-turns and the destination's 16-facet window.
+- [Contour details](unified-contour-details.png): sharp turns with smaller outside elbows and preserved stem clearance, U-turns and the destination's 16-facet window.
+- [Lane width and corner details](lane-widths-and-corners.png): Lane4–Lane7 at the same enlarged scale and at native size, with matching two-pixel feet, symmetric heads and clipped outside corners.
 - [CCW roundabouts](roundabouts-ccw.png) and [CW roundabouts](roundabouts-cw.png): independently absent/known angles and absent/1..8 exit numbers. Their geometry and digit data are retained.
 
 From the repository root on a configured Linux host:

@@ -30,13 +30,13 @@ static const Point kGlyph7HeadEdge[] = { {55,49}, {55,50}, {53,50}, {32,37}, {32
 static const Point kGlyph7Near0Edge[] = { {70,90}, {68,88}, {68,44}, {66,42}, {-15,42}, {-17,40}, {-17,32}, {-15,30}, {75,30}, {78,33}, {79,33}, {80,35}, {80,88}, {78,90} };
 static const Point kGlyph7Near0Fill[] = { {70,88}, {70,44}, {69,42}, {67,40}, {-15,40}, {-15,32}, {75,32}, {77,34}, {78,36}, {78,88} };
 static const Road kGlyph7NearRoads[] = { {{kGlyph7Near0Edge,14,14},{kGlyph7Near0Fill,10,10}} };
-static const Point kGlyph9Body[] = { {69,44}, {68,42}, {67,42}, {65,43}, {63,45}, {51,58}, {43,51}, {53,41}, {57,38}, {60,36}, {62,35}, {65,34}, {69,33}, {70,33}, {73,34}, {75,35}, {76,36}, {77,38}, {78,41}, {79,45}, {79,70}, {69,70} };
+static const Point kGlyph9Body[] = { {69,44}, {68,42}, {67,42}, {65,43}, {63,45}, {51,58}, {43,51}, {67,27}, {69,26}, {72,26}, {75,27}, {78,30}, {79,32}, {79,70}, {69,70} };
 static const Point kGlyph9Head[] = { {59,60}, {35,66}, {41,42}, {46,48}, {53,55} };
-static const Point kGlyph9BodyEdge[] = { {68,44}, {67,43}, {64,46}, {52,59}, {50,59}, {42,52}, {42,50}, {52,40}, {56,37}, {59,35}, {60,35}, {62,34}, {65,33}, {69,32}, {70,32}, {73,33}, {75,34}, {76,34}, {77,35}, {77,36}, {78,38}, {79,41}, {80,45}, {80,71}, {68,71} };
+static const Point kGlyph9BodyEdge[] = { {68,44}, {67,43}, {64,46}, {52,59}, {50,59}, {42,52}, {42,50}, {66,26}, {67,26}, {69,25}, {72,25}, {75,26}, {76,26}, {79,29}, {79,30}, {80,32}, {80,71}, {68,71} };
 static const Point kGlyph9HeadEdge[] = { {60,59}, {60,61}, {59,61}, {35,67}, {34,66}, {40,42}, {40,41}, {42,41}, {47,47}, {54,54} };
-static const Point kGlyph9Near0Edge[] = { {70,90}, {68,88}, {68,43}, {67,43}, {63,45}, {15,94}, {15,95}, {13,95}, {13,94}, {7,88}, {6,88}, {6,86}, {7,86}, {53,41}, {53,40}, {57,37}, {60,35}, {61,35}, {61,34}, {64,33}, {65,33}, {69,32}, {71,32}, {74,33}, {74,34}, {77,37}, {78,37}, {79,40}, {79,41}, {80,45}, {80,88}, {78,90} };
-static const Point kGlyph9Near0Fill[] = { {70,88}, {70,44}, {69,41}, {67,41}, {64,42}, {62,44}, {14,93}, {8,87}, {54,42}, {58,39}, {61,37}, {62,36}, {65,35}, {69,34}, {70,34}, {73,35}, {76,38}, {77,41}, {78,45}, {78,88} };
-static const Road kGlyph9NearRoads[] = { {{kGlyph9Near0Edge,32,32},{kGlyph9Near0Fill,20,20}} };
+static const Point kGlyph9Near0Edge[] = { {70,90}, {68,88}, {68,43}, {67,43}, {63,45}, {15,94}, {15,95}, {13,95}, {13,94}, {7,88}, {6,88}, {6,86}, {7,86}, {67,27}, {69,25}, {73,25}, {75,26}, {75,27}, {80,32}, {80,88}, {78,90} };
+static const Point kGlyph9Near0Fill[] = { {70,88}, {70,44}, {69,41}, {67,41}, {64,42}, {62,44}, {14,93}, {8,87}, {68,28}, {69,27}, {72,27}, {74,28}, {78,32}, {78,88} };
+static const Road kGlyph9NearRoads[] = { {{kGlyph9Near0Edge,21,21},{kGlyph9Near0Fill,14,14}} };
 static const Point kGlyph11Body[] = { {69,38}, {68,36}, {66,34}, {64,33}, {60,33}, {57,35}, {56,36}, {55,38}, {55,52}, {45,52}, {45,40}, {46,35}, {47,31}, {50,28}, {54,25}, {58,23}, {66,23}, {71,25}, {77,31}, {78,35}, {79,40}, {79,70}, {69,70} };
 static const Point kGlyph11Head[] = { {63,47}, {50,69}, {37,47}, {45,49}, {55,49} };
 static const Point kGlyph11BodyEdge[] = { {68,38}, {64,34}, {60,34}, {56,38}, {56,53}, {44,53}, {44,40}, {45,35}, {46,31}, {46,30}, {49,27}, {53,24}, {54,24}, {58,22}, {66,22}, {71,24}, {72,24}, {78,30}, {78,31}, {79,35}, {80,40}, {80,71}, {68,71} };
@@ -88,7 +88,7 @@ static const Glyph kGlyphs[] = {
     {{kGlyph2Body,4,2},{kGlyph2Head,5,5},{kGlyph2BodyEdge,4,2},{kGlyph2HeadEdge,10,10},{0,0,0},0,0,kGlyph2NearRoads,1,70,86,28},
     {{kGlyph5Body,10,8},{kGlyph5Head,5,5},{kGlyph5BodyEdge,13,11},{kGlyph5HeadEdge,10,10},{0,0,0},0,0,kGlyph5NearRoads,1,70,86,51},
     {{kGlyph7Body,10,8},{kGlyph7Head,5,5},{kGlyph7BodyEdge,11,9},{kGlyph7HeadEdge,10,10},{0,0,0},0,0,kGlyph7NearRoads,1,70,86,45},
-    {{kGlyph9Body,22,20},{kGlyph9Head,5,5},{kGlyph9BodyEdge,25,23},{kGlyph9HeadEdge,10,10},{0,0,0},0,0,kGlyph9NearRoads,1,70,86,45},
+    {{kGlyph9Body,15,13},{kGlyph9Head,5,5},{kGlyph9BodyEdge,18,16},{kGlyph9HeadEdge,10,10},{0,0,0},0,0,kGlyph9NearRoads,1,70,86,44},
     {{kGlyph11Body,23,21},{kGlyph11Head,5,5},{kGlyph11BodyEdge,23,21},{kGlyph11HeadEdge,10,10},{0,0,0},0,0,kGlyph11NearRoads,1,70,86,40},
     {{kGlyph13Body,13,11},{kGlyph13Head,5,5},{kGlyph13BodyEdge,16,14},{kGlyph13HeadEdge,10,10},{0,0,0},0,0,kGlyph13NearRoads,1,70,86,52},
     {{kGlyph21Body,12,10},{kGlyph21Head,4,4},{kGlyph21BodyEdge,15,13},{kGlyph21HeadEdge,10,10},{0,0,0},kGlyph21FarRoads,1,kGlyph21NearRoads,2,73,89,51},
@@ -100,12 +100,12 @@ static const Point kLane1Body[] = { {23,15}, {23,5}, {25,5}, {25,15} };
 static const Point kLane1Head[] = { {21,6}, {24,1}, {27,6} };
 static const Point kLane2Body[] = { {26,15}, {26,10}, {23,7}, {25,5}, {28,8}, {28,15} };
 static const Point kLane2Head[] = { {22,9}, {21,3}, {27,5}, {25,6} };
-static const Point kLane4Body[] = { {26,15}, {26,9}, {25,8}, {21,8}, {21,6}, {28,6}, {28,15} };
+static const Point kLane4Body[] = { {26,15}, {26,9}, {25,8}, {21,8}, {21,6}, {27,6}, {28,7}, {28,15} };
 static const Point kLane4Head[] = { {22,10}, {17,7}, {22,4} };
-static const Point kLane6Body[] = { {26,15}, {26,9}, {25,8}, {21,12}, {19,10}, {27,2}, {28,2}, {28,15} };
-static const Point kLane6Head[] = { {23,13}, {18,14}, {19,8}, {20,10}, {22,11} };
+static const Point kLane6Body[] = { {26,15}, {26,8}, {25,8}, {20,13}, {19,11}, {25,5}, {26,5}, {28,7}, {28,15} };
+static const Point kLane6Head[] = { {24,13}, {18,14}, {19,8}, {20,10}, {22,12} };
 static const Point kLane8Body[] = { {26,15}, {26,7}, {25,6}, {24,6}, {22,7}, {22,11}, {20,11}, {20,6}, {22,4}, {26,4}, {28,6}, {28,15} };
 static const Point kLane8Head[] = { {24,9}, {21,15}, {18,9}, {20,10}, {22,10} };
-static const Lane kLanes[] = { {{kLane1Body,4,4},{kLane1Head,3,3}}, {{kLane2Body,6,6},{kLane2Head,4,4}}, {{kLane4Body,7,7},{kLane4Head,3,3}}, {{kLane6Body,8,8},{kLane6Head,5,5}}, {{kLane8Body,12,12},{kLane8Head,5,5}} };
+static const Lane kLanes[] = { {{kLane1Body,4,4},{kLane1Head,3,3}}, {{kLane2Body,6,6},{kLane2Head,4,4}}, {{kLane4Body,8,8},{kLane4Head,3,3}}, {{kLane6Body,9,9},{kLane6Head,5,5}}, {{kLane8Body,12,12},{kLane8Head,5,5}} };
 }}} // namespace nbt::hudterm::unified
 #endif
