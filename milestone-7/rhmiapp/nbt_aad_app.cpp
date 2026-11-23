@@ -76,7 +76,7 @@
 #include <string>
 #endif
 
-#define NBT_AAD_APP_VERSION "rhmiapp-96-hudprofiles (" __DATE__ " " __TIME__ ")"
+#define NBT_AAD_APP_VERSION "rhmiapp-97-radiofollow (" __DATE__ " " __TIME__ ")"
 
 extern char** environ;
 
@@ -1140,11 +1140,13 @@ uint32_t nowMs() {
 }
 
 // NBT_AA_WARN_IGNORE=20,1856 in nbt-aad.env: iDrive contexts that never make Android Auto step aside (screens Android
-// Auto already shows itself: messages, calls, now playing, traffic...). Read once.
+// Auto already shows itself: messages, calls, now playing, traffic...). Read once. 523 and 1325 are always on it.
 void owInit() {
     static bool s_done = false;
     if (s_done) return;
     s_done = true;
+    for (unsigned i = 0; i < sizeof(nbt::kRadioFollowCtx) / sizeof(nbt::kRadioFollowCtx[0]); ++i)
+        g_ow.addIgnore(nbt::kRadioFollowCtx[i]);
     FILE* f = openDaemonEnv();
     char line[160];
     char list[160] = "";
@@ -1160,8 +1162,52 @@ void owInit() {
         p = e;
     }
     list[strcspn(list, "\r\n")] = 0;
-    alog("warnings: iDrive screens that come up on their own over Android Auto make it step aside until they close%s%s",
-         list[0] ? "; never for contexts " : "", list);
+    alog("warnings: iDrive screens that come up on their own over Android Auto make it step aside until they close; "
+         "never for the radio pages 523,1325%s%s", list[0] ? " or contexts " : "", list);
+}
+
+// ---- radio page raised by an AF switch (#234) -------------------------------------------------------------------
+// Put iDrive straight back on state 13. CDS reports the page just before state 13 loses the focus, so if it still has
+// it, onAaFocus() does the re-hold.
+void fireHold(bmw::PluginApp* app, const char* why);
+nbt::RadioRehold g_radioRehold;
+uint32_t g_radioPendingMs = 0;
+int g_radioPendingVc = 0;
+
+bool radioReholdOk(const DaemonState& d) {
+    return g_runApp && g_holding && !g_popupAside && !callActive() && g_lastGear != kReverseGear && !pdcOwnsScreen() &&
+           d.pid > 0 && d.overlay && !d.favouritePeek && !strcmp(d.state, "connected");
+}
+
+void reholdOverRadio(int vc) {
+    if (!g_radioRehold.allow(nowMs())) {
+        static uint32_t s_logged = 0;
+        if (!s_logged || (uint32_t)(nowMs() - s_logged) > 30000u) {
+            s_logged = nowMs();
+            alog("hold: iDrive raised radio page %d more than %d times in %u s: leaving it to the status poll", vc,
+                 nbt::RadioRehold::kMax, (unsigned)(nbt::RadioRehold::kWindowMs / 1000));
+        }
+        return;
+    }
+    char why[112];
+    snprintf(why, sizeof(why), "iDrive raised its radio page %d by itself (station follow): Android Auto keeps the screen",
+             vc);
+    g_holdTries = 0;
+    fireHold(g_runApp, why);
+}
+
+void onRadioPage(int vc, const char* widget, const DaemonState& d, bool input) {
+    g_radioPendingMs = 0;
+    if (g_ow.addIgnore(vc))
+        alog("warnings: iDrive radio page %d ('%s') never makes Android Auto step aside (station follow)", vc, widget);
+    if (input || !radioReholdOk(d)) return;
+    if (g_aaFocused) {
+        g_radioPendingMs = nowMs();
+        if (!g_radioPendingMs) g_radioPendingMs = 1;
+        g_radioPendingVc = vc;
+        return;
+    }
+    reholdOverRadio(vc);
 }
 
 // hmi.graphicalContext: the visible iDrive context. Always logged - that is how the ids for Check Control, the camera
@@ -1238,7 +1284,9 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     // Fed to the overlay watch whether or not iDrive took our state 13 (on some units it never does - F31 bench
     // 2026-11-05 - so the old "popup widget while state 13 is visible" rule waited ~25 s for another path). The step-aside
     // itself is decided on the next status poll (>= 300 ms later), once a hard key's input has reached the state file.
-    if (!warningsOn() || !holdEnabled()) return true;
+    if (!holdEnabled()) return true;
+    const bool radio = nbt::radioFollowPage(vc, widget);
+    if (!warningsOn() && !radio) return true;
     owInit();
     DaemonState d = readDaemonState();
     bool aa = d.pid > 0 && d.overlay && !strcmp(d.state, "connected");
@@ -1248,6 +1296,8 @@ bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
     uint32_t now = nowMs();
     bool knobCounts = !g_aaFocused && (uint32_t)(now - g_aaFocusLostMs) > 500u;
     bool input = aa && (driverInputNow(d) || (knobCounts && knobInputNow(d)));
+    if (radio) onRadioPage(vc, widget, d, input);       // before onContext(): it adds the page to the ignore list
+    if (!warningsOn()) return true;
     g_ow.onContext(vc, nbt::betweenScreens(vc, widget, title), input, aa, now, knobCounts);   // titled = real screen (rhmiapp-51)
     return true;
 }
@@ -1286,6 +1336,14 @@ bool onAaFocus(void*, const bmw::Parcel& p) {
     // iDrive is on our blank state again. The overlay watch only learns that here (hmi.graphicalContext reports state 13
     // as GFXIDENTIFIER_INVALID 50002), so the same iDrive screen opened again counts as a new one.
     if (f) g_ow.onOwnState(nbt::OverlayWatch::kAaState, nowMs());
+    if (!f && g_radioPendingMs) {                        // radio page just before this focus loss (onRadioPage)
+        const bool recent = (uint32_t)(nowMs() - g_radioPendingMs) < 1000u;
+        g_radioPendingMs = 0;
+        if (recent && holdEnabled()) {
+            DaemonState d = readDaemonState();
+            if (radioReholdOk(d) && !driverInputNow(d)) { reholdOverRadio(g_radioPendingVc); return true; }
+        }
+    }
     // MENU went to Android Auto (daemon overlay 3) but iDrive also left for its main menu: come straight back, so the
     // knob does not drive iDrive's main menu under the picture until the next poll.
     if (!f && g_runApp && holdEnabled() && g_holding && !callActive()) {

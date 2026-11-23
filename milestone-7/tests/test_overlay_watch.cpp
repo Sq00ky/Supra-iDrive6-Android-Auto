@@ -232,6 +232,49 @@ int main() {
         w.onOwnState(ownPages[i], 1000);
         assert(!w.takeAside(4000));
     }
+    // #234: radio pages raised by an AF switch (F30, 2026-11-22).
+    {
+        assert(nbt::radioFollowPage(523, "LT_Button_Ent_Radio_StationEntry"));
+        assert(nbt::radioFollowPage(1325, "LT_Button_Ent_Presets_Entry"));
+        assert(nbt::radioFollowPage(523, "GFXIDENTIFIER_INVALID"));             // by id alone
+        assert(nbt::radioFollowPage(1777, "LT_Button_Ent_DAB_StationEntry"));   // unlogged id, by widget
+        assert(!nbt::radioFollowPage(20, "LT_Button_1Row_1CheckLeft_1IconLeft")); // Media/Radio menu: driver-opened
+        assert(!nbt::radioFollowPage(681, "LT_ScrollLabel_CCM_Details"));
+        assert(!nbt::radioFollowPage(50002, "LT_Button_Ent_X"));                // our own states
+        assert(!nbt::radioFollowPage(0, "LT_Button_Ent_X") && !nbt::radioFollowPage(1325 + 1, NULL));
+        OverlayWatch w;
+        assert(w.addIgnore(523) && w.addIgnore(1325));
+        assert(!w.addIgnore(523) && !w.addIgnore(0) && !w.addIgnore(-4));
+        assert(w.addIgnore(1856) && w.isIgnored(1856) && !w.isIgnored(681));
+        w.onOwnState(OverlayWatch::kAaState, 1000);
+        w.onContext(523, false, false, AA, 64589);
+        assert(w.poll(64900, AA, false, false) == OverlayWatch::NONE);
+        assert(w.poll(66000, AA, false, false) == OverlayWatch::NONE);
+        assert(!w.takeAside(67000) && !w.isAside());
+        w.onOwnState(OverlayWatch::kAaState, 67100);                         // our re-hold took
+        w.onContext(1325, false, false, AA, 99613);
+        assert(w.poll(100000, AA, false, false) == OverlayWatch::NONE && !w.takeAside(101000));
+        w.onOwnState(OverlayWatch::kAaState, 102000);                        // a real warning still steps aside
+        w.onContext(681, false, false, AA, 110000);
+        assert(w.poll(110400, AA, false, false) == OverlayWatch::STEP_ASIDE && w.aside() == 681);
+        OverlayWatch full;
+        for (int i = 1; i <= 16; ++i) assert(full.addIgnore(1000 + i));
+        assert(!full.addIgnore(2000) && !full.isIgnored(2000));
+        printf("radio follow pages OK\n");
+    }
+    // Loop guard: 4 per 10 s.
+    {
+        nbt::RadioRehold g;
+        assert(g.allow(0) && g.allow(1000) && g.allow(2000) && g.allow(3000));
+        assert(!g.allow(4000) && !g.allow(9999));
+        assert(g.allow(10000));                                              // the one at 0 has aged out
+        assert(!g.allow(10500));
+        assert(g.allow(4000000000u) && g.allow(4000000001u));                // long gap, monotonic wrap-safe
+        nbt::RadioRehold w2;
+        assert(w2.allow(0xFFFFFF00u) && w2.allow(0x00000100u));             // across the 32-bit wrap
+        assert(w2.allow(0x00000200u) && w2.allow(0x00000300u) && !w2.allow(0x00000400u));
+        printf("radio re-hold guard OK\n");
+    }
     printf("test_overlay_watch: all passed\n");
     return 0;
 }
