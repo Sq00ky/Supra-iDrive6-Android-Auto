@@ -28,17 +28,27 @@ draws them; unset or `0` / `off` keeps the parametric shapes, the default look. 
    the constant extent (100) only, so no `__aeabi` integer-divide is emitted (keep it that way). `tone` 0 → the fill
    colour (`profile.fill`, our `NBT_HUD_FILL=5` orange), 1 → the context tone (`profile.road`, grey).
 4. Roundabouts keep the same drawing far and near. A known angle has a radial exit arrow, with the supplied valid
-   number in the centre; 360 degrees has separate incoming and returning branches. An unknown angle shows three
-   circulation arrows and the supplied number, without inventing an exit direction. Neither the glyph mode nor
+   number in the centre; 360 degrees has separate incoming and returning branches. An unknown angle shows
+   three smooth circular arrows with tangent heads, a plain incoming bar and the supplied number, without
+   inventing an exit direction. Neither the glyph mode nor
    the exit number changes the angle. Known inputs 1..29 are drawn at 30 degrees and 331..359 at 330; 360 keeps its
    returning branch, and the raw input stays in the diagnostic log. The older low-level `mbxRoundabout()` helper remains covered separately.
+
+Unknown-angle arrows follow circular bands with tangent 90-degree heads and a plain entrance of the same width.
+They use a separate fitting envelope so their new outline cannot move a known-angle ring. At the reference
+66-unit scale, single-digit unknown captions stay 24px high; two-digit captions use 15px to clear the tangent
+heads. Below that scale they use one additional pixel of vertical inset, and captions below 6px are omitted.
+Known-angle caption sizes remain 24/18px. Known circular bands
+retain their outer 7.5-degree samples and use denser 2.5-degree inner samples. The previous radii, entrance, exit
+head, caption, fitting anchors and number of drawing commands are retained. Each half-band has at most 98
+points before native-grid deduplication, within the terminal's 99-point limit.
 
 ## Arrow wings
 
 The lateral protrusion beyond the shaft is reduced by 30%. The return edge of each wing meets the shaft axis at
 80 degrees. The tip, neck, shaft and longitudinal length retain their original coordinates. This applies to straight,
 slight, normal and sharp turns, U-turns, forks, merges and ramps, plus the older Mapbox roundabout helper. The shared
-ring renderer uses the same wing rules on a compact radial head. Destination and unused drawings are unchanged. Pixel rounding
+known-angle ring renderer uses the same wing rules on a compact radial head. Destination and unused drawings are unchanged. Pixel rounding
 introduces a small angular error at the HUD's final size.
 
 The automatic F30 fit uses the original bounds through `mbxOriginalBounds()`. Refitting to the narrower wing bounds
@@ -67,7 +77,10 @@ Android Auto type 0 through 60 and two-digit exit numbers. The ring matrices ind
 
 `make check` also checks the catalog coverage, visible arrow size, mirrored shapes, near-stage transitions, packet
 budgets, geometric digit contours and the Mapbox wing anchors. A two-translation-unit regression ensures the curved
-body lookup does not depend on the address of a header-local glyph array. See `hud-digits.md` for digit tests.
+body lookup does not depend on the address of a header-local glyph array. Native-grid regressions cover unknown
+rings at sizes 1..200, both traffic directions and captions 1..99, checking self-crossings, backtracking and contact
+between numbers and arrows. A frozen known-angle regression preserves layouts, entry/exit contours and captions
+while allowing denser sampling of the circular bands. See `hud-digits.md` for digit tests.
 
 ## Not done / how to extend
 

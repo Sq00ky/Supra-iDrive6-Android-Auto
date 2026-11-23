@@ -10,36 +10,74 @@ namespace nbt {
 namespace hudterm {
 
 namespace ring {
-// Q8 offsets from the circle centre on the 66-unit reference frame. Each circular arrow uses concentric arcs
-// (radii 186/148, bearings -27..60), the same symmetric head, and rotations of 35 + n*120 degrees.
-// Sample the arcs at 12 equal intervals; retain fractional coordinates until the final fit onto the cluster.
+// Q8 sample of the accepted analytic SVG: 92-degree circular arrows, repeated every120 degrees.
+// RO/RI=6732/4620, 18x10 heads with0.4-unit quadratic corner trims; no raster tracing.
+// Circular samples are less than one reference pixel apart; round onto the HUD only when fitted.
 static const Point kOutline0[] = {
-    {937,-6666}, {1771,-6495}, {2576,-6220}, {3341,-5845}, {4051,-5376},
-    {4698,-4822}, {5269,-4191}, {5755,-3492}, {6150,-2738}, {6446,-1940},
-    {6640,-1111}, {6727,-264}, {6706,587}, {7962,901}, {5621,2699},
-    {4103,168}, {5336,467}, {5353,-210}, {5283,-884}, {5129,-1544},
-    {4894,-2179}, {4579,-2779}, {4192,-3335}, {3738,-3837}, {3224,-4278},
-    {2658,-4651}, {2050,-4949}, {1409,-5168}, {746,-5305}
+    {-6728,235}, {-6732,-11}, {-6727,-256}, {-6713,-502}, {-6691,-746},
+    {-6659,-990}, {-6618,-1232}, {-6569,-1473}, {-6511,-1711}, {-6444,-1948},
+    {-6369,-2182}, {-6285,-2413}, {-6193,-2640}, {-6092,-2864}, {-5984,-3085},
+    {-5867,-3301}, {-5743,-3513}, {-5611,-3720}, {-5471,-3922}, {-5325,-4119},
+    {-5171,-4311}, {-5010,-4497}, {-4843,-4676}, {-4669,-4850}, {-4489,-5017},
+    {-4303,-5178}, {-4111,-5331}, {-3914,-5478}, {-3711,-5617}, {-3504,-5748},
+    {-3292,-5872}, {-3075,-5989}, {-2855,-6097}, {-2630,-6197}, {-2403,-6289},
+    {-2172,-6372}, {-1938,-6447}, {-1701,-6514}, {-1462,-6571}, {-1222,-6620},
+    {-979,-6660}, {-736,-6692}, {-491,-6714}, {-246,-6728}, {0,-6732},
+    {0,-7878}, {5,-7918}, {19,-7937}, {43,-7935}, {76,-7911},
+    {2484,-5745}, {2512,-5710}, {2522,-5676}, {2512,-5642}, {2484,-5607},
+    {76,-3441}, {43,-3417}, {19,-3415}, {5,-3434}, {0,-3474},
+    {0,-4620}, {-247,-4613}, {-494,-4594}, {-739,-4561}, {-982,-4515},
+    {-1222,-4456}, {-1458,-4384}, {-1691,-4300}, {-1918,-4203}, {-2140,-4094},
+    {-2356,-3974}, {-2566,-3842}, {-2767,-3699}, {-2961,-3546}, {-3147,-3383},
+    {-3323,-3209}, {-3490,-3027}, {-3647,-2836}, {-3794,-2637}, {-3929,-2430},
+    {-4054,-2216}, {-4166,-1996}, {-4267,-1770}, {-4356,-1540}, {-4432,-1304},
+    {-4495,-1065}, {-4546,-823}, {-4584,-579}, {-4608,-333}, {-4619,-86},
+    {-4617,161}
 };
 static const Point kOutline1[] = {
-    {5305,4145}, {4739,4781}, {4098,5341}, {3391,5815}, {2630,6197},
-    {1827,6479}, {995,6658}, {147,6730}, {-704,6695}, {-1543,6553},
-    {-2358,6306}, {-3135,5958}, {-3861,5515}, {-4761,6444}, {-5148,3519},
-    {-2197,3469}, {-3072,4388}, {-2494,4741}, {-1876,5017}, {-1228,5214},
-    {-560,5327}, {117,5355}, {792,5298}, {1454,5156}, {2093,4931},
-    {2699,4627}, {3261,4250}, {3771,3804}, {4221,3298}
+    {3160,-5944}, {3375,-5825}, {3586,-5698}, {3791,-5563}, {3991,-5421},
+    {4187,-5272}, {4376,-5116}, {4560,-4953}, {4738,-4783}, {4909,-4607},
+    {5074,-4425}, {5232,-4237}, {5383,-4043}, {5527,-3844}, {5663,-3640},
+    {5792,-3431}, {5914,-3217}, {6027,-2999}, {6132,-2777}, {6230,-2552},
+    {6319,-2323}, {6399,-2090}, {6471,-1856}, {6535,-1618}, {6589,-1379},
+    {6635,-1137}, {6672,-895}, {6700,-651}, {6720,-406}, {6730,-160},
+    {6731,85}, {6724,331}, {6707,576}, {6682,820}, {6647,1064},
+    {6604,1305}, {6552,1546}, {6491,1784}, {6422,2019}, {6344,2252},
+    {6258,2482}, {6163,2709}, {6060,2932}, {5949,3151}, {5830,3366},
+    {6822,3939}, {6855,3963}, {6864,3985}, {6851,4005}, {6814,4022},
+    {3733,5023}, {3689,5031}, {3655,5022}, {3630,4997}, {3614,4955},
+    {2942,1786}, {2938,1746}, {2948,1724}, {2971,1721}, {3009,1737},
+    {4001,2310}, {4119,2093}, {4225,1869}, {4319,1641}, {4400,1407},
+    {4469,1170}, {4526,929}, {4569,686}, {4599,440}, {4616,193},
+    {4620,-54}, {4610,-301}, {4588,-547}, {4552,-792}, {4503,-1034},
+    {4441,-1273}, {4367,-1509}, {4280,-1741}, {4180,-1967}, {4069,-2188},
+    {3946,-2402}, {3812,-2610}, {3667,-2810}, {3511,-3002}, {3346,-3186},
+    {3170,-3360}, {2986,-3525}, {2793,-3680}, {2592,-3824}, {2384,-3957},
+    {2169,-4079}
 };
 static const Point kOutline2[] = {
-    {-6242,2522}, {-6510,1714}, {-6674,879}, {-6732,29}, {-6682,-820},
-    {-6525,-1657}, {-6264,-2467}, {-5902,-3238}, {-5446,-3957}, {-4903,-4613},
-    {-4282,-5195}, {-3592,-5693}, {-2845,-6101}, {-3201,-7345}, {-473,-6218},
-    {-1906,-3638}, {-2264,-4855}, {-2858,-4530}, {-3407,-4133}, {-3902,-3670},
-    {-4334,-3149}, {-4696,-2576}, {-4984,-1963}, {-5192,-1319}, {-5317,-653},
-    {-5357,23}, {-5311,699}, {-5180,1364}, {-4967,2007}
+    {3567,5709}, {3357,5835}, {3142,5954}, {2922,6065}, {2699,6167},
+    {2472,6262}, {2242,6348}, {2009,6425}, {1773,6494}, {1535,6555},
+    {1295,6606}, {1053,6649}, {810,6683}, {565,6708}, {320,6724},
+    {75,6732}, {-171,6730}, {-416,6719}, {-661,6699}, {-905,6671},
+    {-1148,6633}, {-1389,6587}, {-1629,6532}, {-1866,6468}, {-2101,6396},
+    {-2333,6315}, {-2561,6226}, {-2787,6128}, {-3009,6022}, {-3226,5909},
+    {-3440,5787}, {-3649,5658}, {-3853,5521}, {-4051,5376}, {-4245,5225},
+    {-4433,5067}, {-4615,4902}, {-4790,4730}, {-4960,4552}, {-5123,4368},
+    {-5278,4178}, {-5427,3983}, {-5569,3782}, {-5703,3576}, {-5830,3366},
+    {-6822,3939}, {-6860,3955}, {-6883,3952}, {-6893,3930}, {-6890,3890},
+    {-6217,721}, {-6201,679}, {-6177,654}, {-6142,645}, {-6098,653},
+    {-3018,1654}, {-2981,1671}, {-2967,1691}, {-2976,1713}, {-3009,1737},
+    {-4001,2310}, {-3872,2521}, {-3731,2724}, {-3580,2920}, {-3419,3107},
+    {-3248,3286}, {-3067,3455}, {-2878,3614}, {-2681,3763}, {-2476,3901},
+    {-2263,4028}, {-2045,4143}, {-1820,4246}, {-1590,4338}, {-1356,4417},
+    {-1118,4483}, {-876,4536}, {-632,4577}, {-387,4604}, {-140,4618},
+    {108,4619}, {354,4606}, {600,4581}, {845,4542}, {1086,4490},
+    {1325,4426}, {1560,4349}, {1790,4259}, {2016,4157}, {2235,4043},
+    {2448,3918}
 };
-// The plain entrance starts at the ring's inner edge and keeps the same width as its circular shafts.
 static const Point kOutline3[] = {
-    {-688,5357}, {688,5357}, {688,10752}, {-688,10752}
+    {-1056,4620}, {1056,4620}, {1056,10752}, {-1056,10752}
 };
 struct Outline { const Point* points; size_t count; };
 static const Outline kOutlines[] = {
@@ -49,6 +87,7 @@ static const Outline kOutlines[] = {
     {kOutline3, sizeof(kOutline3) / sizeof(kOutline3[0])}
 };
 enum { kUnit = 256, kSide = 66, kExtentX = 7962, kMinY = -7345, kMaxY = 10752 };
+enum { kCirculationExtentX = 6893, kCirculationMinY = -7937, kCirculationMaxY = 10752 };
 
 // Round half away from zero so reflection stays exact after the one conversion to canvas coordinates.
 inline int rounded(long value, int denominator) {
@@ -73,29 +112,35 @@ inline void append(const Poly& poly, uint8_t colour, Picture& pic) {
 struct RingLayout { int cx, cy, side; };
 
 // Fit uniformly, then translate into the canvas. The symmetric envelope keeps both traffic directions centred alike.
-inline RingLayout ringLayout(const HudProfile& p) {
+inline RingLayout ringLayout(const HudProfile& p, int extentX = ring::kExtentX,
+                             int minY = ring::kMinY, int maxY = ring::kMaxY) {
     Rect box = ringGlyphBox(p);
     RingLayout l = { (box.x0 + box.x1) / 2, box.y0, 0 };
     int width = p.canvas.x1 - p.canvas.x0, height = p.canvas.y1 - p.canvas.y0;
     int side = box.x1 - box.x0;
     if (side > box.y1 - box.y0) side = box.y1 - box.y0;
     if (width <= 0 || height <= 0 || side <= 0) return l;
-    int limit = (int)((long)width * ring::kSide * ring::kUnit / (2 * ring::kExtentX));
+    int limit = (int)((long)width * ring::kSide * ring::kUnit / (2 * extentX));
     if (side > limit) side = limit;
-    limit = (int)((long)height * ring::kSide * ring::kUnit / (ring::kMaxY - ring::kMinY));
+    limit = (int)((long)height * ring::kSide * ring::kUnit / (maxY - minY));
     if (side > limit) side = limit;
-    while (side > 0 && (2 * ring::offset(ring::kExtentX, side) > width ||
-                       ring::offset(ring::kMaxY, side) - ring::offset(ring::kMinY, side) > height))
+    while (side > 0 && (2 * ring::offset(extentX, side) > width ||
+                       ring::offset(maxY, side) - ring::offset(minY, side) > height))
         --side;   // the two rounded edges can need one extra unit at a half-pixel boundary
     l.side = side;
     l.cy += ring::rounded((long)25 * side, ring::kSide);
-    int dx = ring::offset(ring::kExtentX, side);
+    int dx = ring::offset(extentX, side);
     if (l.cx - dx < p.canvas.x0) l.cx = p.canvas.x0 + dx;
     if (l.cx + dx > p.canvas.x1) l.cx = p.canvas.x1 - dx;
-    int low = ring::offset(ring::kMinY, side), high = ring::offset(ring::kMaxY, side);
+    int low = ring::offset(minY, side), high = ring::offset(maxY, side);
     if (l.cy + low < p.canvas.y0) l.cy = p.canvas.y0 - low;
     if (l.cy + high > p.canvas.y1) l.cy = p.canvas.y1 - high;
     return l;
+}
+
+// Unknown circulation fits its actual envelope; default parameters preserve known-exit fitting.
+inline RingLayout circulationLayout(const HudProfile& p) {
+    return ringLayout(p, ring::kCirculationExtentX, ring::kCirculationMinY, ring::kCirculationMaxY);
 }
 
 namespace ring {
@@ -138,6 +183,35 @@ inline void addPoint(Poly& poly, Point p) {
 inline int64_t turn(const Point& a, const Point& b, const Point& c) {
     return (int64_t)(b.x-a.x)*(c.y-a.y)-(int64_t)(b.y-a.y)*(c.x-a.x);
 }
+// Remove tiny closed detours and zero-area spurs introduced by circulation rounding.
+inline void removeBacktracks(Poly& poly) {
+    bool changed = true;
+    while (changed && poly.pts.size() > 2) {
+        changed = false;
+        for (size_t i = 0; i < poly.pts.size(); ++i) {
+            for (size_t j = i + 2; j < poly.pts.size(); ++j) {
+                if (poly.pts[i].x != poly.pts[j].x || poly.pts[i].y != poly.pts[j].y) continue;
+                // A repeated native vertex closes a rounding loop; retain the longer contour around the arrow.
+                if (j - i <= poly.pts.size() - (j - i))
+                    poly.pts.erase(poly.pts.begin() + i + 1, poly.pts.begin() + j + 1);
+                else {
+                    poly.pts.erase(poly.pts.begin() + j, poly.pts.end());
+                    poly.pts.erase(poly.pts.begin(), poly.pts.begin() + i);
+                }
+                changed = true;
+                break;
+            }
+            if (changed) break;
+            Point a = poly.pts[i ? i - 1 : poly.pts.size() - 1];
+            Point b = poly.pts[i], c = poly.pts[i + 1 < poly.pts.size() ? i + 1 : 0];
+            if (!turn(a,b,c) && (int64_t)(b.x-a.x)*(c.x-b.x) + (int64_t)(b.y-a.y)*(c.y-b.y) <= 0) {
+                poly.pts.erase(poly.pts.begin() + i);
+                changed = true;
+                break;
+            }
+        }
+    }
+}
 inline bool crosses(const Point& a, const Point& b, const Point& c, const Point& d) {
     int64_t x = turn(a,b,c), y = turn(a,b,d), u = turn(c,d,a), v = turn(c,d,b);
     return ((x < 0 && y > 0) || (x > 0 && y < 0)) && ((u < 0 && v > 0) || (u > 0 && v < 0));
@@ -171,9 +245,17 @@ inline void addBand(const ShapeSpec& spec, const RingLayout& l, int first2, int 
         angle += direction * (remaining < 15 ? remaining : 15);
         angles.push_back(angle);
     }
+    std::vector<int> inner;
+    angle = first2;
+    inner.push_back(angle);
+    while (angle != last2) {
+        int remaining = (last2 - angle) * direction;
+        angle += direction * (remaining < 5 ? remaining : 5);
+        inner.push_back(angle);
+    }
     std::vector<Point> q;
     for (size_t i = 0; i < angles.size(); ++i) q.push_back(circular(angles[i], kOuter));
-    for (size_t i = angles.size(); i > 0; --i) q.push_back(circular(angles[i - 1], kInner));
+    for (size_t i = inner.size(); i > 0; --i) q.push_back(circular(inner[i - 1], kInner));
     addKnown(spec, l, &q[0], q.size(), colour, pic);
 }
 inline Rect knownBounds(const ShapeSpec& spec) {
@@ -284,7 +366,7 @@ inline void knownPicture(const ShapeSpec& spec, const HudProfile& p, const RingL
 // Return false only when a valid number cannot be drawn.
 inline bool roundaboutPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
     bool known = spec.exit >= 1 && spec.exit <= 360;
-    RingLayout l = known ? knownRingLayout(spec, p) : ringLayout(p);
+    RingLayout l = known ? knownRingLayout(spec, p) : circulationLayout(p);
     if (known) {
         ring::knownPicture(spec, p, l, pic);
     } else {
@@ -300,11 +382,13 @@ inline bool roundaboutPicture(const ShapeSpec& spec, const HudProfile& p, Pictur
             }
             if (poly.pts.size() > 1 && poly.pts.front().x == poly.pts.back().x && poly.pts.front().y == poly.pts.back().y)
                 poly.pts.pop_back();
+            ring::removeBacktracks(poly);
             ring::append(poly, p.fill, pic);
         }
     }
     if (exitNumber < 1 || exitNumber > 99) return true;
-    int height = l.side * (exitNumber > 9 ? 18 : 24) / ring::kSide;
+    int height = l.side * (exitNumber > 9 ? (known ? 18 : 15) : 24) / ring::kSide;
+    if (!known && l.side < ring::kSide) --height;   // preserve clearance after coarse circulation rounding
     if (height < 6) return false;
     Shape number;
     digits::drawNumber(exitNumber, l.cx, l.cy - height / 2, height, number);

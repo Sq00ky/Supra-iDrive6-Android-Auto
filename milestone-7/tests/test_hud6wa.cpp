@@ -16,6 +16,7 @@
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <algorithm>
+#include <utility>
 #include <math.h>
 #include <assert.h>
 #include <stdio.h>
@@ -737,22 +738,46 @@ static void samePolygons(const Shape& actual, size_t offset, const Shape& expect
     }
 }
 
-// Frozen from the approved analytic prototype, not from roundaboutPicture(): three identical curved arrows
-// rotated by 120 degrees, then by 35 degrees, followed by a plain incoming rectangle. F30 pixels.
+// Independent analytic reference for the selected SVG: 92-degree circular arcs, tangent 18x10 heads,
+// 0.4-unit quadratic corner trims and rotations of 120 degrees. Oversample here, not from production tables.
 static Shape approvedCirculation() {
-    static const int count[] = {29,29,29,4};
-    static const int xy[][58] = {
-        {66,8,69,9,72,10,75,11,78,13,80,15,83,18,84,20,86,23,87,26,88,30,88,33,88,36,93,38,84,45,78,35,83,36,83,33,83,31,82,28,81,25,80,23,78,21,77,19,75,17,72,16,70,15,68,14,65,13},
-        {83,50,81,53,78,55,75,57,72,58,69,59,66,60,63,60,59,60,56,60,53,59,50,57,47,56,43,59,42,48,53,48,50,51,52,53,55,54,57,54,60,55,62,55,65,55,68,54,70,53,73,52,75,51,77,49,78,47},
-        {38,44,37,41,36,37,36,34,36,31,37,28,38,24,39,21,41,19,43,16,45,14,48,12,51,10,49,5,60,10,55,20,53,15,51,16,49,18,47,20,45,22,44,24,43,26,42,29,41,31,41,34,41,37,42,39,43,42},
-        {59,55,65,55,65,76,59,76}
-    };
+    const double pi = 3.141592653589793, outer = 26.296875, inner = 18.046875;
+    const double middle = (outer+inner)/2;
     Shape out;
-    for (size_t i = 0; i < 4; ++i) {
+    for (int arrow = 0; arrow < 3; ++arrow) {
+        std::vector<std::pair<double,double> > q;
+        for (int angle = -92; angle <= 0; ++angle) {
+            double a = angle*pi/180;
+            q.push_back(std::make_pair(outer*sin(a),-outer*cos(a)));
+        }
+        const double head[][2] = {{0,-outer},{0,-middle-9},{10,-middle},{0,-middle+9},{0,-inner}};
+        for (int corner = 1; corner < 4; ++corner) {
+            double bx = head[corner-1][0]-head[corner][0], by = head[corner-1][1]-head[corner][1];
+            double ax = head[corner+1][0]-head[corner][0], ay = head[corner+1][1]-head[corner][1];
+            double before = sqrt(bx*bx+by*by), after = sqrt(ax*ax+ay*ay);
+            bx = head[corner][0]+0.4*bx/before; by = head[corner][1]+0.4*by/before;
+            ax = head[corner][0]+0.4*ax/after; ay = head[corner][1]+0.4*ay/after;
+            for (int step = 0; step <= 4; ++step) {
+                double t = step/4.0, u = 1-t;
+                q.push_back(std::make_pair(u*u*bx+2*u*t*head[corner][0]+t*t*ax,
+                                          u*u*by+2*u*t*head[corner][1]+t*t*ay));
+            }
+        }
+        for (int angle = 0; angle >= -92; --angle) {
+            double a = angle*pi/180;
+            q.push_back(std::make_pair(inner*sin(a),-inner*cos(a)));
+        }
         Poly poly; poly.type = kPolygon;
-        for (int j = 0; j < count[i]; ++j) poly.pts.push_back(shapes::pt(xy[i][2*j], xy[i][2*j+1]));
+        double a = arrow*120*pi/180;
+        for (size_t i = 0; i < q.size(); ++i)
+            poly.pts.push_back(shapes::pt((int)floor(62+q[i].first*cos(a)-q[i].second*sin(a)+0.5),
+                                          (int)floor(34+q[i].first*sin(a)+q[i].second*cos(a)+0.5)));
         out.push_back(poly);
     }
+    Poly entrance; entrance.type = kPolygon;
+    const int xy[] = {58,52,66,52,66,76,58,76};
+    for (int i = 0; i < 4; ++i) entrance.pts.push_back(shapes::pt(xy[2*i],xy[2*i+1]));
+    out.push_back(entrance);
     return out;
 }
 
@@ -763,43 +788,45 @@ static void sameRect(const Rect& a, const Rect& b) {
 static void checkCirculation(const Shape& actual, const HudProfile& p, const Rect& frame,
                              int number, bool clockwise, bool standardHud = false) {
     sameRect(ringGlyphBox(p), frame);
-    const RingLayout layout = ringLayout(p);
+    const RingLayout layout = circulationLayout(p);
     int wanted = std::min(frame.x1-frame.x0, frame.y1-frame.y0);
     assert(layout.side > 0 && layout.side <= wanted);
-    // The frozen template spans about 62 pixels symmetrically around x and 71 in y at side 66.
+    // The reference fits a symmetric 54-by-74 envelope at side 66, including its entrance.
     // Permit its subpixel extrema, but reject gratuitous shrinking even if the resulting picture would fit.
-    int available = std::min((p.canvas.x1-p.canvas.x0)*66/62, (p.canvas.y1-p.canvas.y0)*66/71);
+    int available = std::min((p.canvas.x1-p.canvas.x0)*66/54, (p.canvas.y1-p.canvas.y0)*66/74);
     assert(layout.side >= std::min(wanted, available)-1);
     if (standardHud) assert(layout.cx == 62 && layout.cy == 34 && layout.side == 66);
     const Shape approved = approvedCirculation();
     assert(actual.size() >= approved.size());
     for (size_t i = 0; i < approved.size(); ++i) {
         assert(actual[i].type == kPolygon && actual[i].pts.size() <= approved[i].pts.size());
-        if (standardHud) {
-            assert(actual[i].pts.size() == approved[i].pts.size());
-            for (size_t j = 0; j < approved[i].pts.size(); ++j) {
-                int x = approved[i].pts[j].x - 62;
-                if (i < 3 && !clockwise) x = -x;
-                assert(actual[i].pts[j].x == 62+x && actual[i].pts[j].y == approved[i].pts[j].y);
-            }
-        } else {
-            // The frozen reference has half-pixel rounding; the final fit adds another half pixel. Check
-            // both directions so deduplicating rounded neighbours cannot hide a missing head or bent arc.
-            double tolerance = 0.51 + 0.51 * layout.side / 66;
-            for (int direction = 0; direction < 2; ++direction) {
-                size_t count = direction ? approved[i].pts.size() : actual[i].pts.size();
-                size_t other = direction ? actual[i].pts.size() : approved[i].pts.size();
-                for (size_t j = 0; j < count; ++j) {
-                    bool close = false;
-                    for (size_t k = 0; k < other; ++k) {
-                        Point a = actual[i].pts[direction ? k : j], e = approved[i].pts[direction ? j : k];
-                        int x = e.x-62, y = e.y-34;
-                        if (i < 3 && !clockwise) x = -x;
-                        if (fabs(a.x-layout.cx-x*layout.side/66.0) <= tolerance &&
-                            fabs(a.y-layout.cy-y*layout.side/66.0) <= tolerance) { close = true; break; }
-                    }
-                    assert(close);
+        // Compare contour segments in both directions: rounding may remove a redundant native vertex.
+        std::vector<std::pair<double,double> > paths[2];
+        for (size_t j = 0; j < actual[i].pts.size(); ++j)
+            paths[0].push_back(std::make_pair(actual[i].pts[j].x,actual[i].pts[j].y));
+        for (size_t j = 0; j < approved[i].pts.size(); ++j) {
+            double x = approved[i].pts[j].x-62, y = approved[i].pts[j].y-34;
+            if (i < 3 && !clockwise) x = -x;
+            paths[1].push_back(std::make_pair(layout.cx+x*layout.side/66,layout.cy+y*layout.side/66));
+        }
+        double tolerance = 0.51+0.51*layout.side/66;
+        for (int direction = 0; direction < 2; ++direction) {
+            const std::vector<std::pair<double,double> >& from = paths[direction];
+            const std::vector<std::pair<double,double> >& to = paths[1-direction];
+            for (size_t j = 0; j < from.size(); ++j) {
+                bool close = false;
+                for (size_t k = 0; k < to.size(); ++k) {
+                    const std::pair<double,double>& a = to[k];
+                    const std::pair<double,double>& b = to[k+1 < to.size() ? k+1 : 0];
+                    double dx = b.first-a.first, dy = b.second-a.second, length2 = dx*dx+dy*dy;
+                    double t = length2 ? ((from[j].first-a.first)*dx+(from[j].second-a.second)*dy)/length2 : 0;
+                    t = std::max(0.0,std::min(1.0,t));
+                    if (fabs(from[j].first-a.first-t*dx) <= tolerance &&
+                        fabs(from[j].second-a.second-t*dy) <= tolerance) { close = true; break; }
                 }
+                if (!close) fprintf(stderr,"circulation reference: side%d shape%zu direction%d point%zu\n",
+                                    layout.side,i,direction,j);
+                assert(close);
             }
         }
     }
@@ -816,22 +843,17 @@ static void checkCirculation(const Shape& actual, const HudProfile& p, const Rec
             assert(q.x >= p.canvas.x0 && q.x <= p.canvas.x1 && q.y >= p.canvas.y0 && q.y <= p.canvas.y1);
         }
     }
-    int h = layout.side * (number > 9 ? 18 : 24) / 66;
+    int h = layout.side * (number > 9 ? 15 : 24) / 66;
+    if (layout.side < 66) --h;
     if (number < 1 || number > 99 || h < 6) { assert(actual.size() == 4); return; }
-    if (standardHud) assert(h == (number > 9 ? 18 : 24));
+    if (standardHud) assert(h == (number > 9 ? 15 : 24));
     Shape expected;
     digits::drawNumber(number, layout.cx, layout.cy - h/2, h, expected);
     assert(actual.size() == 4 + expected.size());
     samePolygons(actual, 4, expected);   // the central text is upright in both traffic directions
-    Shape body(actual.begin(), actual.begin()+4), caption(actual.begin()+4, actual.end());
+    Shape body(actual.begin(), actual.begin()+4);
     Rect before = boundsForTest(body), after = boundsForTest(actual);
     sameRect(before, after);            // a number cannot enlarge, shrink or displace the ring
-    const double hole = 20.0 * layout.side / 66 + 1;
-    for (size_t i = 0; i < caption.size(); ++i)
-        for (size_t j = 0; j < caption[i].pts.size(); ++j) {
-            double dx = caption[i].pts[j].x-layout.cx, dy = caption[i].pts[j].y-layout.cy;
-            assert(dx*dx + dy*dy <= hole*hole);   // safely inside the empty centre, away from curved arrows
-        }
 }
 
 static void checkCirculationPacket(const Batch& b, const HudProfile& p, const Rect& frame,
@@ -956,7 +978,7 @@ static void testCirculationGeometry() {
             Shape a = picturePolygons(cw), b = picturePolygons(ccw);
             checkCirculation(a, profile, frames[p], numbers[n], true, p == 1);
             checkCirculation(b, profile, frames[p], numbers[n], false, p == 1);
-            int cx = ringLayout(profile).cx;
+            int cx = circulationLayout(profile).cx;
             assert(a.size() == b.size());
             for (size_t i = 0; i < a.size(); ++i) {
                 assert(cw[i].colour == profile.fill && ccw[i].colour == profile.fill);
@@ -983,7 +1005,8 @@ static void testCirculationGeometry() {
             const int labels[] = {0,7,12};
             for (size_t n = 0; n < 3; ++n) {
                 Picture pic;
-                int h = ringLayout(profile).side * (labels[n] > 9 ? 18 : 24) / 66;
+                int h = circulationLayout(profile).side * (labels[n] > 9 ? 15 : 24) / 66;
+                if (circulationLayout(profile).side < 66) --h;
                 bool ok = roundaboutPicture(shapeFor(cw ? 33 : 34, false, 0), profile, pic, labels[n]);
                 assert(ok == (!labels[n] || h >= 6));
                 checkCirculation(picturePolygons(pic), profile, profile.glyph, labels[n], cw != 0);
@@ -1112,7 +1135,7 @@ static void checkKnownBase(const Picture& picture, const ShapeSpec& spec, const 
         const double output[] = {-12.125*mirror,18,-12.125*mirror,33.25,
                                  -16.23828125*mirror,32.5234375,-8.0*mirror,47,0.23828125*mirror,32.5234375,
                                  -3.875*mirror,33.25,-3.875*mirror,18};
-        nearPointSet(picture[2].poly, expectedPolygon(input, 4, l), 0);
+        nearPointSet(picture[picture.size()-2].poly, expectedPolygon(input, 4, l), 0);
         nearPointSet(head, expectedPolygon(output, 7, l), 0);   // the sole nonnormal exception: approved C360
     }
     if (spec.exit % 90 == 0) {
@@ -1772,6 +1795,126 @@ static bool simplePolygon(const Poly& polygon) {
             if (((x < 0 && y > 0) || (x > 0 && y < 0)) && ((u < 0 && v > 0) || (u > 0 && v < 0))) return false;
         }
     return true;
+}
+
+// At a large pinned scale no samples collapse: outer points stay at 7.5 degrees, inner points at 2.5.
+static void testKnownInnerCircleSampling() {
+    setenv("NBT_HUD_GLYPH","pinned",1);
+    HudProfile p = k6wa; p.canvas = Rect{0,0,2000,2000}; p.glyph = Rect{600,600,1260,1260};
+    ShapeSpec spec = shapeFor(34,true,90);
+    RingLayout l = knownRingLayout(spec,p);
+    assert(l.side == 660);
+    Picture pic; assert(roundaboutPicture(spec,p,pic));
+    for (int half = 0; half < 2; ++half) {
+        const Poly& poly = pic[half].poly;
+        assert(poly.pts.size() == 98); // 25 outer + 73 inner; no extra draw command or protocol overflow
+        for (int j = 0; j < 98; ++j) {
+            double degrees = half*180 + (j < 25 ? j*7.5 : 180-(j-25)*2.5);
+            double a = degrees*3.141592653589793/180, radius = (j < 25 ? 26.296875 : 18.046875)*10;
+            assert(fabs(poly.pts[j].x-(l.cx+radius*sin(a))) <= 0.8);
+            assert(fabs(poly.pts[j].y-(l.cy-radius*cos(a))) <= 0.8);
+        }
+    }
+    unsetenv("NBT_HUD_GLYPH");
+}
+
+// Freeze known layouts, entry/exit contours and captions from 9a8570b; circle sampling may become denser.
+static void testKnownRoundaboutAnchorsUnchanged() {
+    uint64_t hash = 14695981039346656037ULL;
+    const int widths[] = {0,126,176,120}, heights[] = {0,77,126,72};
+    for (int p = 0; p < 4; ++p) {
+        HudProfile profile = k6wa; if (p) fitMeasured(widths[p],heights[p],profile);
+        for (int type = 33; type <= 34; ++type)
+            for (int angle = 1; angle <= 360; ++angle)
+                for (int label = 0; label < 2; ++label) {
+                    ShapeSpec spec = shapeFor(type,true,angle);
+                    Picture body, numbered;
+                    assert(roundaboutPicture(spec,profile,body));
+                    assert(roundaboutPicture(spec,profile,numbered,label ? 99 : 0));
+                    RingLayout l = knownRingLayout(spec,profile);
+                    hash = (hash ^ (uint16_t)l.cx) * 1099511628211ULL;
+                    hash = (hash ^ (uint16_t)l.cy) * 1099511628211ULL;
+                    hash = (hash ^ (uint16_t)l.side) * 1099511628211ULL;
+                    assert(body.size() >= 2 && body[body.size()-2].poly.pts.size() == 4);
+                    Picture pic(body.end()-2,body.end()); // entry and exit precede the caption
+                    pic.insert(pic.end(),numbered.begin()+body.size(),numbered.end());
+                    hash = (hash ^ (unsigned)pic.size()) * 1099511628211ULL;
+                    for (size_t i = 0; i < pic.size(); ++i) {
+                        hash = (hash ^ pic[i].colour) * 1099511628211ULL;
+                        hash = (hash ^ (unsigned)pic[i].poly.type) * 1099511628211ULL;
+                        hash = (hash ^ (unsigned)pic[i].poly.pts.size()) * 1099511628211ULL;
+                        for (size_t j = 0; j < pic[i].poly.pts.size(); ++j) {
+                            hash = (hash ^ (uint16_t)pic[i].poly.pts[j].x) * 1099511628211ULL;
+                            hash = (hash ^ (uint16_t)pic[i].poly.pts[j].y) * 1099511628211ULL;
+                        }
+                    }
+                }
+    }
+    assert(hash == 0x62b420aebd59d0a9ULL);
+}
+
+static bool onSegmentForTest(const Point& a, const Point& b, const Point& q) {
+    return !crossForTest(a,b,q) && q.x >= std::min(a.x,b.x) && q.x <= std::max(a.x,b.x) &&
+        q.y >= std::min(a.y,b.y) && q.y <= std::max(a.y,b.y);
+}
+
+// Reject boundary contact as well as filled overlap: a touching number visually merges into an arrow.
+static bool polygonsTouch(const Poly& a, const Poly& b) {
+    for (size_t i = 0; i < a.pts.size(); ++i)
+        for (size_t j = 0; j < b.pts.size(); ++j) {
+            Point p = a.pts[i], q = a.pts[i+1 < a.pts.size() ? i+1 : 0];
+            Point r = b.pts[j], s = b.pts[j+1 < b.pts.size() ? j+1 : 0];
+            long x = crossForTest(p,q,r), y = crossForTest(p,q,s);
+            long u = crossForTest(r,s,p), v = crossForTest(r,s,q);
+            if ((((x < 0 && y > 0) || (x > 0 && y < 0)) &&
+                 ((u < 0 && v > 0) || (u > 0 && v < 0))) ||
+                onSegmentForTest(p,q,r) || onSegmentForTest(p,q,s) ||
+                onSegmentForTest(r,s,p) || onSegmentForTest(r,s,q)) return true;
+        }
+    return containsPoint(a,b.pts[0].x,b.pts[0].y) || containsPoint(b,a.pts[0].x,a.pts[0].y);
+}
+
+static void testCirculationNativeGrid() {
+    setenv("NBT_HUD_GLYPH","pinned",1);
+    for (int side = 1; side <= 200; ++side)
+        for (int type = 33; type <= 34; ++type) {
+            HudProfile p = k6wa; p.canvas = Rect{0,0,1000,1000};
+            p.glyph = Rect{400,400,(int16_t)(400+side),(int16_t)(400+side)};
+            Picture body;
+            assert(roundaboutPicture(shapeFor(type,false,0),p,body));
+            checkPictureBounds(body,p);
+            for (size_t i = 0; i < body.size(); ++i) {
+                const Poly& poly = body[i].poly;
+                assert(simplePolygon(poly));
+                for (size_t j = 0; j < poly.pts.size(); ++j) {
+                    for (size_t k = j + 1; k < poly.pts.size(); ++k)
+                        assert(poly.pts[j].x != poly.pts[k].x || poly.pts[j].y != poly.pts[k].y);
+                    Point a = poly.pts[j ? j-1 : poly.pts.size()-1], b = poly.pts[j];
+                    Point c = poly.pts[j+1 < poly.pts.size() ? j+1 : 0];
+                    assert(crossForTest(a,b,c) ||
+                        (long)(b.x-a.x)*(c.x-b.x)+(long)(b.y-a.y)*(c.y-b.y) > 0);
+                }
+            }
+            for (int number = 1; number <= 99; ++number) {
+                Picture pic;
+                bool drawn = roundaboutPicture(shapeFor(type,false,0),p,pic,number);
+                int captionHeight = circulationLayout(p).side*(number > 9 ? 15 : 24)/66;
+                if (circulationLayout(p).side < 66) --captionHeight;
+                assert(drawn == (captionHeight >= 6));
+                samePictureItems(pic,body);
+                if (!drawn) { assert(pic.size() == body.size()); continue; }
+                assert(pic.size() > body.size());
+                checkPictureBounds(pic,p);
+                for (size_t i = body.size(); i < pic.size(); ++i)
+                    for (size_t j = 0; j < body.size(); ++j)
+                        if (polygonsTouch(pic[i].poly,body[j].poly)) {
+                            fprintf(stderr,"circulation contact: side%d type%d number%d caption%zu body%zu\n",
+                                    side,type,number,i-body.size(),j);
+                            assert(false);
+                        }
+            }
+        }
+    unsetenv("NBT_HUD_GLYPH");
 }
 
 // Pixel rounding must not fold an exit neck across its own head on a constrained manual canvas.
@@ -2626,6 +2769,9 @@ int main() {
     testGlyphBatchBudget();
     testLanes();
     testJunctionDriver();
+    testKnownInnerCircleSampling();
+    testKnownRoundaboutAnchorsUnchanged();
+    testCirculationNativeGrid();
     testSmallRoundaboutExits();
     testNearPolygonsSimple();
     testReadableNearArrows();

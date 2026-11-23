@@ -110,8 +110,8 @@ static int counters(const Shape& shape,int h) {
 
 int main() {
     sourceInvariants();
-    const int counterDigits[]={0,4,6,8,9},heights[]={18,22,30};
-    for (size_t h=0;h<3;++h) for (size_t d=0;d<5;++d) {
+    const int counterDigits[]={0,4,6,8,9},heights[]={15,18,22,30};
+    for (size_t h=0;h<4;++h) for (size_t d=0;d<5;++d) {
         Shape shape;digits::drawNumber(counterDigits[d],digits::width(heights[h])/2,0,heights[h],shape);
         int expected=counterDigits[d]==8?2:1;
         assert(shape.size()==2&&counters(shape,heights[h])==expected);
@@ -143,5 +143,5 @@ int main() {
     digits::drawNumber(1, 0, 0, 0, sentinel);
     digits::drawNumber(1, 0, 0, -1, sentinel);
     assert(sentinel.size() == original);
-    printf("geometric HUD digits: %u number/height combinations; simple outlines at 8..40px; counters at 18/22/30px; source and pixel fitting passed\n", checked);
+    printf("geometric HUD digits: %u number/height combinations; simple outlines at 8..40px; counters at 15/18/22/30px; source and pixel fitting passed\n", checked);
 }

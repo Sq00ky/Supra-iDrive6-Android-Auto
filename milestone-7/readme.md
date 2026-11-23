@@ -1564,8 +1564,10 @@ These are geometry previews, not photographs or a simulation of the cluster's fo
 On an automatically measured 126x77 HUD, ordinary static drawings use a 53x53 box with one scale for both axes;
 Mapbox retains its original fitting bounds when its wings are narrowed. Near ramps have a longer shaft after the
 bend so their heads clear the main road. Roundabouts share one far/near drawing with a fixed circle diameter;
-known exits have an 8px external shaft and the same Mapbox wing rules. Explicit canvas/glyph pins and other buffer
-profiles retain their own ramp geometry. Junction selection and timing are unchanged. The full drawing batch
+known exits have an 8px external shaft and the same Mapbox wing rules. Their inner circular edges have denser
+samples without adding drawing commands or moving the input, exit, number or circle. Unknown angles show three
+smooth circulation arrows with tangent heads and a plain entrance, without inventing an exit direction.
+Explicit canvas/glyph pins and other buffer profiles retain their own ramp geometry. Junction selection and timing are unchanged. The full drawing batch
 admits 64 commands (a complete Mapbox picture
 can require 55); the in-flight window remains eight. Passing host geometry/transport tests does not establish
 the readability of every maneuver or admission of a greater-than-32-command packet on a real head unit.
