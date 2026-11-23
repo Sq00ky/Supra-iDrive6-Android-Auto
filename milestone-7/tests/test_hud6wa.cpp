@@ -1963,6 +1963,25 @@ static void testNearPolygonsSimple() {
     printf("  sharp turns and U-turns: serialized near polygons have no strict self-intersections\n");
 }
 
+// Check native curved edges against independent circles, including border/road agreement.
+static void checkSmoothUTurn(const Poly& poly, int width) {
+    const double scale = 77.0/130, cx = 59.5, cy = 45.5-10*scale;
+    const double inner = (16-width/2)*scale, outer = (16+width/2)*scale;
+    unsigned curved = 0;
+    assert(poly.pts.size() <= 99);
+    for (size_t i = 0; i < poly.pts.size(); ++i) {
+        const Point& a = poly.pts[i];
+        const Point& b = poly.pts[i+1 < poly.pts.size() ? i+1 : 0];
+        if (a.y > cy+0.6) continue;
+        double r = hypot(a.x-cx,a.y-cy);
+        assert(std::min(fabs(r-inner),fabs(r-outer)) <= 0.8);
+        if (b.y <= cy+0.6) assert(hypot(a.x-b.x,a.y-b.y) <= 3.0);
+        ++curved;
+    }
+    assert(curved >= 24);
+    assert(simplePolygon(poly));
+}
+
 static void testReadableNearArrows() {
     unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
     unsigned checked = 0;
@@ -2004,12 +2023,17 @@ static void testReadableNearArrows() {
                     Picture actual;
                     if (overlay) {
                         Picture actualRoads = batchPicture(port.batches[1]);
-                        assert(actualRoads.size() == roads.size()); samePictureItems(actualRoads, roads);
+                        assert(actualRoads.size() == roads.size());
+                        if (mode && (type == 11 || type == 12)) {
+                            checkSmoothUTurn(actualRoads[0].poly,22); checkSmoothUTurn(actualRoads[1].poly,16);
+                        } else samePictureItems(actualRoads, roads);
                         actual = batchPicture(port.batches.back());
                         assert(port.batches.back().slot == kSlotRoute);
                     } else {
                         Picture combined = batchPicture(port.batches.back());
-                        samePictureItems(combined, roads);
+                        if (mode && (type == 11 || type == 12)) {
+                            checkSmoothUTurn(combined[0].poly,22); checkSmoothUTurn(combined[1].poly,16);
+                        } else samePictureItems(combined, roads);
                         actual.assign(combined.begin() + roads.size(), combined.end());
                         assert(port.batches.back().slot == kSlotMain);
                     }
@@ -2020,7 +2044,10 @@ static void testReadableNearArrows() {
                     for (size_t layer = 0; layer < 2; ++layer) {
                         const Poly& path = actual[layer * 2].poly; const Poly& head = actual[layer * 2 + 1].poly;
                         const Poly& old = previous[layer].poly;
-                        assert(path.pts.size() + 3 == old.pts.size() && head.pts.size() == (size_t)(mode ? 5 : 3));
+                        assert(head.pts.size() == (size_t)(mode ? 5 : 3));
+                        if (mode && (type == 11 || type == 12))
+                            checkSmoothUTurn(path,layer ? 12 : 16);
+                        else assert(path.pts.size() + 3 == old.pts.size());
                         assert(area2(path.pts) > 0 && area2(head.pts) > 0);
                         assert(simplePolygon(path) && simplePolygon(head));
                         size_t n = (old.pts.size() - 3) / 2;

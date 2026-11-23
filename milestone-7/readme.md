@@ -1563,7 +1563,8 @@ These are geometry previews, not photographs or a simulation of the cluster's fo
 
 On an automatically measured 126x77 HUD, ordinary static drawings use a 53x53 box with one scale for both axes;
 Mapbox retains its original fitting bounds when its wings are narrowed. Near sharp turns and ramps have a longer shaft after the
-bend so their heads clear the incoming stem or main road. Roundabouts share one far/near drawing with a fixed circle diameter;
+bend so their heads clear the incoming stem or main road. Near Mapbox U-turn bodies use concentric circular edges with one
+rounding step into the native grid, keeping their road, border and fill aligned. Roundabouts share one far/near drawing with a fixed circle diameter;
 known exits have an 8px external shaft and the same Mapbox wing rules. Their inner circular edges have denser
 samples without adding drawing commands or moving the input, exit, number or circle. Unknown angles show three
 smooth circulation arrows with tangent heads and a plain entrance, without inventing an exit direction.

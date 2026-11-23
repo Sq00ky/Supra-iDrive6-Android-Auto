@@ -182,8 +182,7 @@ bool readableHud(const HudProfile& p) {
         && p.glyph.x1 == 82 && p.glyph.y1 == 68;
 }
 
-void drawHudRoute(const Layout& layout, int tail, const HudProfile& profile, const JunctionColours& colours,
-                  Picture& picture) {
+JunctionStyle hudRouteStyle(const Layout& layout, const HudProfile& profile) {
     JunctionStyle style = kJunctionStyle;
     bool readable = readableHud(profile) && !layout.ring;
     if (readable) {
@@ -199,7 +198,70 @@ void drawHudRoute(const Layout& layout, int tail, const HudProfile& profile, con
             style.headL = 28; style.headW = heading == 180 ? 19 : 23;
         }
     }
+    return style;
+}
+
+void drawHudRoute(const Layout& layout, int tail, const HudProfile& profile, const JunctionColours& colours,
+                  Picture& picture) {
+    JunctionStyle style = hudRouteStyle(layout, profile);
+    bool readable = readableHud(profile) && !layout.ring;
     drawRoute(layout, tail, colours, style, picture, readable ? kJunctionStyle.headL : -1, mbxEnabled());
+}
+
+// Concentric U-turn edges sampled before the one conversion to native HUD coordinates.
+Poly smoothUTurnStroke(const Layout& layout, int startY, int endY, int width, const HudProfile& profile) {
+    const Point& in = layout.route.pts.front();
+    const Point& end = layout.route.pts.back();
+    int side = end.x > in.x ? 1 : -1, cx = (in.x + end.x) / 2, cy = in.y;
+    int radius = (end.x - in.x) * side / 2, half = width / 2;
+    const long unit = 4096, fromH = k6wa.canvas.y1 + 1, toH = profile.canvas.y1 + 1;
+    const long divisor = 2 * fromH * unit;
+    Poly poly; poly.type = kPolygon;
+    auto add = [&](long x, long y) {
+        long nx = (profile.glyph.x0 + profile.glyph.x1) * fromH * unit +
+                  (2*x - (k6wa.glyph.x0 + k6wa.glyph.x1)*unit) * toH;
+        long ny = (profile.glyph.y0 + profile.glyph.y1) * fromH * unit +
+                  (2*y - (k6wa.glyph.y0 + k6wa.glyph.y1)*unit) * toH;
+        Point p = shapes::pt(nx >= 0 ? (nx+divisor/2)/divisor : -((-nx+divisor/2)/divisor),
+                             ny >= 0 ? (ny+divisor/2)/divisor : -((-ny+divisor/2)/divisor));
+        if (poly.pts.empty() || p.x != poly.pts.back().x || p.y != poly.pts.back().y) poly.pts.push_back(p);
+    };
+    add((in.x-half)*unit, startY*unit);
+    for (int i = 0; i <= 36; ++i) {
+        int bearing = -side*90 + side*i*5, r = radius+side*half;
+        add(cx*unit+r*isin(bearing), cy*unit-r*icos(bearing));
+    }
+    add((end.x+half)*unit, endY*unit);
+    add((end.x-half)*unit, endY*unit);
+    for (int i = 0; i <= 36; ++i) {
+        int bearing = side*90 - side*i*5, r = radius-side*half;
+        add(cx*unit+r*isin(bearing), cy*unit-r*icos(bearing));
+    }
+    add((in.x+half)*unit, startY*unit);
+    return poly;
+}
+
+// Fit the same circular edges for the road, border and route so early rounding cannot leave a grey fringe.
+void smoothHudUTurn(const Layout& layout, int tail, const HudProfile& profile, Picture& picture, bool roads) {
+    if (!mbxEnabled() || !readableHud(profile) || layout.ring || layout.route.heads.empty() ||
+        layout.route.heads.back() != 180 || layout.roads.size() != 1) return;
+    size_t routeOffset = 0;
+    if (roads) {
+        const Path& road = layout.roads[0];
+        picture[0].poly = smoothUTurnStroke(layout, road.pts.front().y, road.pts.back().y,
+                                           kJunctionStyle.roadW, profile);
+        picture[1].poly = smoothUTurnStroke(layout, road.pts.front().y, road.pts.back().y,
+                                           kJunctionStyle.roadCore, profile);
+        routeOffset = 2;
+    }
+    if (picture.size() == routeOffset + 4) {
+        if (tail > layout.maxTail) tail = layout.maxTail;
+        if (tail < 8) tail = 8;
+        JunctionStyle style = hudRouteStyle(layout, profile);
+        int startY = layout.ey+tail, endY = layout.route.pts.back().y;
+        picture[routeOffset].poly = smoothUTurnStroke(layout, startY, endY, style.routeW, profile);
+        picture[routeOffset+2].poly = smoothUTurnStroke(layout, startY, endY, style.routeCore, profile);
+    }
 }
 
 void readableArrow(const ShapeSpec& spec, const HudProfile& p, Picture& pic) {
@@ -407,6 +469,7 @@ ClusterDisplay::Result Hud6waDisplay::sendRoute() {
     int tail = tailFor(layout_, stage_, kStages);
     drawHudRoute(layout_, tail, p_, colours(), pic);
     fitJunction(pic);
+    smoothHudUTurn(layout_, tail, p_, pic, false);
     Batch b = routeBatch(pic);
     log("ROUTE stage %d/%d, tail %d | %u calls%s", stage_, (int)kStages, tail, (unsigned)b.calls.size(),
         shadow_ ? " (shadow: not sent)" : "");
@@ -493,6 +556,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
         drawRoads(layout_, colours(), kJunctionStyle, pic);
         if (!routeInOverlay()) drawHudRoute(layout_, tailFor(layout_, stage_, kStages), p_, colours(), pic);
         fitJunction(pic);
+        smoothHudUTurn(layout_, tailFor(layout_, stage_, kStages), p_, pic, true);
         what = "junction view, " + describeSpec(spec);
         if (layout_.exitNumber) {
             char n[24];
