@@ -887,9 +887,9 @@ static void testJunctionFits() {
     port2.mw = 126;                                                         // the terminal answers ImageGetSize
     port2.mh = 77;
     assert(d2.showManeuver(w, 1, false, false) == ClusterDisplay::kOk);   // whose health check takes the measure
-    assert(logged("HUD picture buffer measured 126x77") && !d2.nearShown());
+    assert(logged("HUD picture buffer measured 126x77") && d2.nearShown());   // checked again: it fits there too
     printf("  junctionFits scaled onto 126x77: %d fit, %d plain arrow; box in the corner: %d plain arrow (first type %d"
-           " angle %d); a re-measure drops the view\n", fits, cut, edgeCut, cutType, cutAngle);
+           " angle %d); a re-measure checks the view again\n", fits, cut, edgeCut, cutType, cutAngle);
 }
 
 // The guidance moves between the HUD (126 x 77) and the cluster (176 x 126) with the iDrive setting, and each
@@ -1663,6 +1663,101 @@ static void testFitMeasured() {
     printf("  fitMeasured: F20 box kept where it fits, factory boxes on 126x77/176x126, 0x0 and env pins respected\n");
 }
 
+// The polygons of two batches alike, whichever buffer they went into.
+static bool samePolys(const Batch& a, const Batch& b) {
+    std::vector<std::vector<uint8_t> > pa, pb;
+    for (size_t i = 0; i < a.calls.size(); ++i)
+        if (a.calls[i].fkt == kAddPolygon) pa.push_back(std::vector<uint8_t>(a.calls[i].payload.begin() + 2, a.calls[i].payload.end()));
+    for (size_t i = 0; i < b.calls.size(); ++i)
+        if (b.calls[i].fkt == kAddPolygon) pb.push_back(std::vector<uint8_t>(b.calls[i].payload.begin() + 2, b.calls[i].payload.end()));
+    return !pa.empty() && pa == pb;
+}
+
+// What a driver on a w x h field draws for v from the start: the picture, then the route.
+static std::vector<Batch> onField(const NavView& v, int w, int h) {
+    FakePort p;
+    p.mw = w;
+    p.mh = h;
+    Hud6waDisplay d(p, k6wa, false);
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && p.batches.size() == 2);
+    return p.batches;
+}
+static std::vector<Batch> onHud(const NavView& v) { return onField(v, 126, 77); }
+
+// A junction view whose way stays on the cluster's 176 x 126 field but would leave a 126 x 77 one with the arrow box
+// of `corner` (on the real HUD field every view fits both or neither).
+static bool clusterOnlyJunction(const HudProfile& corner, int& type, int& angle) {
+    HudProfile hud = corner, cl = k6wa;
+    fitMeasured(126, 77, hud);
+    fitMeasured(176, 126, cl);
+    const int st = Hud6waDisplay::kStages;
+    for (int t = 0; t <= 60; ++t)
+        for (int a = 0; a <= 360; a += 5) {
+            Layout L;
+            if (!junctionLayout(t, true, a, false, 0, k6wa.glyph, k6wa.canvas.y1, L)) continue;
+            if (junctionFits(L, st, cl.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, cl.glyph, cl.canvas.y1 + 1) &&
+                !junctionFits(L, st, hud.canvas, k6wa.glyph, k6wa.canvas.y1 + 1, hud.glyph, hud.canvas.y1 + 1)) {
+                type = t;
+                angle = a;
+                return true;
+            }
+        }
+    return false;
+}
+
+// The guidance moves between the cluster and the HUD at a junction view (car, 2026-11-23): the view is checked on the
+// new buffer and drawn there once; where its way would leave it, the plain arrow, also once. Back on a field it fits,
+// the junction view again.
+static void testRemeasureAtJunction() {
+    g_log.clear();
+    FakePort port;
+    port.mw = 176;
+    port.mh = 126;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    NavView v = timed(7, "Testroad", "20", 1, 22, 7);
+    const std::vector<Batch> hud = onHud(v);
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && d.nearShown());
+    assert(port.batches.size() == 2 && !samePolys(port.batches[0], hud[0]));   // the cluster's field
+    port.mw = 126;
+    port.mh = 77;
+    assert(d.sameManeuver(v, 1) && d.showManeuver(v, 1, false, false) == ClusterDisplay::kOk);
+    assert(d.nearShown() && logged("REDRAW type 7 -> junction view"));
+    size_t n = port.batches.size();
+    assert(port.batches[n - 2].label == "redraw" && samePolys(port.batches[n - 2], hud[0]));
+    assert(port.batches[n - 1].label == "route" && samePolys(port.batches[n - 1], hud[1]));
+    assert(!d.sameManeuver(v, 2) && d.keepUp(v, 2) == ClusterDisplay::kOk && port.batches.size() == n);
+
+    HudProfile corner = k6wa;
+    const Rect box = { 95, 46, 125, 76 };                           // kept on 126 x 77, refitted on 176 x 126
+    corner.glyph = box;
+    int type = -1, angle = 0;
+    assert(clusterOnlyJunction(corner, type, angle));
+    g_log.clear();
+    FakePort pc;
+    pc.mw = 176;
+    pc.mh = 126;
+    Hud6waDisplay c(pc, corner, false);
+    c.setLog(&logFn, NULL);
+    NavView w = timed(type, "Testroad", "20", 1, 22, 7);
+    w.has_exit_angle = true;
+    w.exit_angle = angle;
+    assert(c.showManeuver(w, 0, true, true) == ClusterDisplay::kOk && c.nearShown());
+    pc.mw = 126;
+    pc.mh = 77;
+    assert(c.sameManeuver(w, 1) && c.showManeuver(w, 1, false, false) == ClusterDisplay::kOk);
+    assert(!c.nearShown() && logged("junction view would leave the 126x77 picture buffer"));
+    n = pc.batches.size();
+    assert(pc.batches[n - 1].label == "redraw" && callsOn(pc.batches[n - 1], 7) == 1);   // its route emptied
+    assert(!c.sameManeuver(w, 2) && c.keepUp(w, 2) == ClusterDisplay::kOk && pc.batches.size() == n);
+    pc.mw = 176;
+    pc.mh = 126;
+    assert(c.sameManeuver(w, 3) && c.showManeuver(w, 3, false, false) == ClusterDisplay::kOk && c.nearShown());
+    assert(!c.sameManeuver(w, 4));
+    printf("  re-measure at a junction view: drawn again once on the new field (type %d angle %d: the arrow there)\n",
+           type, angle);
+}
+
 int main() {
     testShapesInside();
     testShapeFamilies();
@@ -1685,6 +1780,7 @@ int main() {
     testJunctionDriver();
     testJunctionFits();
     testRefitFromProfile();
+    testRemeasureAtJunction();
     testJunctionNoOverlay();
     testJunctionLanes();
     testJunctionCore();

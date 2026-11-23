@@ -78,7 +78,8 @@ void addHides(Batch& b, const HudProfile& p) {
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
     : port_(port), p_(p), base_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
-      redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), barRange_(0), barLevel_(-1), has_layout_(false),
+      redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), barRange_(0), barLevel_(-1),
+      laid_out_(false), layout_type_(0), has_layout_(false),
       near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
       route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false), idle_(false), idle_t_(0) {}
 
@@ -114,11 +115,11 @@ ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
         p_.canvas = base_.canvas;   // from the profile as given: the HUD's box must not stay in the cluster's field
         p_.glyph = base_.glyph;
         fitMeasured(mw, mh, p_);
-        has_layout_ = false;   // laid out for the old buffer: the next maneuver lays out (and checks) on this one
         measured_w_ = mw;
         measured_h_ = mh;
         log("HUD picture buffer measured %dx%d: canvas %d,%d-%d,%d glyph %d,%d-%d,%d", mw, mh, p_.canvas.x0, p_.canvas.y0,
             p_.canvas.x1, p_.canvas.y1, p_.glyph.x0, p_.glyph.y0, p_.glyph.x1, p_.glyph.y1);
+        fitLayout();
         if (sent_any_ && !shadow_ && !redraw_) {   // something is up at the old geometry: draw it again, fitted
             redraw_ = true;
             fresh_ = true;
@@ -290,13 +291,10 @@ bool Hud6waDisplay::nearDue(const NavView& v, double* m) const {
 }
 
 void Hud6waDisplay::startManeuver(const NavView& v) {
-    has_layout_ = s_.junction && junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
-                                                v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
-    if (has_layout_ && !junctionShows()) {   // drawn scaled onto this buffer, its way would still be cut off
-        has_layout_ = false;
-        log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", v.aa_type,
-            p_.canvas.x1 - p_.canvas.x0 + 1, p_.canvas.y1 - p_.canvas.y0 + 1);
-    }
+    laid_out_ = s_.junction && junctionLayout(v.aa_type, v.has_exit_angle, v.exit_angle, v.has_exit_number,
+                                              v.exit_number, k6wa.glyph, k6wa.canvas.y1, layout_);
+    layout_type_ = v.aa_type;
+    fitLayout();
     near_ = false;
     near_m_ = 0;
     stage_ = 0;
@@ -307,6 +305,16 @@ void Hud6waDisplay::startManeuver(const NavView& v) {
         near_m_ = m;
     }
     updateStage(v);
+}
+
+// On each buffer the layout is drawn scaled (fitJunction); where its way would still be cut off, the plain arrow.
+// Once it fits again, the time rule finds the junction view due on the next step.
+void Hud6waDisplay::fitLayout() {
+    has_layout_ = laid_out_ && junctionShows();
+    if (laid_out_ && !has_layout_)
+        log("type %d: junction view would leave the %dx%d picture buffer: the plain arrow", layout_type_,
+            p_.canvas.x1 - p_.canvas.x0 + 1, p_.canvas.y1 - p_.canvas.y0 + 1);
+    if (!has_layout_) near_ = false;
 }
 
 // The stage only ever goes down on one maneuver: traffic or a detour doesn't grow the route back.
@@ -650,6 +658,7 @@ void Hud6waDisplay::forget() {
     held_ = false;
     visible_ = p_.bufB;                               // where a clear or the navigation's end of route leaves it
     shown_ = HudTexts();
+    laid_out_ = false;
     has_layout_ = false;
     near_ = false;
     near_shown_ = false;
