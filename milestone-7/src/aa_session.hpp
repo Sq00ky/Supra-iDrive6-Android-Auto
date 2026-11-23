@@ -218,6 +218,7 @@ private:
     uint32_t mic_sent_;                            // session thread
     bool sendMicFrame(const std::vector<uint8_t>& pcm);   // session thread only
     bool sendMicOpenResponse(uint8_t channel);            // session thread only
+    bool sendChannelMessage(uint8_t channel, const std::vector<uint8_t>& plain);   // session thread only
     bool sendBindingResponse(uint8_t channel);
     // Sensor channel (ch 1): answer SensorStartRequest and publish night mode / driving status / location / satellites.
     bool sendSensorStartResponse(uint8_t channel, bool ok);

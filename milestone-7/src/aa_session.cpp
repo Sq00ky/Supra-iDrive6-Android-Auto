@@ -14,6 +14,7 @@
 #include "aa_control_msgs.hpp"
 #include "aa_phone_status.hpp"
 #include "aa_proto.hpp"
+#include "aa_frames.hpp"
 #include "audio/aa_media_msgs.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -309,6 +310,30 @@ bool AASession::sendMicOpenResponse(uint8_t channel) {
     std::vector<uint8_t> enc;
     if (!cryptor_.encrypt(plain, sizeof(plain), enc)) return false;
     return sendFrame(channel, 0x0B, &enc[0], enc.size());
+}
+
+// One encrypted message; above kAaMaxFramePayload it goes out as FIRST/MIDDLE/LAST fragments, each encrypted alone.
+bool AASession::sendChannelMessage(uint8_t channel, const std::vector<uint8_t>& plain) {
+    if (plain.empty()) return false;
+    std::vector<AaFragment> parts = aaSplit(plain.size(), kAaMaxFramePayload);
+    std::vector<uint8_t> enc;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const uint8_t flags = (uint8_t)(kAaFrameEncrypted | parts[i].type);
+        bool ok = cryptor_.encrypt(&plain[parts[i].offset], parts[i].length, enc);
+        if (ok && parts[i].type == kAaFrameFirst) {
+            std::vector<uint8_t> frame = aaFrameHeader(channel, flags, (uint16_t)enc.size(), (uint32_t)plain.size());
+            frame.insert(frame.end(), enc.begin(), enc.end());
+            ok = sendAll(&frame[0], frame.size());
+        } else if (ok) {
+            ok = sendFrame(channel, flags, &enc[0], enc.size());
+        }
+        if (!ok) {
+            printf("[AASession] ch %u: message of %u bytes not sent (fragment %u of %u failed)\n", (unsigned)channel,
+                   (unsigned)plain.size(), (unsigned)i + 1, (unsigned)parts.size());
+            return false;
+        }
+    }
+    return true;
 }
 
 // AV_MEDIA_WITH_TIMESTAMP_INDICATION 0x0000: 8-byte big-endian timestamp (us, monotonic) + PCM, on ch 14.
