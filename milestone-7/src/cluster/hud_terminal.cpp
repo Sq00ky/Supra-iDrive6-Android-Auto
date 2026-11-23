@@ -629,6 +629,13 @@ bool HudTerminal::measuredSize(int& w, int& h) const {
     return ok;
 }
 
+bool HudTerminal::measuring() const {
+    pthread_mutex_lock(&lock_);
+    bool m = core_.measuring();
+    pthread_mutex_unlock(&lock_);
+    return m;
+}
+
 // Polled: it is only used for a clear, where a short wait does not matter.
 bool HudTerminal::waitIdle(uint32_t ms) {
     uint32_t t0 = nowMs();

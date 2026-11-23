@@ -45,11 +45,12 @@ struct FakePort : public Port {
     Status afterReset;
     std::vector<Batch> batches;
     int mw, mh;              // the picture buffer's size once "measured" (ImageGetSize); 0 = no answer
+    bool sizing;             // a measurement is due or awaited
     bool claimable;          // claim() takes the HUD from the navigation we yield to
     int claims;
     const HudProfile& profile;
     explicit FakePort(const HudProfile& p = k6wa) : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady), mw(0),
-                 mh(0), claimable(false), claims(0), profile(p) {}
+                 mh(0), sizing(false), claimable(false), claims(0), profile(p) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
         for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(profile)));
@@ -63,6 +64,7 @@ struct FakePort : public Port {
     void reset() { ++resets; if (st == kFailed) st = afterReset; }
     bool waitIdle(uint32_t) { return st == kReady && idle; }
     bool measuredSize(int& w, int& h) const { if (!mw) return false; w = mw; h = mh; return true; }
+    bool measuring() const { return sizing; }
     bool claim() { ++claims; if (st == kNavActive && claimable) st = kReady; return st == kReady; }
 };
 
@@ -1758,6 +1760,82 @@ static void testRemeasureAtJunction() {
            type, angle);
 }
 
+// While the cluster is asked for its picture buffer's size again, nothing is drawn on the old one: the maneuver waits
+// and goes out once the answer is in. Shadow mode does not wait.
+static void testHoldWhileMeasuring() {
+    g_log.clear();
+    FakePort port;
+    port.mw = 176;
+    port.mh = 126;
+    port.sizing = true;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setLog(&logFn, NULL);
+    NavView v = timed(7, "Testroad", "20", 1, 22, 7);
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && port.batches.empty());
+    assert(logged("HOLD type 7: the picture buffer is being measured"));
+    assert(d.sameManeuver(v, 1) && d.showManeuver(v, 1, false, false) == ClusterDisplay::kOk && port.batches.empty());
+    assert(d.keepUp(v, 1) == ClusterDisplay::kOk && port.batches.empty());
+    port.mw = 126;
+    port.mh = 77;
+    port.sizing = false;
+    assert(d.sameManeuver(v, 2) && d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 2 && d.nearShown() && samePolys(port.batches[0], onHud(v)[0]));
+    assert(!d.sameManeuver(v, 3));
+
+    g_log.clear();
+    FakePort ps;
+    ps.sizing = true;
+    Hud6waDisplay sh(ps, k6wa, true);
+    sh.setLog(&logFn, NULL);
+    assert(sh.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && !logged("HOLD"));
+}
+
+// The guidance comes back to the HUD at the main prompt (car, 2026-11-23): the factory navigation lets go before the
+// cluster answers the new size. Through the state machine the junction view waits for it and is drawn once, on the
+// HUD's field, not first on the cluster's and then as a plain arrow on every step. The other way, the redraw the
+// navigation's turn leaves due waits for the cluster's size.
+static void testBackToHudAtJunction() {
+    g_log.clear();
+    FakePort port;
+    port.mw = 176;
+    port.mh = 126;
+    port.sizing = true;
+    Hud6waDisplay d(port, k6wa, false);
+    kombinav::Core core(d, Settings(), &logFn, NULL);
+    NavView a = timed(7, "Testroad", "20", 1, 22, 7);
+    a.pos_seq = 2;
+    a.step_pos_seq = 1;
+    core.step(&a, 0);
+    assert(port.batches.empty() && logged("HOLD type 7"));
+    port.mw = 126;
+    port.mh = 77;
+    port.sizing = false;
+    core.step(&a, 1);
+    assert(port.batches.size() == 2 && d.nearShown() && samePolys(port.batches[0], onHud(a)[0]));
+    assert(logged("REDRAW type 7 -> junction view"));
+    core.step(&a, 2);
+    core.step(&a, 3);
+    assert(port.batches.size() == 2);
+
+    g_log.clear();
+    FakePort pc;
+    pc.mw = 126;
+    pc.mh = 77;
+    Hud6waDisplay c(pc, k6wa, false);
+    kombinav::Core cc(c, Settings(), &logFn, NULL);
+    cc.step(&a, 0);
+    assert(c.nearShown() && pc.batches.size() == 2);
+    pc.ep = 1;                                                       // the navigation drew in between
+    pc.sizing = true;
+    cc.step(&a, 1);
+    assert(pc.batches.size() == 2 && logged("HOLD type 7: the picture buffer is being measured"));
+    pc.mw = 176;
+    pc.mh = 126;
+    pc.sizing = false;
+    cc.step(&a, 2);
+    assert(pc.batches.size() == 4 && c.nearShown() && samePolys(pc.batches[2], onField(a, 176, 126)[0]));
+}
+
 int main() {
     testShapesInside();
     testShapeFamilies();
@@ -1781,6 +1859,8 @@ int main() {
     testJunctionFits();
     testRefitFromProfile();
     testRemeasureAtJunction();
+    testHoldWhileMeasuring();
+    testBackToHudAtJunction();
     testJunctionNoOverlay();
     testJunctionLanes();
     testJunctionCore();

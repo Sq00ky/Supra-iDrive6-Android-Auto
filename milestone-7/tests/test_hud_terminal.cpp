@@ -106,9 +106,10 @@ static void testMeasure() {
     {
         Core k = readyCore(c);
         most::Msg m;
-        assert(k.next(0, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5);
+        assert(k.measuring());                                   // due once ready
+        assert(k.next(0, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5 && k.measuring());
         k.tick(c.replyMs + 1);                                   // no answer in time: still listening, not failed
-        assert(k.status() == kReady && !k.measuredSize(w, h));
+        assert(k.status() == kReady && !k.measuredSize(w, h) && !k.measuring());   // drawn on the defaults meanwhile
         Wire early = sizeAnswer(kNav, 5, 126, 77), ours = sizeAnswer(kSelf, 5, 126, 77), after = sizeAnswer(kNav, 5, 126, 77);
         k.onMessage(early.v, c.replyMs + 900);                  // the copy first: ours, not the factory navigation
         assert(k.status() == kReady);
@@ -149,11 +150,12 @@ static void testMeasure() {
         Wire toHud(kHost, 0x0140, kGuidanceMovedFkt, 0x2, std::vector<uint8_t>(inHud, inHud + 6), kGuidanceFBlock);
         Wire navAnswer(0x0140, kHost, kGuidanceMovedFkt, most::kOpStatus, std::vector<uint8_t>(inHud, inHud + 6),
                        kGuidanceFBlock);
+        assert(!k.measuring());
         k.guidanceMoved(toCluster.v);                           // the guidance moved to the cluster
-        assert(k.measuredSize(w, h) && w == 126);               // the last size stands until the answer
-        assert(k.next(30, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5);
+        assert(k.measuredSize(w, h) && w == 126 && k.measuring());   // the last size stands until the answer
+        assert(k.next(30, m) && m.fkt == kGetSize && rdBe16(&m.data[0]) == 5 && k.measuring());
         k.onMessage(cluster.v, 40);
-        assert(k.measuredSize(w, h) && w == 176 && h == 126 && k.stats().remeasures == 1);
+        assert(k.measuredSize(w, h) && w == 176 && h == 126 && k.stats().remeasures == 1 && !k.measuring());
         for (int i = 0; i < 25; ++i) k.guidanceMoved(toCluster.v);   // the same place over and over: nothing moved
         k.guidanceMoved(navAnswer.v);                           // the navigation's answer, not the cluster
         assert(k.stats().remeasures == 1 && !k.next(50, m));
@@ -978,7 +980,7 @@ static void testGuidanceMovedOnClient() {
     const uint8_t toCluster[] = { 0x01, 0x00, 0xa0, 0x00, 0xe2, 0x02 };   // as sabifa captured it (#255)
     moved.data.assign(toCluster, toCluster + sizeof(toCluster));
     deliver(moved);
-    assert(t.stats().remeasures == 1 && t.status() == kReady);   // asked again, not taken for the navigation
+    assert(t.stats().remeasures == 1 && t.status() == kReady && t.measuring());   // asked again, not the navigation
     for (int i = 0; i < 10; ++i) deliver(moved);                 // repeated many times a second (#264): asked once
     assert(t.stats().remeasures == 1 && t.status() == kReady);
     fake_dsi::detach();

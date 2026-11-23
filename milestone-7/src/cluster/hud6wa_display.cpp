@@ -416,6 +416,11 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     } else {
         updateStage(v);
     }
+    if (!shadow_ && port_.measuring()) {   // the guidance may have moved: drawn on the new buffer's size
+        if (!held_) log("HOLD type %d: the picture buffer is being measured, drawn once its size is in", v.aa_type);
+        held_ = true;
+        return kOk;
+    }
     if (!shadow_ && port_.waiting(kSlotMain)) {
         // Only we add batches and the transport only takes them away, so once nothing of the slot waits, every batch
         // before this one runs (or is dropped, which changes the epoch and redraws everything).
