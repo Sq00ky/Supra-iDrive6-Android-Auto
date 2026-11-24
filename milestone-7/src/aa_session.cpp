@@ -568,7 +568,7 @@ void AASession::checkRxRecord(uint8_t channel, uint8_t flags, const std::vector<
     for (int i = 5; i < 13; ++i) seq = (seq << 8) | p[i];
     bool odd = type != 0x17 || p[1] != 0x03 || p[2] != 0x03 || rlen + 5 != payload.size();
     bool jump = rx_seq_known_ && seq != rx_seq_next_;
-    if (odd || jump || rx_records_ <= 32) {
+    if (odd || jump || (rx_records_ <= 32 && nbt::logVerbose())) {
         char note[64] = "";
         if (jump) snprintf(note, sizeof(note), " SEQUENCE JUMP (expected %llu)", (unsigned long long)rx_seq_next_);
         else if (odd) snprintf(note, sizeof(note), " UNEXPECTED HEADER");
@@ -1245,8 +1245,10 @@ void AASession::sessionLoop() {
             static unsigned frame_count[256];
             static int verbose = -1;
             if (verbose < 0) verbose = nbt::logVerbose() ? 1 : 0;   // NBT_VERBOSE=0 used to count as on
-            if (!verbose && (channel == 6 || channel == 9 || channel == 12 || channel == 14 ||
-                             channel == AA_CH_SYSTEM_AUDIO)) {
+            // Without NBT_VERBOSE no per-frame lines at all (#324): they fill the log, and the message lines below
+            // ("Received ...", "Sent ...") already say what the phone did. Errors are logged either way.
+            if (!verbose) logit = false;
+            else if (channel == 6 || channel == 9 || channel == 12 || channel == 14 || channel == AA_CH_SYSTEM_AUDIO) {
                 unsigned n = frame_count[channel]++;
                 logit = (n < 30) || ((n % 300) == 0);
             }
@@ -1561,7 +1563,7 @@ void AASession::sessionLoop() {
                 printf("[AASession] >>> Received VideoFocusIndication on Channel %u.\n", channel);
             } else if (msg_id == 0x0000 || msg_id == 0x0001) { // AV Media Data (Live H.264 video frames)
                 media_frames_++;
-                if ((media_frames_ % 30) == 1) {
+                if (nbt::logVerbose() && (media_frames_ % 30) == 1) {
                     printf("[AASession] >>> Streaming Media Frame %u on Channel %u (%u bytes)\n",
                            media_frames_, channel, static_cast<unsigned int>(frame_data.size()));
                 }
@@ -1729,7 +1731,7 @@ void AASession::sessionLoop() {
                     printf("[AASession] >>> ByeByeResponse from the phone: ending the session\n");
                     break;
                 } else if (msg_id == 11) { // PingRequest
-                    printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");
+                    if (nbt::logVerbose()) printf("[AASession] >>> Received PingRequest. Replying with PingResponse...\n");
                     enum { MSG_PING_RESPONSE = 0x000C, F_TIMESTAMP = 1 };
                     proto::ProtoWriter ping_resp(MSG_PING_RESPONSE);   // echoes the request's timestamp
                     uint64_t timestamp;
