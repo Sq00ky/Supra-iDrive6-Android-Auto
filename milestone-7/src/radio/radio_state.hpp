@@ -110,7 +110,6 @@ inline bool applyDabStation(RadioState& s, const DabStation& st, uint32_t nowMs)
     }
     if (d.id != 0 && d.id != st.sid) {
         ch |= dropContent(d);
-        d.tuneStartMs = nowMs;
         s.slideAnnounceSeen = true;
     }
     const std::string& name = st.longName.empty() ? st.shortName : st.longName;
