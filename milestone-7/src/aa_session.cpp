@@ -3,6 +3,7 @@
 #include <time.h>
 #include <fcntl.h>
 #include "nbt_env.hpp"
+#include "log_privacy.hpp"
 #include "sdr_builder.hpp"
 #include "crash_handler.hpp"
 #include <sys/select.h>
@@ -1052,9 +1053,9 @@ bool AASession::sendSensorEvent(uint32_t sensor_type) {
         }
         buildLocationEvent(f, plain);
         if (location_sent_++ % 60 == 0)
-            printf("[AASession] >>> Sensor LOCATION event #%u (%.6f, %.6f, accuracy %.1f m, speed %.2f m/s%s, bearing %.1f%s, "
+            printf("[AASession] >>> Sensor LOCATION event #%u (%s, accuracy %.1f m, speed %.2f m/s%s, bearing %.1f%s, "
                    "altitude %.1f m%s)\n",
-                   location_sent_, f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.accuracy_e3 / 1000.0, f.speed_e3 / 1000.0,
+                   location_sent_, nbt::logPosition(f.lat_e7, f.lon_e7).c_str(), f.accuracy_e3 / 1000.0, f.speed_e3 / 1000.0,
                    f.has_speed ? "" : " not sent", f.bearing_e6 / 1e6, f.has_bearing ? "" : " not sent",
                    f.altitude_e2 / 100.0, f.has_altitude ? "" : " not sent");
     } else if (sensor_type == 2) { // COMPASS: the newest heading (postCarCompass)
@@ -1243,7 +1244,7 @@ void AASession::sessionLoop() {
         {
             static unsigned frame_count[256];
             static int verbose = -1;
-            if (verbose < 0) verbose = getenv("NBT_VERBOSE") ? 1 : 0;
+            if (verbose < 0) verbose = nbt::logVerbose() ? 1 : 0;   // NBT_VERBOSE=0 used to count as on
             if (!verbose && (channel == 6 || channel == 9 || channel == 12 || channel == 14 ||
                              channel == AA_CH_SYSTEM_AUDIO)) {
                 unsigned n = frame_count[channel]++;
