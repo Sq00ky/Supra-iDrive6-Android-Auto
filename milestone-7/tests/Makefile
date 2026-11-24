@@ -48,7 +48,6 @@ SRC_test_boot_guard        :=
 SRC_test_overlay_watch     :=
 SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
-SRC_test_bt_auto_source    := src/audio/bt_audio.cpp src/audio/config.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
 SRC_test_car_gps           := src/car/geoid.cpp src/car/gps.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_car_vehicle       := src/car/vehicle.cpp src/most/client.cpp tests/fake_dsi_client.cpp
@@ -221,7 +220,3 @@ clean:
 	rm -rf $(OUT)
 
 -include $(wildcard $(OUT)/*.d)
-
-# Compile the real Bluetooth backend against hardware test doubles.
-$(OUT)/test_bt_auto_source: CXXFLAGS := -Ibt_fake $(CXXFLAGS)
-$(OUT)/test_bt_auto_source: $(wildcard bt_fake/audio/*.hpp)
