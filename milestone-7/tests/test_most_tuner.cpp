@@ -194,6 +194,10 @@ static void testConnectionTable() {
     assert(audibleTuner(ARR(e)) == 0);
     const uint8_t z1[] = {0x00, 0x00, 0x01, 0x68, 0x00};
     assert(audibleTuner(ARR(z1)) == 0);
+    const uint8_t noAudio[] = {0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x68, 0x01, 0x01, 0xc1, 0x00};
+    assert(audibleTuner(ARR(noAudio)) == 0);
+    for (unsigned src = 0x08; src <= 0x0A; ++src) assert(!mostIsTunerSource((uint8_t)src));
+    assert(mostIsTunerSource(0x06) && mostIsTunerSource(0x0B) && mostIsTunerSource(0x10));
 
     const uint8_t trunc[] = {0x00, 0x00, 0x00, 0x68};
     assert(!connectionTableValid(ARR(trunc)));

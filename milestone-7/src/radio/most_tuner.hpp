@@ -208,7 +208,10 @@ inline bool decodeRadioText(const uint8_t* p, size_t n, std::string& text) {
 
 inline bool mostIsDabSource(uint8_t s) { return s >= 0x68 && s <= 0x70; }
 
-inline bool mostIsTunerSource(uint8_t s) { return (s >= 0x01 && s <= 0x10) || s == 0x38 || mostIsDabSource(s); }
+// FM/AM 0x01-0x10 without 0x08-0x0A ("No Audio"), FM traffic 0x38, DAB.
+inline bool mostIsTunerSource(uint8_t s) {
+    return (s >= 0x01 && s <= 0x10 && !(s >= 0x08 && s <= 0x0A)) || s == 0x38 || mostIsDabSource(s);
+}
 
 inline bool connectionTableValid(const uint8_t* p, size_t n) {
     (void)p;
