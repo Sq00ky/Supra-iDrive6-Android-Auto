@@ -229,7 +229,7 @@ static void testHoldThenStation() {
 
     const uint32_t t1 = monoMs();
     tap.apply(kMostFBlockDabTuner, kMostFktDabStation, &tuning[0], tuning.size(), t1);
-    assert(!nextTileMessage(sv[1], kTuneHoldMs - 200, m));
+    assert(!nextTileMessage(sv[1], 2500, m));
     expectMsg(sv[1], 1000, status(2, "DAB"));
     assert(monoMs() - t1 >= (uint32_t)kTuneHoldMs);
     expectMsg(sv[1], 1000, metadata("DAB", "", ""));
