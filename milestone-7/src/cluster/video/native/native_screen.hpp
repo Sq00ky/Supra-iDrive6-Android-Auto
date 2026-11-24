@@ -3,6 +3,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 #include "native_metadata.hpp"
 #ifdef NBT_CLUSTER_HOST_TEST
 #include <qnx_api_stub.hpp>
@@ -200,8 +201,32 @@ struct ScreenOutput {
         return ok;
     }
 
+    // The hardware capture already fits the phone picture into the cluster frame.
+    // Sample only its active image so the cluster padding is never scaled into HUD.
+    static void hud_row(const uint8_t* packed, uint8_t* row, unsigned y) {
+        const unsigned fy = y * (ContentHeight - 1) * 256 / (VideoProfile::HudHeight - 1);
+        const unsigned y0 = fy >> 8, y1 = y0 + (y0 + 1 < ContentHeight);
+        const uint8_t* top = packed + (y0 * ContentWidth + VideoProfile::PaddingX) * 4;
+        const uint8_t* bottom = packed + (y1 * ContentWidth + VideoProfile::PaddingX) * 4;
+        for (unsigned x = 0; x < VideoProfile::HudWidth; ++x) row[x * 4 + 3] = 255;
+        for (unsigned x = 0; x < VideoProfile::HudFittedWidth; ++x) {
+            const unsigned fx = x * (VideoProfile::FittedWidth - 1) * 256 /
+                                (VideoProfile::HudFittedWidth - 1);
+            const unsigned left = fx >> 8, right = left + (left + 1 < VideoProfile::FittedWidth);
+            const unsigned wx = fx & 255, wy = fy & 255;
+            uint8_t* pixel = row + (VideoProfile::HudPaddingX + x) * 4;
+            for (unsigned c = 0; c < 3; ++c) {
+                const unsigned a = top[left * 4 + c] * (256 - wx) + top[right * 4 + c] * wx;
+                const unsigned b = bottom[left * 4 + c] * (256 - wx) + bottom[right * 4 + c] * wx;
+                pixel[c] = uint8_t((a * (256 - wy) + b * wy + 32768) >> 16);
+            }
+        }
+    }
+
     bool present(const uint8_t* bgra, unsigned sequence, bool swap_rb, bool compact = false) {
-        if (metadata_profile > FactoryManeuver || !window || !contract(posts != 0)) {
+        const bool hud = metadata_profile == FactoryHudMap;
+        if (metadata_profile > FactoryHudMap || (hud && (!bgra || compact)) ||
+            !window || !contract(posts != 0)) {
             return false;
         }
         int buffer_count = 0, buffer_stride = 0, format = 0, dimensions[2] = {};
@@ -222,6 +247,12 @@ struct ScreenOutput {
         // all other pixels, including the reserved first row, start as zero.
         for (unsigned y = 0; y < Height; ++y) {
             uint8_t* row = (uint8_t*)memory + y * buffer_stride;
+            if (hud) {
+                memset(row, 0, Width * 4);
+                if (y >= ContentY && y < ContentY + VideoProfile::HudHeight)
+                    hud_row(bgra, row, y - ContentY);
+                continue;
+            }
             for (unsigned x = 0; x < Width; ++x) {
                 uint8_t* pixel = row + x * 4;
                 pixel[0] = pixel[1] = pixel[2] = pixel[3] = 0;
@@ -315,7 +346,7 @@ struct ScreenOutput {
                 "FIRST_POST id=%s display_index=%u pipeline=%d stride=%d metadata=factory%u-bgra "
                 "profile=%s content_y=%u swap_rb=%u\n",
                 WindowID, unsigned(VideoProfile::DisplayIndex), pipeline, buffer_stride,
-                unsigned(MetadataBytes), metadata_profile == FactoryMap ? "map" : "maneuver",
+                unsigned(MetadataBytes), hud ? "hud-map" : metadata_profile == FactoryMap ? "map" : "maneuver",
                 unsigned(ContentY), unsigned(swap_rb));
             fflush(0);
         }

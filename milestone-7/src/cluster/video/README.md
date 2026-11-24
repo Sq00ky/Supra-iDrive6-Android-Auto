@@ -151,14 +151,23 @@ two-byte preference at `/var/opt/aa/kombi-video` persists.
 
 ### HUD selection and automatic recovery
 
-The captured G30 DisplaySink service selects either cluster `620×313 / 1`
-or HUD `277×160 / 0`. HUD selection suspends cluster presentation: the player
-acknowledges the selection, releases Guidance and its Screen window, and keeps
-the DisplaySink subscription. It continues decoding references in RAM. When
-the service selects the cluster again, the player reacquires the unchanged
-factory resource and presents its latest picture, even if the phone has stopped
-encoding an unchanged map. This does not implement HUD video or simultaneous
-cluster/HUD output. Turning the map setting off cancels the retained session.
+With **Show map in instrument cluster** enabled, the player follows the G30
+DisplaySink selection. Selection 1 displays a 620×313 cluster frame on plane 1.
+Selection 0 displays a 277×160 HUD frame on plane 0. Both use the same 800×480
+PiP resource, Guidance handle and Screen window. A selection change posts the
+latest picture immediately, even when the phone has stopped sending frames.
+
+Android Auto supplies the secondary map at 800×480. During service discovery
+the G30 requests 200 DPI for that display. Adjust `NBT_PIP_MAP_DPI` in
+`/opt/aa/nbt-aad.env` to change the layout on both destinations. Use 160
+for the original scale or 240 for larger labels. Restart the daemon and
+reconnect the phone after a change. The main display uses `NBT_VID_DPI`.
+
+For HUD, the player fits the active picture to 267×160 with five black
+pixels on each side. The first
+visible row is y=1. Row 0 uses the factory HUD template captured on firmware
+007.039.008. Its configuration and context values come from that session.
+Turning the map preference off releases the resource for either destination.
 
 The existing process supervisor and keyframe recovery handle local transport
 failures together. The daemon asks its supervisor to stop the old player, waits
@@ -202,5 +211,5 @@ existing `make check`. They exercise the player loop, native renderer protocol a
 parser with controlled renderer and Screen peers, including disconnects, rapid toggles,
 malformed input and partial-startup cleanup. Native build records and
 deployment evidence remain outside this repository.
-Concurrent factory navigation is not arbitrated; custom HUD video and other
-firmware/cluster combinations are not validated.
+The HUD route still needs physical validation. Concurrent factory navigation and other
+firmware/cluster combinations remain untested.

@@ -18,9 +18,13 @@ extern "C" { static int close(int); }
 #define accept fake_accept
 #define signal fake_signal
 #include "cluster/video/player.cpp"
+#ifdef NBT_CLUSTER_SCREEN_READBACK_TEST
+#include "firmware_screen_peer.hpp"
+#else
 #define screen_post_window underlying_post_window
 #include "fake_screen.hpp"
 #undef screen_post_window
+#endif
 
 static void check(bool yes, const char *label) {
     if (!yes) {
@@ -101,6 +105,7 @@ static void expect_cleaned(bool with_handle, unsigned expected_posts, unsigned s
     }
 }
 } // namespace peer
+#ifndef NBT_CLUSTER_SCREEN_READBACK_TEST
 extern "C" int *__get_errno_ptr() {
     static int error;
     return &error;
@@ -114,6 +119,7 @@ extern "C" int screen_post_window(void *window, void *buffer, int count, const i
     }
     return underlying_post_window(window, buffer, count, damage, flags);
 }
+#endif
 extern "C" int fake_clock(int, PipClock *p) {
     p->tv_sec = peer::clock_ms / 1000;
     p->tv_nsec = (peer::clock_ms % 1000) * 1000000;
@@ -207,6 +213,7 @@ extern "C" int fake_sendto(int, const void *data, unsigned n, int, const void *,
             aa_cluster::put32(s.reply + 4, 21);
             s.reply[12] = s.reply[13] = 1;
             s.reply[14] = 2;
+            s.reply[16] = 0x3f; s.reply[17] = 0xf0; // scale 1.0
             put16(s.reply + 24, peer::initial_hud ? 277 : 620);
             put16(s.reply + 26, peer::initial_hud ? 160 : 313);
             s.reply[28] = peer::initial_hud ? 0 : 1;
@@ -222,7 +229,7 @@ extern "C" int fake_send(int fd, const void *data, unsigned n, int) {
         return n;
     }
     if (s.role == peer::Sink) {
-        check(n == 18 && p[16] <= 1, "sink acknowledgement");
+        check(n == 18 && p[16] == s.reply[28] && !p[17], "acknowledge selected sink");
         return n;
     }
     check(s.role == peer::Guidance && n >= 16 && peer::guidance_calls < 1024, "Guidance call shape");
@@ -426,12 +433,41 @@ static void notify_sink(Player& player, bool hud) {
     aa_cluster::put32(socket.reply + 4, 21);
     socket.reply[12] = socket.reply[13] = 1;
     socket.reply[14] = 2;
+    socket.reply[16] = 0x3f; socket.reply[17] = 0xf0;
     put16(socket.reply + 24, hud ? 277 : 620);
     put16(socket.reply + 26, hud ? 160 : 313);
     socket.reply[28] = hud ? 0 : 1;
 }
 
-static void test_hud_pause_resume() {
+static void check_hud(const Player& player, unsigned input) {
+    const uint8_t* pixels = screen_peer::pixels;
+    const unsigned sequence = 0x5677 + player.number;
+    uint8_t row[84] = {};
+    row[0] = uint8_t(sequence >> 8);
+    row[1] = uint8_t(sequence);
+    row[5] = row[7] = 1;
+    row[18] = 0x0f;
+    row[19] = 0xa1;
+    check(!memcmp(row, pixels, sizeof(row)), "84-byte factory HUD metadata");
+    for (unsigned y = 0; y < 480; ++y) {
+        for (unsigned x = 0; x < 800; ++x) {
+            if (!y && x < 21) continue;
+            const uint8_t* p = pixels + (800 * y + x) * 4;
+            const bool visible = y >= 1 && y <= 160 && x < 277;
+            const bool image = visible && x >= 5 && x < 272;
+            check(p[3] == (visible ? 255 : 0) && p[2] == (image ? input : 0),
+                  "HUD active image, sidebars and cleared backing");
+            if (!image) check(!p[0] && !p[1], "no previous cluster pixels outside HUD map");
+        }
+    }
+    const uint8_t* top_left = pixels + (800 + 5) * 4;
+    const uint8_t* bottom_right = pixels + (800 * 160 + 271) * 4;
+    check(top_left[0] == 0 && top_left[1] == 0 &&
+          bottom_right[0] == (799 % 256) && bottom_right[1] == (479 % 256),
+          "all four phone picture edges survive fitting");
+}
+
+static void test_hud_route() {
     prepare_one_frame();
     service_mode = true;
     Player* player = new Player;
@@ -440,30 +476,32 @@ static void test_hud_pause_resume() {
     check(player->packet(h, 0, false), "decoder reset");
     header(h, Video, 3, first_frame_size, 0);
     check(player->packet(h, first_frame, false) && player->pump(), "initial map");
-    const int sink = player->control.control;
+    const int sink = player->control.control, guidance = player->control.guidance;
+    const unsigned calls = peer::guidance_calls;
     for (unsigned cycle = 0; cycle < 2; ++cycle) {
-        unsigned posts = screen_peer::posts;
+        const unsigned posts = screen_peer::posts;
         notify_sink(*player, true);
-        check(player->pump(), "valid HUD selection is not fatal");
-        check(player->active && !player->presenting && !screen_peer::windows &&
-              player->control.guidance == -1, "HUD pause releases output and Guidance");
-        check(player->control.control == sink && !peer::cancellation_count,
-              "HUD pause retains original subscription");
-        check(player->packet(h, first_frame, false) && player->pump() && unsigned(screen_peer::posts) == posts,
-              "HUD pause consumes video without cluster-plane posts");
+        check(player->pump() && unsigned(screen_peer::posts) == posts + 1, "quiet map moves to HUD");
+        check_hud(*player, cycle + 1);
+        notify_sink(*player, true);
+        check(player->pump() && unsigned(screen_peer::posts) == posts + 1, "duplicate HUD event is idempotent");
+        check(player->packet(h, first_frame, false) && player->pump(), "moving HUD picture");
+        check_hud(*player, cycle + 2);
         notify_sink(*player, false);
-        check(player->pump() && player->presenting, "cluster selection resumes without setting toggle");
-        check(unsigned(screen_peer::posts) == posts + 1, "cached map is re-presented on resume");
+        check(player->pump() && unsigned(screen_peer::posts) == posts + 3, "cached map returns to cluster");
+        check(screen_peer::pixels[4] == 1 && screen_peer::pixels[19] == 0xa2 &&
+              screen_peer::pixels[(800 * 313 + 570) * 4 + 2] == cycle + 2, "cluster plane and full extent restored");
+        check(player->control.control == sink && player->control.guidance == guidance &&
+              peer::guidance_calls == calls && !screen_peer::destroys && !peer::cancellation_count,
+              "same Screen, Guidance and sink subscription across switches");
     }
     notify_sink(*player, true);
-    check(player->pump(), "pause before map-off");
+    check(player->pump(), "switch to HUD before stopping");
     header(h, Stop, 4, 0, 0);
-    check(player->packet(h, 0, false), "map-off while HUD paused");
-    check(!player->active && !player->have_picture && player->control.control == -1,
-          "map-off cancels retained subscription and cached picture");
-    check(player->pump() && !player->presenting, "map-off cannot auto-resume");
+    check(player->packet(h, 0, false) && !player->active && !player->have_picture, "stop clears cached HUD");
+    check(player->pump() && !player->presenting, "stopped player stays idle");
     delete player;
-    peer::expect_cleaned(true, 3);
+    peer::expect_cleaned(true, 8);
 }
 
 static void test_start_with_hud_selected() {
@@ -475,19 +513,20 @@ static void test_start_with_hud_selected() {
     check(player->packet(h, 0, false), "reset with HUD initially selected");
     header(h, Video, 3, first_frame_size, 0);
     check(player->packet(h, first_frame, false) && player->pump(), "cache map with HUD initially selected");
-    check(player->active && !player->presenting && !peer::handle_created && !screen_peer::posts,
-          "initial HUD does not acquire a cluster output");
+    check(player->active && player->presenting && peer::handle_created && screen_peer::posts == 1,
+          "initial HUD posts directly to the selected plane");
+    check_hud(*player, 1);
     notify_sink(*player, false);
-    check(player->pump() && player->presenting && screen_peer::posts == 1,
+    check(player->pump() && player->presenting && screen_peer::posts == 2,
           "initial HUD can transition directly to cached cluster map");
     check(player->stop(), "clean initial-HUD session");
     delete player;
-    peer::expect_cleaned(true, 1);
+    peer::expect_cleaned(true, 2);
 }
 
 int main() {
     load_first_frame();
-    test_hud_pause_resume();
+    test_hud_route();
     test_start_with_hud_selected();
     test_service_and_trial_deadlines();
     test_reactivation_on_one_connection();

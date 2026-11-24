@@ -9,6 +9,7 @@ namespace screen {
 enum {
     FactoryMap = nbt::cluster::VideoProfile::MetadataMap,
     FactoryManeuver = nbt::cluster::VideoProfile::MetadataManeuver,
+    FactoryHudMap = nbt::cluster::VideoProfile::MetadataHudMap,
     MetadataBytes = nbt::cluster::VideoProfile::MetadataBytes
 };
 

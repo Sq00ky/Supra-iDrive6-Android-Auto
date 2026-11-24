@@ -22,11 +22,12 @@ struct G30Video {
         CompactWidth = 310,
         CompactHeight = 157,
         SinkSelection = 1,
-        // Valid alternate sink captured from the factory HUD. We pause on it;
-        // this profile still produces only cluster video.
+        // Factory DisplaySink selection and picture extent within the same backing.
         HudWidth = 277,
         HudHeight = 160,
         HudSelection = 0,
+        HudFittedWidth = (SourceWidth * HudHeight + SourceHeight / 2) / SourceHeight,
+        HudPaddingX = (HudWidth - HudFittedWidth) / 2,
         // 93 identical factory method-3 writes in 20261114T143330Z-4cdd29
         // configured this backing with color-depth 0 and packaging 1.
         ColorDepth = 0,
@@ -52,6 +53,7 @@ struct G30Video {
 
         MetadataMap = 0,
         MetadataManeuver = 1,
+        MetadataHudMap = 2,
         MetadataBytes = 84
     };
 
@@ -79,12 +81,12 @@ struct G30Video {
     }
 
     // Exact first-84-byte templates from paired factory window-1056 BGRA
-    // BMPs in 20261114T143330Z-4cdd29; see test_factory_capture.py. Only the
+    // BMPs in 20261114T143330Z-4cdd29 and the HUD trace 20261116T184335Z-b99c80. The
     // BE16 picture counter varies within each profile. BMP export is evidence
     // for this output contract, not a physical wire-byte capture.
     static bool encodeMetadataBgra(uint8_t* destination, uint16_t picture,
                                    unsigned profile = MetadataMap) {
-        if (profile != MetadataMap && profile != MetadataManeuver) {
+        if (profile != MetadataMap && profile != MetadataManeuver && profile != MetadataHudMap) {
             return false;
         }
         for (unsigned i = 0; i < MetadataBytes; ++i) {
@@ -92,11 +94,13 @@ struct G30Video {
         }
         destination[0] = uint8_t(picture >> 8);
         destination[1] = uint8_t(picture);
-        destination[4] = 1;
+        const bool hud = profile == MetadataHudMap;
+        destination[4] = hud ? 0 : 1; // destination plane
+        destination[5] = hud ? 1 : 0; // configuration in the respective reference capture
         destination[7] = 1;
-        if (profile == MetadataMap) {
+        if (profile != MetadataManeuver) {
             destination[18] = 0x0f;
-            destination[19] = 0xa2;
+            destination[19] = hud ? 0xa1 : 0xa2;
         } else {
             destination[16] = 0x0f;
         }

@@ -49,19 +49,12 @@ struct Player {
         return ok;
     }
 
-    bool suspend_output() {
-        // Release only video/Guidance ownership. DisplaySink stays subscribed
-        // so turning HUD off can resume this same player without a retry loop.
-        bool ok = control.close_guidance();
-        ok = output.close() && ok;
-        clear_marker(ok);
-        output = {};
-        presenting = false;
-        printf("AA_CLUSTER_SUSPENDED reason=hud cleanup=%u\n", unsigned(ok));
-        return ok;
-    }
-
     bool present_picture() {
+        typedef nbt::cluster::VideoProfile Profile;
+        const bool hud = control.selected_sink == Control::HudSink;
+        const unsigned profile = hud ? Profile::MetadataHudMap : Profile::MetadataMap;
+        const bool switched = !output.posts || output.metadata_profile != profile;
+        output.metadata_profile = profile;
         const unsigned began = millis();
         if (!output.present(pixels, (0x5678u + number) & 65535, false)) {
             const int error = *__get_errno_ptr();
@@ -73,6 +66,12 @@ struct Player {
         }
         if (millis() - began >= 250)
             printf("AA_CLUSTER_SLOW stage=present elapsed_ms=%u\n", millis() - began);
+        if (switched) {
+            printf("AA_CLUSTER_DESTINATION sink=%s content=%ux%u plane=%u\n", hud ? "hud" : "cluster",
+                   unsigned(hud ? Profile::HudWidth : Profile::ContentWidth),
+                   unsigned(hud ? Profile::HudHeight : Profile::ContentHeight), unsigned(!hud));
+            fflush(0);
+        }
         ++number;
         last_present = millis();
         return true;
@@ -80,23 +79,18 @@ struct Player {
 
     bool pump() {
         if (expired()) return false;
+        const Control::Sink previous = control.selected_sink;
         if (active) {
             const unsigned began = millis();
             if (!control.pump()) return false;
             if (millis() - began >= 250)
                 printf("AA_CLUSTER_SLOW stage=control elapsed_ms=%u\n", millis() - began);
-            if (!control.cluster_selected()) {
-                if (presenting && !suspend_output()) return false;
-            } else if (!presenting && have_picture) {
-                if (!start_output() || !present_picture()) return false;
-                printf("AA_CLUSTER_RESUMED sink=cluster frames=%u\n", number);
-            }
         }
-        // Native hardware output can arrive after the last encoded packet.
-        // Poll it even while the phone is quiet or HUD has suspended PiP.
+        // If a fresh hardware picture arrives with a selection, post it only once.
         const int decoded = decoder.poll_picture(pixels);
         if (decoded < 0) return false;
-        return decoded == 0 || decoded_picture(0);
+        if (decoded) return decoded_picture(0);
+        return !presenting || previous == control.selected_sink || present_picture();
     }
 
     enum ReadResult { ReadComplete, ReadClosed, ReadPlaybackError };
@@ -239,9 +233,6 @@ struct Player {
             if (!control.connect_sink()) return false;
             active = true;
         }
-        // Keep decoding references and retaining the latest selected picture
-        // while HUD owns the sink. Never post cluster-plane pixels to HUD.
-        if (!control.cluster_selected()) return true;
         if (!presenting && !start_output()) return false;
         if (!present_picture()) return false;
         if (number == 1 || number % 30 == 0) {
@@ -249,8 +240,8 @@ struct Player {
                    (unsigned long long)pts,
                    unsigned(nbt::cluster::VideoProfile::SourceWidth),
                    unsigned(nbt::cluster::VideoProfile::SourceHeight),
-                   unsigned(nbt::cluster::VideoProfile::ContentWidth),
-                   unsigned(nbt::cluster::VideoProfile::ContentHeight));
+                   unsigned(control.cluster_selected() ? nbt::cluster::VideoProfile::ContentWidth : nbt::cluster::VideoProfile::HudWidth),
+                   unsigned(control.cluster_selected() ? nbt::cluster::VideoProfile::ContentHeight : nbt::cluster::VideoProfile::HudHeight));
             fflush(0);
         }
         return true;

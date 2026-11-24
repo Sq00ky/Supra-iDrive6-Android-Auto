@@ -61,8 +61,9 @@ The runner checks both build profiles, then runs the C++ regression programs:
   activations in one connection, SIGTERM during Screen posting, the standalone
   65-second limit, and a successful restart. Each acquired socket,
   subscription, Guidance handle and Screen object must be released.
-  HUD selection is exercised twice in one player: Guidance/Screen release,
-  retained sink subscription, cached-picture resume, and map-off while paused.
+  HUD tests cover initial selection, two round trips with the same Guidance and
+  Screen handles, fresh and cached pictures, duplicate events and stopping on HUD.
+  Pixel checks cover the entire backing, metadata row, padding and image edges.
   The captured 36,832-of-42,919-byte access-unit stall is also reproduced.
 - `source-session`: actual AASession parsing, fragmented packets and deferred
   acknowledgements, with a scripted phone and plaintext test TLS. A stalled

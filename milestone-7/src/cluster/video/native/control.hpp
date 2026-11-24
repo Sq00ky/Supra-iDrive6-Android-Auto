@@ -116,7 +116,6 @@ struct Control {
         completion[12] = completion[13] = completion[14] = 1;
         completion[16] = packet[28];
         // Acknowledge the selected destination using the captured factory shape.
-        // HUD selection pauses our cluster output; it does not enable HUD video.
         bool ok = transfer(control, completion, sizeof(completion), true);
         printf("SINK_COMPLETION sent=%u\n", unsigned(ok));
         return ok;
@@ -153,7 +152,7 @@ struct Control {
     }
 
     bool start_guidance() {
-        if (!cluster_selected()) return false;
+        if (selected_sink == UnknownSink) return false;
         if (guidance >= 0) return true;
         guidance = open_tcp(ClusterIP, GuidancePort);
         if (guidance < 0) {
@@ -164,7 +163,7 @@ struct Control {
     }
 
     bool start() {
-        return connect_sink() && (!cluster_selected() || start_guidance());
+        return connect_sink() && start_guidance();
     }
 
     bool pump() {
@@ -228,8 +227,6 @@ struct Control {
 
     bool close() {
         const bool ok = close_guidance();
-        // HUD pauses retain these sockets and the subscription. Full Stop,
-        // session end and failures release all resources as before.
         if (udp >= 0 && port) subscribe(udp, port, 0);
         if (udp >= 0) ::close(udp);
         if (control >= 0) ::close(control);

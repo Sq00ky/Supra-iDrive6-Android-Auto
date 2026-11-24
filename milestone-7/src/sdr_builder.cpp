@@ -467,6 +467,16 @@ ServiceDiscovery sessionManifest(const SdrIdentity& id) {
     configureRailHide(m);
     configureTouchScreen(m);
     dropSdrChannels(m);
+#if defined(NBT_CLUSTER_VIDEO) && defined(NBT_CLUSTER_PROFILE_G30)
+    // Both G30 PiP destinations show the same phone-rendered secondary display.
+    // Request larger map labels before encoding so the full frame still fits.
+    if (AaChannel* cluster = findChannel(m, AA_CH_CLUSTER_VIDEO)) {
+        const int dpi = int(envRange("NBT_PIP_MAP_DPI", 200, 120, 320));
+        cluster->videoSink.config.dpi = dpi;
+        cluster->videoSink.config.realDensity = dpi;
+        printf("[SDR] secondary map display_id=%d dpi=%d\n", cluster->videoSink.displayId, dpi);
+    }
+#endif
     retypeGuidanceSink(m);
     addSystemAudioSink(m);
     limitGuidanceOffers(m);

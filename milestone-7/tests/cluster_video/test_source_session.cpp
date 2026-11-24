@@ -1,5 +1,7 @@
 // Real AASession parsing/reassembly/ACK dispatch, scripted phone, stub TLS.
 #include "aa_session.hpp"
+#include "aa_manifest.hpp"
+#include "aa_proto.hpp"
 #include "cluster/video/router.hpp"
 #include "cluster/video/bridge.hpp"
 #include "cluster/video/credits.hpp"
@@ -98,6 +100,45 @@ static Bytes read_reply(int descriptor, unsigned channel) {
     read_exactly(descriptor, message.data(), message.size());
     return message;
 }
+
+static void check_discovery_density(const char* setting, int expected_dpi) {
+    using namespace nbt::proto;
+    if (setting) setenv("NBT_PIP_MAP_DPI", setting, 1);
+    else unsetenv("NBT_PIP_MAP_DPI");
+    setenv("NBT_VID_DPI", "144", 1);
+    int sockets[2];
+    assert(!socketpair(AF_UNIX, SOCK_STREAM, 0, sockets));
+    nbt::AASession session;
+    assert(session.start(sockets[0]));
+    uint8_t version[12];
+    read_exactly(sockets[1], version, sizeof(version));
+    send_packet(sockets[1], 0, {0, 5});
+    const Bytes sdr = read_reply(sockets[1], 0);
+    assert(sdr.size() > 2 && sdr[0] == 0 && sdr[1] == 6);
+    PbReader fields(sdr.data() + 2, sdr.size() - 2);
+    PbField entry;
+    unsigned seen = 0;
+    while (fields.next(entry)) {
+        if (entry.num != 1 || entry.wire != WIRE_LENGTH) continue;
+        const PbSpan channel(entry.data, entry.len);
+        int64_t id, dpi, real_density, resolution;
+        assert(pbInt(channel, 1, id));
+        if (id != nbt::AA_CH_CLUSTER_VIDEO && id != nbt::AA_CH_AUX_VIDEO &&
+            id != nbt::AA_CH_MAIN_VIDEO) continue;
+        const PbSpan video = pbMsg(pbMsg(channel, 3), 4);
+        assert(pbInt(video, 5, dpi) && pbInt(video, 9, real_density));
+        const int expected = id == nbt::AA_CH_CLUSTER_VIDEO ? expected_dpi :
+                             id == nbt::AA_CH_MAIN_VIDEO ? 144 : 160;
+        assert(dpi == expected && real_density == expected);
+        if (id == nbt::AA_CH_CLUSTER_VIDEO)
+            assert(pbInt(video, 1, resolution) && resolution == nbt::VIDEO_800X480);
+        seen |= 1u << id;
+    }
+    assert(fields.ok() && seen == ((1u << 2) | (1u << 4) | (1u << 6)));
+    session.stop();
+    close(sockets[1]);
+    printf("AA_MAP_DENSITY_OK cluster=%d main=144 auxiliary=160 secondary=800x480\n", expected_dpi);
+}
 static void expect_ack(int descriptor, unsigned channel, unsigned session) {
     Bytes message = read_reply(descriptor, channel);
     assert(message.size() >= 6 && message[0] == 0x80 && message[1] == 4 &&
@@ -113,6 +154,11 @@ static void main_config(const uint8_t *, size_t, void *) {
 int main() {
     alarm(15);
     signal(SIGPIPE, SIG_IGN);
+    check_discovery_density(NULL, 200);
+    check_discovery_density("160", 160);
+    check_discovery_density("240", 240);
+    unsetenv("NBT_PIP_MAP_DPI");
+    unsetenv("NBT_VID_DPI");
     int phone_sockets[2];
     assert(!socketpair(AF_UNIX, SOCK_STREAM, 0, phone_sockets));
     nbt::AASession session;

@@ -207,7 +207,7 @@ static void test_metadata_profiles() {
     output.close();
     reset_peer();
     output = {};
-    output.metadata_profile = 2;
+    output.metadata_profile = 99;
     expect(output.inspect(1) && output.create() && !output.present(0, 1, false) &&
                !buffer_queries && !posted_frames,
            "unknown metadata profile refused before accessing buffers");

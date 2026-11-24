@@ -243,18 +243,23 @@ A separate `pf_aa` download is not required. Restart iDrive after the files
 and checks are complete; a full head-unit restart is needed if persistent
 firewall rules changed.
 
-Cancel BMW route guidance and turn HUD navigation off for the first test.
+Cancel BMW route guidance for the first test.
 Start Android Auto, open Google Maps and enable **Settings → Show map in
 instrument cluster**. The player starts automatically. Switching the setting
-off restores the dial; switching it on requests the map again. No reboot is
+off restores the dial. Switching it on requests the map again. With the map enabled,
+select HUD navigation in iDrive to move the map to the HUD. Turn HUD navigation
+off to return it to the cluster. No reboot is
 needed for toggling. Video buffers stay in RAM. Kombi diagnostics use the daemon's existing log destination.
+
+The secondary map starts at 200 DPI. To try a larger layout, set
+`NBT_PIP_MAP_DPI=240` in `/opt/aa/nbt-aad.env`, restart Android Auto and
+reconnect the phone. Set it to 160 for the original cluster and HUD scale.
 
 The reference setup is a G30 with NBT Evo 007.039.008. Firmware version is
 reported in the log and does not reject a different version by itself. Live
 network/display checks still apply; other firmware and cluster combinations
-remain unvalidated. Custom HUD video and concurrent factory navigation are
-not supported by this experimental integration. Consult the custom build's
-test notes before installing.
+remain unvalidated. HUD map output is experimental and still needs a physical
+test. Run it with BMW route guidance cancelled.
 
 For diagnostics, save `/dev/shmem/nbt-aad.log`. Lines from the supervisor and
 decoder carry the `[kombi-player]` prefix in this same file, including successful
