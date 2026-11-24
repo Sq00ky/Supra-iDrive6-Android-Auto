@@ -283,6 +283,7 @@ private:
     bool radio_holding_;                           // the holding line is out for radio_hold_until_
     uint32_t radio_hold_until_;
     uint32_t phone_media_state_;                   // ch 12 media status state this session, 0xFFFFFFFF none yet
+    RadioTap* radioTap();                          // radio_tap_, read under touch_mutex_
     void radioTileOpened();                        // after the ChannelOpenResponse on ch 18
     void drainRadioTile();                         // collect the tap's changes, send the tile when due
     void pushRadioTile(RadioTap* tap);             // due or just opened: hold, or send the tile if it changed

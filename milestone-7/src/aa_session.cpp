@@ -1193,6 +1193,13 @@ void AASession::setRadioTile(RadioTap* tap) {
     pthread_mutex_unlock(&touch_mutex_);
 }
 
+RadioTap* AASession::radioTap() {
+    pthread_mutex_lock(&touch_mutex_);
+    RadioTap* const tap = radio_tap_;
+    pthread_mutex_unlock(&touch_mutex_);
+    return tap;
+}
+
 void AASession::postRadioUpdate() {
     pthread_mutex_lock(&touch_mutex_);
     const bool wake = radio_armed_ && !radio_pending_;   // one wake per pending update
@@ -1610,6 +1617,13 @@ void AASession::sessionLoop() {
                        (unsigned)frame_data.size());
                 for (size_t i = 0; i < frame_data.size() && i < 24; ++i) printf(" %02x", frame_data[i]);
                 printf("%s\n", frame_data.size() > 24 ? " ..." : "");
+            } else if (channel == AA_CH_LOCAL_MEDIA && radioTap()) {
+                // Car local media: nothing from the phone is answered here; the generic AV handlers below would.
+                static unsigned local_media_msgs = 0;
+                if (local_media_msgs < 5 || local_media_msgs % 100 == 0)
+                    printf("[RadioTile] %s phone msg 0x%04X (%u bytes) on ch %u ignored, %u so far\n", WallTime().hms,
+                           msg_id, (unsigned)frame_data.size(), channel, local_media_msgs + 1);
+                ++local_media_msgs;
             } else if (msg_id == 0x8000) { // AV SETUP_REQUEST (Phone requests AV configuration on Video/Audio channel)
                 // Only focus/open the main dashboard display. Advertising/focusing all
                 // DHU display channels makes the phone encode several H.264 streams; we

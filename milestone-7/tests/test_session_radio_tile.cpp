@@ -333,6 +333,24 @@ static void testNewSessionStartsOver() {
     endSession(s, tap, sv);
 }
 
+// Other phone messages on channel 18 get no answer, and the tile goes on.
+static void testOtherMessagesIgnored() {
+    RadioTap tap;
+    int sv[2];
+    AASession* s = newSession(tap, sv);
+    tuneTestfunk(tap);
+    openTile(sv[1]);
+    expectTestfunk(sv[1]);
+    const uint8_t setup[] = {0x80, 0x00, 0x08, 0x01};
+    phoneSends(sv[1], AA_CH_LOCAL_MEDIA, bytes(setup));
+    Bytes m;
+    assert(!nextTileMessage(sv[1], 600, m));
+    dab(tap, kMostFktDynamicLabel, label("Testlauftext zwei"));
+    expectMsg(sv[1], 2000, status(2, "DAB"));
+    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "Testlauftext zwei", "Testfunk Radio"));
+    endSession(s, tap, sv);
+}
+
 // Without a tap, opening channel 18 sends only the response; a tap set while a session runs is used from the opening on.
 static void testSetWhileRunning() {
     RadioTap tap;
@@ -364,6 +382,7 @@ int main() {
     testNoSendWithoutChannel();
     testPhonePlaybackStopsTile();
     testNewSessionStartsOver();
+    testOtherMessagesIgnored();
     testSetWhileRunning();
     printf("test_session_radio_tile OK\n");
     return 0;
