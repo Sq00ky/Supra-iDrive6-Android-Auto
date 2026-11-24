@@ -22,9 +22,11 @@ struct TunerContent {
     uint32_t tuneStartMs;
     bool spoke;                   // any message since start
     uint32_t id;                  // DAB: SId; FM: PI, or the frequency without PI; 0 unknown
+    bool idIsFreq;                // FM: id is the frequency
     uint32_t freqKHz;             // FM
     TunerContent()
-        : slideId(-1), pendingSlide(-1), tuning(false), tuneStartMs(0), spoke(false), id(0), freqKHz(0) {}
+        : slideId(-1), pendingSlide(-1), tuning(false), tuneStartMs(0), spoke(false), id(0), idIsFreq(false),
+          freqKHz(0) {}
 };
 
 struct RadioState {
@@ -186,23 +188,33 @@ inline bool applyDab(RadioState& s, uint16_t fkt, const uint8_t* p, size_t n, ui
 
 inline bool applyFmStation(RadioState& s, const FmStation& st, uint32_t nowMs) {
     TunerContent& f = s.fm;
-    const uint32_t id = st.pi >= 0 ? (uint32_t)st.pi : st.freqKHz;
-    const std::string* dabName = st.pi >= 0 ? dabNameFor(s, (uint32_t)st.pi) : NULL;
+    const bool hasPi = st.pi >= 0;
+    const std::string* dabName = hasPi ? dabNameFor(s, (uint32_t)st.pi) : NULL;
     const uint32_t oldFreq = f.freqKHz;
+    const bool sameFreq = st.freqKHz == f.freqKHz;
+    // Same PI on any frequency, or a PI coming or going on the tuner's frequency. A PI station that loses its PI on
+    // another frequency cannot be told from a new station, so that is a station change.
+    const bool same = f.id == 0 || (hasPi ? f.id == (uint32_t)st.pi || (f.idIsFreq && sameFreq) : sameFreq);
     bool ch = false;
-    if (f.id != 0 && f.id != id) {
+    if (!same) {
         const std::string& name = dabName ? *dabName : st.ps;
         ch |= dropContent(f);
         ch |= setStr(f.name, name);
         ch |= setFlag(f.tuning, name.empty());
         if (name.empty()) f.tuneStartMs = nowMs;
     } else {
-        // Same station on another frequency, or the first since start: the PS may change, the name stays.
+        // Same station, or the first since start: the PS may change, the name stays unless the PI has a DAB name.
         if (dabName) ch |= setStr(f.name, *dabName);
         else if (f.name.empty()) ch |= setStr(f.name, st.ps);
         if (!f.name.empty()) ch |= setFlag(f.tuning, false);
     }
-    f.id = id;
+    if (hasPi) {
+        f.id = (uint32_t)st.pi;
+        f.idIsFreq = false;
+    } else if (!same || f.id == 0) {
+        f.id = st.freqKHz;
+        f.idIsFreq = true;
+    }
     f.freqKHz = st.freqKHz;
     if (f.name.empty() && f.freqKHz != oldFreq) ch = true;   // the fallback name shows the frequency
     return ch;

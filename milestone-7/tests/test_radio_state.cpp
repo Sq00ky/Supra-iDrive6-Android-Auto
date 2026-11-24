@@ -28,7 +28,8 @@ static void testDefaults() {
     const TunerContent* t[] = {&s.dab, &s.fm};
     for (int i = 0; i < 2; ++i) {
         assert(emptyContent(*t[i]));
-        assert(!t[i]->tuning && t[i]->tuneStartMs == 0 && !t[i]->spoke && t[i]->id == 0 && t[i]->freqKHz == 0);
+        assert(!t[i]->tuning && t[i]->tuneStartMs == 0 && !t[i]->spoke && t[i]->id == 0 && !t[i]->idIsFreq &&
+               t[i]->freqKHz == 0);
     }
 }
 
@@ -232,6 +233,52 @@ static void testFmWithoutPiFrequencyIsStation() {
     assert(s.fm.id == 101000 && s.fm.name == "TESTZWEI" && s.fm.text.empty());
 }
 
+// RDS drops out and comes back on the same frequency: same station. Without PI on another frequency it cannot tell.
+static void testFmPiDropoutKeepsStation() {
+    RadioState s;
+    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001));
+    fmMsg(s, kMostFktRadioText, radioText("Radiotext Probe"));
+    fmMsg(s, kMostFktDlPlus, dlPlus("Probe Titel", "Probe Artist"));
+    const uint32_t g = s.generation;
+    assert(!fmMsg(s, kMostFktFmStation, fmStation("IM RADIO", 100000, -1), 1000));
+    assert(s.fm.id == 0xD001 && s.fm.name == "TESTFUNK" && s.fm.text == "Radiotext Probe");
+    assert(s.fm.title == "Probe Titel" && s.fm.artist == "Probe Artist" && !s.fm.tuning && s.generation == g);
+    assert(!fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001), 2000));
+    assert(s.fm.id == 0xD001 && s.fm.name == "TESTFUNK" && s.fm.text == "Radiotext Probe" && s.generation == g);
+
+    fmMsg(s, kMostFktFmStation, fmStation("IM RADIO", 100000, -1), 3000);
+    assert(fmMsg(s, kMostFktFmStation, fmStation("TESTZWEI", 101000, -1), 4000));
+    assert(s.fm.id == 101000 && s.fm.name == "TESTZWEI" && s.fm.text.empty() && s.fm.title.empty());
+}
+
+// A PI shows up on the frequency that was the station: the PI becomes the identity, the content stays.
+static void testFmPiAppearsOnFrequency() {
+    RadioState s;
+    dabMsg(s, kMostFktDabStation, dabStation(0xD001, "TESTFUNK", "Testfunk Radio"));
+    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, -1));
+    fmMsg(s, kMostFktRadioText, radioText("Radiotext Probe"));
+    assert(s.fm.id == 100000 && s.fm.name == "TESTFUNK");
+    assert(fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001), 1000));
+    assert(s.fm.id == 0xD001 && s.fm.name == "Testfunk Radio" && s.fm.text == "Radiotext Probe" && !s.fm.tuning);
+    assert(!fmMsg(s, kMostFktFmStation, fmStation("IM RADIO", 101000, 0xD001), 2000));
+    assert(s.fm.id == 0xD001 && s.fm.freqKHz == 101000 && s.fm.text == "Radiotext Probe");
+
+    RadioState u;
+    fmMsg(u, kMostFktFmStation, fmStation("TESTFUNK", 100000, -1));
+    fmMsg(u, kMostFktRadioText, radioText("Radiotext Probe"));
+    const uint32_t g = u.generation;
+    assert(!fmMsg(u, kMostFktFmStation, fmStation("IM RADIO", 100000, 0xD002), 1000));
+    assert(u.fm.id == 0xD002 && u.fm.name == "TESTFUNK" && u.fm.text == "Radiotext Probe" && u.generation == g);
+    assert(fmMsg(u, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001), 2000));
+    assert(u.fm.id == 0xD001 && u.fm.name == "TESTFUNK" && u.fm.text.empty());
+
+    RadioState w;
+    fmMsg(w, kMostFktFmStation, fmStation("TESTFUNK", 100000, -1));
+    fmMsg(w, kMostFktRadioText, radioText("Radiotext Probe"));
+    assert(fmMsg(w, kMostFktFmStation, fmStation("TESTZWEI", 101000, 0xD002), 1000));
+    assert(w.fm.id == 0xD002 && w.fm.name == "TESTZWEI" && w.fm.text.empty());
+}
+
 static void testFmEmptyPsTunes() {
     RadioState s;
     fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001));
@@ -412,6 +459,8 @@ int main() {
     testFmAltFrequencySamePi();
     testFmNewPiIsStationChange();
     testFmWithoutPiFrequencyIsStation();
+    testFmPiDropoutKeepsStation();
+    testFmPiAppearsOnFrequency();
     testFmEmptyPsTunes();
     testFmFrequencyWithoutName();
     testFirstFmStationKeepsContent();
