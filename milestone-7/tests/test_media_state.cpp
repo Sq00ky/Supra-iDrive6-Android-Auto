@@ -76,7 +76,7 @@ int main() {
         CHECK(st.song == "Song A" && st.artist == "Artist B");
     }
 
-    // ---- a new track with empty strings keeps the old ones (the phone omits what it does not have)
+    // A new title must not inherit the previous track's artist.
     {
         MediaState st;
         std::vector<uint8_t> a, b;
@@ -84,7 +84,38 @@ int main() {
         putStr(b, 1, "Second");
         CHECK(mediaMerge(st, 0x8003, &a[0], a.size()));
         CHECK(mediaMerge(st, 0x8003, &b[0], b.size()));
-        CHECK(st.song == "Second" && st.artist == "Someone");
+        CHECK(st.song == "Second" && st.artist.empty());
+    }
+
+    // Partial updates of the same track preserve fields; explicit empties clear them.
+    {
+        MediaState st;
+        std::vector<uint8_t> first, album, clearArtist, clearTitle;
+        putStr(first, 1, "Трек"); putStr(first, 2, "Исполнитель"); putStr(first, 3, "Album");
+        putStr(album, 3, "Another album");
+        putStr(clearArtist, 2, "");
+        putStr(clearTitle, 1, "");
+        CHECK(mediaMerge(st, 0x8003, &first[0], first.size()));
+        CHECK(mediaMerge(st, 0x8003, &album[0], album.size()));
+        CHECK(st.song == "Трек" && st.artist == "Исполнитель" && st.album == "Another album");
+        CHECK(mediaMerge(st, 0x8003, &clearArtist[0], clearArtist.size()));
+        CHECK(st.song == "Трек" && st.artist.empty());
+        CHECK(mediaMerge(st, 0x8003, &clearTitle[0], clearTitle.size()));
+        CHECK(st.song.empty() && st.artist.empty() && st.album.empty());
+    }
+
+    // A different player must not display the previous player's track while metadata catches up.
+    {
+        MediaState st;
+        std::vector<uint8_t> a, b, metadata;
+        putInt(a, 1, 2); putStr(a, 2, "Player A");
+        putStr(b, 2, "Player B");
+        putStr(metadata, 1, "Трек"); putStr(metadata, 2, "Исполнитель");
+        CHECK(mediaMerge(st, 0x8003, &metadata[0], metadata.size()));
+        CHECK(mediaMerge(st, 0x8001, &a[0], a.size()));
+        CHECK(st.song == "Трек" && st.artist == "Исполнитель");
+        CHECK(mediaMerge(st, 0x8001, &b[0], b.size()));
+        CHECK(st.song.empty() && st.artist.empty() && !st.haveMetadata && st.state == 0);
     }
 
     // ---- unknown message ids and empty bodies are ignored
@@ -98,6 +129,31 @@ int main() {
         std::string rec = mediaRecord(st);
         CHECK(has(rec, "state=unknown"));
         CHECK(has(rec, "have=0"));
+    }
+
+    // Only valid playback heartbeats renew freshness; malformed messages and metadata cannot revive a stale track.
+    {
+        MediaState st;
+        const uint8_t playing[] = { 0x08, 0x02 };
+        const uint8_t invalid[] = { 0x08, 0x04 };
+        const uint8_t truncated[] = { 0x08, 0x02, 0x12, 0x05, 'x' };
+        CHECK(mediaMerge(st, 0x8001, playing, sizeof(playing), 0));
+        CHECK(!mediaExpire(st, kMediaStaleMs - 1));
+        CHECK(!mediaMerge(st, 0x8001, playing, sizeof(playing), 14000));
+        CHECK(st.updatedMs == 14000);
+        CHECK(!mediaMerge(st, 0x8001, invalid, sizeof(invalid), 28000));
+        CHECK(!mediaMerge(st, 0x8001, truncated, sizeof(truncated), 28000));
+        std::vector<uint8_t> metadata;
+        putStr(metadata, 1, "Late metadata");
+        CHECK(mediaMerge(st, 0x8003, &metadata[0], metadata.size(), 28000));
+        CHECK(st.updatedMs == 14000 && !mediaExpire(st, 28999));
+        CHECK(mediaExpire(st, 29000));
+        CHECK(st.state == 0 && st.song.empty() && st.artist.empty());
+        CHECK(mediaMerge(st, 0x8001, playing, sizeof(playing), 30000));
+        CHECK(st.song.empty());
+        st.clear();
+        CHECK(mediaMerge(st, 0x8001, playing, sizeof(playing), UINT32_MAX - 100));
+        CHECK(!mediaExpire(st, 20));
     }
 
     // ---- cleaning: control characters become spaces, ends trimmed, cap at kMediaValueMax

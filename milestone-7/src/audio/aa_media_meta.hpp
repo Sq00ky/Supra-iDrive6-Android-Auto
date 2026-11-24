@@ -27,23 +27,27 @@
 namespace nbt {
 
 struct AaMediaStatus {
+    enum { kState = 1, kSource = 2, kPosition = 4, kShuffle = 8, kRepeat = 16, kRepeatOne = 32 };
+    unsigned fields;            // distinguish an absent field from an explicit empty/zero value
     unsigned state;             // 1 stopped, 2 playing, 3 paused (0 = not seen)
     std::string source;         // media_source: the app name, e.g. "Apple Music"
     unsigned position;          // playback_seconds
     bool shuffle;
     bool repeat;
     bool repeatOne;
-    AaMediaStatus() : state(0), position(0), shuffle(false), repeat(false), repeatOne(false) {}
+    AaMediaStatus() : fields(0), state(0), position(0), shuffle(false), repeat(false), repeatOne(false) {}
 };
 
 struct AaMediaMetadata {
+    enum { kSong = 1, kArtist = 2, kAlbum = 4, kArt = 8, kPlaylist = 16, kDuration = 32 };
+    unsigned fields;
     std::string song;
     std::string artist;
     std::string album;
     std::string playlist;
     unsigned duration;          // duration_seconds
     size_t albumArtBytes;       // field 4 is the image itself; only its length is kept here
-    AaMediaMetadata() : duration(0), albumArtBytes(0) {}
+    AaMediaMetadata() : fields(0), duration(0), albumArtBytes(0) {}
 };
 
 inline std::string aaMediaText(const proto::PbField& f) { return std::string((const char*)f.data, f.len); }
@@ -58,22 +62,22 @@ inline bool aaParseMediaStatus(const uint8_t* p, size_t n, AaMediaStatus& out) {
     while (r.next(f)) {
         switch (f.num) {
             case 1:
-                if (f.wire == proto::WIRE_VARINT) { out.state = (unsigned)f.value; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.state = f.value <= 3 ? (unsigned)f.value : 4; out.fields |= AaMediaStatus::kState; any = true; }
                 break;
             case 2:
-                if (f.wire == proto::WIRE_LENGTH) { out.source = aaMediaText(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.source = aaMediaText(f); out.fields |= AaMediaStatus::kSource; any = true; }
                 break;
             case 3:
-                if (f.wire == proto::WIRE_VARINT) { out.position = (unsigned)f.value; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.position = (unsigned)f.value; out.fields |= AaMediaStatus::kPosition; any = true; }
                 break;
             case 4:
-                if (f.wire == proto::WIRE_VARINT) { out.shuffle = f.value != 0; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.shuffle = f.value != 0; out.fields |= AaMediaStatus::kShuffle; any = true; }
                 break;
             case 5:
-                if (f.wire == proto::WIRE_VARINT) { out.repeat = f.value != 0; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.repeat = f.value != 0; out.fields |= AaMediaStatus::kRepeat; any = true; }
                 break;
             case 6:
-                if (f.wire == proto::WIRE_VARINT) { out.repeatOne = f.value != 0; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.repeatOne = f.value != 0; out.fields |= AaMediaStatus::kRepeatOne; any = true; }
                 break;
             default:
                 break;
@@ -91,22 +95,22 @@ inline bool aaParseMediaMetadata(const uint8_t* p, size_t n, AaMediaMetadata& ou
     while (r.next(f)) {
         switch (f.num) {
             case 1:
-                if (f.wire == proto::WIRE_LENGTH) { out.song = aaMediaText(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.song = aaMediaText(f); out.fields |= AaMediaMetadata::kSong; any = true; }
                 break;
             case 2:
-                if (f.wire == proto::WIRE_LENGTH) { out.artist = aaMediaText(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.artist = aaMediaText(f); out.fields |= AaMediaMetadata::kArtist; any = true; }
                 break;
             case 3:
-                if (f.wire == proto::WIRE_LENGTH) { out.album = aaMediaText(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.album = aaMediaText(f); out.fields |= AaMediaMetadata::kAlbum; any = true; }
                 break;
             case 4:
-                if (f.wire == proto::WIRE_LENGTH) { out.albumArtBytes = f.len; any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.albumArtBytes = f.len; out.fields |= AaMediaMetadata::kArt; any = true; }
                 break;
             case 5:
-                if (f.wire == proto::WIRE_LENGTH) { out.playlist = aaMediaText(f); any = true; }
+                if (f.wire == proto::WIRE_LENGTH) { out.playlist = aaMediaText(f); out.fields |= AaMediaMetadata::kPlaylist; any = true; }
                 break;
             case 6:
-                if (f.wire == proto::WIRE_VARINT) { out.duration = (unsigned)f.value; any = true; }
+                if (f.wire == proto::WIRE_VARINT) { out.duration = (unsigned)f.value; out.fields |= AaMediaMetadata::kDuration; any = true; }
                 break;
             default:
                 break;          // rating (7) is not shown anywhere

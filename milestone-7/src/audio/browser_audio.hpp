@@ -95,6 +95,8 @@ public:
     void refocus(const char* why);
     // Live media gain 0..1 (the volume slider). Ramped inside the mixer, safe from any thread; 0 = silent.
     void setMediaGain(float g);
+    // Session thread only: eligibility for the native media list, without changing the route.
+    bool mediaListActive();
     // Shutdown starts: drops the queued nav prompt focus requests.
     virtual void cancelPending();
     // Daemon shutdown.
