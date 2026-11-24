@@ -66,17 +66,19 @@ private:
         return (int)n;
     }
 
-    // Under mu_: the content of the tuner that sent, for C03 of the audible one.
+    static const char* kindName(int kind) { return kind == kTunerDab ? "dab" : (kind == kTunerFm ? "fm" : "?"); }
+
+    // Under mu_: who sent (cm = connection master), the shown tuner, the sender's content (for C03 the shown one's).
     void describe(uint8_t fblock, char* line, size_t size) const {
-        const int kind = fblock == kMostFBlockDabTuner ? kTunerDab
-                         : fblock == kMostFBlockFmTuner ? kTunerFm : state_.tuner;
+        const int shown = shownTuner(state_);
+        const int kind = fblock == kMostFBlockDabTuner ? kTunerDab : fblock == kMostFBlockFmTuner ? kTunerFm : shown;
         const TunerContent none;
         const TunerContent& t = kind == kTunerDab ? state_.dab : (kind == kTunerFm ? state_.fm : none);
-        const int k = snprintf(line, size, "[RadioTap] %s tuner %s audible %d name \"%s\" title \"%s\" artist \"%s\" "
-                               "text \"%.*s\" slide %u logo %u\n", WallTime().hms,
-                               kind == kTunerDab ? "dab" : (kind == kTunerFm ? "fm" : "?"), state_.audible,
-                               t.name.c_str(), t.title.c_str(), t.artist.c_str(), logTextLen(t.text), t.text.c_str(),
-                               (unsigned)t.slide.size(), (unsigned)t.logo.size());
+        const int k = snprintf(line, size, "[RadioTap] %s from %s shown %s audible %d name \"%s\" title \"%s\" "
+                               "artist \"%s\" text \"%.*s\" slide %u logo %u\n", WallTime().hms,
+                               fblock == kMostFBlockConnectionMaster ? "cm" : kindName(kind), kindName(shown),
+                               state_.audible, t.name.c_str(), t.title.c_str(), t.artist.c_str(), logTextLen(t.text),
+                               t.text.c_str(), (unsigned)t.slide.size(), (unsigned)t.logo.size());
         if (k < 0 || k >= (int)size) {   // cut: keep the line end
             line[size - 2] = '\n';
             line[size - 1] = '\0';

@@ -63,8 +63,7 @@ inline std::vector<uint8_t> radioTileArt(const TunerContent& t) {
 
 inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint32_t nowMs) {
     RadioTileView v;
-    int kind = s.tuner;
-    if (kind == kTunerNone) kind = s.dab.spoke ? kTunerDab : (s.fm.spoke ? kTunerFm : kTunerNone);
+    const int kind = shownTuner(s);
     if (kind == kTunerNone) return v;
     const TunerContent& t = kind == kTunerDab ? s.dab : s.fm;
 

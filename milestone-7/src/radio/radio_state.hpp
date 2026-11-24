@@ -46,6 +46,12 @@ inline const std::string* dabNameFor(const RadioState& s, uint32_t sid) {
     return NULL;
 }
 
+// The tuner the tile shows: the audible one, before the first one the one that spoke, DAB first.
+inline int shownTuner(const RadioState& s) {
+    if (s.tuner != kTunerNone) return s.tuner;
+    return s.dab.spoke ? kTunerDab : (s.fm.spoke ? kTunerFm : kTunerNone);
+}
+
 namespace radio_detail {
 
 inline bool setStr(std::string& dst, const std::string& v) {
