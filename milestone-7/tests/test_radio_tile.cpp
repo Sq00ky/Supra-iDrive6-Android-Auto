@@ -98,7 +98,7 @@ static void testFmTuningHolds() {
     RadioState s;
     fmAudible(s);
     fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD002), 500);
-    fmMsg(s, kMostFktFmStation, fmStation("", 101000, 0xD003), 1000);
+    fmMsg(s, kMostFktFmStation, fmStation("", 101000, 0xD001), 1000);
     assert(s.fm.tuning);
     RadioTileView v = radioTileView(s, false, 2000);
     assert(!v.show && v.hold && v.holdUntilMs == 4000);
@@ -116,10 +116,10 @@ static void testFallbackNames() {
     fmMsg(f, kMostFktFmStation, fmStation("", 100000, -1), 1);
     v = radioTileView(f, false, 10);
     assert(v.show && v.song == "FM 100.0" && v.album.empty() && v.source == "FM");
-    fmMsg(f, kMostFktFmStation, fmStation("", 99400, -1), 1);
-    assert(radioTileView(f, false, 5000).song == "FM 99.4");
-    fmMsg(f, kMostFktFmStation, fmStation("", 99460, -1), 1);
-    assert(radioTileView(f, false, 5000).song == "FM 99.5");
+    fmMsg(f, kMostFktFmStation, fmStation("", 101000, -1), 1);
+    assert(radioTileView(f, false, 5000).song == "FM 101.0");
+    fmMsg(f, kMostFktFmStation, fmStation("", 100060, -1), 1);
+    assert(radioTileView(f, false, 5000).song == "FM 100.1");
     fmMsg(f, kMostFktFmStation, fmStation("", 1017, -1), 1);
     assert(radioTileView(f, false, 5000).song == "AM 1017");
 

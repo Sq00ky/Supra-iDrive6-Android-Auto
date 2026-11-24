@@ -68,7 +68,7 @@ inline bool mostTextEnd(const uint8_t* p, size_t from, size_t n, size_t& end) {
 }
 
 // fkt C2B: after 2 bytes, entries (type, then three fields charset, text, 0x00; the content is the third field);
-// 1 = title, 4 = artist. The DAB tuner leaves the first two fields empty, the FM tuner fills them (car log 2026-11-18).
+// 1 = title, 4 = artist. The DAB tuner leaves the first two fields empty, the FM tuner fills them.
 inline bool decodeDlPlus(const uint8_t* p, size_t n, std::string& title, std::string& artist) {
     title.clear();
     artist.clear();
@@ -107,8 +107,7 @@ inline int decodeSlideAnnounce(const uint8_t* p, size_t n) {
     return p[1];
 }
 
-// fkt C44 00 00 00: no slideshow (car log 2026-11-18: sent on a station change). Exactly that, so an ErrorAck (00 80 ..)
-// is not taken for it.
+// fkt C44 exactly 00 00 00, not an ErrorAck (00 80 ..): no slideshow, sent on a station change.
 inline bool mostNoSlideshow(const uint8_t* p, size_t n) {
     return p && n >= 3 && p[0] == 0x00 && p[1] == 0x00 && p[2] == 0x00;
 }
@@ -130,7 +129,7 @@ inline bool decodeLogo(const uint8_t* p, size_t n, const uint8_t*& img, size_t& 
     return true;
 }
 
-// fkt C0D 01 without a PNG: no logo (car log 2026-11-18: sent on a station change).
+// fkt C0D 01 without a PNG: no logo, sent on a station change.
 inline bool mostNoLogo(const uint8_t* p, size_t n) { return p && n >= 1 && n < 5 && p[0] == 0x01; }
 
 // String field at i (charset, text, 0x00); advances i past the 0x00.
