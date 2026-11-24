@@ -102,7 +102,7 @@ SpeechConfig readSpeechConfig(bool def_enabled, const char* def_endpoint, uint32
 }
 
 BtConfig::BtConfig()
-    : src(0x3a), sink(0x1), conn(0xc7), route_delay_ms(1500), refocus(true), release(false), sdr_drop("9") {}
+    : src(0x3a), sink(0x1), conn(0xc7), route_delay_ms(1500), auto_source(true), refocus(true), release(false), sdr_drop("9") {}
 
 BtConfig readBtConfig() {
     BtConfig c;
@@ -124,6 +124,7 @@ BtConfig readBtConfig() {
     }
     // Default ON since v1.7.7 (car-verified nbt-aad-22-2-2: with it the Assistant's reply is heard).
     // NBT_BT_REFOCUS=0 / off / no / false disables.
+    c.auto_source = btAutoSourceEnabled();
     c.refocus = envFlag("NBT_BT_REFOCUS") != 0;   // unset stays on
     c.release = getenv("NBT_BT_RELEASE") && strcmp(getenv("NBT_BT_RELEASE"), "1") == 0;
     c.sdr_drop = getenv("NBT_SDR_DROP") ? getenv("NBT_SDR_DROP") : "9";

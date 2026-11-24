@@ -951,6 +951,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_DROP_IDR` | `0` | v1.9.53: after a dropped video frame the daemon asks the phone for a keyframe (video focus off, on again 500 ms later, at most once in 10 s). `0` = never ask: the picture then stays damaged until the phone's next keyframe |
 | `NBT_GUIDANCE_BT` | `0` | Bluetooth mode only: nav prompts mixed into the Bluetooth audio (sink declared as system audio) |
 | `NBT_VOICE_SCENARIO` | `0` | Car mic routed to the Assistant via the `Carplay_Siri_1mic` speech scenario. Without it the Assistant hears silence |
+| `NBT_BT_AUTO_SOURCE` | checkbox (on by default) | Set to `0` to keep your selected media source when Android Auto connects and after Assistant closes the mic, or `1` to switch automatically. In Bluetooth audio mode this overrides the saved checkbox, which takes effect after restarting Android Auto. |
 | `NBT_BT_REFOCUS` | `0` | Request the car's Bluetooth source again after the Assistant closes the mic, so the reply is heard |
 | `NBT_MIC` | `0` | Car microphone (also `/opt/aa/mic.disable`) |
 | `NBT_KNOB` | `0` | iDrive controller to the phone |

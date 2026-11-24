@@ -21,6 +21,7 @@
       <raAction id="470"/>
       <raAction id="173"/>
       <raAction id="174"/>
+      <raAction id="181"/>
       <hmiAction id="25" target="12"/>
       <hmiAction id="81" target="15"/>
       <hmiAction id="80" target="14"/>
@@ -129,6 +130,8 @@
         <synonyms/>
       </textIdModel>
       <raBoolModel id="175"/>
+      <raBoolModel id="182"/>
+      <textIdModel id="183" textId="53"><synonyms/></textIdModel>
       <raBoolModel id="177"/>
       <textIdModel id="178" textId="48">
         <synonyms/>
@@ -314,6 +317,7 @@
           <checkbox action="167" id="169" model="170" text="Show directions at any distance" textModel="168"/>
           <checkbox action="470" id="473" model="471" text="Song title in gauge cluster" textModel="472"/>
           <checkbox action="173" id="174" model="175" text="Disable logging (performance test)" textModel="176"/>
+          <checkbox action="181" id="184" model="182" text="Automatically switch audio source to Bluetooth when Android Auto connects" textModel="183"/>
           <checkbox action="174" id="180" model="177" text="Prompts on car radio (BT, beta)" textModel="178"/>
           <checkbox action="30" id="73" model="48" text="Show iDrive warnings" textModel="49"/>
           <checkbox action="83" id="86" model="84" text="Android Auto over USB" textModel="85"/>

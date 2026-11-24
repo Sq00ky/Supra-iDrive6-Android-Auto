@@ -25,6 +25,7 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          46: "Show directions at any distance",       # 45 = Version row/page title, 46 = the "at any distance" box
          47: "Disable logging (performance test)",     # 47 = no-log checkbox (rhmiapp-56); env NBT_NO_LOG wins
          52: "Nav prompts mixed into Music",   # 52 = native audio: ticked = prompts in the music mix (default off)
+         53: "Automatically switch audio source to Bluetooth when Android Auto connects",
          51: "Switch 2 Finger Gesture to Mute",   # 51 = gesture checkbox (native audio; 50 is kept for PR #285)
          49: "Song title in gauge cluster",   # 49 = now-playing checkbox (kombi_nav idle text, 6WA street line)
          48: "Prompts on car radio (BT, beta)",     # 48 = BT speech checkbox (rhmiapp-66)
@@ -162,6 +163,24 @@ LANG_TEXTS = {
 }
 LANG_TEXTS["es-US"] = LANG_TEXTS["es-ES"]
 LANG_TEXTS["fr-CA"] = LANG_TEXTS["fr-FR"]
+# Automatic media source selection: every supported locale has an explicit translation.
+BT_AUTO_SOURCE_TEXTS = {
+    "de": "Beim Verbinden von Android Auto automatisch zur Bluetooth-Audioquelle wechseln",
+    "en-UK": "Automatically switch audio source to Bluetooth when Android Auto connects",
+    "en-US": "Automatically switch audio source to Bluetooth when Android Auto connects",
+    "es-ES": "Cambiar automáticamente la fuente de audio a Bluetooth al conectar Android Auto",
+    "es-US": "Cambiar automáticamente la fuente de audio a Bluetooth al conectar Android Auto",
+    "fr-FR": "Basculer automatiquement la source audio sur Bluetooth à la connexion d’Android Auto",
+    "fr-CA": "Basculer automatiquement la source audio sur Bluetooth à la connexion d’Android Auto",
+    "it": "Passa automaticamente alla sorgente audio Bluetooth quando Android Auto si connette",
+    "pt": "Mudar automaticamente a fonte de áudio para Bluetooth ao ligar o Android Auto",
+    "ru": "Автоматически переключать источник звука на Bluetooth при подключении Android Auto",
+    "hu": "Az Android Auto csatlakozásakor automatikusan váltson Bluetooth-hangforrásra",
+    "pl": "Automatycznie przełączaj źródło na Bluetooth po połączeniu Android Auto"
+}
+for lang, text in BT_AUTO_SOURCE_TEXTS.items():
+    LANG_TEXTS.setdefault(lang, {})[53] = text
+
 with zipfile.ZipFile(os.path.join(HERE, "NbtAad_ALL_Texts.zip"), "w", zipfile.ZIP_DEFLATED) as z:
     for lang, langname in LANGS.items():
         texts = dict(TEXTS)
