@@ -16,7 +16,7 @@ enum { kSettleMs = 300, kMaxDelayMs = 1000, kTuneHoldMs = 3000 };
 
 struct RadioTileView {
     bool show;                  // false: send nothing now
-    bool hold;                  // the shown tuner is tuning: keep the last tile until holdUntilMs
+    bool hold;                  // the shown tuner tunes while playing: keep the last tile until holdUntilMs
     uint32_t holdUntilMs;
     int state;                  // 1 stopped, 2 playing
     std::string source, song, artist, album;
@@ -69,7 +69,7 @@ inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint3
     const TunerContent& t = kind == kTunerDab ? s.dab : s.fm;
 
     v.state = s.audible == 1 ? 2 : (s.audible == 0 ? 1 : (phonePlaying ? 1 : 2));
-    if (t.tuning && nowMs - t.tuneStartMs < (uint32_t)kTuneHoldMs) {
+    if (v.state == 2 && t.tuning && nowMs - t.tuneStartMs < (uint32_t)kTuneHoldMs) {   // STOPPED goes out at once
         v.hold = true;
         v.holdUntilMs = t.tuneStartMs + kTuneHoldMs;
         return v;

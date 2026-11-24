@@ -104,6 +104,23 @@ static void testFmTuningHolds() {
     assert(!v.show && v.hold && v.holdUntilMs == 4000);
 }
 
+// The radio stops while the tuner tunes: the tile gives up at once, with the fallback name.
+static void testStoppedDoesNotHold() {
+    RadioState s;
+    dabAudible(s);
+    dabMsg(s, kMostFktDabStation, bytes(kDabTuning), 1000);
+    assert(radioTileView(s, false, 1200).hold);
+    tableMsg(s, bytes(kTableDabDisplaced));
+    RadioTileView v = radioTileView(s, false, 1500);
+    assert(v.show && !v.hold && v.state == 1 && v.source == "DAB" && v.song == "DAB");
+
+    RadioState u;
+    dabMsg(u, kMostFktDabStation, bytes(kDabTuning), 1000);
+    assert(u.audible == -1 && radioTileView(u, false, 1500).hold);
+    v = radioTileView(u, true, 1500);
+    assert(v.show && !v.hold && v.state == 1 && v.song == "DAB");
+}
+
 static void testFallbackNames() {
     RadioState d;
     dabAudible(d);
@@ -294,6 +311,7 @@ int main() {
     testHoldWhileTuning();
     testHoldAcrossClockWrap();
     testFmTuningHolds();
+    testStoppedDoesNotHold();
     testFallbackNames();
     testFmWithName();
     testArt();
