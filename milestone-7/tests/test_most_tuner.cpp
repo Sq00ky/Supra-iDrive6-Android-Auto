@@ -208,6 +208,11 @@ static void testConnectionTable() {
     assert(audibleTuner(ARR(dabAnnouncement)) == 0x3b);
     const uint8_t sdars[] = {0x00, 0x00, 0x00, 0x6b, 0x00, 0x01, 0xc1, 0x00};
     assert(audibleTuner(ARR(sdars)) == 0);
+    for (unsigned src = 0xD0; src <= 0xD2; ++src)
+        assert(mostIsTunerSource((uint8_t)src) && !mostIsDabSource((uint8_t)src));
+    assert(!mostIsTunerSource(0xCF) && !mostIsTunerSource(0xD3));
+    const uint8_t following[] = {0x00, 0x00, 0x00, 0xd0, 0x00, 0x01, 0xc1, 0x00};
+    assert(audibleTuner(ARR(following)) == 0xd0);
 
     const uint8_t trunc[] = {0x00, 0x00, 0x00, 0x68};
     assert(!connectionTableValid(ARR(trunc)));

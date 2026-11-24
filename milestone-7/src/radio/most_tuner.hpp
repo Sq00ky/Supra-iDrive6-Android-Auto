@@ -211,9 +211,10 @@ inline bool mostIsDabSource(uint8_t s) {
     return (s >= 0x68 && s <= 0x6A) || (s >= 0x6E && s <= 0x70) || (s >= 0x3B && s <= 0x3D);
 }
 
-// FM/AM 0x01-0x10 without 0x08-0x0A ("No Audio"), FM traffic 0x38, DAB.
+// FM/AM 0x01-0x10 without 0x08-0x0A ("No Audio"), FM traffic 0x38, DAB-FM following 0xD0-0xD2, DAB.
 inline bool mostIsTunerSource(uint8_t s) {
-    return (s >= 0x01 && s <= 0x10 && !(s >= 0x08 && s <= 0x0A)) || s == 0x38 || mostIsDabSource(s);
+    return (s >= 0x01 && s <= 0x10 && !(s >= 0x08 && s <= 0x0A)) || s == 0x38 || (s >= 0xD0 && s <= 0xD2) ||
+           mostIsDabSource(s);
 }
 
 inline bool connectionTableValid(const uint8_t* p, size_t n) {
