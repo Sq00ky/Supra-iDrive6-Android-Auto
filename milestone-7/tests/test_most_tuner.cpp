@@ -198,6 +198,16 @@ static void testConnectionTable() {
     assert(audibleTuner(ARR(noAudio)) == 0);
     for (unsigned src = 0x08; src <= 0x0A; ++src) assert(!mostIsTunerSource((uint8_t)src));
     assert(mostIsTunerSource(0x06) && mostIsTunerSource(0x0B) && mostIsTunerSource(0x10));
+    const uint8_t dabSources[] = {0x68, 0x69, 0x6A, 0x6E, 0x6F, 0x70, 0x3B, 0x3C, 0x3D};
+    for (size_t i = 0; i < sizeof(dabSources); ++i)
+        assert(mostIsDabSource(dabSources[i]) && mostIsTunerSource(dabSources[i]));
+    for (unsigned src = 0x6B; src <= 0x6D; ++src)
+        assert(!mostIsDabSource((uint8_t)src) && !mostIsTunerSource((uint8_t)src));
+    assert(!mostIsDabSource(0x38) && !mostIsDabSource(0x3A) && !mostIsDabSource(0x3E));
+    const uint8_t dabAnnouncement[] = {0x00, 0x00, 0x00, 0x3b, 0x00, 0x01, 0xc1, 0x00};
+    assert(audibleTuner(ARR(dabAnnouncement)) == 0x3b);
+    const uint8_t sdars[] = {0x00, 0x00, 0x00, 0x6b, 0x00, 0x01, 0xc1, 0x00};
+    assert(audibleTuner(ARR(sdars)) == 0);
 
     const uint8_t trunc[] = {0x00, 0x00, 0x00, 0x68};
     assert(!connectionTableValid(ARR(trunc)));

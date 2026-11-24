@@ -206,7 +206,10 @@ inline bool decodeRadioText(const uint8_t* p, size_t n, std::string& text) {
     return mostReadString(p, n, i, text);
 }
 
-inline bool mostIsDabSource(uint8_t s) { return s >= 0x68 && s <= 0x70; }
+// DAB 0x68-0x6A and 0x6E-0x70 (0x6B-0x6D is SDARS), DAB announcement 0x3B-0x3D.
+inline bool mostIsDabSource(uint8_t s) {
+    return (s >= 0x68 && s <= 0x6A) || (s >= 0x6E && s <= 0x70) || (s >= 0x3B && s <= 0x3D);
+}
 
 // FM/AM 0x01-0x10 without 0x08-0x0A ("No Audio"), FM traffic 0x38, DAB.
 inline bool mostIsTunerSource(uint8_t s) {

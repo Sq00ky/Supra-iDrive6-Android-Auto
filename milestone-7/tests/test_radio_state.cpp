@@ -120,6 +120,8 @@ static const uint8_t kTableDabCall[] = {0x00, 0x00, 0x00, 0x68, 0x05, 0x00, 0x90
 static const uint8_t kTableDabChime[] = {0x00, 0x00, 0x00, 0x68, 0x00, 0x00, 0x84, 0x00, 0x01, 0xc1, 0x00};
 static const uint8_t kTableNoAudio[] = {0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x68, 0x01, 0x01, 0xc1, 0x00};
 static const uint8_t kTableFm[] = {0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0xc1, 0x00};
+static const uint8_t kTableDabAnnouncement[] = {0x00, 0x00, 0x00, 0x3b, 0x00, 0x01, 0xc1, 0x00};
+static const uint8_t kTableSdars[] = {0x00, 0x00, 0x00, 0x6b, 0x00, 0x01, 0xc1, 0x00};
 
 static bool dabMsg(RadioState& s, uint16_t fkt, const Bytes& m, uint32_t nowMs = 0) {
     return applyMost(s, kMostFBlockDabTuner, fkt, &m[0], m.size(), nowMs);
@@ -418,6 +420,10 @@ static void testConnectionTable() {
     const uint8_t bad[] = {0x00, 0x00, 0x00, 0x68};
     assert(!tableMsg(s, bytes(bad)));
     assert(s.audible == 1 && s.tuner == kTunerFm);
+    assert(tableMsg(s, bytes(kTableDabAnnouncement)));
+    assert(s.audible == 1 && s.tuner == kTunerDab);
+    assert(tableMsg(s, bytes(kTableSdars)));
+    assert(s.audible == 0 && s.tuner == kTunerDab);
     assert(!s.dab.spoke && !s.fm.spoke);
 
     RadioState off;
