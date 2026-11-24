@@ -24,8 +24,21 @@ static void dabStationShown(RadioState& s, uint32_t nowMs = 0) {
 static void testNothingBeforeContent() {
     RadioState s;
     assert(!radioTileView(s, false, 0).show);
+}
+
+static void testSelectedTunerShowsBeforeItSpeaks() {
+    RadioState s;
     dabAudible(s);
-    assert(!radioTileView(s, false, 0).show);
+    RadioTileView v = radioTileView(s, false, 0);
+    assert(v.show && v.source == "DAB" && v.song == "DAB");
+
+    RadioState t;
+    dabStationShown(t);
+    assert(radioTileView(t, false, 10).song == "Testfunk Radio");
+    fmAudible(t);
+    assert(!t.fm.spoke);
+    v = radioTileView(t, false, 20);
+    assert(v.show && v.source == "FM" && v.song == "FM" && v.album.empty());
 }
 
 static void testBoldIsStation() {
@@ -275,6 +288,7 @@ static void testChanged() {
 
 int main() {
     testNothingBeforeContent();
+    testSelectedTunerShowsBeforeItSpeaks();
     testBoldIsStation();
     testSecondLine();
     testHoldWhileTuning();

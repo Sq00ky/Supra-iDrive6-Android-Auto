@@ -67,7 +67,6 @@ inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint3
     if (kind == kTunerNone) kind = s.dab.spoke ? kTunerDab : (s.fm.spoke ? kTunerFm : kTunerNone);
     if (kind == kTunerNone) return v;
     const TunerContent& t = kind == kTunerDab ? s.dab : s.fm;
-    if (!t.spoke) return v;
 
     v.state = s.audible == 1 ? 2 : (s.audible == 0 ? 1 : (phonePlaying ? 1 : 2));
     if (t.tuning && nowMs - t.tuneStartMs < (uint32_t)kTuneHoldMs) {
