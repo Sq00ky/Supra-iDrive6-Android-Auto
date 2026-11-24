@@ -50,6 +50,7 @@ SRC_test_boot_guard        :=
 SRC_test_overlay_watch     :=
 SRC_test_most_tuner        :=
 SRC_test_radio_state       :=
+SRC_test_radio_tile        :=
 SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
