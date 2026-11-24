@@ -183,12 +183,18 @@ run-$(1): $(OUT)/$(1)
 endef
 $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 
-# This one #includes aa_session.cpp, so it is not in its SRC list, and with several sources -MF keeps only the last one's
-# dependencies: without this line, a change to the session would not rebuild it.
-$(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
-$(OUT)/test_session_rx_timeout: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
-$(OUT)/test_session_radio_tile: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/radio/radio_tap.hpp \
-  $(ROOT)/src/radio/radio_tile.hpp $(ROOT)/src/radio/radio_state.hpp $(ROOT)/src/radio/aa_local_media.hpp stub_cryptor.hpp radio_fixtures.hpp
+# These #include aa_session.cpp or aa_session.hpp, and with several sources -MF keeps only the last one's dependencies:
+# without these lines, a change to the session or a header it pulls in would not rebuild them.
+SESSION_DEPS := $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp \
+  $(ROOT)/src/aa_frames.hpp $(ROOT)/src/radio/radio_tap.hpp $(ROOT)/src/radio/radio_tile.hpp \
+  $(ROOT)/src/radio/radio_state.hpp $(ROOT)/src/radio/most_tuner.hpp $(ROOT)/src/radio/wall_time.hpp \
+  $(ROOT)/src/radio/aa_local_media.hpp
+$(OUT)/test_session_sensors: $(SESSION_DEPS) stub_cryptor.hpp
+$(OUT)/test_session_rx_timeout: $(SESSION_DEPS) stub_cryptor.hpp
+$(OUT)/test_session_radio_tile: $(SESSION_DEPS) stub_cryptor.hpp radio_fixtures.hpp
+$(OUT)/test_session_bye: $(SESSION_DEPS) stub_cryptor.hpp
+$(OUT)/test_session_control $(OUT)/test_session_fragments $(OUT)/test_session_lifecycle: $(SESSION_DEPS)
+$(OUT)/test_session_lifecycle.tsan: $(SESSION_DEPS)
 
 # Frames are not really encrypted in this one, so it can script the phone without a TLS handshake.
 $(OUT)/test_session_bye: CXXFLAGS += -include stub_cryptor.hpp
