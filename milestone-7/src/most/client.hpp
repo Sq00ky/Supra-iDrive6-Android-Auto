@@ -99,6 +99,10 @@ public:
     // Sends one command (see the top of this file), from any thread. m.src is ignored: the registered address is used.
     // False when refused here or not handed to the server; the answer, if any, arrives on a route like any message.
     bool send(const Msg& m);
+    typedef bool (*SendGuard)(const Msg& actual, void* user);
+    // Guard runs after sendLock_, with the current registered source. It must not send or block.
+    bool sendGuarded(const Msg& m, SendGuard guard, void* user);
+    uint32_t identityEpoch() const;   // attach/detach/registration, including same-address re-registration
 
     // One line with the counters since the last call, so a silent client still shows. From main's loop, every 60 s.
     void logHealth();
@@ -149,6 +153,7 @@ private:
 
     // Under lock_: the callback thread writes, logHealth and the getters read.
     mutable pthread_mutex_t lock_;
+    uint32_t identityEpoch_;
     LinkState state_;
     bool attached_;
     bool answered_;                   // the registration has been answered

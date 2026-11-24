@@ -395,6 +395,10 @@ public:
             if (used_[i] && fkt_[i] == fkt && handle_[i] == h && now - t_[i] <= windowMs_) return true;
         return false;
     }
+    void remove(uint16_t fkt, uint16_t handle, uint32_t sent) {
+        for (int i = 0; i < kSlots; ++i)
+            if (used_[i] && fkt_[i] == fkt && handle_[i] == handle && t_[i] == sent) used_[i] = false;
+    }
     void clear() { for (int i = 0; i < kSlots; ++i) used_[i] = false; }
 private:
     uint32_t windowMs_;

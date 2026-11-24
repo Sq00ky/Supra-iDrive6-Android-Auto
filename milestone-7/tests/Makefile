@@ -61,6 +61,7 @@ SRC_test_ccs_push          :=
 SRC_test_cds_parse         :=
 SRC_test_ctl_wizard        :=
 SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
+SRC_test_hud_native_bars   := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
 SRC_test_hudprobe          :=
