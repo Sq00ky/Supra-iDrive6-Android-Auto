@@ -11,10 +11,13 @@
 #include "aa_cryptor.hpp"
 #include "aa_sensor_msg.hpp"
 #include "audio/audio_acks.hpp"
+#include "radio/radio_tile.hpp"
 #include "sdr_builder.hpp"
 #include "touch_types.hpp"
 
 namespace nbt {
+
+class RadioTap;
 
 typedef void (*SessionEndedCallback)(void* user_data);
 typedef void (*VideoFrameCallback)(uint32_t frame_index, std::vector<uint8_t>& frame_data, size_t data_offset,
@@ -119,6 +122,11 @@ public:
     // (mixer thread); the message goes out from the session thread.
     void setUnderflowReports(bool on);
     void postAudioUnderflow(uint8_t channel);
+
+    // Radio tile (ch 18, car local media): the tap's radio in the phone's media tile. Set before start(); NULL = off.
+    void setRadioTile(RadioTap* tap);
+    // The tap saw a change. Any thread; the session thread sends while the phone has ch 18 open.
+    void postRadioUpdate();
 
 private:
     static void* sessionThreadStub(void* arg);
@@ -263,6 +271,20 @@ private:
     uint32_t av_session_[32];    // AV session id per channel from START_INDICATION; echoed in media acks (session thread)
     // AudioConfigs our ServiceDiscoveryResponse offered per audio sink channel, in order (session thread).
     std::vector<AaAudioConfig> offered_audio_[32];
+
+    // Radio tile: radio_tap_ is set before start(); the rest is the session thread's unless marked.
+    RadioTap* radio_tap_;
+    bool radio_open_;                              // the phone opened ch 18 this session
+    bool radio_armed_;                             // guarded by touch_mutex_: ch 18 is open, tap changes wake the thread
+    bool radio_pending_;                           // guarded by touch_mutex_: the tap saw a change
+    RadioTilePacer radio_pacer_;
+    RadioTileSent radio_sent_;                     // the last tile sent this session
+    bool radio_holding_;                           // the holding line is out for radio_hold_until_
+    uint32_t radio_hold_until_;
+    uint32_t phone_media_state_;                   // ch 12 media status state this session, 0xFFFFFFFF none yet
+    void radioTileOpened();                        // after the ChannelOpenResponse on ch 18
+    void drainRadioTile();                         // collect the tap's changes, send the tile when due
+    void pushRadioTile();                          // due or just opened: hold, or send the tile if it changed
 
     std::map<uint8_t, std::vector<uint8_t> > reassembly_;
     std::map<uint8_t, uint32_t> reassembly_total_;   // size the phone announced on the FIRST fragment

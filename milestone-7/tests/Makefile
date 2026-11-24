@@ -117,6 +117,7 @@ SRC_test_session_owner     :=
 SRC_test_spp_rereg         :=
 SRC_test_session_sensors   := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_rx_timeout := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
+SRC_test_session_radio_tile := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_touch             := src/touch_probe.cpp
 SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
@@ -186,6 +187,8 @@ $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 # dependencies: without this line, a change to the session would not rebuild it.
 $(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
 $(OUT)/test_session_rx_timeout: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
+$(OUT)/test_session_radio_tile: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/radio/radio_tap.hpp \
+  $(ROOT)/src/radio/radio_tile.hpp $(ROOT)/src/radio/radio_state.hpp $(ROOT)/src/radio/aa_local_media.hpp stub_cryptor.hpp radio_fixtures.hpp
 
 # Frames are not really encrypted in this one, so it can script the phone without a TLS handshake.
 $(OUT)/test_session_bye: CXXFLAGS += -include stub_cryptor.hpp
