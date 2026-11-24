@@ -104,6 +104,18 @@ static void testFmTuningHolds() {
     assert(!v.show && v.hold && v.holdUntilMs == 4000);
 }
 
+// Only the shown tuner holds: the FM tuner tuning in the background leaves the DAB tile alone.
+static void testHoldOnlyForShownTuner() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktDynamicLabel, label("Lauftext Probe"));
+    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001), 500);
+    fmMsg(s, kMostFktFmStation, fmStation("", 101000, 0xD002), 1000);
+    assert(s.fm.tuning && s.tuner == kTunerDab && s.audible == 1);
+    const RadioTileView v = radioTileView(s, false, 1500);
+    assert(v.show && !v.hold && v.source == "DAB" && v.song == "Testfunk Radio" && v.artist == "Lauftext Probe");
+}
+
 // The radio stops while the tuner tunes: the tile gives up at once, with the fallback name.
 static void testStoppedDoesNotHold() {
     RadioState s;
@@ -172,8 +184,10 @@ static void testState() {
     RadioState s;
     dabStationShown(s);
     assert(s.audible == 1 && radioTileView(s, false, 10).state == 2);
+    assert(radioTileView(s, true, 10).state == 2);
     tableMsg(s, bytes(kTableNoAudio));
     assert(s.audible == 0 && radioTileView(s, true, 10).state == 1);
+    assert(radioTileView(s, false, 10).state == 1);
 
     RadioState u;
     dabMsg(u, kMostFktDynamicLabel, label("Lauftext Probe"));
@@ -311,6 +325,7 @@ int main() {
     testHoldWhileTuning();
     testHoldAcrossClockWrap();
     testFmTuningHolds();
+    testHoldOnlyForShownTuner();
     testStoppedDoesNotHold();
     testFallbackNames();
     testFmWithName();
