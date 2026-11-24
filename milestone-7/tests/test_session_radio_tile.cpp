@@ -333,6 +333,27 @@ static void testNewSessionStartsOver() {
     endSession(s, tap, sv);
 }
 
+// Without a tap, opening channel 18 sends only the response; a tap set while a session runs is used from the opening on.
+static void testSetWhileRunning() {
+    RadioTap tap;
+    int sv[2];
+    AASession* s = new AASession();
+    tap.setCallback(&tapChanged, s);
+    startOn(s, sv);
+    tuneTestfunk(tap);
+    openTile(sv[1]);
+    Bytes m;
+    assert(!nextTileMessage(sv[1], 600, m));
+    s->stop();
+    close(sv[1]);
+
+    startOn(s, sv);
+    s->setRadioTile(&tap);
+    openTile(sv[1]);
+    expectTestfunk(sv[1]);
+    endSession(s, tap, sv);
+}
+
 int main() {
     signal(SIGPIPE, SIG_IGN);
     setenv("NBT_RX_TIMEOUT_S", "0", 1);
@@ -343,6 +364,7 @@ int main() {
     testNoSendWithoutChannel();
     testPhonePlaybackStopsTile();
     testNewSessionStartsOver();
+    testSetWhileRunning();
     printf("test_session_radio_tile OK\n");
     return 0;
 }

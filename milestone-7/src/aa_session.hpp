@@ -123,7 +123,8 @@ public:
     void setUnderflowReports(bool on);
     void postAudioUnderflow(uint8_t channel);
 
-    // Radio tile (ch 18, car local media): the tap's radio in the phone's media tile. Set before start(); NULL = off.
+    // Radio tile (ch 18, car local media): the tap's radio in the phone's media tile. Any time; a running session uses
+    // it from the phone's next opening of ch 18. NULL = off.
     void setRadioTile(RadioTap* tap);
     // The tap saw a change. Any thread; the session thread sends while the phone has ch 18 open.
     void postRadioUpdate();
@@ -272,9 +273,9 @@ private:
     // AudioConfigs our ServiceDiscoveryResponse offered per audio sink channel, in order (session thread).
     std::vector<AaAudioConfig> offered_audio_[32];
 
-    // Radio tile: radio_tap_ is set before start(); the rest is the session thread's unless marked.
-    RadioTap* radio_tap_;
-    bool radio_open_;                              // the phone opened ch 18 this session
+    // Radio tile: the session thread's unless marked.
+    RadioTap* radio_tap_;                          // guarded by touch_mutex_: NULL = tile off
+    bool radio_open_;                              // the phone opened ch 18 this session with the tile on
     bool radio_armed_;                             // guarded by touch_mutex_: ch 18 is open, tap changes wake the thread
     bool radio_pending_;                           // guarded by touch_mutex_: the tap saw a change
     RadioTilePacer radio_pacer_;
@@ -284,7 +285,7 @@ private:
     uint32_t phone_media_state_;                   // ch 12 media status state this session, 0xFFFFFFFF none yet
     void radioTileOpened();                        // after the ChannelOpenResponse on ch 18
     void drainRadioTile();                         // collect the tap's changes, send the tile when due
-    void pushRadioTile();                          // due or just opened: hold, or send the tile if it changed
+    void pushRadioTile(RadioTap* tap);             // due or just opened: hold, or send the tile if it changed
 
     std::map<uint8_t, std::vector<uint8_t> > reassembly_;
     std::map<uint8_t, uint32_t> reassembly_total_;   // size the phone announced on the FIRST fragment

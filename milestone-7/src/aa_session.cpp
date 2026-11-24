@@ -1187,7 +1187,11 @@ void AASession::drainSpeed() {
 
 // ---- Radio tile (ch 18, radio/radio_tile.hpp) --------------------------------------------------------------------------
 
-void AASession::setRadioTile(RadioTap* tap) { radio_tap_ = tap; }
+void AASession::setRadioTile(RadioTap* tap) {
+    pthread_mutex_lock(&touch_mutex_);
+    radio_tap_ = tap;
+    pthread_mutex_unlock(&touch_mutex_);
+}
 
 void AASession::postRadioUpdate() {
     pthread_mutex_lock(&touch_mutex_);
@@ -1199,31 +1203,35 @@ void AASession::postRadioUpdate() {
 
 void AASession::radioTileOpened() {
     pthread_mutex_lock(&touch_mutex_);
-    radio_armed_ = true;      // before the snapshot, so no change in between is missed
+    RadioTap* const tap = radio_tap_;
+    radio_armed_ = tap != NULL;   // before the snapshot, so no change in between is missed
     radio_pending_ = false;
     pthread_mutex_unlock(&touch_mutex_);
+    if (!tap) return;
     radio_open_ = true;
     radio_pacer_.reset();
     radio_sent_ = RadioTileSent();
     radio_holding_ = false;
-    pushRadioTile();
+    pushRadioTile(tap);
 }
 
 void AASession::drainRadioTile() {
     if (!radio_open_) return;
     pthread_mutex_lock(&touch_mutex_);
+    RadioTap* const tap = radio_tap_;
     const bool changed = radio_pending_;
     radio_pending_ = false;
     pthread_mutex_unlock(&touch_mutex_);
     const uint32_t now = monoMs();
     if (changed) radio_pacer_.changed(now);
-    if (radio_pacer_.due(now)) pushRadioTile();
+    if (radio_pacer_.due(now)) pushRadioTile(tap);
 }
 
 // A tile counts as sent even when sending fails, so a dead connection is not retried.
-void AASession::pushRadioTile() {
+void AASession::pushRadioTile(RadioTap* tap) {
     radio_pacer_.sent();
-    const RadioState s = radio_tap_->snapshot();
+    if (!tap) return;   // the tile was turned off
+    const RadioState s = tap->snapshot();
     const uint32_t now = monoMs();   // after the snapshot: no tuning in it started later
     const RadioTileView v = radioTileView(s, phone_media_state_ == 2, now);
     if (v.hold) {
@@ -1551,7 +1559,7 @@ void AASession::sessionLoop() {
                 if (cryptor_.encrypt(open_resp, sizeof(open_resp), enc_resp)) {
                     opened = sendFrame(channel, 0x0F, &enc_resp[0], enc_resp.size()); // Specific channel flag 0x0F
                 }
-                if (opened && channel == AA_CH_LOCAL_MEDIA && radio_tap_) radioTileOpened();
+                if (opened && channel == AA_CH_LOCAL_MEDIA) radioTileOpened();
             } else if (channel == 10 && msg_id >= 0x8000) {
                 // Navigation status channel: guidance state (0x8003), next turn (0x8006), turn distance (0x8007), ...
                 // Nothing is answered; the messages go to the nav-status callback (kombi_nav). Before v1.6.3 the
