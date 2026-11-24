@@ -318,7 +318,8 @@ ProtoWriter encode(const VendorExtensionService& s) {
 ProtoWriter encode(const AaChannel& c) {
     enum {
         F_ID = 1, F_SENSOR_SOURCE = 2, F_MEDIA_SINK = 3, F_INPUT_SOURCE = 4, F_MICROPHONE = 5, F_BLUETOOTH = 6,
-        F_NAV_STATUS = 8, F_MEDIA_PLAYBACK = 9, F_PHONE_STATUS = 10, F_MEDIA_BROWSER = 11, F_VENDOR_EXTENSION = 12, F_LOCAL_MEDIA = 16
+        F_NAV_STATUS = 8, F_MEDIA_PLAYBACK = 9, F_PHONE_STATUS = 10, F_MEDIA_BROWSER = 11, F_VENDOR_EXTENSION = 12,
+        F_LOCAL_MEDIA = 16
     };
     enum { F_BLUETOOTH_ADDRESS = 1 };
     ProtoWriter w;
