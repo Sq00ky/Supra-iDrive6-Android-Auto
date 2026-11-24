@@ -74,6 +74,8 @@ SRC_test_lm_geometry       :=
 SRC_test_media_ack         :=
 SRC_test_media_msgs        :=
 SRC_test_media_state       :=
+SRC_test_native_media_record :=
+SRC_test_native_media_hook   :=
 SRC_test_mfl               :=
 SRC_test_mmr_launch        :=
 SRC_test_mmr_pps           :=
@@ -137,7 +139,7 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_text_ids run-test_rhmi_actions run-test_settings_refresh tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_text_ids run-test_rhmi_actions run-test_settings_refresh run-test_native_media_lifecycle run-test_native_media_hook_lifecycle tsan
 	@echo "[CHECK] all host tests passed"
 
 .PHONY: run-test_text_ids
@@ -156,6 +158,14 @@ run-test_rhmi_actions:
 .PHONY: run-test_settings_refresh
 run-test_settings_refresh:
 	@python3 test_settings_refresh.py
+
+.PHONY: run-test_native_media_lifecycle
+run-test_native_media_lifecycle:
+	@python3 test_native_media_lifecycle.py
+
+.PHONY: run-test_native_media_hook_lifecycle
+run-test_native_media_hook_lifecycle:
+	@python3 test_native_media_hook_lifecycle.py
 
 $(OUT):
 	@mkdir -p $(OUT)

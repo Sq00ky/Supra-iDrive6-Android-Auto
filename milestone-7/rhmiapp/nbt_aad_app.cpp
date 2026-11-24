@@ -67,6 +67,7 @@
 #include "overlay_watch.hpp"
 #include "entry_key.hpp"
 #include "settings_watch.hpp"   // restart after a Settings change (rhmiapp-68)
+#include "native_media_hook.hpp"
 #include "../src/favourite_colour.hpp"
 #include "../src/status_hint.hpp"
 #include <vector>
@@ -2949,6 +2950,7 @@ bool appOnInit(bmw::PluginApp* self) {
          menuIdriveOn() ? "on" : "off");
     subscribeGear(self);                                 // gear (unless gear.disable) + call status (Fork F hold)
     startStatusPolling(self);
+    if (ok) nbt::native_media::start(&alog);
     return ok;
 }
 
@@ -2959,6 +2961,7 @@ void appOnError(bmw::PluginApp* /*self*/, unsigned code, const bmw::BasicString<
 
 void appOnFinalize(bmw::PluginApp* self) {
     alog("onFinalize");
+    nbt::native_media::stop();
     g_runApp = NULL;
     self->onFinalize();
 }
@@ -2991,6 +2994,7 @@ bmw::PluginApp* createApp(bmw::IDispatcher& dispatcher, const char* name, const 
 void destroyApp(void* app) {
     alog("destroy(%p)", app);
     if (!app) return;
+    if (app == g_app) nbt::native_media::stop();
     void** vt = *reinterpret_cast<void***>(app);
     reinterpret_cast<void (*)(void*)>(vt[1])(app);   // deleting destructor (PluginApp::~PluginApp + operator delete)
     if (app == g_app) g_app = NULL;

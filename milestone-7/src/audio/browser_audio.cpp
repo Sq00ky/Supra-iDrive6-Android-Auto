@@ -483,6 +483,14 @@ bool BrowserAudio::mediaOnSource(uint64_t now) {   // session thread (it writes 
     return on;
 }
 
+bool BrowserAudio::mediaListActive() {
+    if (conn_ != 0xB8 || pcm_failed_ || !stream_[MEDIA].in.started) return false;
+    pthread_mutex_lock(&lock_);
+    const bool granted = route_policy_.routed();
+    pthread_mutex_unlock(&lock_);
+    return granted;
+}
+
 void BrowserAudio::setMediaGain(float g) {
     // Ramped inside the mixer (per frame, ~50 ms), so this is safe from the UI thread while the mixer thread runs.
     mixer_.setMediaGain(g);
