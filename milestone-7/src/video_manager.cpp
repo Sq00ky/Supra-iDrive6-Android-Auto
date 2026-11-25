@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "video_manager.hpp"
+#include "log_privacy.hpp"
 #include "nbt_env.hpp"
 #include "car_config.hpp"
 #include "lm_geometry.hpp"
@@ -1931,7 +1932,7 @@ void VideoManager::workerLoop() {
                 }
 
                 uint32_t next_frame = frame_count + 1;
-                if (next_frame <= 35 || (next_frame % 30) == 0) {
+                if (nbt::logVerbose() && (next_frame <= 35 || (next_frame % 30) == 0)) {
                     printf("[VideoManager] mdev frame #%u BEGIN (%u bytes%s, raw=%u, cfg=%u, queue_after_pop=%u)\n",
                            next_frame,
                            static_cast<unsigned int>(item.inline_config_size + item.data_length),
@@ -1971,7 +1972,7 @@ void VideoManager::workerLoop() {
                     if (!frame_queue_.hasKeyframe()) idr_wanted_ = true;
                     pthread_mutex_unlock(&queue_mutex_);
                 }
-                if (ret != 0 || frame_count <= 35 || (frame_count % 30) == 0) {
+                if (ret != 0 || (nbt::logVerbose() && (frame_count <= 35 || (frame_count % 30) == 0))) {
                     printf("[VideoManager] mdev frame #%u END (%u bytes%s, raw=%u, cfg=%u, pts=%llu, elapsed=%llu us) -> MsgSendvs_r ret=%d (status: %s)\n",
                            frame_count, static_cast<unsigned int>(item.inline_config_size + item.data_length),
                            item.has_inline_config ? " incl-config" : "",
