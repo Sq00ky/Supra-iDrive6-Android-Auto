@@ -11,6 +11,13 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **rhmiapp-97-radiofollow (not car-verified; #234): the FM page no longer pulls the screen from Android Auto.**
+> With FM playing, iDrive raises its radio page (523 FM list, 1325 saved stations) when the tuner switches frequency
+> (AF); Android Auto stepped aside for it as for a warning (F30, NBTevo_Y24073J, ~20 times in one drive). These pages,
+> and any `LT_Button_Ent_` page, now never cause a step-aside, and iDrive goes straight back to state 13 (at most 4
+> times in 10 s). Not covered: our own menu / Settings page, where the daemon sees no input.
+> Log: `hold: event 52 -> state 13 (iDrive raised its radio page 523 by itself (station follow) ...)`.
+>
 > **v1.9.117 / rhmiapp-94: native audio media controls, nav prompts on their own channel, volume pill labels.**
 > - **Nav prompts in native audio** play on the car's nav prompt channel again while Android Auto music plays
 >   (navigation volume; the car mutes the music for the prompt). **Nav prompts mixed into Music** (Settings, off by
@@ -252,7 +259,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > Android Auto (or on our state 13 / menu 10) for 2 s, Android Auto comes back once; a 681/20 flip-flop does not count.
 > If it closes onto another screen, the driver went on in iDrive and the Android Auto entry brings it back.
 > `NBT_AA_WARN_IGNORE=<ctx>,<ctx>` in nbt-aad.env lists contexts that never cause a step-aside (screens Android Auto
-> already shows: messages, calls, now playing). Previously only widgets named `*popup*` counted, and only while state 13
+> already shows: messages, calls, now playing); the radio pages 523 and 1325 are always on it (rhmiapp-97). Previously only widgets named `*popup*` counted, and only while state 13
 > was visible, so a CCM waited ~25 s (F31 bench, 2026-11-05). With the box unticked, nothing changes.
 > Log: `warnings: iDrive context N came up on its own ...` / `... closed (back on M for 2 s): Android Auto comes back`.
 >

@@ -9,8 +9,9 @@
 // / obstacle warnings, climate, the 360 camera, intelligent safety, seat memory, TA/TP, driver profile, notices...) vary
 // too much between models to list. So: any context that appears while Android Auto is on screen, with no driver
 // input behind it, is iDrive's own overlay -> step aside at once. Not overlays: our blank state (13), our menu (10 and
-// its Settings page 14), contexts listed in NBT_AA_WARN_IGNORE (screens Android Auto already shows itself), anything
-// within 2 s of our own iDrive moves (event 52, show, the entry), and GFXIDENTIFIER_INVALID transitions.
+// its Settings page 14), contexts listed in NBT_AA_WARN_IGNORE (screens Android Auto already shows itself), the radio
+// pages (radioFollowPage), anything within 2 s of our own iDrive moves (event 52, show, the entry), and
+// GFXIDENTIFIER_INVALID transitions.
 //
 // Our own states come from their focus notifications (onOwnState), not from hmi.graphicalContext: CDS numbers them the
 // framework's way (50002 for 13, 50000 for 10 on the Supra) and reports 13 only as GFXIDENTIFIER_INVALID, so without it
@@ -51,7 +52,16 @@ public:
                      pendKnob_(true), aside_(-1), asideFrom_(-1), asideMs_(0), isAside_(false), ownMs_(0),
                      ownSet_(false) {}
 
-    void addIgnore(int vc) { if (nIgnore_ < kMaxIgnore) ignore_[nIgnore_++] = vc; }
+    // False if already listed, not a context id, or the list is full.
+    bool addIgnore(int vc) {
+        if (vc <= 0 || isIgnored(vc) || nIgnore_ >= kMaxIgnore) return false;
+        ignore_[nIgnore_++] = vc;
+        return true;
+    }
+    bool isIgnored(int vc) const {
+        for (int i = 0; i < nIgnore_; ++i) if (ignore_[i] == vc) return true;
+        return false;
+    }
 
     // We moved iDrive ourselves (event 52, "show", the entry): what follows for 2 s is not a car overlay.
     void own(uint32_t now) { ownMs_ = now; ownSet_ = true; }
@@ -155,11 +165,7 @@ private:
     static const uint32_t kHideLagMs = 3000;
 
     static bool isOwnState(int vc) { return vc == kAaState || vc == kMenuState || vc == kSettingsState || vc == kVersionState || vc == kColourState || vc == kPickerState; }
-    bool isOwn(int vc) const {
-        if (isOwnState(vc)) return true;
-        for (int i = 0; i < nIgnore_; ++i) if (ignore_[i] == vc) return true;
-        return false;
-    }
+    bool isOwn(int vc) const { return isOwnState(vc) || isIgnored(vc); }
 
     int ignore_[kMaxIgnore];
     int nIgnore_;
@@ -202,6 +208,35 @@ inline bool isCameraContext(int vc, const int* list, int n) {
     for (int i = 0; i < n; ++i) if (list[i] == vc) return true;
     return false;
 }
+
+// Radio pages iDrive raises by itself when the tuner switches frequency (AF), #234 (F30, 2026-11-22): 523 FM list,
+// 1325 saved stations; the LT_Button_Ent_ prefix covers AM / DAB pages. Never a step-aside.
+static const int kRadioFollowCtx[] = {523, 1325};
+inline bool radioFollowPage(int vc, const char* widget) {
+    if (vc <= 0 || vc >= 50000) return false;            // 50000+ are our own states
+    for (unsigned i = 0; i < sizeof(kRadioFollowCtx) / sizeof(kRadioFollowCtx[0]); ++i)
+        if (kRadioFollowCtx[i] == vc) return true;
+    return widget && strncmp(widget, "LT_Button_Ent_", 14) == 0;
+}
+
+// At most kMax immediate re-holds per kWindowMs; past that the status poll's hold logic takes over.
+class RadioRehold {
+public:
+    RadioRehold() : n_(0) {}
+    bool allow(uint32_t now) {
+        int k = 0;
+        for (int i = 0; i < n_; ++i) if ((uint32_t)(now - t_[i]) < kWindowMs) t_[k++] = t_[i];
+        n_ = k;
+        if (n_ >= kMax) return false;
+        t_[n_++] = now;
+        return true;
+    }
+    static const int kMax = 4;
+    static const uint32_t kWindowMs = 10000;
+private:
+    uint32_t t_[kMax];
+    int n_;
+};
 } // namespace nbt
 
 #endif // NBT_RHMIAPP_OVERLAY_WATCH_HPP
