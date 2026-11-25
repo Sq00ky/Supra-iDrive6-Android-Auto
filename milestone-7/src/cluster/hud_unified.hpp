@@ -54,31 +54,35 @@ inline int tailDelta(const Glyph& g, int stage) {
     return g.curveY + ((g.nearTail-g.curveY)*stage+3)/4 - g.farTail;
 }
 
-inline void roads(int type, const HudProfile& profile, bool near, Picture& out) {
+inline void roads(int type, const HudProfile& profile, bool near, Picture& out, bool night = false) {
     bool mirror; const Glyph* g = glyph(type,mirror); if (!g) return;
     const Road* list = near ? g->nearRoads : g->farRoads;
     size_t count = near ? g->nearCount : g->farCount;
     for (int pass = 0; pass < 2; ++pass)
-        for (size_t i = 0; i < count; ++i)
+        for (size_t i = 0; i < count; ++i) {
+            if (night && !pass) continue;
             append(pass ? list[i].fill : list[i].edge, pass ? profile.road : profile.edge,
                    mirror,124,0,0,0,out);
+        }
 }
 
-inline void route(int type, const HudProfile& profile, int stage, Picture& out) {
+inline void route(int type, const HudProfile& profile, int stage, Picture& out, bool night = false) {
     bool mirror; const Glyph* g = glyph(type,mirror); if (!g) return;
     int delta = tailDelta(*g,stage);
     // Paint every border before either fill, so the head cannot cut a dark seam through its stem.
-    append(g->bodyEdge,profile.edge,mirror,124,0,0,delta,out);
-    append(g->headEdge,profile.edge,mirror,124,0,0,0,out);
+    if (!night) {
+        append(g->bodyEdge,profile.edge,mirror,124,0,0,delta,out);
+        append(g->headEdge,profile.edge,mirror,124,0,0,0,out);
+    }
     append(g->body,stage ? profile.route : profile.fill,mirror,124,0,0,delta,out);
     append(g->head,stage ? profile.route : profile.fill,mirror,124,0,0,0,out);
     // MOST has no documented compound-contour encoding: one solid pin body, then its window mask.
     append(g->hole,profile.edge,mirror,124,0,0,0,out);
 }
 
-inline bool far(int type, const HudProfile& profile, Picture& out) {
+inline bool far(int type, const HudProfile& profile, Picture& out, bool night = false) {
     bool mirror; if (!glyph(type,mirror)) return false;
-    roads(type,profile,false,out); route(type,profile,0,out); return true;
+    roads(type,profile,false,out,night); route(type,profile,0,out,night); return true;
 }
 
 inline bool lanes(const std::vector<kombinav::AaLane>& lanes, const Rect& box,

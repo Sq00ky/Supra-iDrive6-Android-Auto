@@ -92,14 +92,24 @@ inline bool picture(const ShapeSpec& spec, const HudProfile& profile, Picture& p
     int height = number > 9 ? 18 : 24;
     Shape caption;
     digits::drawNumber(number, 0, -height/2, height, caption);
+    int x0 = 32767, y0 = 32767, x1 = -32767, y1 = -32767;
     for (size_t i = 0; i < caption.size(); ++i) {
         for (size_t j = 0; j < caption[i].pts.size(); ++j) {
             Point& p = caption[i].pts[j];
-            // Round on the final positive canvas, including half-pixel caption vertices.
-            p.x = (int16_t)(ring::rounded(62L*4+(long)p.x*5,4)-62);
-            p.y = (int16_t)(ring::rounded((long)cy*4+(long)p.y*5,4)-cy);
+            p.x = (int16_t)ring::rounded(62L*4+(long)p.x*5,4);
+            p.y = (int16_t)ring::rounded((long)cy*4+(long)p.y*5,4);
+            x0 = std::min(x0,(int)p.x); x1 = std::max(x1,(int)p.x);
+            y0 = std::min(y0,(int)p.y); y1 = std::max(y1,(int)p.y);
         }
-        append(caption[i], profile.fill, false, cy, pic); // captions never mirror
+    }
+    // Centre the final ink, not the font cell. Odd native extents have an unavoidable half-pixel tie.
+    const int dx = ring::rounded(124-x0-x1,2), dy = ring::rounded(2*cy-y0-y1,2);
+    for (size_t i = 0; i < caption.size(); ++i) {
+        for (size_t j = 0; j < caption[i].pts.size(); ++j) {
+            caption[i].pts[j].x += dx-62;
+            caption[i].pts[j].y += dy-cy;
+        }
+        append(caption[i], profile.fill, false, cy, pic);
     }
     return true;
 }

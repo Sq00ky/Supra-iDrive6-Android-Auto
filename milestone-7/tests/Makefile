@@ -263,3 +263,8 @@ clean:
 	rm -rf $(OUT)
 
 -include $(wildcard $(OUT)/*.d)
+
+.PHONY: run-test_hud_night_signal
+check: run-test_hud_night_signal
+run-test_hud_night_signal:
+	@python3 test_hud_night_signal.py

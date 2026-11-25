@@ -54,6 +54,8 @@ struct HudProfile {
 };
 
 // The 6WA, as our F20 showed it:
+// F30 owner check (2026-11-26): index7 appeared as a WHITE outline at night. The F20 colour comments below
+// are not a portable F30 palette; night road/background indices still need an on-car swatch check.
 //   - fill 4 is the factory navigation's colour for its main picture (white at night on our car; other colour schemes
 //     of a related cluster firmware make it orange: the scheme is the cluster's choice)
 //   - junction view colours from the car's colour sweep: 7 black, 3 light grey, 4 white. Whether black covers grey on

@@ -72,7 +72,7 @@ public:
     Hud6waDisplay(hudterm::Port& port, const hudterm::HudProfile& p, bool shadow);
 
     const char* name() const { return p_.name; }
-    void setSettings(const Settings& s) { s_ = s; }
+    void setSettings(const Settings& s);
     void setLog(LogFn log, void* user) { log_fn_ = log; log_user_ = user; }
 
     bool sameManeuver(const NavView& v, double now);

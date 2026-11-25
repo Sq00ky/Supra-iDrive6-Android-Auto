@@ -49,11 +49,33 @@ int main(int argc, char** argv) {
                 if (n) {
                     // Captions must remain wholly inside the ring, even for two-digit exits.
                     const int cy = bodies[cw][0].poly.pts[0].y - (angle ? 30 : ring60::kCirculation0[0].y);
+                    int x0=32767,y0=32767,x1=-32767,y1=-32767;
                     for (size_t i = bodies[cw].size(); i < p.size(); ++i)
                         for (size_t j = 0; j < p[i].poly.pts.size(); ++j) {
-                            int x = p[i].poly.pts[j].x-62, y = p[i].poly.pts[j].y-cy;
+                            const Point& point=p[i].poly.pts[j];
+                            x0=std::min(x0,(int)point.x);x1=std::max(x1,(int)point.x);
+                            y0=std::min(y0,(int)point.y);y1=std::max(y1,(int)point.y);
+                            int x = point.x-62, y = point.y-cy;
                             assert(x*x+y*y <= 22*22);
                         }
+                    assert(abs(x0+x1-124)<=1 && abs(y0+y1-2*cy)<=1);
+                    Shape original;int h=n>9?18:24;
+                    digits::drawNumber(n,0,-h/2,h,original);
+                    assert(original.size()==p.size()-bodies[cw].size());
+                    int dx=0,dy=0;
+                    for(size_t i=0;i<original.size();++i){
+                        for(size_t j=0;j<original[i].pts.size();++j){
+                            Point& q=original[i].pts[j];
+                            q.x=ring::rounded(62L*4+(long)q.x*5,4);
+                            q.y=ring::rounded((long)cy*4+(long)q.y*5,4);
+                        }
+                        ring60::compact(original[i]);
+                        const Poly& actual=p[bodies[cw].size()+i].poly;
+                        assert(actual.pts.size()==original[i].pts.size());
+                        if(!i){dx=actual.pts[0].x-original[i].pts[0].x;dy=actual.pts[0].y-original[i].pts[0].y;}
+                        for(size_t j=0;j<original[i].pts.size();++j)
+                            assert(actual.pts[j].x==original[i].pts[j].x+dx && actual.pts[j].y==original[i].pts[j].y+dy);
+                    }
                 }
                 if (dump && n < 10) printf("%u%c",hash(p),n == 9 ? '\n' : ' ');
             }

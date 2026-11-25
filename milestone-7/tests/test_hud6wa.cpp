@@ -14,6 +14,7 @@
 #include "cluster/mapbox_hud.hpp"
 #include "cluster/hudterm_ring.hpp"
 #include "cluster/hud_ring60.hpp"
+#include "cluster/hud_unified.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <algorithm>
@@ -2851,7 +2852,36 @@ static void testFitMeasured() {
     printf("  fitMeasured: F20 box kept where it fits, factory boxes on 126x77/176x126, 0x0 and env pins respected\n");
 }
 
+static void testNightOutlinePolicy() {
+    HudProfile p=k6wa; fitMeasured(126,77,p);
+    for (int type=0;type<=60;++type) for (int stage=0;stage<=4;++stage) {
+        bool mirror;const unified::Glyph* glyph=unified::glyph(type,mirror);if(!glyph)continue;
+        Picture day,night,expected;
+        unified::roads(type,p,stage!=0,day);unified::route(type,p,stage,day);
+        unified::roads(type,p,stage!=0,night,true);unified::route(type,p,stage,night,true);
+        for(size_t i=0;i<day.size();++i)
+            if(day[i].colour!=p.edge || (glyph->hole.count && i+1==day.size())) expected.push_back(day[i]);
+        assert(expected.size()==night.size());
+        for(size_t i=0;i<night.size();++i)assert(night[i].colour==expected[i].colour);
+        samePolygons(picturePolygons(night),0,picturePolygons(expected));
+    }
+    FakePort port;Hud6waDisplay display(port,p,false);Settings s=arrows();s.junction=false;
+    display.setSettings(s);NavView v=timed(8,"Road","800",1,800,60);
+    assert(display.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+    Shape day=packetPolygons(port.batches.back());
+    s.hud_night=true;display.setSettings(s);
+    assert(display.sameManeuver(v,1));
+    assert(display.showManeuver(v,1,false,false)==ClusterDisplay::kOk);
+    Picture expected;unified::far(8,p,expected,true);
+    Shape actual=packetPolygons(port.batches.back());
+    assert(actual.size()==expected.size());samePolygons(actual,0,picturePolygons(expected));
+    s.hud_night=false;display.setSettings(s);assert(display.sameManeuver(v,2));
+    assert(display.showManeuver(v,2,false,false)==ClusterDisplay::kOk);
+    Shape restored=packetPolygons(port.batches.back());assert(restored.size()==day.size());samePolygons(restored,0,day);
+}
+
 int main() {
+    testNightOutlinePolicy();
     testShapesInside();
     testShapeFamilies();
     testMirror();

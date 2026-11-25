@@ -197,13 +197,13 @@ void drawHudRoute(const Layout& layout, int tail, const HudProfile&, const Junct
     drawRoute(layout, tail, colours, kJunctionStyle, picture, -1, mbxEnabled());
 }
 
-bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
+bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0, bool night = false) {
     if (spec.kind == kShapeRoundabout) {
         if (readableHud(p)) return ring60::picture(spec, p, pic, exitNumber);
         return roundaboutPicture(spec, p, pic, exitNumber);
     }
     if (readableHud(p)) {
-        return unified::far(spec.aa_type, p, pic);
+        return unified::far(spec.aa_type, p, pic, night);
     }
     if (mbxManeuver(spec, p, pic)) return true;   // Mapbox ordinary glyph; else the parametric shape below
     Shape design, fitted;
@@ -220,9 +220,18 @@ bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int 
 }
 }
 
+void Hud6waDisplay::setSettings(const Settings& s) {
+    if (s_.hud_night != s.hud_night && readableHud(p_) && sent_any_) {
+        redraw_ = true;
+        fresh_ = true;
+        stage_shown_ = 0;
+    }
+    s_ = s;
+}
+
 Batch Hud6waDisplay::showBatch(bool isNew, const HudTexts& t, const ShapeSpec& spec) const {
     Picture pic;
-    arrowPicture(spec, p_, pic);
+    arrowPicture(spec, p_, pic, 0, s_.hud_night);
     return pictureBatch(isNew ? "maneuver" : "redraw", pic, t, false);
 }
 
@@ -362,7 +371,7 @@ ClusterDisplay::Result Hud6waDisplay::sendRoute(int type) {
     if (!shadow_ && port_.waiting(kSlotRoute)) return kOk;   // drawn on a later step, from the newest stage
     Picture pic;
     int tail = tailFor(layout_, stage_, kStages);
-    if (readableHud(p_)) unified::route(type,p_,stage_,pic);
+    if (readableHud(p_)) unified::route(type,p_,stage_,pic,s_.hud_night);
     else { drawHudRoute(layout_,tail,p_,colours(),pic); fitJunction(pic); }
     Batch b = routeBatch(pic);
     log("ROUTE stage %d/%d, tail %d | %u calls%s", stage_, (int)kStages, tail, (unsigned)b.calls.size(),
@@ -451,8 +460,8 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     std::string what;
     if (junction) {
         if (readableHud(p_)) {
-            unified::roads(v.aa_type,p_,true,pic);
-            if (!routeInOverlay()) unified::route(v.aa_type,p_,stage_,pic);
+            unified::roads(v.aa_type,p_,true,pic,s_.hud_night);
+            if (!routeInOverlay()) unified::route(v.aa_type,p_,stage_,pic,s_.hud_night);
         } else {
             drawRoads(layout_,colours(),kJunctionStyle,pic);
             if (!routeInOverlay()) drawHudRoute(layout_,tailFor(layout_,stage_,kStages),p_,colours(),pic);
@@ -466,7 +475,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
         }
     } else {
         int number = v.has_exit_number && v.exit_number >= 1 && v.exit_number <= 99 ? (int)v.exit_number : 0;
-        if (!arrowPicture(spec, p_, pic, number))
+        if (!arrowPicture(spec, p_, pic, number, s_.hud_night))
             log("exit number %d omitted: no room for a readable number in this canvas", number);
         what = describeSpec(spec);
         if (spec.kind == kShapeRoundabout && number) {
