@@ -5,6 +5,7 @@
 #include "radio_fixtures.hpp"
 
 #include <assert.h>
+#include <string.h>
 
 static const uint32_t kLater = 10000;
 
@@ -135,7 +136,7 @@ static void testHoldOnlyForShownTuner() {
     fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001), 500);
     fmMsg(s, kMostFktFmStation, fmStation("", 101000, 0xD002), 1000);
     assert(s.fm.tuning && s.tuner == kTunerDab && s.audible == 1);
-    const RadioTileView v = radioTileView(s, false, 1500);
+    const RadioTileView v = radioTileView(s, false, kLater);
     assert(v.show && !v.hold && v.source == "DAB" && v.song == "Testfunk Radio" && v.artist == "Lauftext Probe");
 }
 
@@ -156,11 +157,71 @@ static void testStoppedDoesNotHold() {
     assert(v.show && !v.hold && v.state == 1 && v.song == "DAB");
 }
 
+static void testWaitForDlPlus() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktDynamicLabel, label("Testtitel - Testinterpret"), 1000);
+    RadioTileView v = radioTileView(s, false, 1500);
+    assert(!v.show && v.hold && v.holdUntilMs == 4000);
+    assert(v.holdReason && strcmp(v.holdReason, "waiting for DL+") == 0);
+    dabMsg(s, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 1700);
+    v = radioTileView(s, false, 1700);
+    assert(v.show && !v.hold && v.song == "Testtitel");
+}
+
+static void testWaitTimesOut() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext"), 1000);
+    assert(radioTileView(s, false, 3999).hold);
+    const RadioTileView v = radioTileView(s, false, 4000);
+    assert(v.show && !v.hold && v.song == "Testfunk Radio" && v.artist == "Testlauftext");
+}
+
+static void testWaitDoesNotExtend() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext eins"), 1000);
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext zwei"), 2000);
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext drei"), 3000);
+    const RadioTileView v = radioTileView(s, false, 4000);
+    assert(v.show && !v.hold && v.song == "Testfunk Radio" && v.artist == "Testlauftext drei");
+}
+
+static void testLateDlPlusSwitchesOnce() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktDynamicLabel, label("Testtitel - Testinterpret"), 1000);
+    RadioTileView v = radioTileView(s, false, 4000);
+    assert(v.show && v.song == "Testfunk Radio" && v.artist == "Testtitel - Testinterpret");
+    dabMsg(s, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 4100);
+    v = radioTileView(s, false, 4100);
+    assert(v.show && !v.hold && v.song == "Testtitel" && v.artist == "Testinterpret");
+}
+
+static void testStoppedDoesNotWait() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext"), 1000);
+    tableMsg(s, bytes(kTableNoAudio));
+    const RadioTileView v = radioTileView(s, false, 1100);
+    assert(v.show && !v.hold && v.state == 1);
+}
+
+static void testWaitOnlyForShownTuner() {
+    RadioState s;
+    dabStationShown(s);
+    fmMsg(s, kMostFktRadioText, radioText("Testlauftext"), 1000);
+    assert(s.fm.plusWaiting && s.tuner == kTunerDab);
+    const RadioTileView v = radioTileView(s, false, 1100);
+    assert(v.show && !v.hold && v.source == "DAB");
+}
+
 static void testFallbackNames() {
     RadioState d;
     dabAudible(d);
     dabMsg(d, kMostFktDynamicLabel, label("Lauftext Probe"));
-    RadioTileView v = radioTileView(d, false, 10);
+    RadioTileView v = radioTileView(d, false, kLater);
     assert(v.show && v.song == "DAB" && v.album.empty() && v.source == "DAB");
 
     RadioState f;
@@ -178,7 +239,7 @@ static void testFallbackNames() {
     RadioState n;
     fmAudible(n);
     fmMsg(n, kMostFktRadioText, radioText("Lauftext Probe"));
-    v = radioTileView(n, false, 10);
+    v = radioTileView(n, false, kLater);
     assert(v.show && v.song == "FM" && v.artist == "Lauftext Probe");
 }
 
@@ -263,8 +324,8 @@ static void testState() {
     RadioState u;
     dabMsg(u, kMostFktDynamicLabel, label("Lauftext Probe"));
     assert(u.audible == -1);
-    assert(radioTileView(u, true, 10).state == 1);
-    assert(radioTileView(u, false, 10).state == 2);
+    assert(radioTileView(u, true, kLater).state == 1);
+    assert(radioTileView(u, false, kLater).state == 2);
 }
 
 static void testUnknownTunerPrefersDab() {
@@ -274,7 +335,7 @@ static void testUnknownTunerPrefersDab() {
     RadioTileView v = radioTileView(s, false, 10);
     assert(v.show && v.source == "FM");
     dabMsg(s, kMostFktDynamicLabel, label("Lauftext Probe"));
-    v = radioTileView(s, false, 10);
+    v = radioTileView(s, false, kLater);
     assert(v.show && v.source == "DAB");
 }
 
@@ -401,6 +462,12 @@ int main() {
     testFmTuningHolds();
     testHoldOnlyForShownTuner();
     testStoppedDoesNotHold();
+    testWaitForDlPlus();
+    testWaitTimesOut();
+    testWaitDoesNotExtend();
+    testLateDlPlusSwitchesOnce();
+    testStoppedDoesNotWait();
+    testWaitOnlyForShownTuner();
     testFallbackNames();
     testFmWithName();
     testPlaceholderJpeg();

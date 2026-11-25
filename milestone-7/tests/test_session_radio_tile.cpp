@@ -126,6 +126,12 @@ static void dab(RadioTap& tap, uint16_t fkt, const Bytes& m) {
     tap.apply(kMostFBlockDabTuner, fkt, &m[0], m.size(), monoMs());
 }
 
+// A scrolling text stamped kPlusWaitMs ago: its DL+ wait is over, the tile shows it at once.
+static void dabText(RadioTap& tap, const char* text) {
+    const Bytes m = label(text);
+    tap.apply(kMostFBlockDabTuner, kMostFktDynamicLabel, &m[0], m.size(), monoMs() - kPlusWaitMs);
+}
+
 static void table(RadioTap& tap, const Bytes& m) {
     tap.apply(kMostFBlockConnectionMaster, kMostFktConnectionTable, &m[0], m.size(), monoMs());
 }
@@ -155,7 +161,7 @@ static void endSession(AASession* s, RadioTap& tap, int sv[2]) {
 
 static void tuneTestfunk(RadioTap& tap) {
     dab(tap, kMostFktDabStation, dabStation(0xD001, "TESTFUNK", "Testfunk Radio"));
-    dab(tap, kMostFktDynamicLabel, label("Testlauftext eins"));
+    dabText(tap, "Testlauftext eins");
     table(tap, bytes(kTableDab));
 }
 
@@ -324,12 +330,58 @@ static void testNewSessionStartsOver() {
     close(sv[1]);
 
     startOn(s, sv);
-    dab(tap, kMostFktDynamicLabel, label("Testlauftext zwei"));
+    dabText(tap, "Testlauftext zwei");
     Bytes m;
     assert(!nextTileMessage(sv[1], 600, m));
     openTile(sv[1]);
     expectMsg(sv[1], 2000, status(2, "DAB"));
     expectMsg(sv[1], 1000, metadata("Testfunk Radio", "Testlauftext zwei", "Testfunk Radio"));
+    endSession(s, tap, sv);
+}
+
+// A new text waits for its DL+: one tile with the title, none with the scrolling text in between.
+static void testWaitsForDlPlus() {
+    RadioTap tap;
+    int sv[2];
+    AASession* s = newSession(tap, sv);
+    tuneTestfunk(tap);
+    openTile(sv[1]);
+    expectTestfunk(sv[1]);
+    const uint32_t t0 = monoMs();
+    dab(tap, kMostFktDynamicLabel, label("Testtitel - Testinterpret"));
+    usleep(700000);
+    dab(tap, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"));
+    const Bytes want = metadata("Testtitel", "Testinterpret", "Testfunk Radio", radioPlaceholderArt());
+    int metas = 0;
+    Bytes m;
+    for (;;) {
+        const int left = 3500 - (int)(monoMs() - t0);
+        if (left <= 0 || !nextTileMessage(sv[1], left, m)) break;
+        if (msgId(m) != AA_MSG_LOCAL_MEDIA_METADATA) continue;
+        ++metas;
+        if (m != want) dump("got ", m);
+        assert(m == want);
+        assert(monoMs() - t0 >= 700 && monoMs() - t0 <= 2000);
+    }
+    assert(metas == 1);
+    endSession(s, tap, sv);
+}
+
+static void testWaitWithoutDlPlusTimesOut() {
+    RadioTap tap;
+    int sv[2];
+    AASession* s = newSession(tap, sv);
+    tuneTestfunk(tap);
+    openTile(sv[1]);
+    expectTestfunk(sv[1]);
+    const uint32_t t0 = monoMs();
+    dab(tap, kMostFktDynamicLabel, label("Testtitel - Testinterpret"));
+    Bytes m;
+    assert(!nextTileMessage(sv[1], kPlusWaitMs - 300, m));
+    expectMsg(sv[1], 1300, status(2, "DAB"));
+    expectMsg(sv[1], 200, metadata("Testfunk Radio", "Testtitel - Testinterpret", "Testfunk Radio"));
+    const uint32_t at = monoMs() - t0;
+    assert(at >= (uint32_t)kPlusWaitMs && at <= (uint32_t)kPlusWaitMs + 1000);
     endSession(s, tap, sv);
 }
 
@@ -345,7 +397,7 @@ static void testOtherMessagesIgnored() {
     phoneSends(sv[1], AA_CH_LOCAL_MEDIA, bytes(setup));
     Bytes m;
     assert(!nextTileMessage(sv[1], 600, m));
-    dab(tap, kMostFktDynamicLabel, label("Testlauftext zwei"));
+    dabText(tap, "Testlauftext zwei");
     expectMsg(sv[1], 2000, status(2, "DAB"));
     expectMsg(sv[1], 1000, metadata("Testfunk Radio", "Testlauftext zwei", "Testfunk Radio"));
     endSession(s, tap, sv);
@@ -378,6 +430,8 @@ int main() {
     testOpenSendsCurrentTile();
     testChangesAreCoalesced();
     testHoldThenStation();
+    testWaitsForDlPlus();
+    testWaitWithoutDlPlusTimesOut();
     testLargeArtIsFragmented();
     testNoSendWithoutChannel();
     testPhonePlaybackStopsTile();

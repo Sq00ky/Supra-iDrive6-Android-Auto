@@ -389,6 +389,43 @@ static void testDlPlus() {
     assert(s.dab.title.empty() && s.dab.artist.empty());
 }
 
+static void testTextStartsPlusWait() {
+    RadioState s;
+    assert(dabMsg(s, kMostFktDynamicLabel, label("Testtitel - Testinterpret"), 1000));
+    assert(s.dab.plusWaiting && s.dab.plusWaitStartMs == 1000);
+    assert(dabMsg(s, kMostFktDynamicLabel, label("Testlauftext zwei"), 2000));
+    assert(s.dab.plusWaiting && s.dab.plusWaitStartMs == 1000);
+    assert(dabMsg(s, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 2500));
+    assert(!s.dab.plusWaiting);
+
+    RadioState u;
+    dabMsg(u, kMostFktDynamicLabel, label("Testlauftext"), 1000);
+    dabMsg(u, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 1100);
+    assert(dabMsg(u, kMostFktDynamicLabel, label("Testlauftext zwei"), 2000));
+    assert(dabMsg(u, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 2100));
+    assert(!u.dab.plusWaiting);
+    assert(!dabMsg(u, kMostFktDynamicLabel, label("Testlauftext zwei"), 3000));
+    assert(!u.dab.plusWaiting);
+}
+
+static void testFmRepeatEndsWait() {
+    RadioState s;
+    fmMsg(s, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 900);
+    assert(fmMsg(s, kMostFktRadioText, radioText("Testlauftext"), 1000));
+    assert(s.fm.plusWaiting && s.fm.plusWaitStartMs == 1000);
+    assert(fmMsg(s, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 1050));
+    assert(!s.fm.plusWaiting);
+    assert(!fmMsg(s, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 1050));
+}
+
+static void testStationChangeClearsWait() {
+    RadioState s;
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext"), 1000);
+    assert(s.dab.plusWaiting);
+    dabMsg(s, kMostFktDabStation, bytes(kDabTuning), 1100);
+    assert(!s.dab.plusWaiting);
+}
+
 static void testLabel() {
     RadioState s;
     const Bytes l = label("BE");
@@ -470,6 +507,9 @@ int main() {
     testDuplicatesAreNoChange();
     testSpoke();
     testDlPlus();
+    testTextStartsPlusWait();
+    testFmRepeatEndsWait();
+    testStationChangeClearsWait();
     testLabel();
     testLogo();
     testNoLogo();

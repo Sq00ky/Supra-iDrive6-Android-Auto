@@ -13,6 +13,7 @@ namespace nbt {
 
 enum RadioTunerKind { kTunerNone = 0, kTunerDab = 1, kTunerFm = 2 };
 enum { kRadioMaxDabNames = 32 };
+enum { kPlusWaitMs = 3000 };   // a new text waits this long for its DL+/RT+
 
 struct TunerContent {
     std::string name, title, artist, text;
@@ -20,13 +21,15 @@ struct TunerContent {
     int slideId, pendingSlide;    // -1 none
     bool tuning;
     uint32_t tuneStartMs;
+    bool plusWaiting;             // new text seen, its DL+/RT+ not yet
+    uint32_t plusWaitStartMs;
     bool spoke;                   // any message since start
     uint32_t id;                  // DAB: SId; FM: PI, or the frequency without PI; 0 unknown
     bool idIsFreq;                // FM: id is the frequency
     uint32_t freqKHz;             // FM
     TunerContent()
-        : slideId(-1), pendingSlide(-1), tuning(false), tuneStartMs(0), spoke(false), id(0), idIsFreq(false),
-          freqKHz(0) {}
+        : slideId(-1), pendingSlide(-1), tuning(false), tuneStartMs(0), plusWaiting(false), plusWaitStartMs(0),
+          spoke(false), id(0), idIsFreq(false), freqKHz(0) {}
 };
 
 struct RadioState {
@@ -84,11 +87,18 @@ inline bool dropContent(TunerContent& t) {
     t.title.clear();
     t.artist.clear();
     t.text.clear();
+    t.plusWaiting = false;
     ch |= clearImg(t.slide);
     ch |= clearImg(t.logo);
     t.slideId = -1;
     t.pendingSlide = -1;
     return ch;
+}
+
+inline void textChanged(TunerContent& t, uint32_t nowMs) {
+    if (t.text.empty() || (t.plusWaiting && nowMs - t.plusWaitStartMs < (uint32_t)kPlusWaitMs)) return;
+    t.plusWaiting = true;
+    t.plusWaitStartMs = nowMs;
 }
 
 inline void learnDabName(RadioState& s, uint32_t sid, const std::string& name) {
@@ -143,7 +153,10 @@ inline bool applyDab(RadioState& s, uint16_t fkt, const uint8_t* p, size_t n, ui
     case kMostFktDynamicLabel: {
         std::string text;
         if (!decodeDynamicLabel(p, n, text)) return false;
-        ch |= setStr(d.text, text);
+        if (setStr(d.text, text)) {
+            ch = true;
+            textChanged(d, nowMs);
+        }
         return true;
     }
     case kMostFktDlPlus: {
@@ -151,6 +164,7 @@ inline bool applyDab(RadioState& s, uint16_t fkt, const uint8_t* p, size_t n, ui
         if (!decodeDlPlus(p, n, title, artist)) return false;
         ch |= setStr(d.title, title);
         ch |= setStr(d.artist, artist);
+        ch |= setFlag(d.plusWaiting, false);
         return true;
     }
     case kMostFktLogo: {
@@ -237,7 +251,10 @@ inline bool applyFm(RadioState& s, uint16_t fkt, const uint8_t* p, size_t n, uin
     case kMostFktRadioText: {
         std::string text;
         if (!decodeRadioText(p, n, text)) return false;
-        ch |= setStr(f.text, text);
+        if (setStr(f.text, text)) {
+            ch = true;
+            textChanged(f, nowMs);
+        }
         return true;
     }
     case kMostFktDlPlus: {
@@ -245,6 +262,7 @@ inline bool applyFm(RadioState& s, uint16_t fkt, const uint8_t* p, size_t n, uin
         if (!decodeDlPlus(p, n, title, artist)) return false;
         ch |= setStr(f.title, title);
         ch |= setStr(f.artist, artist);
+        ch |= setFlag(f.plusWaiting, false);
         return true;
     }
     default:

@@ -1244,7 +1244,7 @@ void AASession::pushRadioTile(RadioTap* tap) {
     if (v.hold) {
         radio_pacer_.holdUntil(v.holdUntilMs);
         if (!radio_holding_ || radio_hold_until_ != v.holdUntilMs)
-            printf("[RadioTile] %s holding the last tile while the tuner tunes\n", WallTime().hms);
+            printf("[RadioTile] %s holding the last tile %s\n", WallTime().hms, v.holdReason);
         radio_holding_ = true;
         radio_hold_until_ = v.holdUntilMs;
         return;

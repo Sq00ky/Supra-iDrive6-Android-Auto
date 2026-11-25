@@ -19,10 +19,11 @@ struct RadioTileView {
     bool show;                  // false: send nothing now
     bool hold;                  // the shown tuner tunes while playing: keep the last tile until holdUntilMs
     uint32_t holdUntilMs;
+    const char* holdReason;     // NULL unless hold
     int state;                  // 1 stopped, 2 playing
     std::string source, song, artist, album;
     std::vector<uint8_t> art;
-    RadioTileView() : show(false), hold(false), holdUntilMs(0), state(1) {}
+    RadioTileView() : show(false), hold(false), holdUntilMs(0), holdReason(NULL), state(1) {}
 };
 
 struct RadioTileSent {
@@ -72,6 +73,13 @@ inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint3
     if (v.state == 2 && t.tuning && nowMs - t.tuneStartMs < (uint32_t)kTuneHoldMs) {   // STOPPED goes out at once
         v.hold = true;
         v.holdUntilMs = t.tuneStartMs + kTuneHoldMs;
+        v.holdReason = "while the tuner tunes";
+        return v;
+    }
+    if (v.state == 2 && t.plusWaiting && nowMs - t.plusWaitStartMs < (uint32_t)kPlusWaitMs) {
+        v.hold = true;
+        v.holdUntilMs = t.plusWaitStartMs + kPlusWaitMs;
+        v.holdReason = "waiting for DL+";
         return v;
     }
     v.source = kind == kTunerDab ? "DAB" : "FM";
