@@ -496,7 +496,7 @@ int addMediaBrowserProbe(ServiceDiscovery& manifest) {
 int addRadioTile(ServiceDiscovery& m, bool on) {
     if (!on || findChannel(m, AA_CH_LOCAL_MEDIA)) return 0;
     m.channels.push_back(AaChannel(AA_CH_LOCAL_MEDIA, AaChannel::LOCAL_MEDIA));
-    printf("[SDR] channel %u: car local media (radio tile, on unless NBT_RADIO_TILE=0), empty config\n", (unsigned)AA_CH_LOCAL_MEDIA);
+    printf("[SDR] channel %u: car local media (radio tile), empty config\n", (unsigned)AA_CH_LOCAL_MEDIA);
     return 1;
 }
 

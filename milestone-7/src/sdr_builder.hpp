@@ -88,8 +88,8 @@ int addSystemAudioSink(ServiceDiscovery& manifest);
 // config, so the session logs whatever the phone sends there. Returns 1 if added.
 int addMediaBrowserProbe(ServiceDiscovery& manifest);
 
-// Radio tile (on unless NBT_RADIO_TILE=0): adds car local media (channel 18, descriptor field 16, empty config) so the radio can show in the
-// media tile. Returns 1 if added; 0 when `on` is false or the channel exists.
+// Radio tile: adds car local media (channel 18, descriptor field 16, empty config) so the radio can show in the media tile.
+// Returns 1 if added; 0 when `on` is false or the channel exists.
 int addRadioTile(ServiceDiscovery& manifest, bool on);
 
 // Keeps only the AudioConfigs with this sample rate in `channel`'s audio sink. Does nothing when no offer has that

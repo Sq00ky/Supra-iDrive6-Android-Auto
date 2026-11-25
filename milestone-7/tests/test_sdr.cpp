@@ -61,6 +61,11 @@ static void testRadioTileOffWords() {
         setenv("NBT_RADIO_TILE", words[i], 1);
         assert(!radioTileEnabled());
     }
+    const char* unknown[] = { "maybe", "2" };
+    for (size_t i = 0; i < sizeof unknown / sizeof unknown[0]; ++i) {
+        setenv("NBT_RADIO_TILE", unknown[i], 1);
+        assert(radioTileEnabled());
+    }
     unsetenv("NBT_RADIO_TILE");
     printf("radio tile off words OK\n");
 }
@@ -75,6 +80,10 @@ static void testRadioTileOn() {
     const std::vector<uint8_t> bytes = serializeManifest(on);
     assert(countChannelId(on, 18) == 1 && containsBytes(bytes, ch18, sizeof ch18));
     assert(bytes.size() == plain.size() + sizeof ch18 + 2);
+    ServiceDiscovery without = on;
+    for (size_t i = 0; i < without.channels.size(); ++i)
+        if (without.channels[i].id == 18) { without.channels.erase(without.channels.begin() + i); break; }
+    assert(countChannelId(without, 18) == 0 && serializeManifest(without) == plain);
     assert(addRadioTile(on, true) == 0 && countChannelId(on, 18) == 1 && serializeManifest(on) == bytes);
     printf("radio tile on OK\n");
 }
