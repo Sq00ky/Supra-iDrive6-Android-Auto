@@ -534,6 +534,16 @@ static bool ctlClaimOrForward() {
 static uint16_t g_aaPort = 5277;
 static volatile int g_btLink = 0;              // wireless thread: phone's Bluetooth setup link (/dev/btspp0) is open
 static volatile uint32_t g_btIdleSince = 0;     // wireless thread: waiting for that link since (monoSecs; 0 = not waiting)
+static int g_noJoinRun = 0;                     // wireless thread: Wi-Fi handshakes in a row the phone never connected after
+static const int kNoJoinHintTries = 3;          // ... before iDrive says "forget the phone, pair again" (a slow join is not a bad pairing)
+// Seconds to wait for the phone's TCP connect after it closes Bluetooth having accepted the Wi-Fi details: joining
+// the hotspot and DHCP can take longer than the old 8 s (car log #341: the phone was still in the ARP table as
+// "incomplete" when we gave up). NBT_WIFI_JOIN_WAIT_S=5..90, default 20.
+static int wifiJoinWaitS() {
+    const char* e = getenv("NBT_WIFI_JOIN_WAIT_S");
+    int v = (e && *e) ? atoi(e) : 20;
+    return v < 5 ? 5 : v > 90 ? 90 : v;
+}
 static volatile uint32_t g_noJoinAt = 0;        // wireless thread: phone took the Wi-Fi details, never joined (monoSecs)
 static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
 static volatile int g_apCfgState = -1;   // wireless thread's apCfgState: -1 not checked, 0 no usable Wi-Fi, 1 present
@@ -1472,7 +1482,7 @@ static void* wirelessThread(void*) {
                     break;
                 }
                 if (!g_sessionActive && (tick % 10) == 5) logStations("waiting for phone TCP connect");
-                if (!everActive && !g_sessionActive && tick == nbt::kHintJoinWaitS) {
+                if (!everActive && !g_sessionActive && tick == nbt::kHintJoinWaitS && g_noJoinRun + 1 >= kNoJoinHintTries) {
                     g_noJoinAt = monoSecs();   // iDrive: re-pair now, not after the phone gives up (~36 s + retries)
                     printf("[Wireless] [%9.3f] phone took the Wi-Fi details %d s ago and has not connected: iDrive says "
                            "forget the phone in the car and pair again (it keeps trying)\n", upSec(), tick);
@@ -1486,13 +1496,20 @@ static void* wirelessThread(void*) {
             // A phone that joined the Wi-Fi usually drops Bluetooth before its TCP connect arrives: give it a
             // few seconds before counting this as a "never joined" try.
             if (toUsb) continue;       // not a failed wireless try: no recovery, no passphrase rotation
-            for (int w = 0; !everActive && g_running && w < 40; ++w) {
+            const int joinWait = wifiJoinWaitS();
+            for (int w = 0; !everActive && g_running && w < joinWait * 5; ++w) {
                 if (wirelessSessionActive()) everActive = true;
                 else usleep(200000);
             }
             if (!everActive) {
-                g_noJoinAt = monoSecs();   // iDrive: "Phone not on Wi-Fi: forget phone in car, pair again"
+                ++g_noJoinRun;
+                printf("[Wireless] phone did not connect within %d s of closing Bluetooth (%d of %d in a row before iDrive "
+                       "suggests pairing again)\n", joinWait, g_noJoinRun, kNoJoinHintTries);
+                if (g_noJoinRun >= kNoJoinHintTries)
+                    g_noJoinAt = monoSecs();   // iDrive: "Phone not on Wi-Fi: forget phone in car, pair again"
                 recoverWifiPath("phone took the Wi-Fi details but did not connect");
+            } else {
+                g_noJoinRun = 0;
             }
             if (everActive) {
                 apNoJoin = 0;
@@ -1679,6 +1696,7 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     g_sessionActive = true;
     nbt::btResetRefusedRun();   // a working session ends any "car refused the phone" (coding) run
     g_noJoinAt = 0;
+    g_noJoinRun = 0;
     resetMedia("new session");
     if (server) server->markSessionActive();
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames
