@@ -174,7 +174,7 @@ static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the 
 static nbt::car::InputActivity g_carInput;   // any car control the driver touched: a consumer of g_most
 static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
 static nbt::car::CarVehicle g_vehicle;       // the car's wheel speed, gear and parking brake: a consumer of g_most
-static nbt::RadioTap g_radioTap;             // NBT_RADIO_TILE=1: the iDrive radio in the media tile: a consumer of g_most
+static nbt::RadioTap g_radioTap;             // radio tile (on unless NBT_RADIO_TILE=0): the iDrive radio in the media tile: a consumer of g_most
 static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 static nbt::car::FavouritePreview g_favouritePreview;
 static volatile sig_atomic_t g_favouritePeek = 0;
@@ -2637,7 +2637,7 @@ int main(int argc, char* argv[]) {
     if (!g_most.requireConsumer("vehicle sensors", g_vehicle.attach(g_most, vehicle)))
         printf("[Main] car speed, gear and parking brake failed to start.\n");
     if (nbt::radioTileEnabled()) {
-        printf("[RadioTile] on (NBT_RADIO_TILE=1): the iDrive radio in the Android Auto media tile, channel 18\n");
+        printf("[RadioTile] on: the iDrive radio in the Android Auto media tile, channel 18 (NBT_RADIO_TILE=0 turns it off)\n");
         if (g_most.requireConsumer("radio tile", g_radioTap.attach(g_most, &onRadioChange, &g_session)))
             g_session.setRadioTile(&g_radioTap);
     }

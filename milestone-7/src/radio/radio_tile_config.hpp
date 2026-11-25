@@ -5,7 +5,7 @@
 
 namespace nbt {
 
-// NBT_RADIO_TILE=1 shows the iDrive radio in the Android Auto media tile. Off by default.
-inline bool radioTileEnabled() { return envFlag("NBT_RADIO_TILE") == 1; }
+// On unless NBT_RADIO_TILE=0.
+inline bool radioTileEnabled() { return envFlag("NBT_RADIO_TILE") != 0; }
 
 } // namespace nbt

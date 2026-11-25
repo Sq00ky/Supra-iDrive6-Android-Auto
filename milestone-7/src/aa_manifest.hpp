@@ -33,7 +33,7 @@ enum AaChannelId {
     AA_CH_MICROPHONE = 14,
     AA_CH_BLUETOOTH = 15,
     AA_CH_MEDIA_BROWSER = 17,   // probe only (NBT_AA_BROWSE=1, sdr_builder addMediaBrowserProbe)
-    AA_CH_LOCAL_MEDIA = 18      // car local media, radio tile (NBT_RADIO_TILE=1)
+    AA_CH_LOCAL_MEDIA = 18      // car local media, radio tile (on unless NBT_RADIO_TILE=0)
 };
 
 enum AaSensorType {

@@ -40,22 +40,33 @@ static int countChannelId(const ServiceDiscovery& m, int id) {
     for (size_t i = 0; i < m.trailingChannels.size(); ++i) if (m.trailingChannels[i].id == id) ++n;
     return n;
 }
-static void testRadioTileOff() {
+static void testRadioTileDefaultOn() {
     unsetenv("NBT_RADIO_TILE");
     ServiceDiscovery unset = sessionManifest(dhuIdentity());
-    assert(!radioTileEnabled() && countChannelId(unset, 18) == 0);
+    assert(radioTileEnabled() && countChannelId(unset, 18) == 1);
+    printf("radio tile default on OK\n");
+}
+static void testRadioTileZeroOff() {
     setenv("NBT_RADIO_TILE", "0", 1);
     ServiceDiscovery zero = sessionManifest(dhuIdentity());
     assert(!radioTileEnabled() && countChannelId(zero, 18) == 0);
-    assert(serializeManifest(zero) == serializeManifest(unset));
     const std::vector<uint8_t> before = serializeManifest(zero);
     assert(addRadioTile(zero, false) == 0 && serializeManifest(zero) == before);
     unsetenv("NBT_RADIO_TILE");
-    printf("radio tile off OK\n");
+    printf("radio tile 0 off OK\n");
+}
+static void testRadioTileOffWords() {
+    const char* words[] = { "off", "no", "false" };
+    for (size_t i = 0; i < sizeof words / sizeof words[0]; ++i) {
+        setenv("NBT_RADIO_TILE", words[i], 1);
+        assert(!radioTileEnabled());
+    }
+    unsetenv("NBT_RADIO_TILE");
+    printf("radio tile off words OK\n");
 }
 static void testRadioTileOn() {
     const uint8_t ch18[] = { 0x08, 0x12, 0x82, 0x01, 0x00 };
-    unsetenv("NBT_RADIO_TILE");
+    setenv("NBT_RADIO_TILE", "0", 1);
     const std::vector<uint8_t> plain = serializeManifest(sessionManifest(dhuIdentity()));
     setenv("NBT_RADIO_TILE", "1", 1);
     assert(radioTileEnabled());
@@ -68,7 +79,9 @@ static void testRadioTileOn() {
     printf("radio tile on OK\n");
 }
 int main() {
-    testRadioTileOff();
+    testRadioTileDefaultOn();
+    testRadioTileZeroOff();
+    testRadioTileOffWords();
     testRadioTileOn();
     // The reference manifest is byte for byte what Google's Desktop Head Unit sends.
     {
