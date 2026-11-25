@@ -35,6 +35,13 @@ static void testTextLogged() {
     assert(!logDab(l, kMostFktDynamicLabel, label("Testlauftext"), body));
 }
 
+static void testControlCharsEscaped() {
+    RadioTextLog l;
+    std::string body;
+    assert(logDab(l, kMostFktDynamicLabel, label("Testzeile eins\nTestzeile zwei\x1f"), body));
+    assert(body == "dab text \"Testzeile eins\\x0ATestzeile zwei\\x1F\"");
+}
+
 static void testPlusLogged() {
     RadioTextLog l;
     std::string body;
@@ -72,6 +79,7 @@ static void testOtherMessagesIgnored() {
 
 int main() {
     testTextLogged();
+    testControlCharsEscaped();
     testPlusLogged();
     testRepeatNotLogged();
     testTunersSeparate();
