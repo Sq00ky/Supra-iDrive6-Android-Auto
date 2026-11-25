@@ -188,7 +188,7 @@ $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 SESSION_DEPS := $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp \
   $(ROOT)/src/aa_frames.hpp $(ROOT)/src/radio/radio_tap.hpp $(ROOT)/src/radio/radio_tile.hpp \
   $(ROOT)/src/radio/radio_state.hpp $(ROOT)/src/radio/most_tuner.hpp $(ROOT)/src/radio/wall_time.hpp \
-  $(ROOT)/src/radio/aa_local_media.hpp
+  $(ROOT)/src/radio/aa_local_media.hpp $(ROOT)/src/radio/radio_placeholder_art.hpp
 $(OUT)/test_session_sensors: $(SESSION_DEPS) stub_cryptor.hpp
 $(OUT)/test_session_rx_timeout: $(SESSION_DEPS) stub_cryptor.hpp
 $(OUT)/test_session_radio_tile: $(SESSION_DEPS) stub_cryptor.hpp radio_fixtures.hpp

@@ -186,17 +186,71 @@ static void testFmWithName() {
     assert(v.show && v.song == "TESTFUNK" && v.album == "TESTFUNK" && v.source == "FM");
 }
 
+static void testPlaceholderJpeg() {
+    const std::vector<uint8_t> p = radioPlaceholderArt();
+    assert(p.size() >= 4 && p.size() <= 10240);
+    assert(p[0] == 0xFF && p[1] == 0xD8 && p[p.size() - 2] == 0xFF && p[p.size() - 1] == 0xD9);
+}
+
 static void testArt() {
     RadioState s;
     dabStationShown(s);
-    assert(radioTileView(s, false, 10).art.empty());
+    assert(radioTileView(s, false, 10).art == radioPlaceholderArt());
     dabMsg(s, kMostFktLogo, bytes(kLogo));
     assert(radioTileView(s, false, 10).art == s.dab.logo);
     dabMsg(s, kMostFktSlideAnnounce, announce(5));
     dabMsg(s, kMostFktSlide, slide(5, 0x05));
     const RadioTileView v = radioTileView(s, false, 10);
     assert(v.art == s.dab.slide && v.art != s.dab.logo);
-    assert(radioTileArt(s.dab) == s.dab.slide);
+    assert(radioTileArt(s, kTunerDab) == s.dab.slide);
+}
+
+static void fmHeard(RadioState& s, int pi, uint32_t freqKHz = 100000) {
+    fmAudible(s);
+    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", freqKHz, pi), 1);
+}
+
+static void testFmArtSameProgramme() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktLogo, bytes(kLogo));
+    fmHeard(s, 0xD001);
+    RadioTileView v = radioTileView(s, false, kLater);
+    assert(v.source == "FM" && !s.dab.logo.empty() && v.art == s.dab.logo);
+    dabMsg(s, kMostFktSlideAnnounce, announce(5));
+    dabMsg(s, kMostFktSlide, slide(5, 0x05));
+    v = radioTileView(s, false, kLater);
+    assert(v.art == s.dab.slide && v.art != s.dab.logo);
+}
+
+static void testFmArtOtherProgramme() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktLogo, bytes(kLogo));
+    fmHeard(s, 0xD002);
+    const RadioTileView v = radioTileView(s, false, kLater);
+    assert(v.source == "FM" && v.art == radioPlaceholderArt());
+}
+
+static void testFmFrequencyIsNotProgramme() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktLogo, bytes(kLogo));
+    fmHeard(s, -1, 0xD001);
+    assert(s.fm.idIsFreq && s.fm.id == s.dab.id);
+    const RadioTileView v = radioTileView(s, false, kLater);
+    assert(v.source == "FM" && v.art == radioPlaceholderArt());
+}
+
+static void testStationChangeShowsPlaceholder() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktLogo, bytes(kLogo));
+    dabMsg(s, kMostFktDabStation, bytes(kDabTuning), 1000);
+    RadioTileView v = radioTileView(s, false, 2000);
+    assert(!v.show && v.hold);
+    v = radioTileView(s, false, 4001);
+    assert(v.show && v.song == "DAB" && v.art == radioPlaceholderArt() && v.art != s.dab.logo);
 }
 
 static void testState() {
@@ -229,6 +283,7 @@ static void testUnknownTunerPrefersDab() {
 static void checkNeverEmpty(const RadioState& s, uint32_t nowMs) {
     const RadioTileView v = radioTileView(s, false, nowMs);
     assert(!v.show || !v.song.empty());
+    assert(!v.show || !v.art.empty());
 }
 
 static void testNeverEmptySong() {
@@ -350,7 +405,12 @@ int main() {
     testStoppedDoesNotHold();
     testFallbackNames();
     testFmWithName();
+    testPlaceholderJpeg();
     testArt();
+    testFmArtSameProgramme();
+    testFmArtOtherProgramme();
+    testFmFrequencyIsNotProgramme();
+    testStationChangeShowsPlaceholder();
     testState();
     testUnknownTunerPrefersDab();
     testNeverEmptySong();

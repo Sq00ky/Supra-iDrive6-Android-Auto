@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #pragma once
 // What the Android Auto media tile shows for the audible radio, and when to send it. Pure, no I/O, no clock.
+#include "radio/radio_placeholder_art.hpp"
 #include "radio/radio_state.hpp"
 
 #include <stdint.h>
@@ -49,9 +50,16 @@ inline std::string fallbackName(int kind, const TunerContent& t) {
 
 }  // namespace radio_detail
 
-// The one place the art passes before it is sent.
-inline std::vector<uint8_t> radioTileArt(const TunerContent& t) {
-    return !t.slide.empty() ? t.slide : t.logo;
+inline std::vector<uint8_t> radioPlaceholderArt() {
+    return std::vector<uint8_t>(kRadioPlaceholderJpeg, kRadioPlaceholderJpeg + sizeof(kRadioPlaceholderJpeg));
+}
+
+// The one place the art passes before it is sent. FM borrows the DAB picture only for the same programme (PI == SId).
+inline std::vector<uint8_t> radioTileArt(const RadioState& s, int kind) {
+    if (kind != kTunerDab && (s.fm.id == 0 || s.fm.idIsFreq || s.fm.id != s.dab.id)) return radioPlaceholderArt();
+    if (!s.dab.slide.empty()) return s.dab.slide;
+    if (!s.dab.logo.empty()) return s.dab.logo;
+    return radioPlaceholderArt();
 }
 
 inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint32_t nowMs) {
@@ -76,7 +84,7 @@ inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint3
         v.song = station;
         v.artist = t.text;
     }
-    v.art = radioTileArt(t);
+    v.art = radioTileArt(s, kind);
     v.show = !v.song.empty();
     return v;
 }
