@@ -11,13 +11,16 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
-> **v1.9.120 / rhmiapp-97: NBTApps install fix, BMW F15 HUD profile, Turkish, log privacy.**
+> **v1.9.120 / rhmiapp-97: NBTApps install fix, wireless connect fix, BMW F15 HUD profile, Turkish, log privacy.**
 > - **#332**: dropped 8 orphaned textIdModels (230-237 -> texts 301-308, the old favourites submenu) that every language
 >   lacked; the NBTApps installer refused the release. `tests/test_text_ids.py` now fails `make check` on any missing text.
 > - **F15 HUD profile** (@LeongKY, #326): opt-in `F-Series (6WA-F15)` under HUD profiles, plus `tools/hudprobe`.
 >   `NBT_MFL_WHEEL_FALLBACK=0` no longer counts as on.
 > - **HUD late answers** (@sabifa, #316): a cold cluster's late answers no longer turn the arrows off.
 > - **Turkish** texts (@Deepblow0, #320).
+> - **Wireless connect after a slow join** (#341): listener sockets are close-on-exec (a long-lived child such as
+>   `sloginfo -w` kept 5277 bound, so re-creating the listener failed until a restart); 20 s for the phone's connect
+>   after Bluetooth closes (`NBT_WIFI_JOIN_WAIT_S`, was 8 s); the re-pair hint only after 3 failed joins in a row.
 > - **Log privacy** (#324): GPS position, full phone Bluetooth address, raw DSI payloads, raw Bluetooth handshake
 >   bytes and per-frame Android Auto lines only with `NBT_VERBOSE=1` (which now needs a real 1/on).
 >
