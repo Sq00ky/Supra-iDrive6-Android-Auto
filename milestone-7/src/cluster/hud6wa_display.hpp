@@ -120,6 +120,8 @@ private:
         return hudterm::junctionFits(layout_, kStages, p_.canvas, hudterm::k6wa.glyph, hudterm::k6wa.canvas.y1 + 1,
                                      p_.glyph, p_.canvas.y1 + 1);
     }
+    int distanceBarLevel(const NavView& v);
+    void appendDistanceBar(hudterm::Batch& b, int level, bool redraw) const;
     Result sendRoute(int type);
     Result sendLanes(const NavView& v);
 
@@ -139,6 +141,8 @@ private:
     uint32_t epoch_;         // the terminal's epoch when our last picture was queued
     int measured_w_, measured_h_;   // the picture-buffer size last fitted into p_ (0 = still on the profile defaults)
     HudTexts shown_;         // the texts last queued
+    double barRange_;        // largest distance reported for the current maneuver
+    int barLevel_;           // last queued bar level, -1 when the bar is hidden
 
     // the junction view of the maneuver shown
     bool has_layout_;        // the maneuver has one (the destination keeps its flag)

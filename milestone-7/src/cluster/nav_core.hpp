@@ -50,7 +50,7 @@ public:
     Core(ClusterDisplay& d, const Settings& s, LogFn log = NULL, void* log_user = NULL);
 
     // One tick. v = the next maneuver, or NULL when there is no guidance (or it went stale).
-    void step(const NavView* v, double now, const char* why_none = "guidance ended");
+    void step(const NavView* v, double now, const char* why_none = "guidance ended", bool ended = false);
     // After step(): the line to show while no maneuver is up (what the phone is playing), "" for none. A maneuver
     // has the panel to itself: nothing is done while one is shown, and the line comes back once it is cleared.
     // With media_show_s set, a line is taken down again that long after it came up and stays away until it changes

@@ -42,7 +42,10 @@ struct Settings {
     double approach_mi;    // kApproachDistance: show a maneuver only within this many miles (0 = at once)
     double hysteresis;     // once shown, the same maneuver hides again only past approach_mi * hysteresis
     size_t dist_chars;     // with an approach rule on: distance text <= 3 chars + the KOMBI's mi/ft
-    bool hide_bar;         // red distance bar hidden (pct 255); its percentage means nothing without a factory route
+    bool hide_bar;         // J29's factory red distance bar
+    bool hud_bar;          // use a measured MOST HUD distance bar
+    bool show_departure;   // show an initial zero-distance departure while waiting for a turn
+    bool clear_route_end;  // clear on explicit INACTIVE without reroute grace
     double grace_s;        // guidance off this long before the clear (rerouting blips survive)
     double first_dist_s;   // a new maneuver without a distance yet waits this long, then shows "-"
     double min_update_s;   // distance updates at most this often
@@ -59,7 +62,8 @@ struct Settings {
     double media_refresh_s; // the idle text's panel is switched on again this often (0 = only when the text changes)
     double media_show_s;    // the idle text is cleared again this long after it changed (0 = it stays while it plays)
     Settings() : approach(kApproachTime), warn_s(50), main_s(20), mway_warn_m(2000), mway_main_m(1000),
-                 approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
+                 approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), hud_bar(false), show_departure(false), clear_route_end(false),
+                 grace_s(8.0), first_dist_s(3.0),
                  min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1),
                  junction(true), near_m(300), hud_lanes(false), media_refresh_s(0), media_show_s(0) {}
 };

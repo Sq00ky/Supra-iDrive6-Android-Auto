@@ -170,7 +170,7 @@ volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp 
 
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa hudprobe
 
 # osdprobe: standalone check that this unit lets us own an LM surface for our own window.
 osdprobe: tools/osdprobe.cpp
@@ -190,6 +190,12 @@ ricprobe: tools/ricprobe.cpp src/cluster/ric_list.hpp src/cluster/j29_graph.hpp
 	@echo [CXX] tools/ricprobe.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/ricprobe.cpp -lsocket -lang-c++
 	@echo [DONE] Built $@
+
+# hudprobe: standalone read-only layout discovery over MOST, with an Ethernet KOMBI reachability check.
+HUDPROBE_SRCS = tools/hudprobe.cpp src/most/client.cpp src/dsi_client.cpp
+
+hudprobe: $(HUDPROBE_SRCS) tools/hudprobe_protocol.hpp tools/hudprobe_visual.hpp tools/hudprobe_text.hpp $(wildcard src/most/*.hpp) src/cluster/hudterm.hpp src/dsi_client.hpp
+	$(CXX) $(CXXFLAGS) -o $@ $(HUDPROBE_SRCS) -lsocket -lang-c++
 
 # kdprobe: the supported overlay path -- KD window + EGL/GLES surface (see tools/kdprobe.cpp).
 kdprobe: tools/kdprobe.cpp

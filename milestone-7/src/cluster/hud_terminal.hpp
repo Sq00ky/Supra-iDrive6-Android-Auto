@@ -46,6 +46,11 @@
 //     traffic is a car test still to do. Its state is kept when the link drops (a route that ended meanwhile leaves us
 //     yielded until the next one ends, the safe side) and reset when the host changes.
 //
+// A cold cluster answers late: for minutes after a cold start every answer came alike 1.1 to 7.5 s after its call, none
+// was lost (6WA, 2026-11-20). So replyMs is long, and the cluster's copy of an answer to us is ours while its call
+// waits and within copyMs of the call or of our answer. A window from the call alone took a late copy for the
+// navigation drawing; one of replyMs would take the navigation for our copies for that long.
+//
 // Answers to calls the terminal dropped (leaving kReady drops the calls in flight) can still arrive. Within replyMs of
 // the drop, a success is a stray and an error is counted (lateErrors) and does not fail the terminal: a navigation
 // taking over the instances can make a call of ours fail that was fine when it was sent.
@@ -66,15 +71,16 @@ const char* statusName(Status s);
 struct Config {
     HandleSet handles;       // the only handles calls may use
     int navFrame;            // the factory navigation's frame instance: SetVisibility(navFrame, 0) ends a route
-    uint32_t replyMs;        // per call, and the copy window
+    uint32_t replyMs;        // per call: no answer in this long fails the terminal
+    uint32_t copyMs;         // the copy window; an answer later than this is slow
     uint32_t navQuietMs;     // quiet after the frame went off before the navigation counts as finished
     unsigned maxInFlight;    // calls sent and not yet answered; a batch goes out back to back up to this
     unsigned maxBatch;       // a full Mapbox picture needs up to 55 calls including texts, hides and route cleanup
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
     uint16_t measureHandle;  // ImageGetSize is asked for this handle once the terminal is ready, for the driver to fit
                              // its box to the cluster's real buffer (0 = don't; the shadow mode leaves it 0)
-    Config() : navFrame(-1), replyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(64), logBatches(false),
-               measureHandle(0) {}
+    Config() : navFrame(-1), replyMs(10000), copyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(64),
+               logBatches(false), measureHandle(0) {}
 };
 
 // What a batch draws: its own slot's waiting batch is the only one it may take the place of or merge into.
@@ -87,7 +93,9 @@ struct Batch {
     uint8_t slot;            // Slot; kSlotAll (a clear) replaces every waiting batch
     Batch() : full(false), slot(kSlotMain) {}
     explicit Batch(const char* l, bool f = false, uint8_t s = kSlotMain) : label(l), full(f), slot(s) {}
-    void add(uint16_t fkt, const std::vector<uint8_t>& p) { calls.push_back(Call(fkt, p)); }
+    void add(uint16_t fkt, const std::vector<uint8_t>& p, bool afterReplies = false, bool allowTimeout = false) {
+        calls.push_back(Call(fkt, p, afterReplies, allowTimeout));
+    }
 };
 
 enum SubmitResult {
@@ -103,6 +111,7 @@ struct TerminalStats {
     uint32_t batches, batchesDone, batchesDropped, replaced, merged, refused;
     uint32_t calls, answers, copies, strays, navMsgs, timeouts, errors, lateErrors;
     uint32_t remeasures;     // the guidance moved (kGuidanceMovedFkt): the picture buffer asked again
+    uint32_t slow;           // answers later than copyMs
 };
 
 class Core {
@@ -139,7 +148,7 @@ public:
     TerminalStats stats() const { return stats_; }
 
 private:
-    struct InFlight { uint16_t fkt, handle; uint32_t sentMs; };
+    struct InFlight { uint16_t fkt, handle; uint32_t sentMs; bool allowTimeout; };
 
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
@@ -147,7 +156,9 @@ private:
     void fail(const char* why, uint32_t now);
     void refresh(const char* why, uint32_t now);
     void dropWork(uint32_t now);
+    void expireDropped(uint32_t now);
     bool takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now);
+    bool awaited(const most::View& m, uint32_t now) const;
     void finishIfDone(uint32_t now);
 
     Config cfg_;
@@ -175,7 +186,7 @@ private:
     // inFlight_, so no answer keeps the defaults instead of failing the terminal; a late one is still taken.
     bool measureDue_;        // ready, not yet asked this ready-session
     bool measureInFlight_;   // asked, waiting for the answer
-    bool measureLate_;       // past the reply timeout, and still listening
+    bool measureLate_;       // past copyMs, and still listening
     uint32_t measureSentMs_;
     bool haveSize_;
     int sizeW_, sizeH_;

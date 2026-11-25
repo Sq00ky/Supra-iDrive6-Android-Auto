@@ -3,6 +3,7 @@ release/
 *.o
 *.d
 nbt-aad
+hudprobe
 wfd_probe
 pf_aa
 test_display

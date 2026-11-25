@@ -28,6 +28,7 @@
       <raAction id="411"/>
       <raAction id="412"/>
       <raAction id="413"/>
+      <raAction id="415"/>
       <raAction id="83"/>
       <raAction id="87"/>
       <raAction id="91"/>
@@ -85,6 +86,10 @@
       </textIdModel>
       <raBoolModel id="403"/>
       <textIdModel id="406" textId="406">
+        <synonyms/>
+      </textIdModel>
+      <raBoolModel id="455"/>
+      <textIdModel id="417" textId="408">
         <synonyms/>
       </textIdModel>
       <textIdModel id="407" textId="407">
@@ -354,10 +359,11 @@
         <components>
           <radiobutton action="411" id="408" model="401" text="..." textModel="404"/>
           <radiobutton action="412" id="409" model="402" text="..." textModel="405"/>
+          <radiobutton action="415" id="416" model="455" text="F-Series (6WA-F15)" textModel="417"/>
           <radiobutton action="413" id="410" model="403" text="..." textModel="406"/>
         </components>
       </hmiState>
-    
+
       <hmiState id="18" parentId="14" text="Car manufacturer">
         <properties><property id="24" value="3"/></properties>
         <components>

@@ -173,11 +173,12 @@ bool Core::distanceHold(const NavView& v) {
     return true;
 }
 
-void Core::step(const NavView* in, double now, const char* why_none) {
+void Core::step(const NavView* in, double now, const char* why_none, bool ended) {
     if (stop_ != kRunning) return;
     // A DEPART at 0 m counts as no guidance: after a reroute the arrow shown stays through it (and goes after grace_s,
     // as in any gap) instead of a straight arrow at 0 yd for a second, drawn and then replaced or cleared.
-    bool depart = in && departHere(*in);
+    const bool parkDeparture = s_.show_departure && (!has_shown_ || departHere(shown_));
+    bool depart = in && departHere(*in) && !parkDeparture;
     if (depart) {
         if (!depart_) log("DEPART at 0 m: not shown%s", has_shown_ ? ", the arrow shown stays" : "");
         in = NULL;
@@ -187,6 +188,10 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     if (!in) {
         no_dist_ = false;
         if (!has_shown_) return;
+        if (ended && s_.clear_route_end) {
+            clear(why_none);
+            return;
+        }
         d_.guidanceGap();                              // a guidance gap (a reroute)
         if (!off_) { off_ = true; off_since_ = now; }
         if (now - off_since_ >= s_.grace_s) clear(why_none);
@@ -253,7 +258,9 @@ void Core::step(const NavView* in, double now, const char* why_none) {
             return;
         }
     }
-    if (!v.sameDistance(last_dist_) && now - last_dist_t_ >= s_.min_update_s) {
+    const bool barChanged = s_.hud_bar && (v.has_step_m != last_dist_.has_step_m ||
+                            (v.has_step_m && v.step_m != last_dist_.step_m));
+    if ((!v.sameDistance(last_dist_) || barChanged) && now - last_dist_t_ >= s_.min_update_s) {
         ClusterDisplay::Result r = d_.updateDistance(v, now);
         if (r != ClusterDisplay::kOk) {
             fail(r);
@@ -476,26 +483,31 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         stopHint_ = "not a J29, or a changed instance handle: NBT_KOMBI_NAV_HANDLE";
         return true;
     }
-    if (!strcmp(id, "6wa")) {
+    if (!strcmp(id, "6wa") || !strcmp(id, "6wa-f15")) {
         if (!most) {
-            printf("[KombiNav] NBT_CLUSTER=6wa: no MOST client to send through: cluster arrows disabled\n");
+            printf("[KombiNav] NBT_CLUSTER=%s: no MOST client to send through: cluster arrows disabled\n", id);
             return false;
         }
         const char* h = getenv("NBT_HUDTERM");
         shadow_ = h && *h && strcmp(h, "on") != 0;
         if (shadow_ && strcmp(h, "log") != 0)
             printf("[KombiNav] NBT_HUDTERM=%s unknown (log, on): shadow mode, nothing is sent\n", h);
-        hudterm::HudProfile p = hudterm::k6wa;   // a copy: env can retune the box on the car without a rebuild
+        hudterm::HudProfile p = !strcmp(id, "6wa-f15") ? hudterm::k6waF15 : hudterm::k6wa;   // a copy: env can retune the box on the car without a rebuild
         hudterm::applyHudEnv(p);
-        printf("[KombiNav] HUD 6wa: start canvas %d,%d-%d,%d glyph %d,%d-%d,%d fill %u (fitted to the cluster's own "
+        printf("[KombiNav] HUD %s: start canvas %d,%d-%d,%d glyph %d,%d-%d,%d fill %u (fitted to the cluster's own "
                "picture buffer at start; NBT_HUD_CANVAS/GLYPH/FILL pin it)\n",
-               p.canvas.x0, p.canvas.y0, p.canvas.x1, p.canvas.y1,
+               p.name, p.canvas.x0, p.canvas.y0, p.canvas.x1, p.canvas.y1,
                p.glyph.x0, p.glyph.y0, p.glyph.x1, p.glyph.y1, (unsigned)p.fill);
         hudterm::Config c;
         c.handles = hudterm::handlesOf(p);
         c.navFrame = p.frame;
         c.logBatches = !shadow_;
-        c.measureHandle = shadow_ ? 0 : p.bufA;   // ask the buffer's real size once ready; the display fits the box to it
+        c.measureHandle = shadow_ ? 0 : (p.singlePicture ? p.bufB : p.bufA);   // ask the buffer's real size once ready; the display fits the box to it
+        if (p.panelBeforeText) {
+            settings_.show_departure = true;
+            settings_.clear_route_end = true;
+        }
+        settings_.hud_bar = p.distanceBar && envFlag("NBT_KOMBI_NAV_SHOW_BAR") != 0;
         terminal_ = new hudterm::HudTerminal(c);   // never deleted before exit once attached: the client calls it
         if (!most->requireConsumer("HUDTerminal", terminal_->attach(*most, !shadow_) && terminal_->start())) {
             printf("[KombiNav] cannot attach the HUDTerminal to the MOST client: cluster arrows disabled\n");
@@ -503,10 +515,10 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         }
         display_ = new Hud6waDisplay(*terminal_, p, shadow_);
         target_ = "HUDTerminal 82/00 on MOST";
-        stopHint_ = "a call failed, or this cluster is not laid out like the 6wa profile: see the [HudTerm] lines";
+        stopHint_ = "a call failed, or this cluster is not laid out like the selected HUD profile: see the [HudTerm] lines";
         return true;
     }
-    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa): cluster arrows disabled\n", id);
+    printf("[KombiNav] NBT_CLUSTER=%s unknown (j29, 6wa, 6wa-f15): cluster arrows disabled\n", id);
     return false;
 }
 
@@ -615,10 +627,8 @@ void KombiNav::start(most::Client* most) {
     envNumber("NBT_KOMBI_MEDIA_SHOW_S", 0, 600, settings_.media_show_s);
     e = getenv("NBT_KOMBI_NAV_INPLACE");
     if (e && *e && e[0] >= '0' && e[0] <= '2' && !e[1]) settings_.inplace = e[0] - '0';
-    e = getenv("NBT_CLUSTER");                       // the env wins, like every other setting here
     char clusterFlag[24];
-    if (!(e && *e) && nbt::flagText("cluster", clusterFlag, sizeof(clusterFlag))) e = clusterFlag;
-    if (!createDisplay(e && *e ? e : "j29", most)) return;
+    if (!createDisplay(nbt::clusterProfile(clusterFlag, sizeof(clusterFlag)), most)) return;
     core_ = new Core(*display_, settings_, &KombiNav::logLine, this);
     if (client_)
         printf("[KombiNav] cluster/HUD arrows %s (%s); KOMBI %s:%u handle 0x%X, approach %s, bar %s, iDrive-route "
@@ -820,7 +830,7 @@ void KombiNav::tick(double now) {
         if (now - last_msg > settings_.nav_stale_s) why = "navigation status frozen";
         else pv = &v;
     }
-    core_->step(pv, now, why);
+    core_->step(pv, now, why, m.guidanceEnded());
     core_->idle(playing, now);
     if (core_->takeFallback() && !fallback_noted_) {
         fallback_noted_ = true;

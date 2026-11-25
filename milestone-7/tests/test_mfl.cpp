@@ -162,6 +162,25 @@ int main() {
         CHECK(d.feed(0xC30, 0xC, notch, 1, ev, 2) == 0);        // turning the wheel sends nothing
         CHECK(d.feed(0xC30, 0xC, rest, 1, ev, 2) == 0);
         CHECK(d.feed(0x511, 0xC, two, 1, ev, 2) == 1 && ev[0].keycode == AAK_MEDIA_NEXT);   // the skip buttons as before
+
+        d.reset();
+        const uint8_t opposite[1] = { 0x80 };
+        CHECK(d.feed(0xC30, 0xC, notch, 1, ev, 2, 100) == 0);
+        CHECK(d.feed(0xC30, 0xC, rest, 1, ev, 2, 110) == 0);
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2, 120) == 1 && ev[0].turn == -1);
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2, 121) == 0);
+        CHECK(d.feed(0xC31, 0xC, zero, 1, ev, 2, 130) == 1 && ev[0].turn == 0);
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2, 140) == 1 && ev[0].turn == 0);  // consumed
+        d.feed(0xC31, 0xC, zero, 1, ev, 2, 150);
+        CHECK(d.feed(0xC30, 0xC, opposite, 1, ev, 2, 200) == 0);
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2, 300) == 1 && ev[0].turn == 1);
+        d.feed(0xC31, 0xC, zero, 1, ev, 2, 310);
+        d.feed(0xC30, 0xC, notch, 1, ev, 2, 400);
+        d.feed(0xC30, 0xC, notch, 1, ev, 2, 2400);  // a repeat does not refresh the turn
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2, 2401) == 1 && ev[0].turn == 0);
+        d.feed(0xC30, 0xC, opposite, 1, ev, 2, 2500);
+        d.reset();
+        CHECK(d.feed(0xC31, 0xC, one, 1, ev, 2, 2510) == 1 && ev[0].turn == 0);  // link reset
         setenv("NBT_KOMBI_TRACKS_PRESS", "0", 1);
         CHECK(readMflConfig().n == 4);
         setenv("NBT_KOMBI_TRACKS_PRESS", "C40:1", 1);

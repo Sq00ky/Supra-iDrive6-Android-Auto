@@ -114,8 +114,8 @@ inline MflConfig readMflConfig() {
         mflDropKey(c, AAK_MEDIA_PLAY_PAUSE);
         mflParseBindings(getenv("NBT_MFL_PLAYPAUSE"), c.b, kMflBindings, &c.n, AAK_MEDIA_PLAY_PAUSE, "MFL_PLAYPAUSE");
     }
-    // Thumb-wheel press (J29: fkt C31, 01 down / 00 up), only with the cluster track title on. The wheel's rotation
-    // (C30) is deliberately not here. NBT_KOMBI_TRACKS_PRESS=<fkt[:value]> names another function, =0 turns it off.
+    // Thumb-wheel press (fkt C31, 01 down / 00 up), only with cluster track controls on.
+    // NBT_KOMBI_TRACKS_PRESS=<fkt[:value]> names another function, =0 turns it off.
     if (kombiTracksEnabled()) {
         const char* p = getenv("NBT_KOMBI_TRACKS_PRESS");
         mflParseBindings(p ? p : "C31", c.b, kMflBindings, &c.n, kMflWheelKey, "MFL_WHEEL");
@@ -127,19 +127,26 @@ inline MflConfig readMflConfig() {
 struct MflEvent {
     int down;               // 1 press, 0 release
     uint32_t keycode;       // AA (Android) keycode
-    const char* what;       // "MFL_NEXT" / "MFL_PREV" / "MFL_PLAYPAUSE"
+    const char* what;
+    int turn;               // most recent thumb-wheel direction, attached only to a press
 };
 
 class MflDecoder {
 public:
-    enum { kFkts = 16 };
+    enum { kFkts = 16, kWheelTurnMs = 2000 };
 
-    MflDecoder() : n_(0) {}
+    MflDecoder() : n_(0), turn_(0), turnMs_(0), wheelValue_(0x7F) {}
 
-    void setConfig(const MflConfig& cfg) { cfg_ = cfg; }
+    void setConfig(const MflConfig& cfg) { cfg_ = cfg; reset(); }
+
+    void reset() {
+        for (int i = 0; i < cfg_.n; ++i) cfg_.b[i].pressed = false;
+        turn_ = 0;
+        wheelValue_ = 0x7F;
+    }
 
     // One message on 15/02. Returns the number of events written to `out` (at most kMflBindings * 2).
-    int feed(int fkt, int op, const uint8_t* data, size_t len, MflEvent* out, int max) {
+    int feed(int fkt, int op, const uint8_t* data, size_t len, MflEvent* out, int max, uint32_t rxMs = 0) {
         if (!data || len == 0) return 0;
         const uint8_t v = data[0];
         int n = 0;
@@ -158,6 +165,16 @@ public:
             }
         }
 
+        // BMW 6WA capture: C30 moves to either side of 0x7F and returns to rest.
+        // Ignore repeats and keep the direction through the return to rest, until the press consumes it.
+        if (fkt == 0xC30 && op == 0xC && len == 1 && v != wheelValue_) {
+            wheelValue_ = v;
+            if (v != 0x7F) {
+                turn_ = v < 0x7F ? -1 : 1;
+                turnMs_ = rxMs;
+            }
+        }
+
         // Keys: a binding is down while its value is seen, up on 0. A press is a change into that state.
         for (int i = 0; i < cfg_.n && n < max; ++i) {
             MflBinding& b = cfg_.b[i];
@@ -168,12 +185,18 @@ public:
                 out[n].down = 1;
                 out[n].keycode = b.key;
                 out[n].what = b.what;
+                out[n].turn = 0;
+                if (b.key == kMflWheelKey) {
+                    if (fkt == 0xC31 && (uint32_t)(rxMs - turnMs_) <= kWheelTurnMs) out[n].turn = turn_;
+                    turn_ = 0;
+                }
                 ++n;
             } else if (v == 0 && b.pressed) {
                 b.pressed = false;
                 out[n].down = 0;
                 out[n].keycode = b.key;
                 out[n].what = b.what;
+                out[n].turn = 0;
                 ++n;
             }
         }
@@ -198,6 +221,9 @@ private:
     MflConfig cfg_;
     Slot seen_[kFkts];
     int n_;
+    int turn_;
+    uint32_t turnMs_;
+    uint8_t wheelValue_;
 };
 
 } // namespace car

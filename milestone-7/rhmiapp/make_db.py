@@ -5,7 +5,7 @@
 import os, zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 LANGS = {"de": "Deutsch", "en-UK": "English (UK)", "en-US": "English (US)", "es-ES": "Espanol", "es-US": "Espanol (US)",
-         "fr-FR": "Francais", "fr-CA": "Francais (CA)", "it": "Italiano", "pt": "Portugues", "ru": "Russian", "pl": "Polski", "hu": "Hungarian"}
+         "fr-FR": "Francais", "fr-CA": "Francais (CA)", "it": "Italiano", "pt": "Portugues", "ru": "Russian", "pl": "Polski", "hu": "Hungarian", "tr": "Turkce"}
 ABOUT = ("NBT-AAD: native wireless Android Auto\\nDeveloped by nanaisu\\n"
          "Contributors: @houssems, @tom-pryor, @dn00, @sabifa,\\n"
          "@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft, @FreZZZeR, @LeongKY\\n"
@@ -28,11 +28,12 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          51: "Switch 2 Finger Gesture to Mute",   # 51 = gesture checkbox (native audio; 50 is kept for PR #285)
          49: "Song title in gauge cluster",   # 49 = now-playing checkbox (kombi_nav idle text, 6WA street line)
          48: "Prompts on car radio (BT, beta)",     # 48 = BT speech checkbox (rhmiapp-66)
-         # 400 / 404-406 = the HUD profile row, page title and its three choices.
+         # 400 / 404-406 = the HUD profile row, page title and choices.
          400: "HUD profiles",
          404: "G Series/Supra",
          405: "F-series (6WA)",
          406: "6WB (no driver yet)",
+         408: "F-Series (6WA-F15)",
          407: "Cyrillic street names in HUD",   # 407 = 6WA HUD Cyrillic checkbox (rhmiapp-99)
          22: "Show iDrive warnings",   # 22 = iDrive warnings checkbox (rhmiapp-32)
          23: "Settings",   # 23 = Settings row (hmiState 10) / page title (hmiState 14), rhmiapp-39
@@ -152,13 +153,16 @@ LANG_TEXTS = {
         336: "Nincs Bluetooth: töröld a telefont az autóban, párosítsd újra",  # No Bluetooth link: forget phone in car, pair again
         337: "Telefon nincs Wi-Fi-n: töröld az autóban, párosítsd újra",       # Phone not on Wi-Fi: forget phone in car, pair again
         338: "Az autó elutasítja a telefont: lásd coding-requirements.md (GitHub)",  # Car refused phone: see coding-requirements.md (GitHub)
-        # 400-407: HUD profilok (sor, oldalcím, három választás) és a 6WA HUD cirill opció
+        # 400-407: HUD profilok (sor, oldalcím, választások) és a 6WA HUD cirill opció
         400: "HUD profilok",                                        # HUD profiles
         404: "G sorozat/Supra",                                     # G Series/Supra
         405: "F-széria (6WA)",                                      # F-series (6WA)
         406: "6WB (még nem támogatott)",                            # 6WB (no driver yet)
         407: "Cirill betűs utcanevek a HUD-on",                     # Cyrillic street names in HUD
     },
+         "tr": {52: "Navigasyon sesleri Muzige karistirilsin", 51: "Iki Parmak Hareketini Sessize Almaya Cevir", 49: "Gosterge panelinde sarki adi", 340: "Aracta kullanilabilir Wi-Fi yok: USB kullanin", 341: "WiFi Direct kullanilamiyor: SSID adini manuel ayarlayin", 339: "Bluetooth aygitti bekleniyor", 335: "Wi-Fi Direct uzerinde telefon bekleniyor", 336: "Bluetooth baglantisi yok: telefonu aractan silin, tekrar eslestirin", 337: "Telefon Wi-Fi'de degil: aractan silin, tekrar eslestirin", 338: "Arac telefonu reddetti: coding-requirements.md (GitHub)", 48: "Arac radiosunda sesli uyarilar (BT, beta)", 22: "iDrive uyarilarini goster", 21: "Navigasyonu gosterge/HUD'da goster", 47: "Gunluk kaydini devre disi birak (performans testi)", 45: "Surum", 46: "Her mesafede yonlendirmeleri goster", 20: "Surus modu degisikliklerini goster", 19: "MENU tusu iDrive'i acar", 2: "Android Auto: Baglaniyor...", 18: "Gunlukleri USB'ye kaydet", 10: "Android Auto'yu Baslat", 11: "Zorla Durdur", 12: "Yeniden Baslat", 1: "Android Auto",
+          13: "Baglaniyor...", 14: "Android Auto'yu Ac", 15: "Otomatik baslat", 16: "Hakkinda", 23: "Ayarlar", 24: "USB uzerinden Android Auto", 25: "Telefon GPS'ini kullan", 26: "WiFi Direct Agini kullan (kendi sifresi)", 27: "Bluetooth yerine Yerel Ses kullan", 28: "Yerel Medya Kontrollerini Geri Yukle (beta)", 29: "PF Kurallarini Yukle", 30: "PF Kurallarini Kontrol Et", 31: "PF Kurallarini Kaldir", 32: "Kurallar yaziliyor...", 33: "Kurallar basariyla yazildi", 34: "Kurallar aktif", 35: "Kurallar kontrol ediliyor...", 36: "Kurallar mevcut", 37: "Kurallar mevcut, aktif degil", 38: "Kurallar mevcut degil", 39: "Kurallar kaldiriliyor...", 40: "Kurallar basariyla kaldirildi", 41: "Paket filtresi kapali, eskisi gibi", 42: "Tamamlandi, aktif degil - gunluge bakin", 43: "Basarisiz - gunluge bakin", 44: "CarPlay uyumlulugu", 320: "Android Auto", 321: "Telefona baglaniliyor...", 322: "Baglandi", 323: "Telefon bekleniyor", 324: "Android Auto: Wi-Fi Direct yok, USB kullanin", 325: "Android Auto: CarPlay agi yok, Wi-Fi Direct kullaniliyor", 326: "CarPlay Wi-Fi uzerinde telefon bekleniyor", 327: "CarPlay yok: WiFi Direct'i etkinlestirin", 328: "CarPlay veya WiFi Direct yok: USB kullanin", 329: "Wi-Fi uzerinden baglandi", 330: "USB uzerinden baglandi", 331: "Telefona baglaniliyor...", 332: "USB uzerinden telefon bekleniyor", 333: "Bekleniyor: CarPlay Wi-Fi", 334: "CarPlay yok: WiFi Direct'i etkinlestirin", 400: "HUD profilleri", 404: "G Serisi/Supra", 405: "F serisi (6WA)", 406: "6WB (henuz surucu yok)", 407: "HUD'da Kiril sokak isimleri",
+          17: "NBT-AAD: NBT Evo icin yerel kablosuz Android Auto.\\nGelistiren: nanaisu.\\nKatkida bulunanlar: @houssems, @tom-pryor, @dn00, @sabifa,\\n@ryanriccio1, @pstryju, @owenashurst, @BobW5, @DreckSoft, @FreZZZeR, @LeongKY.\\ngithub.com/Sq00ky/Supra-iDrive6-Android-Auto\\nUcretsizdir. Bunun icin para odediyseniz dolandirildiniz."},
 }
 LANG_TEXTS["es-US"] = LANG_TEXTS["es-ES"]
 LANG_TEXTS["fr-CA"] = LANG_TEXTS["fr-FR"]

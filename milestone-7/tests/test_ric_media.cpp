@@ -414,6 +414,7 @@ static void endToEnd() {
     setenv("NBT_KOMBI_NAV_PORT", pb, 1);
 
     FakeSource src;
+    unsetenv("NBT_MFL_WHEEL_FALLBACK");
     {
         KombiMedia off;                         // not switched on: no worker, update() is a no-op
         unsetenv("NBT_KOMBI_TRACKS");
@@ -422,16 +423,49 @@ static void endToEnd() {
         usleep(50000);
         assert(src.opens() == 0);
         setenv("NBT_KOMBI_TRACKS", "1", 1);
-        off.start(false, &src);                 // Bluetooth audio mode: the car shows the track itself
+        off.start(false, &src, true);           // Bluetooth audio mode: the car shows the track itself
         off.update("Song", true);
+        assert(off.wheelPress(NULL, 1) == kPressNone);
         usleep(50000);
         assert(src.opens() == 0);
     }
     assert(!KombiMedia::settingOn(NULL) && !KombiMedia::settingOn("") && !KombiMedia::settingOn("0") &&
            !KombiMedia::settingOn("yes") && KombiMedia::settingOn("1"));
 
+    {
+        KombiMedia j29;
+        j29.start(true, &src);
+        j29.update("", true);
+        assert(j29.wheelPress(NULL, 1) == kPressNone);
+    }
+    {
+        setenv("NBT_MFL_WHEEL_FALLBACK", "1", 1);
+        setenv("NBT_MFL_WHEEL_INVERT", "1", 1);
+        KombiMedia optedIn;
+        optedIn.start(true, &src);              // no BMW-specific default
+        optedIn.update("", true);
+        assert(optedIn.wheelPress(NULL, 1) == kPressPrev);
+        assert(optedIn.wheelPress(NULL, -1) == kPressNext);
+        optedIn.directTrackKeySeen();
+        assert(optedIn.wheelPress(NULL, 1) == kPressNone);
+        assert(optedIn.wheelPress(NULL, -1) == kPressNone);
+    }
+    {
+        setenv("NBT_MFL_WHEEL_FALLBACK", "0", 1);
+        KombiMedia disabled;
+        disabled.start(true, &src, true);
+        disabled.update("", true);
+        assert(disabled.wheelPress(NULL, 1) == kPressNone);
+    }
+    unsetenv("NBT_MFL_WHEEL_FALLBACK");
+    unsetenv("NBT_MFL_WHEEL_INVERT");
     KombiMedia km;
-    km.start(true, &src);
+    km.start(true, &src, true);
+    assert(km.wheelPress(NULL, 1) == kPressNone);  // paused and no list
+    km.update("", true);                        // a playing stream can arrive before its metadata
+    assert(km.wheelPress(NULL, 0) == kPressNone);
+    assert(km.wheelPress(NULL, 1) == kPressNext);
+    assert(km.wheelPress(NULL, -1) == kPressPrev);
     usleep(50000);
     assert(src.opens() == 0);                     // nothing playing: not listening
     wireGroup(port);                            // iDrive traffic before anything plays is not even read
@@ -462,11 +496,13 @@ static void endToEnd() {
     // a thumb-wheel press now: the list has been up for a while with the cursor on row 2 ("Next title")
     {
         std::string why;
-        assert(km.wheelPress(&why) == kPressNext && why.empty());
+        assert(km.wheelPress(&why, -1) == kPressNext && why.empty());  // real cursor takes priority
+        km.directTrackKeySeen();
+        assert(km.wheelPress(&why) == kPressNext && why.empty());      // suppress the fallback only
         wire(0x0009, kClosed, 0x7F000001, port);    // iDrive closes the list: a press only brings it back
         wire(0x0004, kCommit, 0x7F000001, port);
         int a = kPressNext;
-        for (int i = 0; i < 100 && a != kPressNone; ++i) { usleep(10000); a = km.wheelPress(&why); }
+        for (int i = 0; i < 100 && a != kPressNone; ++i) { usleep(10000); a = km.wheelPress(&why, 1); }
         assert(a == kPressNone && !why.empty());
         wireGroup(port);                            // ... and a press right after it reopened does nothing yet
         for (int i = 0; i < 100 && why != "the cluster list had only just opened"; ++i) { usleep(2000); km.wheelPress(&why); }

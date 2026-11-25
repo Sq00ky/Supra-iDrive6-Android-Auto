@@ -382,7 +382,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > was already on the display for 300 ms, so the press that brings the list up skips nothing. The wheel's rotation is not
 > mapped to anything: it moves iDrive's cursor. Needs "Native Functionality Media Controls Restore" like the skip buttons.
 > `NBT_KOMBI_TRACKS_PRESS=0` turns it off, `=<fkt[:value]>` names another function. Log:
-> `[Media] thumb-wheel press on Next title -> AA key 87`, or `[KombiMedia] thumb-wheel press: nothing sent (<why>)`.
+> `[Media] thumb-wheel next track -> AA key 87`, or `[KombiMedia] thumb-wheel press: nothing sent (<why>)`.
 > v1.9.61 on the car (2026-11-10): eight presses on "Next title" and four on "Previous title" each skipped on the
 > phone, and the list showed the new title.
 >
@@ -1064,10 +1064,13 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_TRACKS` | Android Auto track title in the instrument cluster's track list and the thumb-wheel press on Previous / Next title (J29, native audio only). Default: follows **Native Functionality Media Controls Restore**; `1` / `0` wins either way |
 | `NBT_KOMBI_TRACKS_MODE` | `slot` (default): the title is written into iDrive's own title text model. `list`: iDrive's list is answered with a list naming a text model of our own (not shown by the cluster so far) |
 | `NBT_KOMBI_TRACKS_PRESS` | With `NBT_KOMBI_TRACKS=1`: the steering-wheel function whose press picks the row under the cluster list's cursor (default `C31`, the thumb-wheel press; `0` = off; `fkt[:value]` hex as the `[MFL]` log prints it) |
-| `NBT_KOMBI_TRACKS_IF`, `NBT_KOMBI_TRACKS_INDEX` | The interface iDrive's requests to the KOMBI are read from (default `vlan73`) and the index of our own text model (default `0x7E01`) |
-| `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
+| `NBT_KOMBI_TRACKS_IF`, `NBT_KOMBI_TRACKS_INDEX` | Override the capture interface. By default the daemon uses the interface for an on-link route to the KOMBI, or `vlan73` if it cannot find one. The default text model index is `0x7E01`. |
+| `NBT_MFL_WHEEL_FALLBACK=1` | Enable the Native Audio thumb-wheel fallback on other cars that report MOST `C30` rotation around `7F` and a `C31` press. With media controls restored, turn then press within two seconds. Once an Ethernet track list or mapped Next/Previous key is seen, the fallback stops for that daemon run. The `6wa-f15` BMW profile enables this policy by default. Other profiles use the upstream wheel policy unless explicitly configured. Set to `0` to disable it. |
+| `NBT_MFL_WHEEL_INVERT=1` | Reverse the thumb-wheel fallback direction. |
+| `NBT_KOMBI_NAV_SHOW_BAR` | With `6wa-f15`, the factory HUD distance bar is enabled by default and counts down from the first reported distance to each turn. Set `0` to hide it. On J29, `1` keeps the factory distance bar visible. |
 | `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
 | `NBT_KOMBI_NAV_LANES=0` | No lane row in the cluster / HUD (the arrows stay) |
+| `NBT_CLUSTER=6wa-f15` | Opt in to the BMW F15 layout on MOST HUDTerminal 82/00. In iDrive, open Android Auto → Settings → HUD profiles, choose **F-Series (6WA-F15)**, then restart Android Auto. The iDrive guidance display setting selects the windshield or the instrument cluster. |
 | `NBT_HUD_JUNCTION=0` | 6WA cluster (`NBT_CLUSTER=6wa`): keep the arrow all the way to the turn. By default the arrow gives way to a junction view at the main prompt (see `NBT_KOMBI_NAV_MAIN_S`) or within `NBT_HUD_NEAR_M`, like the factory navigation's near view: the maneuver's roads (in and out, both branches of a fork or an exit, a roundabout's ring and exit number) with the route drawn over them, its tail shorter in four steps on the way in. Android Auto sends no map, so other side roads are not drawn |
 | `NBT_HUD_NEAR_M` | 6WA: the junction view comes in this close to the maneuver whatever the time (default `300`, `50`..`2000`) |
 | `NBT_HUD_LANES=1` | 6WA: the phone's lanes in the cluster's lane layer, left of the picture. Off by default: where the cluster shows that layer is not known yet |
@@ -1292,6 +1295,73 @@ Send:
 - `nbt-aad.log` and `nbt-aad-app.log` from the USB stick (tick **Save logs to USB** first);
 - `/opt/sys/etc/nbt_version.txt`;
 - what you did and what you saw, with times.
+
+## Probe the cluster and HUD layout
+
+Build the standalone QNX ARM tool with `make -C milestone-7 hudprobe`. Copy it to
+the head unit and run it over SSH while parked, with NBT-AAD and any other HUD
+add-on stopped. It uses the head unit's MOST service directly.
+
+```sh
+chmod +x /tmp/hudprobe
+/tmp/hudprobe
+```
+
+The probe checks TCP reachability at the configured Ethernet KOMBI address
+(`NBT_KOMBI_NAV_HOST` and `NBT_KOMBI_NAV_PORT` in the probe's environment) and lists
+the MOST HUDTerminal instances in the registry. It queries `82/00` and `82/02`
+separately, enumerates picture surfaces and dimensions for handles `0x01`–`0x40`,
+and reports a layout family when there is enough evidence. The same terminal
+can feed different physical displays on different cars, and an Ethernet TCP
+reply alone identifies a candidate endpoint.
+
+If the surfaces are empty, or you need the text and frame handles, run
+`/tmp/hudprobe --observe 30` and start a factory
+BMW navigation route during the listen window. It reports any setup replies it
+observes, including the street, distance, unit, picture and bar item handles.
+It also records handles referenced by factory guidance drawing calls. Text
+contents are omitted. If the setup happened before the probe attached, only
+the handles used while it is listening may appear. The probe sends
+only picture-size queries on MOST in this mode.
+
+### Visual HUD layout test
+
+Copy `tools/hudprobe-layouts.txt` to `/tmp/hudprobe-layouts.txt` on the head unit.
+Exit all navigation routes and stop NBT-AAD or other HUD add-ons before using
+visual mode. Open an SSH terminal with a TTY (`ssh -t` if needed), then run
+
+```sh
+/tmp/hudprobe --visual /tmp/hudprobe-layouts.txt
+```
+
+The probe shows a temporary rectangle with a centre cross and top-left dot on
+one terminal at a time. For each screen, enter `full`, `none`, `?`, or the clipped
+edges (`l` left, `r` right, `t` top, `b` bottom, e.g. `rt`). The report records
+both answers, the geometry and whether the terminal acknowledged draw and clear.
+It attempts to hide the panel and clear the picture before moving on, including
+on quit, disconnect, interruption or an answer timeout. The default timeout is
+45 seconds for both answers together. Add `--answer-seconds 90` after the layout
+file if the operator needs longer to relay observations. If cleanup is
+unconfirmed, the run stops and the report identifies the affected layout.
+
+Edit the text file to change the order, handles, pixel bounds or colour, or add
+up to 16 tests. Each row contains `name terminal panel buffer left top right bottom colour [swap-from]`.
+Terminal is `0` or `2`. Use decimal or `0x`-prefixed hex for numbers. The optional
+`swap-from` handle tests the terminal's buffer swap instead of setting the
+target buffer visible directly. Save the SSH terminal output to retain the
+report.
+
+### HUD text test
+
+With the vehicle parked, factory guidance ended and other HUD apps stopped,
+run `/tmp/hudprobe --text --answer-seconds 90` from an interactive SSH terminal.
+It sends short ASCII markers to `0x0C`, `0x0D`, and `0x10` on `82/00` using
+UTF-16BE, ISO-8859-15, and UTF-8, records which writes the terminal accepted,
+and asks what actually appeared. Use `--markers A B C` after the timeout
+option to change the three markers, in handle order. The probe clears test
+text between encodings. In read-only `--observe` mode, it can also report
+the encoding and likely role of factory text it observes, without saving the
+text itself.
 
 ## Other cars: controller setup wizard
 

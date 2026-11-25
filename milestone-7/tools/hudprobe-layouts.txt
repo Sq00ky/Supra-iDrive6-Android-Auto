@@ -1,0 +1,11 @@
+# HUD probe visual script. One test per row. Delete, reorder, or duplicate rows to try your own geometry.
+# All coordinates are in HUDTerminal pixels. Use decimal or 0x-prefixed hex.
+# name          terminal panel buffer left top right bottom colour [buffer-to-hide-with-swap]
+6wa-inner       0        1     6       70   20  170   120    4
+6wa-bounds      0        1     6       0    0   199   129    4
+mini            0        1     6       35   15  85    65     4
+6wb-bounds      0        0x17  0x1F    0    0   220   157    4
+6wa-inner       2        1     6       70   20  170   120    4
+6wa-bounds      2        1     6       0    0   199   129    4
+mini            2        1     6       35   15  85    65     4
+6wb-bounds      2        0x17  0x1F    0    0   220   157    4

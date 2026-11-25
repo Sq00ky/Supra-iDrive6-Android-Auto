@@ -23,7 +23,7 @@ CcsEvent makeMflCcsEvent(const MflEvent& e) {
     ev.kind = 1;
     ev.keycode = e.keycode;
     ev.down = e.down;
-    ev.delta = 0;
+    ev.delta = e.turn;
     ev.what = e.what;
     ev.cancel = 0;
     return ev;
@@ -51,7 +51,7 @@ bool CcsInput::attach(most::Client& client, const CcsConfig& cfg, CcsEventCb cb,
         printf("[MFL] steering-wheel keys:");
         if (!mc.n) printf(" none mapped");
         for (int i = 0; i < mc.n; ++i) {
-            if (mc.b[i].key == kMflWheelKey) printf(" %s=%03X->the cluster list's row", mc.b[i].what, mc.b[i].fkt);
+            if (mc.b[i].key == kMflWheelKey) printf(" %s=%03X->cluster media selection", mc.b[i].what, mc.b[i].fkt);
             else if (mc.b[i].value < 0) printf(" %s=%03X->%u", mc.b[i].what, mc.b[i].fkt, mc.b[i].key);
             else printf(" %s=%03X:%02X->%u", mc.b[i].what, mc.b[i].fkt, (unsigned)mc.b[i].value, mc.b[i].key);
         }
@@ -75,6 +75,7 @@ void CcsInput::linkTramp(most::LinkState s, void* self) { static_cast<CcsInput*>
 void CcsInput::onLink(most::LinkState s) {
     if (s == most::kUp) return;
     ptt_.reset();
+    mfl_.reset();
     CcsEvent ev[CCS_MAX_RESET_EVENTS];
     int n = dec_.reset(ev, CCS_MAX_RESET_EVENTS);
     for (int i = 0; i < n; ++i) {
@@ -121,7 +122,7 @@ void CcsInput::onMfl(const most::View& m) {
         }
     }
     MflEvent ev[2];
-    int n = mfl_.feed(m.fkt, m.op, m.len ? m.data : NULL, m.len, ev, 2);
+    int n = mfl_.feed(m.fkt, m.op, m.len ? m.data : NULL, m.len, ev, 2, m.rxMs);
     for (int i = 0; i < n; ++i) {
         if (ev[i].keycode == kMflWheelKey) printf("[MFL] %s %s\n", ev[i].what, ev[i].down ? "down" : "up");
         else printf("[MFL] %s %s -> AA key %u\n", ev[i].what, ev[i].down ? "down" : "up", ev[i].keycode);
