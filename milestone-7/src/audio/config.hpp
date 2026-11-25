@@ -140,6 +140,7 @@ struct BtConfig {
     uint32_t sink;              // NBT_BT_SINK: focus-form sink (0x1 eSNK_SPEAKERS)
     uint32_t conn;              // NBT_BT_CONN: ConnectionMaster connection (0xc7; 0 = focus form)
     int route_delay_ms;         // NBT_BT_ROUTE_DELAY_MS (1500, 0..10000)
+    bool auto_source;           // NBT_BT_AUTO_SOURCE; default on, never disables factory HFP calls
     bool refocus;               // NBT_BT_REFOCUS: request the source again when the mic closes (on)
     bool release;               // NBT_BT_RELEASE=1: release the source when the session ends
     const char* sdr_drop;       // NBT_SDR_DROP as given, for the start-up line ("9" when unset)

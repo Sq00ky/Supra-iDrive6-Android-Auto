@@ -126,6 +126,14 @@ inline bool usbEnabled() { return usbSettingOn(getenv("NBT_USB"), usbFlagFileSet
 // first and connects over Wi-Fi instead of the cable, which is the one thing USB mode is meant to avoid.
 inline bool wirelessEnabledForTransport() { return wirelessEnabled() && !usbEnabled(); }
 
+// Default ON. Only controls the daemon's A2DP media-source requests; factory HFP calls are untouched.
+// A negative flag preserves the old default on existing installations. Read at daemon start.
+static const char* const kNoBtAutoSourceFlagName = "no-bt-auto-source";
+inline bool btAutoSourceSetting(int env, bool disabledFlag) { return env < 0 ? !disabledFlag : env != 0; }
+inline bool btAutoSourceEnabled() {
+    return btAutoSourceSetting(envFlag("NBT_BT_AUTO_SOURCE"), flagSet(kNoBtAutoSourceFlagName));
+}
+
 // "Prompts on car radio (BT, beta)" (iDrive Settings checkbox; the "speech-bt" flag, resolved by nbt_paths.hpp so a
 // package install keeps it in its own data dir; NBT_SPEECH_BT=1 / 0 wins either way, same words as NBT_USB). Only
 // meaningful in Bluetooth audio mode, where it turns the speech path on with the nav prompter defaults and keeps the

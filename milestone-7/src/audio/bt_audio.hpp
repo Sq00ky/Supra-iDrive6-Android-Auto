@@ -59,6 +59,7 @@ private:
     uint32_t sink_;    // eSNK_SPEAKERS
     uint32_t conn_;
     int route_delay_ms_;   // NBT_BT_ROUTE_DELAY_MS
+    bool auto_source_;     // only A2DP media-source selection; factory phone calls remain independent
     bool refocus_;         // NBT_BT_REFOCUS
     bool release_;         // NBT_BT_RELEASE=1
     const char* sdr_drop_; // NBT_SDR_DROP, for the start-up line

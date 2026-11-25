@@ -9,7 +9,7 @@
 namespace nbt {
 
 BtAudio::BtAudio()
-    : src_(0x3a), sink_(0x1), conn_(0xc7), route_delay_ms_(1500), refocus_(true), release_(false), sdr_drop_("9"),
+    : src_(0x3a), sink_(0x1), conn_(0xc7), route_delay_ms_(1500), auto_source_(true), refocus_(true), release_(false), sdr_drop_("9"),
       speech_(route_), snaps_(0) {}
 
 void BtAudio::grantedThunk(void* self) {
@@ -17,6 +17,7 @@ void BtAudio::grantedThunk(void* self) {
 }
 
 bool BtAudio::requestSource() {
+    if (!auto_source_) return true; // deliberately no request, hence no queued retries or PLAY callback
     // The delay (NBT_BT_ROUTE_DELAY_MS): onSessionEnded() cancels a request still waiting, so a phone that reconnects
     // every few seconds never starts an audioconn at all.
     if (conn_) return route_.build(conn_, &grantedThunk, this, route_delay_ms_);
@@ -42,8 +43,9 @@ void BtAudio::init(const BtConfig& cfg) {
     src_ = cfg.src;
     sink_ = cfg.sink;
     route_delay_ms_ = cfg.route_delay_ms;
+    auto_source_ = cfg.auto_source;
     refocus_ = cfg.refocus;
-    release_ = cfg.release;
+    release_ = cfg.release && auto_source_; // leave manually selected media alone when automatic routing is off
     sdr_drop_ = cfg.sdr_drop;
     printf("[BtAudio] NBT_AUDIO_BT on: AA media sink left out of the ServiceDiscovery (NBT_SDR_DROP=%s),\n"
            "[BtAudio] phone audio stays on Bluetooth A2DP; A2I pipeline not opened. Source 0x%x -> sink 0x%x.\n",
@@ -61,6 +63,10 @@ void BtAudio::init(const BtConfig& cfg) {
 }
 
 void BtAudio::onSessionStarted() {
+    if (!auto_source_) {
+        printf("[BtAudio] automatic Bluetooth media source selection off.\n");
+        return;
+    }
     char d[64];
     describe(d, sizeof(d));
     printf("[BtAudio] session started: requesting car Bluetooth audio %s\n", d);
@@ -106,7 +112,7 @@ void BtAudio::onMicClosed() {
     // Assistant pauses the music before it listens, so its reply restarts a suspended A2DP stream. Re-request the
     // car's BT audio source when the phone closes the mic, in case the car does not pick the restarted stream up on
     // its own.
-    if (refocus_) {
+    if (auto_source_ && refocus_) {
         char d[64];
         describe(d, sizeof(d));
         printf("[BtAudio] mic closed: re-requesting car Bluetooth audio %s for the reply\n", d);

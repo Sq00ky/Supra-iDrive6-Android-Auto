@@ -449,6 +449,9 @@ const unsigned    kNoLogModel       = 175;   // raBoolModel
 const unsigned    kActSpeechBt      = 174;   // "Prompts on car radio (BT, beta)" checkbox
 const unsigned    kSpeechBtModel    = 177;   // raBoolModel
 const char* const kSpeechBtFlag     = "speech-bt";
+const unsigned kActBtAutoSource = 181;
+const unsigned kBtAutoSourceModel = 182;
+const char* const kNoBtAutoSourceFlag = "no-bt-auto-source";
 const char* const kNoLogFlag        = "no-log";
 const unsigned    kPfRowButton[3]  = { 135, 140, 141 };
 const unsigned    kPfRowLabel[3]   = { 29, 30, 31 };      // Install / Check / Uninstall PF Rules
@@ -2383,6 +2386,17 @@ bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     return true;
 }
 
+bool btAutoSourceOn() { return !nbt::flagSet(kNoBtAutoSourceFlag); }
+void showBtAutoSource(bmw::PluginApp* app) {
+    app->updateModel(kBtAutoSourceModel, btAutoSourceOn());
+}
+bool onBtAutoSourceToggle(void*, const bmw::Parcel&) {
+    toggleFlagFile(kNoBtAutoSourceFlag,
+                   "Disable automatic Bluetooth media source selection");
+    if (g_runApp) showBtAutoSource(g_runApp);
+    return true;
+}
+
 bool speechBtOn() { return nbt::flagSet(kSpeechBtFlag); }
 void showSpeechBt(bmw::PluginApp* app) { app->updateModel(kSpeechBtModel, speechBtOn()); }
 bool onSpeechBtToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
@@ -2679,7 +2693,7 @@ bool onRestartRow(void*, const bmw::Parcel&) {
 // key), and is compared the next time the main page shows. NBT_SETTINGS_RESTART=0 in nbt-aad.env turns it off.
 const char* const kSettingsFlags[] = {
     kAutostartFlag, nbt::usblog::kFlagName, kMenuIdriveFlag, kDriveModeFlag, kKombiNavFlag, kAnyDistFlag, kNoLogFlag,
-    kSpeechBtFlag, kWarnFlag, kUsbAaFlag, kPhoneGpsFlag, kWfdOnlyFlag, kNativeAudioFlag, kLciMediaFlag, kCpCompatFlag,
+    kSpeechBtFlag, kNoBtAutoSourceFlag, kWarnFlag, kUsbAaFlag, kPhoneGpsFlag, kWfdOnlyFlag, kNativeAudioFlag, kLciMediaFlag, kCpCompatFlag,
 };
 const size_t kSettingsFlagCount = sizeof(kSettingsFlags) / sizeof(kSettingsFlags[0]);
 bool settingFlagSet(const char* name) { return nbt::flagSet(name); }
@@ -2825,7 +2839,8 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showLciMedia(g_app);
         showCpCompat(g_app);
         showSpeechBt(g_app);
-        alog("settings: thirteen checkbox models refreshed");
+        showBtAutoSource(g_app);
+        alog("settings: checkbox models refreshed");
     }
     return true;
 }
@@ -2882,6 +2897,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActNavPromptOwn, &onNavPromptOwnToggle);
     addAction(self, kActNoLog, &onNoLogToggle);
     addAction(self, kActSpeechBt, &onSpeechBtToggle);
+    addAction(self, kActBtAutoSource, &onBtAutoSourceToggle);
     addAction(self, kActPfInstall, &onPfInstallRow);
     addAction(self, kActPfCheck, &onPfCheckRow);
     addAction(self, kActPfUninstall, &onPfUninstallRow);
