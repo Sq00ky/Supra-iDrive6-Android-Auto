@@ -6,8 +6,6 @@
 
 #include <assert.h>
 
-static const char* kDash = " \xe2\x80\x93 ";
-
 static void dabAudible(RadioState& s) {
     tableMsg(s, bytes(kTableDab));
 }
@@ -41,31 +39,50 @@ static void testSelectedTunerShowsBeforeItSpeaks() {
     assert(v.show && v.source == "FM" && v.song == "FM" && v.album.empty());
 }
 
-static void testBoldIsStation() {
+static const uint32_t kLater = 10000;
+
+static void testTitleBold() {
     RadioState s;
     dabStationShown(s);
     dabMsg(s, kMostFktDlPlus, dlPlus("Probe Titel", "Probe Artist"));
-    const RadioTileView v = radioTileView(s, false, 10);
+    const RadioTileView v = radioTileView(s, false, kLater);
     assert(v.show && !v.hold);
-    assert(v.song == "Testfunk Radio");
-    assert(v.artist == std::string("Probe Artist") + kDash + "Probe Titel");
+    assert(v.song == "Probe Titel");
+    assert(v.artist == "Probe Artist");
     assert(v.album == "Testfunk Radio");
     assert(v.source == "DAB");
     assert(v.state == 2);
 }
 
-static void testSecondLine() {
+static void testWithoutTitle() {
     RadioState s;
     dabStationShown(s);
     dabMsg(s, kMostFktDlPlus, dlPlus("Probe Titel", ""));
-    assert(radioTileView(s, false, 10).artist == "Probe Titel");
+    RadioTileView v = radioTileView(s, false, kLater);
+    assert(v.song == "Probe Titel" && v.artist == "Testfunk Radio");
     dabMsg(s, kMostFktDlPlus, dlPlus("", "Probe Artist"));
-    assert(radioTileView(s, false, 10).artist == "Probe Artist");
-    dabMsg(s, kMostFktDlPlus, dlPlus("", ""));
     dabMsg(s, kMostFktDynamicLabel, label("Lauftext Probe"));
-    assert(radioTileView(s, false, 10).artist == "Lauftext Probe");
+    v = radioTileView(s, false, kLater);
+    assert(v.song == "Testfunk Radio" && v.artist == "Lauftext Probe");
     dabMsg(s, kMostFktDynamicLabel, label(""));
-    assert(radioTileView(s, false, 10).artist == "");
+    assert(radioTileView(s, false, kLater).artist == "");
+}
+
+static void testFmTitleBold() {
+    RadioState s;
+    fmAudible(s);
+    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD002), 1);
+    fmMsg(s, kMostFktDlPlus, dlPlus("Probe Titel", "Probe Artist"));
+    const RadioTileView v = radioTileView(s, false, kLater);
+    assert(v.song == "Probe Titel" && v.artist == "Probe Artist" && v.source == "FM");
+}
+
+static void testTitleWithFallbackName() {
+    RadioState s;
+    dabAudible(s);
+    dabMsg(s, kMostFktDlPlus, dlPlus("Probe Titel", ""));
+    const RadioTileView v = radioTileView(s, false, kLater);
+    assert(v.song == "Probe Titel" && v.artist == "DAB");
 }
 
 static void testHoldWhileTuning() {
@@ -320,8 +337,10 @@ static void testChanged() {
 int main() {
     testNothingBeforeContent();
     testSelectedTunerShowsBeforeItSpeaks();
-    testBoldIsStation();
-    testSecondLine();
+    testTitleBold();
+    testWithoutTitle();
+    testFmTitleBold();
+    testTitleWithFallbackName();
     testHoldWhileTuning();
     testHoldAcrossClockWrap();
     testFmTuningHolds();

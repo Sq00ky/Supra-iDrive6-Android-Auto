@@ -190,7 +190,7 @@ static void testChangesAreCoalesced() {
     usleep(50000);
     const uint32_t tLast = monoMs();
     dab(tap, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"));
-    const Bytes want = metadata("Testfunk Radio", "Testinterpret \xe2\x80\x93 Testtitel", "Testfunk Radio");
+    const Bytes want = metadata("Testtitel", "Testinterpret", "Testfunk Radio");
     int metas = 0;
     uint32_t firstAt = 0;
     Bytes m;

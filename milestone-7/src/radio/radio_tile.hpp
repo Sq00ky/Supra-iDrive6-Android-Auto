@@ -47,13 +47,6 @@ inline std::string fallbackName(int kind, const TunerContent& t) {
     return buf;
 }
 
-inline std::string secondLine(const TunerContent& t) {
-    if (!t.artist.empty() && !t.title.empty()) return t.artist + " \xe2\x80\x93 " + t.title;
-    if (!t.artist.empty()) return t.artist;
-    if (!t.title.empty()) return t.title;
-    return t.text;
-}
-
 }  // namespace radio_detail
 
 // The one place the art passes before it is sent.
@@ -74,9 +67,15 @@ inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint3
         return v;
     }
     v.source = kind == kTunerDab ? "DAB" : "FM";
-    v.song = t.name.empty() ? radio_detail::fallbackName(kind, t) : t.name;
+    const std::string station = t.name.empty() ? radio_detail::fallbackName(kind, t) : t.name;
     v.album = t.name;
-    v.artist = radio_detail::secondLine(t);
+    if (!t.title.empty()) {
+        v.song = t.title;
+        v.artist = t.artist.empty() ? station : t.artist;
+    } else {
+        v.song = station;
+        v.artist = t.text;
+    }
     v.art = radioTileArt(t);
     v.show = !v.song.empty();
     return v;
