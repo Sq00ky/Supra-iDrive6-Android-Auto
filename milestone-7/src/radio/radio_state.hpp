@@ -15,6 +15,9 @@ enum RadioTunerKind { kTunerNone = 0, kTunerDab = 1, kTunerFm = 2 };
 enum { kRadioMaxDabNames = 32 };
 enum { kPlusWaitMs = 3000 };   // a new text waits this long for its DL+/RT+
 
+// True while a span that began at startMs lasts; survives the ms clock's wrap.
+inline bool radioWithin(uint32_t startMs, uint32_t spanMs, uint32_t nowMs) { return nowMs - startMs < spanMs; }
+
 struct TunerContent {
     std::string name, title, artist, text;
     std::vector<uint8_t> slide, logo;
@@ -98,13 +101,28 @@ inline bool dropContent(TunerContent& t) {
 }
 
 inline void textChanged(TunerContent& t, uint32_t nowMs) {
+    if (t.text.empty()) return;
     if (t.freshStation) {
         t.freshStation = false;
         return;
     }
-    if (t.text.empty() || (t.plusWaiting && nowMs - t.plusWaitStartMs < (uint32_t)kPlusWaitMs)) return;
+    if (t.plusWaiting && radioWithin(t.plusWaitStartMs, kPlusWaitMs, nowMs)) return;
     t.plusWaiting = true;
     t.plusWaitStartMs = nowMs;
+}
+
+inline bool setText(TunerContent& t, const std::string& text, uint32_t nowMs) {
+    if (!setStr(t.text, text)) return false;
+    textChanged(t, nowMs);
+    return true;
+}
+
+// DL+/RT+ also ends a running wait, even when title and artist stay.
+inline bool setPlus(TunerContent& t, const std::string& title, const std::string& artist) {
+    bool ch = setStr(t.title, title);
+    ch |= setStr(t.artist, artist);
+    ch |= setFlag(t.plusWaiting, false);
+    return ch;
 }
 
 inline void learnDabName(RadioState& s, uint32_t sid, const std::string& name) {
@@ -159,18 +177,13 @@ inline bool applyDab(RadioState& s, uint16_t fkt, const uint8_t* p, size_t n, ui
     case kMostFktDynamicLabel: {
         std::string text;
         if (!decodeDynamicLabel(p, n, text)) return false;
-        if (setStr(d.text, text)) {
-            ch = true;
-            textChanged(d, nowMs);
-        }
+        ch |= setText(d, text, nowMs);
         return true;
     }
     case kMostFktDlPlus: {
         std::string title, artist;
         if (!decodeDlPlus(p, n, title, artist)) return false;
-        ch |= setStr(d.title, title);
-        ch |= setStr(d.artist, artist);
-        ch |= setFlag(d.plusWaiting, false);
+        ch |= setPlus(d, title, artist);
         return true;
     }
     case kMostFktLogo: {
@@ -257,18 +270,13 @@ inline bool applyFm(RadioState& s, uint16_t fkt, const uint8_t* p, size_t n, uin
     case kMostFktRadioText: {
         std::string text;
         if (!decodeRadioText(p, n, text)) return false;
-        if (setStr(f.text, text)) {
-            ch = true;
-            textChanged(f, nowMs);
-        }
+        ch |= setText(f, text, nowMs);
         return true;
     }
     case kMostFktDlPlus: {
         std::string title, artist;
         if (!decodeDlPlus(p, n, title, artist)) return false;
-        ch |= setStr(f.title, title);
-        ch |= setStr(f.artist, artist);
-        ch |= setFlag(f.plusWaiting, false);
+        ch |= setPlus(f, title, artist);
         return true;
     }
     default:

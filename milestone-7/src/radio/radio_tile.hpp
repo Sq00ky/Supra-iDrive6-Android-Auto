@@ -49,6 +49,15 @@ inline std::string fallbackName(int kind, const TunerContent& t) {
     return buf;
 }
 
+// Holds v from startMs for spanMs while on.
+inline bool holdFor(RadioTileView& v, bool on, uint32_t startMs, uint32_t spanMs, uint32_t nowMs, const char* why) {
+    if (!on || !radioWithin(startMs, spanMs, nowMs)) return false;
+    v.hold = true;
+    v.holdUntilMs = startMs + spanMs;
+    v.holdReason = why;
+    return true;
+}
+
 }  // namespace radio_detail
 
 inline std::vector<uint8_t> radioPlaceholderArt() {
@@ -70,18 +79,10 @@ inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint3
     const TunerContent& t = kind == kTunerDab ? s.dab : s.fm;
 
     v.state = s.audible == 1 ? 2 : (s.audible == 0 ? 1 : (phonePlaying ? 1 : 2));
-    if (v.state == 2 && t.tuning && nowMs - t.tuneStartMs < (uint32_t)kTuneHoldMs) {   // STOPPED goes out at once
-        v.hold = true;
-        v.holdUntilMs = t.tuneStartMs + kTuneHoldMs;
-        v.holdReason = "while the tuner tunes";
+    if (v.state == 2 &&   // STOPPED goes out at once
+        (radio_detail::holdFor(v, t.tuning, t.tuneStartMs, kTuneHoldMs, nowMs, "while the tuner tunes") ||
+         radio_detail::holdFor(v, t.plusWaiting, t.plusWaitStartMs, kPlusWaitMs, nowMs, "waiting for DL+")))
         return v;
-    }
-    if (v.state == 2 && t.plusWaiting && nowMs - t.plusWaitStartMs < (uint32_t)kPlusWaitMs) {
-        v.hold = true;
-        v.holdUntilMs = t.plusWaitStartMs + kPlusWaitMs;
-        v.holdReason = "waiting for DL+";
-        return v;
-    }
     v.source = kind == kTunerDab ? "DAB" : "FM";
     const std::string station = t.name.empty() ? radio_detail::fallbackName(kind, t) : t.name;
     v.album = t.name;
