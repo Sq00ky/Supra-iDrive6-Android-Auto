@@ -2508,7 +2508,7 @@ int main(int argc, char* argv[]) {
     const char* profile = nbt::clusterProfile(clusterFlag, sizeof(clusterFlag));
     const bool f15Wheel = car.make == nbt::MAKE_BMW && !strcmp(profile, "6wa-f15");
     // An explicit fallback setting or a measured BMW profile selects the two-second roll-and-press policy.
-    g_useProfileWheelPolicy = f15Wheel || getenv("NBT_MFL_WHEEL_FALLBACK");
+    g_useProfileWheelPolicy = f15Wheel || nbt::envFlag("NBT_MFL_WHEEL_FALLBACK") == 1;   // =0 must not count as on
     g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT, NULL, f15Wheel);
     if (audio_mode == nbt::AUDIO_MODE_BT)
         printf("[Gesture] two-finger gesture capture off: audio mode is Bluetooth (iDrive skips the phone itself)\n");
