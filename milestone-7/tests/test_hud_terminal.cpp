@@ -423,7 +423,7 @@ static void testCopiesIgnored() {
     assert(k.stats().batchesDone == 1);
 
     Wire late = copyOf(r);
-    k.onMessage(late.v, 100 + 1501);                    // past the window: that is the navigation
+    k.onMessage(late.v, 102 + config().copyMs + 1);     // past the window after our answer: that is the navigation
     assert(k.status() == kNavActive && k.stats().navMsgs == 1);
 }
 
@@ -601,7 +601,7 @@ static void testLateErrorAfterTakeover() {
         k.onMessage(nav.v, 10);
         assert(k.status() == kNavActive && k.stats().batchesDropped == 1);
         Wire e(kHost, kSelf, m0.fkt, most::kOpErrorAck, err);
-        k.onMessage(e.v, late ? 10 + 1500 : 300);
+        k.onMessage(e.v, late ? 10 + config().replyMs : 300);
         if (!late) {
             assert(k.status() == kNavActive && k.stats().errors == 0 && k.stats().lateErrors == 1);
             k.onMessage(e.v, 310);                            // the same answer again: matches nothing any more
@@ -627,36 +627,70 @@ static void testLateErrorAfterTakeover() {
 }
 
 static void testTimeoutAndReset() {
+    const uint32_t r = config().replyMs;
     Core k = readyCore();
     assert(k.submit(batchOf(2), 0) == kQueued);
     most::Msg a, b;
     assert(k.next(0, a) && k.next(10, b));
-    assert(k.msUntilDeadline(0) == 1500);
+    assert(k.msUntilDeadline(0) == r);
     Wire ra = answer(a);
     k.onMessage(ra.v, 200);
-    k.tick(1509);
-    assert(k.status() == kReady && k.msUntilDeadline(1509) == 1);
-    k.tick(1510);
+    k.tick(r + 9);
+    assert(k.status() == kReady && k.msUntilDeadline(r + 9) == 1);
+    k.tick(r + 10);
     assert(k.status() == kFailed && k.stats().timeouts == 1 && !k.busy());
-    assert(k.submit(batchOf(1), 1600) == kNotReady);
-    k.reset(1700);
+    assert(k.submit(batchOf(1), r + 100) == kNotReady);
+    k.reset(r + 200);
     assert(k.status() == kReady);
-    assert(pumpAnswered(k, 1800) == 0);
-    assert(k.submit(batchOf(1), 1800) == kQueued && pumpAnswered(k, 1800) == 1 && !k.busy());
+    assert(pumpAnswered(k, r + 300) == 0);
+    assert(k.submit(batchOf(1), r + 300) == kQueued && pumpAnswered(k, r + 300) == 1 && !k.busy());
 
     // A link that comes back clears it too, and so does a new host.
-    assert(k.submit(batchOf(1), 2000) == kQueued);
+    const uint32_t t = 2 * r;
+    assert(k.submit(batchOf(1), t) == kQueued);
     most::Msg c;
-    assert(k.next(2000, c));
-    k.tick(4000);
+    assert(k.next(t, c));
+    k.tick(t + r);
     assert(k.status() == kFailed);
-    k.setLink(false, 0, 4100);
-    k.setLink(true, kSelf, 4200);
+    k.setLink(false, 0, t + r + 100);
+    k.setLink(true, kSelf, t + r + 200);
     assert(k.status() == kReady);
-    k.sendFailed(4300);
+    k.sendFailed(t + r + 300);
     assert(k.status() == kFailed);
-    k.setHost(0x0124, 4400);
+    k.setHost(0x0124, t + r + 400);
     assert(k.status() == kReady && k.host() == 0x0124);
+}
+
+// After a cold start the cluster answered every call, but all of them up to 7.5 s late (car, 2026-11-20): a late
+// answer is not a failure, and its copy to the navigation, before or after ours, is ours too, not the navigation
+// drawing. Only no answer in replyMs fails the terminal.
+static void testLateAnswers() {
+    Config c = config();
+    Core k = readyCore(c);
+    Batch b("late");
+    b.add(kSetVisibility, setVisibility(kFrame, true));
+    b.add(kTextareaSetText, setText(3, "400"));
+    assert(k.submit(b, 0) == kQueued);
+    most::Msg v, t;
+    assert(k.next(0, v) && k.next(0, t));
+    k.tick(1600);
+    assert(k.status() == kReady);
+    Wire cv = copyOf(v), av = answer(v), at = answer(t), ct = copyOf(t);
+    k.onMessage(cv.v, 5300);                                  // the copy first, as on the car
+    k.onMessage(av.v, 5300);
+    k.onMessage(at.v, 5320);
+    k.onMessage(ct.v, 5330);                                  // and a copy after ours
+    k.tick(5400);
+    assert(k.status() == kReady && k.stats().navMsgs == 0 && k.stats().copies == 2 && k.stats().slow == 2);
+    assert(k.stats().batchesDone == 1 && k.stats().timeouts == 0 && !k.busy());
+
+    assert(k.submit(batchOf(1), 6000) == kQueued);
+    most::Msg m;
+    assert(k.next(6000, m));
+    k.tick(6000 + c.replyMs - 1);
+    assert(k.status() == kReady);
+    k.tick(6000 + c.replyMs);
+    assert(k.status() == kFailed && k.stats().timeouts == 1);
 }
 
 static void testErrorAnswers() {
@@ -964,6 +998,7 @@ int main() {
     testCleanUpAfterFrameOff();
     testLateErrorAfterTakeover();
     testTimeoutAndReset();
+    testLateAnswers();
     testErrorAnswers();
     testLinkDropKeepsNav();
     testLateAnswerAfterLinkDrop();
