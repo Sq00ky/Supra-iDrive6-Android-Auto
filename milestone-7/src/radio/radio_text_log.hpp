@@ -17,12 +17,12 @@ struct RadioTextLog {
 
 namespace radio_detail {
 
-// Control characters (DAB line breaks 0x0A/0x0B, soft hyphen 0x1F) as \xHH, so a change stays one log line.
+// Control characters (DAB line breaks 0x0A/0x0B, soft hyphen 0x1F), '"' and '\' as \xHH: one log line, unambiguous quotes.
 inline std::string logEscaped(const std::string& s) {
     std::string out;
     for (size_t i = 0; i < s.size(); ++i) {
         const unsigned char c = (unsigned char)s[i];
-        if (c >= 0x20 && c != 0x7F) {
+        if (c >= 0x20 && c != 0x7F && c != '"' && c != '\\') {
             out += (char)c;
         } else {
             char hex[8];

@@ -17,7 +17,10 @@ struct WallTime {
     WallTime() {
         struct timeval tv;
         struct tm tm;
-        if (gettimeofday(&tv, NULL) != 0 || !localtime_r(&tv.tv_sec, &tm) ||
+        time_t sec = 0;
+        if (gettimeofday(&tv, NULL) == 0) sec = tv.tv_sec;
+        else tv.tv_usec = 0;
+        if (sec == 0 || !localtime_r(&sec, &tm) ||
             strftime(hms, sizeof(hms), "%H:%M:%S", &tm) == 0) {
             strcpy(hms, "--:--:--");
             strcpy(hmsMs, "--:--:--.---");

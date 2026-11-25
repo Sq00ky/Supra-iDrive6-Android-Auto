@@ -2640,7 +2640,7 @@ int main(int argc, char* argv[]) {
         printf("[RadioTile] on: the iDrive radio in the Android Auto media tile, channel 18 (NBT_RADIO_TILE=0 turns it off)\n");
         if (g_most.requireConsumer("radio tile", g_radioTap.attach(g_most, &onRadioChange, &g_session)))
             g_session.setRadioTile(&g_radioTap);
-    }
+    } else printf("[Main] radio tile -> Android Auto off (NBT_RADIO_TILE=0).\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.
     const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;

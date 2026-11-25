@@ -88,7 +88,7 @@ int addSystemAudioSink(ServiceDiscovery& manifest);
 // config, so the session logs whatever the phone sends there. Returns 1 if added.
 int addMediaBrowserProbe(ServiceDiscovery& manifest);
 
-// Radio tile: adds car local media (channel 18, descriptor field 16, empty config) so the radio can show in the media tile.
+// Radio tile: adds car local media (channel 18, descriptor field 16, empty config) for the radio in the media tile.
 // Returns 1 if added; 0 when `on` is false or the channel exists.
 int addRadioTile(ServiceDiscovery& manifest, bool on);
 

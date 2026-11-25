@@ -34,20 +34,30 @@ public:
         pthread_mutex_unlock(&mu_);
     }
 
-    // nowMs: CLOCK_MONOTONIC ms, the session's clock. One [RadioText] line per changed text; on a visible change (or a DL+ that ends a wait) one [RadioTap] line, then the callback.
+    // nowMs: CLOCK_MONOTONIC ms, the session's clock. One [RadioText] line per changed text; on a visible change (or a
+    // DL+ that ends a wait) one [RadioTap] line unless it repeats the last printed one, then the callback.
     void apply(uint8_t fblock, uint16_t fkt, const uint8_t* p, size_t n, uint32_t nowMs) {
-        char line[512];
-        std::string textBody;
+        char desc[512];
+        std::string textBody, idTag;
+        bool printTap = false;
         pthread_mutex_lock(&mu_);
         const bool textCh = radioTextLogBody(textLog_, fblock, fkt, p, n, textBody);
         const bool ch = applyMost(state_, fblock, fkt, p, n, nowMs);
-        if (ch) describe(fblock, line, sizeof(line));
+        if (textCh) {
+            idTag = stationId(fblock == kMostFBlockDabTuner ? state_.dab : state_.fm, fblock == kMostFBlockFmTuner);
+            lastTap_.clear();
+        }
+        if (ch) {
+            describe(fblock, desc, sizeof(desc));
+            printTap = lastTap_ != desc;
+            lastTap_ = desc;
+        }
         const ChangeCb cb = cb_;
         void* const user = user_;
         pthread_mutex_unlock(&mu_);
-        if (textCh) printf("[RadioText] %s %s\n", WallTime().hmsMs, textBody.c_str());
+        if (textCh) printf("[RadioText] %s %s %s\n", WallTime().hmsMs, idTag.c_str(), textBody.c_str());
         if (!ch) return;
-        fputs(line, stdout);
+        if (printTap) printf("[RadioTap] %s %s", WallTime().hms, desc);
         if (cb) cb(user);
     }
 
@@ -72,14 +82,24 @@ private:
 
     static const char* kindName(int kind) { return kind == kTunerDab ? "dab" : (kind == kTunerFm ? "fm" : "?"); }
 
+    // DAB "sid D3A5"; FM "pi D3A5" or "freq 100000" (kHz); "-" while unknown.
+    static std::string stationId(const TunerContent& t, bool fm) {
+        if (t.id == 0) return "-";
+        char b[32];
+        if (!fm) snprintf(b, sizeof(b), "sid %X", (unsigned)t.id);
+        else if (t.idIsFreq) snprintf(b, sizeof(b), "freq %u", (unsigned)t.id);
+        else snprintf(b, sizeof(b), "pi %X", (unsigned)t.id);
+        return b;
+    }
+
     // Under mu_: who sent (cm = connection master), the shown tuner, the sender's content (for C03 the shown one's).
     void describe(uint8_t fblock, char* line, size_t size) const {
         const int shown = shownTuner(state_);
         const int kind = fblock == kMostFBlockDabTuner ? kTunerDab : fblock == kMostFBlockFmTuner ? kTunerFm : shown;
         const TunerContent none;
         const TunerContent& t = kind == kTunerDab ? state_.dab : (kind == kTunerFm ? state_.fm : none);
-        const int k = snprintf(line, size, "[RadioTap] %s from %s shown %s audible %d name \"%s\" title \"%s\" "
-                               "artist \"%s\" text \"%.*s\" slide %u logo %u\n", WallTime().hms,
+        const int k = snprintf(line, size, "from %s shown %s audible %d name \"%s\" title \"%s\" "
+                               "artist \"%s\" text \"%.*s\" slide %u logo %u\n",
                                fblock == kMostFBlockConnectionMaster ? "cm" : kindName(kind), kindName(shown),
                                state_.audible, t.name.c_str(), t.title.c_str(), t.artist.c_str(), logTextLen(t.text),
                                t.text.c_str(), (unsigned)t.slide.size(), (unsigned)t.logo.size());
@@ -92,6 +112,7 @@ private:
     pthread_mutex_t mu_;
     RadioState state_;
     RadioTextLog textLog_;
+    std::string lastTap_;   // [RadioTap] body printed last, cleared by a [RadioText] line
     ChangeCb cb_;
     void* user_;
 };

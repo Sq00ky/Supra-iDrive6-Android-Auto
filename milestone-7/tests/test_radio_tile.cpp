@@ -296,6 +296,11 @@ static void testPlaceholderJpeg() {
     const std::vector<uint8_t> p = radioPlaceholderArt();
     assert(p.size() >= 4 && p.size() <= 10240);
     assert(p[0] == 0xFF && p[1] == 0xD8 && p[p.size() - 2] == 0xFF && p[p.size() - 1] == 0xD9);
+    size_t sof = 0;
+    for (size_t i = 2; i + 9 < p.size() && sof == 0; ++i)
+        if (p[i] == 0xFF && p[i + 1] == 0xC0) sof = i;
+    assert(sof != 0);
+    assert(((p[sof + 5] << 8) | p[sof + 6]) == 457 && ((p[sof + 7] << 8) | p[sof + 8]) == 408);
 }
 
 static void testArt() {

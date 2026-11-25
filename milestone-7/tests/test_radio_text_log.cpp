@@ -2,6 +2,7 @@
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 // radio_text_log: one line body per change of a tuner's scrolling text, radiotext or DL+/RT+.
 #include "radio/radio_text_log.hpp"
+#include "radio/wall_time.hpp"
 #include "radio_fixtures.hpp"
 
 #include <assert.h>
@@ -42,6 +43,21 @@ static void testControlCharsEscaped() {
     assert(body == "dab text \"Testzeile eins\\x0ATestzeile zwei\\x1F\"");
 }
 
+static void testQuoteAndBackslashEscaped() {
+    RadioTextLog l;
+    std::string body;
+    assert(logDab(l, kMostFktDynamicLabel, label("Test \"eins\" a\\b"), body));
+    assert(body == "dab text \"Test \\x22eins\\x22 a\\x5Cb\"");
+}
+
+static void testHmsMsFormat() {
+    const WallTime t;
+    const std::string s = t.hmsMs;
+    assert(s.size() == 12 && s[2] == ':' && s[5] == ':' && s[8] == '.');
+    for (size_t i = 0; i < s.size(); ++i)
+        if (i != 2 && i != 5 && i != 8) assert(s[i] >= '0' && s[i] <= '9');
+}
+
 static void testPlusLogged() {
     RadioTextLog l;
     std::string body;
@@ -80,6 +96,8 @@ static void testOtherMessagesIgnored() {
 int main() {
     testTextLogged();
     testControlCharsEscaped();
+    testQuoteAndBackslashEscaped();
+    testHmsMsFormat();
     testPlusLogged();
     testRepeatNotLogged();
     testTunersSeparate();

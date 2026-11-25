@@ -5,7 +5,7 @@
 
     python3 tools/gen_radio_placeholder.py --out src/radio/radio_placeholder_art.hpp [--jpeg preview.jpg]
 
-Needs Pillow.
+Needs Pillow >= 8.2 (rounded_rectangle).
 """
 import argparse
 import io
