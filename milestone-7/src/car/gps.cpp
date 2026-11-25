@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "car/gps.hpp"
+#include "log_privacy.hpp"
 
 #include "most/client.hpp"
 
@@ -95,7 +96,7 @@ void CarGps::onFix(const most::View& m) {
     if (r.repeat) return;
     if (r.stateChanged) {
         if (r.ok)
-            printf("[GPS] car GPS fix: %.6f, %.6f (UTC %04u-%02u-%02u %02u:%02u:%02u)\n", f.lat_e7 / 1e7, f.lon_e7 / 1e7,
+            printf("[GPS] car GPS fix: %s (UTC %04u-%02u-%02u %02u:%02u:%02u)\n", nbt::logPosition(f.lat_e7, f.lon_e7).c_str(),
                    f.year, f.mon, f.day, f.hh, f.mm, f.ss);
         else
             printf("[GPS] car GPS: no fix (%02X/%02X fkt %03X, %u bytes)\n", m.fblock, m.inst, m.fkt, (unsigned)m.len);
@@ -105,11 +106,11 @@ void CarGps::onFix(const most::View& m) {
     // direction travelled between lines.
     if (r.logFields) {
         if (f.ext)
-            printf("[GPS] fix #%u %02u:%02u:%02u %.6f, %.6f fix=%u hdop=%u vdop=%u speed=%d heading=%u height=%d%s\n",
-                   r.fixNo, f.hh, f.mm, f.ss, f.lat_e7 / 1e7, f.lon_e7 / 1e7, f.gpsFix, f.hdop, f.vdop, f.speed,
+            printf("[GPS] fix #%u %02u:%02u:%02u %s fix=%u hdop=%u vdop=%u speed=%d heading=%u height=%d%s\n",
+                   r.fixNo, f.hh, f.mm, f.ss, nbt::logPosition(f.lat_e7, f.lon_e7).c_str(), f.gpsFix, f.hdop, f.vdop, f.speed,
                    f.heading, f.height, r.fixChanged ? " (fix changed)" : "");
         else
-            printf("[GPS] fix #%u %.6f, %.6f (%u-byte payload, no extra fields)\n", r.fixNo, f.lat_e7 / 1e7, f.lon_e7 / 1e7,
+            printf("[GPS] fix #%u %s (%u-byte payload, no extra fields)\n", r.fixNo, nbt::logPosition(f.lat_e7, f.lon_e7).c_str(),
                    (unsigned)m.len);
     }
     const bool usable = positionUsable(haveStatus_, status_, statusMs_, m.rxMs);

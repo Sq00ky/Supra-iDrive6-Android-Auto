@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "bluetooth_manager.hpp"
+#include "log_privacy.hpp"
 #include "dsi_client.hpp"
 #include "gap_parse.hpp"
 #include "spp_direction.hpp"
@@ -145,7 +146,7 @@ void logServiceList(const uint8_t* pl, uint32_t len, bool withError) {
         snprintf(st, sizeof(st), "%u", i < L.states.size() ? L.states[i] : 0u);
         sv += (i ? ", " : "") + L.services[i] + "(" + st + ")";
     }
-    printf("[BluetoothManager] [%9.3f] phone %s services: %s%s%s\n", upSecBt(), L.address.c_str(), sv.c_str(),
+    printf("[BluetoothManager] [%9.3f] phone %s services: %s%s%s\n", upSecBt(), logMac(L.address).c_str(), sv.c_str(),
            err ? " | error " : "", err ? gapErrorText(err) : "");
 }
 
@@ -164,7 +165,7 @@ void updateDevices(DsiClient* c, const std::vector<GapDevice>& d, const char* fr
                (unsigned)d.size());
     else
         printf("[BluetoothManager] [%9.3f] %s: phone '%s' %s is %s over Bluetooth\n", upSecBt(), from,
-               d[best].name.c_str(), addr.c_str(), connName(conn));
+               d[best].name.c_str(), logMac(addr).c_str(), connName(conn));
     if (btTrace() && !addr.empty() && conn >= 2) {   // the phone's services: diagnostics only
         std::vector<uint8_t> p;
         DsiClient::putString(p, addr.c_str());
@@ -207,7 +208,7 @@ void onGapData(DsiClient* c, uint32_t type, uint32_t id, uint32_t, const uint8_t
         const char* what = id == kInfServiceRequest ? "ServiceRequest"
                          : (id == kInfServiceRequestComplete ? "ServiceRequestComplete" : "ServiceRequestError");
         printf("[BluetoothManager] [%9.3f] %s from the phone: %s%s%s service '%s'%s\n", upSecBt(), what,
-               name.empty() ? "" : "'", name.c_str(), name.empty() ? addr.c_str() : ("' " + addr).c_str(), svc.c_str(),
+               name.empty() ? "" : "'", name.c_str(), name.empty() ? logMac(addr).c_str() : ("' " + logMac(addr)).c_str(), svc.c_str(),
                r.ok() ? "" : " (payload not fully parsed)");
         pthread_mutex_lock(&g_dirMx);
         const uint32_t nowSec = monoSec();

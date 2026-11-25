@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "wireless_setup.hpp"
+#include "log_privacy.hpp"
 #include "aa_proto.hpp"
 
 #include <stdio.h>
@@ -229,7 +230,8 @@ static bool writeAll(int fd, const std::vector<uint8_t>& d) {
     {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        printf("[Wireless] RAW TX t=%ld +%u\n", (long)(tv.tv_sec % 100000) * 1000 + tv.tv_usec / 1000, (unsigned)d.size());
+        if (nbt::logVerbose())
+            printf("[Wireless] RAW TX t=%ld +%u\n", (long)(tv.tv_sec % 100000) * 1000 + tv.tv_usec / 1000, (unsigned)d.size());
     }
     while (off < d.size()) {
         ssize_t n = write(fd, &d[off], d.size() - off);
@@ -313,9 +315,11 @@ static int rxFill(int fd, int timeout_ms) {
     ssize_t k = read(fd, tmp, sizeof(tmp));
     if (k == 0) { g_lastReadEnd = 2; return -1; }
     if (k < 0) { if (errno == EINTR || errno == EAGAIN) return 0; g_lastReadEnd = 3; return -1; }
-    printf("[Wireless] RAW RX t=%ld +%d:", nowMs(), (int)k);
-    for (ssize_t i = 0; i < k && i < 48; ++i) printf(" %02x", tmp[i]);
-    printf("\n");
+    if (nbt::logVerbose()) {   // raw bytes carry the Wi-Fi name and passphrase exchange (#324)
+        printf("[Wireless] RAW RX t=%ld +%d:", nowMs(), (int)k);
+        for (ssize_t i = 0; i < k && i < 48; ++i) printf(" %02x", tmp[i]);
+        printf("\n");
+    }
     // Only the first message of a new link is inspected. Once an Android Auto frame has been
     // accepted, later payloads are not scanned (a passphrase or album name can contain anything).
     if (!g_spokeWpp && g_rxLen == 0 && looksLikeBmwBcl(tmp, (size_t)k)) {
@@ -361,7 +365,7 @@ static void hexdump(const char* tag, const uint8_t* p, size_t n) {
 static int handleMsg(int fd, uint16_t id, const std::vector<uint8_t>& pl, const ApInfo& ap, uint16_t port,
                      bool& sentInfo, int& startRespSeen, bool& startAcked) {
     printf("[Wireless] RX msg id=%u len=%u\n", id, (unsigned)pl.size());
-    if (!pl.empty()) { hexdump("   payload", &pl[0], pl.size()); printf("[Wireless]    fields:%s\n", wpp::describeFields(&pl[0], pl.size()).c_str()); }
+    if (!pl.empty()) { if (nbt::logVerbose()) hexdump("   payload", &pl[0], pl.size()); printf("[Wireless]    fields:%s\n", wpp::describeFields(&pl[0], pl.size()).c_str()); }
     if (id == wpp::kWifiInfoRequest) {
         std::vector<uint8_t> resp = wpp::buildInfoResponse(ap);
         printf("[Wireless] TX WifiInfoResponse ssid='%s' bssid='%s' security=%d\n",

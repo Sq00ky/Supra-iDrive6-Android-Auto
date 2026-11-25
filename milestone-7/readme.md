@@ -11,6 +11,19 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.120 / rhmiapp-97: NBTApps install fix, wireless connect fix, BMW F15 HUD profile, Turkish, log privacy.**
+> - **#332**: dropped 8 orphaned textIdModels (230-237 -> texts 301-308, the old favourites submenu) that every language
+>   lacked; the NBTApps installer refused the release. `tests/test_text_ids.py` now fails `make check` on any missing text.
+> - **F15 HUD profile** (@LeongKY, #326): opt-in `F-Series (6WA-F15)` under HUD profiles, plus `tools/hudprobe`.
+>   `NBT_MFL_WHEEL_FALLBACK=0` no longer counts as on.
+> - **HUD late answers** (@sabifa, #316): a cold cluster's late answers no longer turn the arrows off.
+> - **Turkish** texts (@Deepblow0, #320).
+> - **Wireless connect after a slow join** (#341): listener sockets are close-on-exec (a long-lived child such as
+>   `sloginfo -w` kept 5277 bound, so re-creating the listener failed until a restart); 20 s for the phone's connect
+>   after Bluetooth closes (`NBT_WIFI_JOIN_WAIT_S`, was 8 s); the re-pair hint only after 3 failed joins in a row.
+> - **Log privacy** (#324): GPS position, full phone Bluetooth address, raw DSI payloads, raw Bluetooth handshake
+>   bytes and per-frame Android Auto lines only with `NBT_VERBOSE=1` (which now needs a real 1/on).
+>
 > **v1.9.117 / rhmiapp-94: native audio media controls, nav prompts on their own channel, volume pill labels.**
 > - **Nav prompts in native audio** play on the car's nav prompt channel again while Android Auto music plays
 >   (navigation volume; the car mutes the music for the prompt). **Nav prompts mixed into Music** (Settings, off by
@@ -983,6 +996,7 @@ Leave these unset unless you are testing.
 | `NBT_ALT_WIFI=DIRECT\|CARPLAY`, `NBT_WFD_IF`, `NBT_WFD_SSID` | **Default `CARPLAY`**; also the Settings checkbox **Use WiFi Direct Network** (= `DIRECT`; a set `NBT_ALT_WIFI` wins). `BOTH` was removed in v1.9.37 and now means `CARPLAY`. Which Wi-Fi the phone is offered, one per run with no fallback. `CARPLAY` (unset) = the CarPlay hotspot. `DIRECT` = the car's Wi-Fi Direct group only, no fallback (for cars without the CarPlay licence, where `iap2.cfg` is missing but `wfd0` runs because Miracast is coded): passphrase decoded from `/var/opt/conn/WFDPass.conf` (hex, XOR `NBTEvo0715`), SSID from `NBT_WFD_SSID`, `ifconfig <if>`, `mwud` 127.0.0.1:9096, or derived as `DIRECT-03-` + the WLAN device name from the WLAN persistency (the J29: `DIRECT-03-Toyota51807`). `NBT_WFD_IF` (default `wfd0`) and `NBT_WFD_SSID` pin the interface and the group name. The passphrase is logged once per value so it can be typed into a phone by hand. Not car-verified yet |
 | `NBT_SPP_UUID_CON` | Connect UUID registered with the car's SPP service (default = AA UUID) |
 | `NBT_SPP_REREG_S` | While no Android Auto Bluetooth link is open, register the service again every this many seconds for 2 minutes, then every 30 s (default 5; `0` = off) |
+| `NBT_WIFI_JOIN_WAIT_S` | Seconds to wait for the phone's TCP connect after it took the Wi-Fi details and closed Bluetooth (default 20, 5..90; was 8). iDrive suggests pairing again only after 3 such tries in a row |
 | `NBT_BT_TRACE` | `1` = read-only Bluetooth diagnostics: log, with uptime, when the phone connects to / drops from the car over Bluetooth and which services it has (`DeviceListChanged: phone ... is connected`), to see why the phone does not open the Android Auto link after the car sleeps and wakes. Off by default, not car-verified |
 | `NBT_VOICE_SCENARIO_NAME` | Speech scenario name, e.g. `Carplay_Siri_1mic_RefCh` |
 | `NBT_BT_SRC`, `NBT_BT_SINK`, `NBT_BT_RELEASE=1` | Audio source/sink for Bluetooth mode (default `0x3a` / `0x1`); release the source when the phone leaves |
@@ -1016,6 +1030,7 @@ Leave these unset unless you are testing.
 | `NBT_SPEECH_BT` | `1` = the **Prompts on car radio (BT, beta)** checkbox (`/var/opt/aa/speech-bt`; a set `NBT_SPEECH_BT` wins either way). Bluetooth audio mode only: turns the speech path on with the browser defaults (`/input_mono_0`, `0x1a`, sink `0x1`) and keeps channel 8 as GUIDANCE. Unset = off, the BT default (prompts over A2DP as before). |
 | `NBT_SPEECH_HOLD_MS` | The focus is released this long after the queued audio has played, then the endpoint is closed (default `500`, `0`..`5000`) |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
+| `NBT_VERBOSE=1` | Full logging for debugging: every Android Auto frame and its first bytes, TLS records, pings, video frames, the raw Bluetooth Wi-Fi handshake bytes, the car's GPS position, the phone's full Bluetooth address and raw DSI payloads. Off by default, so a log posted on GitHub does not show where the car is (#324); turn it off again afterwards |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
 | `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets, calculated from the video canvas and panel size: on 1280x480 `0,240,0,0` at 720p and `0,180,0,0` at 480p. MINI round display (`1180_480` coding) side insets: 40 px at 720p (car-verified on a MINI F60), 25 px at 480p. `off` keeps the manifest's insets |
 | `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20 at 720p, tester-verified on a MINI F60; -12.5 at 480p) |
