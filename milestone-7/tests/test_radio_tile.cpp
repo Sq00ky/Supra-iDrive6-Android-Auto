@@ -6,6 +6,8 @@
 
 #include <assert.h>
 
+static const uint32_t kLater = 10000;
+
 static void dabAudible(RadioState& s) {
     tableMsg(s, bytes(kTableDab));
 }
@@ -39,8 +41,6 @@ static void testSelectedTunerShowsBeforeItSpeaks() {
     assert(v.show && v.source == "FM" && v.song == "FM" && v.album.empty());
 }
 
-static const uint32_t kLater = 10000;
-
 static void testTitleBold() {
     RadioState s;
     dabStationShown(s);
@@ -61,6 +61,8 @@ static void testWithoutTitle() {
     RadioTileView v = radioTileView(s, false, kLater);
     assert(v.song == "Probe Titel" && v.artist == "Testfunk Radio");
     dabMsg(s, kMostFktDlPlus, dlPlus("", "Probe Artist"));
+    v = radioTileView(s, false, kLater);
+    assert(v.song == "Testfunk Radio" && v.artist == "");
     dabMsg(s, kMostFktDynamicLabel, label("Lauftext Probe"));
     v = radioTileView(s, false, kLater);
     assert(v.song == "Testfunk Radio" && v.artist == "Lauftext Probe");
