@@ -12,6 +12,16 @@ using namespace nbt;
 
 #define ARR(a) a, sizeof(a)
 
+static void put(std::vector<uint8_t>& v, const char* s) {
+    v.insert(v.end(), (const uint8_t*)s, (const uint8_t*)s + strlen(s));
+}
+
+static void putStr(std::vector<uint8_t>& v, uint8_t cs, const char* s) {
+    v.push_back(cs);
+    put(v, s);
+    v.push_back(0);
+}
+
 static void testMostString() {
     const uint8_t latin[] = {0x47, 0xE4, 0x72, 0xA4};
     assert(mostString(0x01, ARR(latin)) == "G\xC3\xA4r\xE2\x82\xAC");
@@ -47,6 +57,30 @@ static void testDlPlus() {
     assert(!decodeDlPlus(fm, 3, t, a));    // type only
     assert(!decodeDlPlus(fm, 8, t, a));    // first field only
     assert(!decodeDlPlus(fm, 16, t, a));   // third field without 0x00
+}
+
+static void testDlPlusEntries() {
+    std::vector<uint8_t> m(2, 0);
+    m.push_back(33);
+    putStr(m, 0x01, "");
+    putStr(m, 0x01, "");
+    putStr(m, 0x01, "Testprogramm");
+    m.push_back(1);
+    putStr(m, 0x01, "");
+    putStr(m, 0x01, "");
+    putStr(m, 0x01, "Testtitel");
+    m.push_back(4);
+    putStr(m, 0x01, "");
+    putStr(m, 0x01, "");
+    putStr(m, 0x01, "Testinterpret");
+    std::vector<DlPlusEntry> e;
+    assert(decodeDlPlusEntries(&m[0], m.size(), e) && e.size() == 3);
+    assert(e[0].type == 33 && e[0].text == "Testprogramm");
+    assert(e[1].type == 1 && e[1].text == "Testtitel");
+    assert(e[2].type == 4 && e[2].text == "Testinterpret");
+    std::string t, a;
+    assert(decodeDlPlus(&m[0], m.size(), t, a) && t == "Testtitel" && a == "Testinterpret");
+    assert(!decodeDlPlusEntries(&m[0], m.size() - 3, e));
 }
 
 static void testDynamicLabel() {
@@ -86,16 +120,6 @@ static void testLogo() {
     const uint8_t one[] = {0x01};
     assert(!decodeLogo(ARR(one), img, len));
     assert(!decodeLogo(l, 4, img, len));
-}
-
-static void put(std::vector<uint8_t>& v, const char* s) {
-    v.insert(v.end(), (const uint8_t*)s, (const uint8_t*)s + strlen(s));
-}
-
-static void putStr(std::vector<uint8_t>& v, uint8_t cs, const char* s) {
-    v.push_back(cs);
-    put(v, s);
-    v.push_back(0);
 }
 
 static std::vector<uint8_t> dabFilled(uint8_t csLong, const char* longName) {
@@ -224,6 +248,7 @@ static void testConnectionTable() {
 int main() {
     testMostString();
     testDlPlus();
+    testDlPlusEntries();
     testDynamicLabel();
     testSlides();
     testLogo();

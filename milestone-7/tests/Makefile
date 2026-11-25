@@ -50,6 +50,7 @@ SRC_test_boot_guard        :=
 SRC_test_overlay_watch     :=
 SRC_test_most_tuner        :=
 SRC_test_radio_state       :=
+SRC_test_radio_text_log    :=
 SRC_test_radio_tile        :=
 SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
@@ -187,7 +188,7 @@ $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 # without these lines, a change to the session or a header it pulls in would not rebuild them.
 SESSION_DEPS := $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp \
   $(ROOT)/src/aa_frames.hpp $(ROOT)/src/radio/radio_tap.hpp $(ROOT)/src/radio/radio_tile.hpp \
-  $(ROOT)/src/radio/radio_state.hpp $(ROOT)/src/radio/most_tuner.hpp $(ROOT)/src/radio/wall_time.hpp \
+  $(ROOT)/src/radio/radio_state.hpp $(ROOT)/src/radio/most_tuner.hpp $(ROOT)/src/radio/wall_time.hpp $(ROOT)/src/radio/radio_text_log.hpp \
   $(ROOT)/src/radio/aa_local_media.hpp $(ROOT)/src/radio/radio_placeholder_art.hpp
 $(OUT)/test_session_sensors: $(SESSION_DEPS) stub_cryptor.hpp
 $(OUT)/test_session_rx_timeout: $(SESSION_DEPS) stub_cryptor.hpp

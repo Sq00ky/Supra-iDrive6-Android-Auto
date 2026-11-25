@@ -3,6 +3,7 @@
 #pragma once
 // Follows the DAB and FM tuners and the audible source on the observe-only MOST client; sends nothing.
 #include "radio/radio_state.hpp"
+#include "radio/radio_text_log.hpp"
 #include "radio/wall_time.hpp"
 
 #include <pthread.h>
@@ -33,15 +34,18 @@ public:
         pthread_mutex_unlock(&mu_);
     }
 
-    // nowMs: CLOCK_MONOTONIC ms, the session's clock. On a visible change (or a DL+ that ends a wait) one log line, then the callback.
+    // nowMs: CLOCK_MONOTONIC ms, the session's clock. One [RadioText] line per changed text; on a visible change (or a DL+ that ends a wait) one [RadioTap] line, then the callback.
     void apply(uint8_t fblock, uint16_t fkt, const uint8_t* p, size_t n, uint32_t nowMs) {
         char line[512];
+        std::string textBody;
         pthread_mutex_lock(&mu_);
+        const bool textCh = radioTextLogBody(textLog_, fblock, fkt, p, n, textBody);
         const bool ch = applyMost(state_, fblock, fkt, p, n, nowMs);
         if (ch) describe(fblock, line, sizeof(line));
         const ChangeCb cb = cb_;
         void* const user = user_;
         pthread_mutex_unlock(&mu_);
+        if (textCh) printf("[RadioText] %s %s\n", WallTime().hmsMs, textBody.c_str());
         if (!ch) return;
         fputs(line, stdout);
         if (cb) cb(user);
@@ -87,6 +91,7 @@ private:
 
     pthread_mutex_t mu_;
     RadioState state_;
+    RadioTextLog textLog_;
     ChangeCb cb_;
     void* user_;
 };

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <string>
+#include <vector>
 
 namespace nbt {
 
@@ -67,15 +68,20 @@ inline bool mostTextEnd(const uint8_t* p, size_t from, size_t n, size_t& end) {
     return true;
 }
 
-// fkt C2B: after 2 bytes, entries (type, then three fields charset, text, 0x00; the content is the third field);
-// 1 = title, 4 = artist. The DAB tuner leaves the first two fields empty, the FM tuner fills them.
-inline bool decodeDlPlus(const uint8_t* p, size_t n, std::string& title, std::string& artist) {
-    title.clear();
-    artist.clear();
+struct DlPlusEntry {
+    int type;
+    std::string text;
+};
+
+// fkt C2B: after 2 bytes, entries (type, then three fields charset, text, 0x00; the content is the third field), all
+// types in order. The DAB tuner leaves the first two fields empty, the FM tuner fills them.
+inline bool decodeDlPlusEntries(const uint8_t* p, size_t n, std::vector<DlPlusEntry>& out) {
+    out.clear();
     if (!p || n < 2) return false;
     size_t i = 2;
     while (i < n) {
-        const uint8_t type = p[i++];
+        DlPlusEntry entry;
+        entry.type = p[i++];
         uint8_t cs = 0;
         size_t s = 0, e = 0;
         for (int f = 0; f < 3; ++f) {
@@ -85,8 +91,21 @@ inline bool decodeDlPlus(const uint8_t* p, size_t n, std::string& title, std::st
             if (!mostTextEnd(p, s, n, e)) return false;
             i = e + 1;
         }
-        if (type == 1) title = mostString(cs, p + s, e - s);
-        else if (type == 4) artist = mostString(cs, p + s, e - s);
+        entry.text = mostString(cs, p + s, e - s);
+        out.push_back(entry);
+    }
+    return true;
+}
+
+// fkt C2B: 1 = title, 4 = artist.
+inline bool decodeDlPlus(const uint8_t* p, size_t n, std::string& title, std::string& artist) {
+    title.clear();
+    artist.clear();
+    std::vector<DlPlusEntry> entries;
+    if (!decodeDlPlusEntries(p, n, entries)) return false;
+    for (size_t k = 0; k < entries.size(); ++k) {
+        if (entries[k].type == 1) title = entries[k].text;
+        else if (entries[k].type == 4) artist = entries[k].text;
     }
     return true;
 }
