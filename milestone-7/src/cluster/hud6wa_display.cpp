@@ -3,6 +3,7 @@
 #include "cluster/hud6wa_display.hpp"
 #include "cluster/hudterm_digits.hpp"
 #include "cluster/hudterm_ring.hpp"
+#include "cluster/hud_ring60.hpp"
 #include "cluster/hud_unified.hpp"
 #include "cluster/mapbox_hud.hpp"   // Mapbox maneuver glyphs (NBT_HUD_GLYPHS); falls back to the parametric shapes
 
@@ -197,7 +198,10 @@ void drawHudRoute(const Layout& layout, int tail, const HudProfile&, const Junct
 }
 
 bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0) {
-    if (spec.kind == kShapeRoundabout) return roundaboutPicture(spec, p, pic, exitNumber);
+    if (spec.kind == kShapeRoundabout) {
+        if (readableHud(p)) return ring60::picture(spec, p, pic, exitNumber);
+        return roundaboutPicture(spec, p, pic, exitNumber);
+    }
     if (readableHud(p)) {
         return unified::far(spec.aa_type, p, pic);
     }

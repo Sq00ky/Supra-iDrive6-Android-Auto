@@ -64,6 +64,7 @@ SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
 SRC_test_hud_digits        :=
+SRC_test_hud_ring60        :=
 SRC_test_hud_ramps         :=
 SRC_test_mapbox_wings      := tests/mapbox_wings_other_tu.cpp
 SRC_test_hudprobe          :=
@@ -140,7 +141,7 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh run-test_hud_preview run-test_hud_unified tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh run-test_hud_preview run-test_hud_unified run-test_hud_ring60_golden tsan
 	@echo "[CHECK] all host tests passed"
 
 .PHONY: run-test_favourite_resources
@@ -171,6 +172,12 @@ run-test_hud_unified: $(OUT)/hud_preview
 	@python3 $(ROOT)/tools/gen_unified_hud.py --check
 	@python3 test_hud_unified.py $(OUT)/hud_preview > $(OUT)/test_hud_unified.log 2>&1 \
 	  && echo "[PASS] test_hud_unified.py" || { echo "[FAIL] test_hud_unified.py"; cat $(OUT)/test_hud_unified.log; exit 1; }
+
+.PHONY: run-test_hud_ring60_golden
+run-test_hud_ring60_golden: $(OUT)/test_hud_ring60
+	@python3 $(ROOT)/tools/gen_ring60_hud.py --check
+	@python3 test_hud_ring60.py $(OUT)/test_hud_ring60 > $(OUT)/test_hud_ring60_golden.log 2>&1 \
+	  && echo "[PASS] test_hud_ring60.py" || { echo "[FAIL] test_hud_ring60.py"; cat $(OUT)/test_hud_ring60_golden.log; exit 1; }
 
 run-test_hud_preview: $(OUT)/hud_preview
 	@python3 test_hud_preview.py $(OUT)/hud_preview > $(OUT)/test_hud_preview.log 2>&1 \

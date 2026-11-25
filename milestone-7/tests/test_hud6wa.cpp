@@ -13,6 +13,7 @@
 #include "cluster/nav_core.hpp"
 #include "cluster/mapbox_hud.hpp"
 #include "cluster/hudterm_ring.hpp"
+#include "cluster/hud_ring60.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <algorithm>
@@ -957,7 +958,15 @@ static void checkCirculation(const Shape& actual, const HudProfile& p, const Rec
 
 static void checkCirculationPacket(const Batch& b, const HudProfile& p, const Rect& frame,
                                    int number, bool clockwise, bool standardHud = false) {
-    checkCirculation(packetPolygons(b), p, frame, number, clockwise, standardHud);
+    if (standardHud) {
+        Picture expected;
+        assert(ring60::picture(shapeFor(clockwise ? 33 : 34, false, 0), p, expected, number));
+        Shape shapes;
+        for (size_t i = 0; i < expected.size(); ++i) shapes.push_back(expected[i].poly);
+        Shape actual = packetPolygons(b);
+        assert(actual.size() == shapes.size());
+        samePolygons(actual, 0, shapes);
+    } else checkCirculation(packetPolygons(b), p, frame, number, clockwise);
     int colour = -1;
     for (size_t i = 0; i < b.calls.size(); ++i) {
         if (b.calls[i].fkt == kSetFillColor) colour = b.calls[i].payload[2];
@@ -1558,7 +1567,7 @@ static void testKnownRoundaboutDriver() {
                     assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
                     assert(port.batches.size() == 1 && !display.nearShown() && display.routeStage() == 0);
                     Picture expected;
-                    assert(roundaboutPicture(shapeFor(type, true, angles[a]), profile, expected, label ? 7 : 0));
+                    assert(ring60::picture(shapeFor(type, true, angles[a]), profile, expected, label ? 7 : 0));
                     Shape expectedShape = picturePolygons(expected);
                     Shape far = packetPolygons(port.batches[0]);
                     assert(far.size() == expectedShape.size()); samePolygons(far, 0, expectedShape);
