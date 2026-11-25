@@ -990,6 +990,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | `NBT_GEAR_ACTION` | `0` | Reverse-gear handling |
 | `NBT_CTL` | `0` | Single-instance control port (UDP 127.0.0.1:52790) |
 | `NBT_KEEP_PF` | set to `1` | Don't run `pfctl -d` at start. Only with the Android Auto rules in `pf.conf`: `pf_aa --install` adds both (see [Troubleshooting](#troubleshooting)) |
+| `NBT_PF_AUTO=0` | Do not install the Android Auto packet-filter rules automatically. By default nbt-aad adds them once (pf_aa: four pass rules for TCP 5277 in /etc/pf.conf, backup in pf.bak, `NBT_KEEP_PF=1`) at the first start without `NBT_KEEP_PF=1`, instead of switching the whole filter off with `pfctl -d` at every start (#329). Settings -> Install / Check / Uninstall PF Rules still work; Uninstall also stops the automatic install (`pf-auto.off`), and a failed automatic install falls back to `pfctl -d` and is not retried until Install PF Rules is pressed (`pf-auto.failed`) |
 
 ### Advanced / experimental
 

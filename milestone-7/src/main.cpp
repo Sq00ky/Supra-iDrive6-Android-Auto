@@ -2300,6 +2300,64 @@ static void serviceUsbLog(bool atStart) {
     }
 }
 
+// ---- PF rules by default --------------------------------------------------------------------------------------------
+// The car's packet filter blocks Android Auto's TCP 5277. Before, nbt-aad switched the whole filter off at every start
+// ('pfctl -d') unless the driver had pressed Install PF Rules (pf_aa: four pass rules in /etc/pf.conf, NBT_KEEP_PF=1),
+// and with the filter off the car's own connected services can break (#329). Now the rules are installed once,
+// automatically, at the first start without NBT_KEEP_PF=1; the iDrive rows (Install / Check / Uninstall PF Rules)
+// still work as before. Not done when: NBT_PF_AUTO=0, the driver pressed Uninstall PF Rules (pf-auto.off), or an
+// automatic install failed before (pf-auto.failed: until Install PF Rules is pressed). A failed install falls back to
+// the old 'pfctl -d'.
+static const char* const kPfAutoOffName = "pf-auto.off";
+static const char* const kPfAutoFailedName = "pf-auto.failed";
+
+static void touchMarker(const char* path) {
+    FILE* f = fopen(path, "w");
+    if (f) fclose(f);
+}
+
+static bool fileExists(const char* path) {
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+// true: the rules are in place (installed now or already) and nbt-aad must leave the filter on.
+static bool pfAutoInstall() {
+    if (nbt::envFlag("NBT_PF_AUTO") == 0) {
+        printf("[Main] PF rules: automatic install off (NBT_PF_AUTO=0)\n");
+        return false;
+    }
+    const std::string off = nbt::confFile(kPfAutoOffName), failed = nbt::confFile(kPfAutoFailedName);
+    if (fileExists(off.c_str())) {
+        printf("[Main] PF rules: not installed automatically (Uninstall PF Rules was pressed; %s)\n", off.c_str());
+        return false;
+    }
+    if (fileExists(failed.c_str())) {
+        printf("[Main] PF rules: an automatic install failed before (%s): press Install PF Rules in Settings to try "
+               "again\n", failed.c_str());
+        return false;
+    }
+    printf("[Main] PF rules: installing the Android Auto rules into the car's packet filter (once; NBT_PF_AUTO=0 turns "
+           "this off)\n");
+    fflush(stdout);
+    static char envPath[160], bakPath[160];
+    snprintf(envPath, sizeof(envPath), "%s", nbt::confFile(nbt::kDaemonEnvName).c_str());
+    snprintf(bakPath, sizeof(bakPath), "%s", nbt::confFile(nbt::kPfBackupName).c_str());
+    if (nbt::packaged()) nbt::makeDataDir();
+    static char a0[] = "nbt-aad", mode[] = "--install", load[] = "--load", optEnv[] = "--env", optBak[] = "--backup";
+    char* pfArgv[] = { a0, mode, optEnv, envPath, optBak, bakPath, load, NULL };
+    const int rc = nbt::pfaa::run(7, pfArgv);
+    if (rc == 0) {
+        setenv("NBT_KEEP_PF", "1", 1);   // this run, too (pf_aa wrote it into nbt-aad.env for the next ones)
+        printf("[Main] PF rules: installed and active; the packet filter stays on\n");
+        return true;
+    }
+    touchMarker(failed.c_str());
+    printf("[Main] PF rules: automatic install failed (pf_aa exit %d): switching the packet filter off as before; "
+           "Install PF Rules in Settings tries again\n", rc);
+    return false;
+}
+
 int main(int argc, char* argv[]) {
     // Hand install or NBTApps package (nbt_paths.hpp): from where we were started, before anything reads a setting.
     nbt::initPaths(argc > 0 ? argv[0] : NULL);
@@ -2333,6 +2391,13 @@ int main(int argc, char* argv[]) {
         for (int i = 2; i < argc && pfArgc < 63; ++i) pfArgv[pfArgc++] = argv[i];
         pfArgv[pfArgc] = NULL;
         int rc = nbt::pfaa::run(pfArgc, pfArgv);
+        // Automatic install at start (pfAutoInstall below) follows what the driver did by hand: Uninstall PF Rules
+        // turns it off for good, Install PF Rules turns it back on and clears an earlier failure.
+        if (!strcmp(mode, "--uninstall") && rc == 0) touchMarker(nbt::confFile(kPfAutoOffName).c_str());
+        if (!strcmp(mode, "--install")) {
+            unlink(nbt::confFile(kPfAutoOffName).c_str());
+            if (rc == 0) unlink(nbt::confFile(kPfAutoFailedName).c_str());
+        }
         // Last line for the iDrive app: it cannot wait for us (the HMI ignores SIGCHLD), so it reads the result here.
         printf("pf_aa-exit: %d\n", rc);
         fflush(stdout);
@@ -2385,8 +2450,9 @@ int main(int argc, char* argv[]) {
         if (pre && strip) unsetenv("LD_PRELOAD");
     }
 
-    // Drop the packet filter so the phone can reach the stock AA port (5277) on uap0.
-    // Set NBT_KEEP_PF=1 to leave the firewall alone.
+    // Drop the packet filter so the phone can reach the stock AA port (5277) on uap0, unless the PF rules are in
+    // place (NBT_KEEP_PF=1, or installed automatically just now: pfAutoInstall).
+    if (nbt::envFlag("NBT_KEEP_PF") != 1 && nbt::wirelessEnabled()) pfAutoInstall();
     if (nbt::envFlag("NBT_KEEP_PF") == 1) {
         printf("[Main] NBT_KEEP_PF=1: leaving packet filter untouched.\n");
     } else {
