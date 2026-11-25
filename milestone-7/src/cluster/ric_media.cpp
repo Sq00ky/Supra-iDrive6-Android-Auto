@@ -20,6 +20,7 @@
 #include <sys/types.h>
 
 #ifdef __QNXNTO__
+#include <ifaddrs.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
 #include <net/bpf.h>
@@ -113,11 +114,42 @@ bool readMessage(int fd, Bytes& m) {
 }
 
 #ifdef __QNXNTO__
+// A connected UDP socket selects a local route without sending traffic. Use its interface only for an on-link KOMBI.
+std::string kombiInterface(const struct in_addr& destination, uint16_t port) {
+    const int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return std::string();
+    struct sockaddr_in peer, local;
+    memset(&peer, 0, sizeof(peer));
+    peer.sin_family = AF_INET;
+    peer.sin_port = htons(port);
+    peer.sin_addr = destination;
+    socklen_t len = sizeof(local);
+    const bool routed = connect(fd, (struct sockaddr*)&peer, sizeof(peer)) == 0 &&
+                        getsockname(fd, (struct sockaddr*)&local, &len) == 0;
+    close(fd);
+    struct ifaddrs* addrs = NULL;
+    if (!routed || getifaddrs(&addrs) != 0) return std::string();
+
+    std::string result;
+    for (const struct ifaddrs* p = addrs; p; p = p->ifa_next) {
+        if (!p->ifa_addr || !p->ifa_netmask || !p->ifa_name || p->ifa_addr->sa_family != AF_INET ||
+            !(p->ifa_flags & IFF_UP) || (p->ifa_flags & IFF_LOOPBACK)) continue;
+        const uint32_t address = ((const struct sockaddr_in*)p->ifa_addr)->sin_addr.s_addr;
+        const uint32_t mask = ((const struct sockaddr_in*)p->ifa_netmask)->sin_addr.s_addr;
+        if (local.sin_addr.s_addr == address && mask && ((destination.s_addr ^ address) & mask) == 0) {
+            result = p->ifa_name;
+            break;
+        }
+    }
+    freeifaddrs(addrs);
+    return result;
+}
+
 // bpfRecords() (cluster/ric_sniff.hpp) reads the record header by offset: these are the offsets it assumes.
 typedef char bpf_caplen_is_at_8[offsetof(struct bpf_hdr, bh_caplen) == 8 ? 1 : -1];
 typedef char bpf_hdrlen_is_at_16[offsetof(struct bpf_hdr, bh_hdrlen) == 16 ? 1 : -1];
 
-// The head unit's own traffic to the KOMBI, read from a BPF device on its interface. Not promiscuous, receive only.
+// The head unit's own traffic to the KOMBI, read from a non-promiscuous BPF tap on its interface.
 class BpfSource : public FrameSource {
 public:
     BpfSource(const std::string& ifname, uint32_t ip) : if_(ifname), ip_(ip), fd_(-1) {}
@@ -141,6 +173,8 @@ public:
         u_int dlt = 0;
         if (ioctl(fd_, BIOCGDLT, &dlt) < 0 || dlt != DLT_EN10MB) { errno = 0; return fail(why, "not an Ethernet interface"); }
         u_int one = 1;
+        if (ioctl(fd_, BIOCSSEESENT, &one) < 0)
+            printf("[KombiMedia] %s: could not enable capture of outgoing packets (%s)\n", if_.c_str(), strerror(errno));
         if (ioctl(fd_, BIOCIMMEDIATE, &one) < 0) return fail(why, "BIOCIMMEDIATE");
         struct timeval tv;
         tv.tv_sec = 0;
@@ -169,6 +203,19 @@ public:
         const ssize_t n = ::read(fd_, &buf_[0], buf_.size());
         if (n < 0) return (errno == EINTR || errno == EAGAIN || errno == ETIMEDOUT) ? 0 : -1;
         return bpfRecords(&buf_[0], (size_t)n, BPF_ALIGNMENT, frames);
+    }
+
+    virtual void logStats() {
+        struct bpf_stat stats;
+        if (ioctl(fd_, BIOCGSTATS, &stats) == 0) {
+            printf("[KombiMedia] %s BPF stats: received %llu, matched %llu, dropped %llu\n", if_.c_str(),
+                   (unsigned long long)stats.bs_recv, (unsigned long long)stats.bs_capt,
+                   (unsigned long long)stats.bs_drop);
+        } else {
+            struct bpf_stat_old old;
+            if (ioctl(fd_, BIOCGSTATSOLD, &old) == 0)
+                printf("[KombiMedia] %s BPF stats: received %u, dropped %u\n", if_.c_str(), old.bs_recv, old.bs_drop);
+        }
     }
 
     virtual void close() {
@@ -207,7 +254,8 @@ FrameSource* defaultSource(const std::string& ifname, uint32_t ip) {
 }  // namespace
 
 KombiMedia::KombiMedia()
-    : running_(false), stop_(false), show_(false), answered_(0), listOpen_(false), kombiSeen_(false), openSinceMs_(0), cursor_(-1),
+    : running_(false), stop_(false), show_(false), playing_(false), wheelFallback_(false), reverseWheel_(false),
+      seenTrackList_(false), seenDirectTrackKey_(false), answered_(0), listOpen_(false), kombiSeen_(false), openSinceMs_(0), cursor_(-1),
       port_(30502), ip_(0), index_(kDefaultTextIndex),
       mode_(MediaList::kSlot), src_(NULL), ownSrc_(false), fd_(-1), session_(0x0100), fails_(0) {
     pthread_mutex_init(&mu_, NULL);
@@ -222,7 +270,7 @@ KombiMedia::~KombiMedia() {
 
 bool KombiMedia::settingOn(const char* env) { return env && !strcmp(env, "1"); }
 
-void KombiMedia::start(bool audioModeOk, FrameSource* source) {
+void KombiMedia::start(bool audioModeOk, FrameSource* source, bool fallbackByDefault) {
     if (running_) return;
     if (!nbt::kombiTracksEnabled()) {
         printf("[KombiMedia] track title in the cluster list: off (tick Native Functionality Media Controls Restore, or "
@@ -239,7 +287,7 @@ void KombiMedia::start(bool audioModeOk, FrameSource* source) {
     e = getenv("NBT_KOMBI_NAV_PORT");
     port_ = (uint16_t)((e && atoi(e) > 0 && atoi(e) < 65536) ? atoi(e) : 30502);
     e = getenv("NBT_KOMBI_TRACKS_IF");
-    if_ = (e && *e) ? e : "vlan73";
+    if_ = (e && *e) ? e : "";
     e = getenv("NBT_KOMBI_TRACKS_INDEX");
     const unsigned long idx = (e && *e) ? strtoul(e, NULL, 0) : 0;
     index_ = (idx >= 1 && idx <= 0xFFFFFFul - (unsigned long)kIndexSpan) ? (uint32_t)idx : kDefaultTextIndex;
@@ -250,7 +298,15 @@ void KombiMedia::start(bool audioModeOk, FrameSource* source) {
         printf("[KombiMedia] track title in the cluster list: off, '%s' is not an address\n", host_.c_str());
         return;
     }
+#ifdef __QNXNTO__
+    if (if_.empty() && !source) if_ = kombiInterface(a, port_);
+#endif
+    if (if_.empty()) if_ = "vlan73";
     ip_ = ntohl(a.s_addr);
+    e = getenv("NBT_KOMBI_TRACKS_PRESS");
+    wheelFallback_ = (!e || strcmp(e, "0") != 0) &&
+                     nbt::settingOr(getenv("NBT_MFL_WHEEL_FALLBACK"), fallbackByDefault);
+    reverseWheel_ = nbt::envFlag("NBT_MFL_WHEEL_INVERT") == 1;
     src_ = source ? source : defaultSource(if_, ip_);
     ownSrc_ = !source;
     if (!src_) {
@@ -273,13 +329,15 @@ void KombiMedia::start(bool audioModeOk, FrameSource* source) {
         printf("[KombiMedia] track title in the cluster list: on (Native Functionality Media Controls Restore), mode list "
                "(NBT_KOMBI_TRACKS_MODE): iDrive's list answered with our own text model 0x%08X - listens on %s while "
                "Android Auto plays, KOMBI %s:%u\n", 0x03000000u | index_, if_.c_str(), host_.c_str(), (unsigned)port_);
-    e = getenv("NBT_KOMBI_TRACKS_PRESS");
     if (e && !strcmp(e, "0"))
         printf("[KombiMedia] thumb-wheel press on Previous title / Next title: off (NBT_KOMBI_TRACKS_PRESS=0)\n");
     else
         printf("[KombiMedia] thumb-wheel press on Previous title / Next title: previous / next to the phone, while the "
                "list is on the display (NBT_KOMBI_TRACKS_PRESS=0 turns it off; needs Native Functionality Media "
                "Controls Restore)\n");
+    if (wheelFallback_)
+        printf("[KombiMedia] wheel fallback: turn then press during native playback when no track list or direct track key has been seen%s\n",
+               reverseWheel_ ? " (direction inverted)" : "");
 }
 
 void KombiMedia::stop() {
@@ -290,6 +348,10 @@ void KombiMedia::stop() {
     pthread_mutex_unlock(&mu_);
     pthread_join(thread_, NULL);
     running_ = false;
+    pthread_mutex_lock(&mu_);
+    playing_ = show_ = listOpen_ = seenTrackList_ = seenDirectTrackKey_ = false;
+    title_.clear();
+    pthread_mutex_unlock(&mu_);
     closeLink();
     if (ownSrc_) delete src_;
     src_ = NULL;
@@ -299,6 +361,7 @@ void KombiMedia::update(const std::string& song, bool playing) {
     if (!running_) return;
     const bool show = playing && !song.empty();
     pthread_mutex_lock(&mu_);
+    playing_ = playing;
     if (song != title_ || show != show_) {
         title_ = song;
         show_ = show;
@@ -314,7 +377,16 @@ unsigned KombiMedia::answered() {
     return n;
 }
 
-int KombiMedia::wheelPress(std::string* why) {
+void KombiMedia::directTrackKeySeen() {
+    if (!wheelFallback_) return;
+    pthread_mutex_lock(&mu_);
+    const bool first = !seenDirectTrackKey_;
+    seenDirectTrackKey_ = true;
+    pthread_mutex_unlock(&mu_);
+    if (first) printf("[KombiMedia] direct steering-wheel track key seen; direction fallback disabled\n");
+}
+
+int KombiMedia::wheelPress(std::string* why, int turn) {
     if (!running_) {
         if (why) *why = "the cluster track title is not running";
         return kPressNone;
@@ -323,7 +395,14 @@ int KombiMedia::wheelPress(std::string* why) {
     const bool up = listOpen_;
     const uint32_t since = openSinceMs_;
     const int cursor = cursor_;
+    const bool fallback = wheelFallback_ && playing_ && !up && !seenTrackList_ && !seenDirectTrackKey_;
     pthread_mutex_unlock(&mu_);
+    if (fallback && turn) {
+        const bool next = (turn > 0) != reverseWheel_;
+        printf("[KombiMedia] thumb-wheel roll and press: %s\n", next ? "next" : "previous");
+        if (why) why->clear();
+        return next ? kPressNext : kPressPrev;
+    }
     const char* w = "";
     const int a = wheelPressAction(up, up ? (uint32_t)(nowMs() - since) : 0, cursor, &w);
     if (why) *why = w;
@@ -390,7 +469,7 @@ void KombiMedia::worker() {
     bool open = false, dead = false;
     uint32_t idleSince = 0;
     unsigned seenLists = 0, seenOthers = 0, seenMoved = 0, base = 0;
-    unsigned long packets = 0, onPort = 0, healthPackets = 0;   // what the capture has delivered since it opened
+    unsigned long decodedFrames = 0, packets = 0, onPort = 0, healthPackets = 0;   // what the capture has delivered since it opened
     uint32_t openedMs = 0, healthMs = 0;
     bool silentLogged = false;
     uint32_t seenHandle = 0;
@@ -424,7 +503,7 @@ void KombiMedia::worker() {
             seenHandle = 0;
             base = 0;
             idleSince = 0;
-            packets = onPort = healthPackets = 0;
+            decodedFrames = packets = onPort = healthPackets = 0;
             silentLogged = false;
             openedMs = healthMs = nowMs();
             printf("[KombiMedia] listening on %s for iDrive's track list\n", if_.c_str());
@@ -443,6 +522,7 @@ void KombiMedia::worker() {
             listOpen_ = false;
             continue;
         }
+        decodedFrames += frames.size();
         for (size_t i = 0; i < frames.size(); ++i) {
             TcpSeg seg;
             if (frames[i].empty() || !parseTcp(&frames[i][0], frames[i].size(), &seg)) continue;
@@ -482,6 +562,15 @@ void KombiMedia::worker() {
             seenMoved = logic.moved();
         }
 
+        // Publish the cursor before title writes can block on the network.
+        const uint32_t now = nowMs();
+        pthread_mutex_lock(&mu_);
+        if (logic.open() && !listOpen_) openSinceMs_ = now;
+        listOpen_ = logic.open();
+        cursor_ = logic.cursor();
+        seenTrackList_ = seenTrackList_ || logic.lists() != 0;
+        pthread_mutex_unlock(&mu_);
+
         if (!out.empty()) {
             bool text = false;
             for (size_t i = 0; i < out.size(); ++i) text = text || out[i].method == kMethodText;
@@ -497,11 +586,11 @@ void KombiMedia::worker() {
             }
         }
 
-        const uint32_t now = nowMs();
         if (packets == 0 && !silentLogged && (uint32_t)(now - openedMs) > 30000u) {
             silentLogged = true;
-            printf("[KombiMedia] no packet to the KOMBI seen on %s in 30 s (iDrive sends it a keep-alive about every "
-                   "10 s): the capture is not working\n", if_.c_str());
+            printf("[KombiMedia] no TCP packet to KOMBI %s seen on %s in 30 s (%lu decoded frames from BPF); "
+                   "check the cluster address and interface\n", host_.c_str(), if_.c_str(), decodedFrames);
+            src_->logStats();
         }
         if (packets != healthPackets && (uint32_t)(now - healthMs) > 60000u) {
             healthMs = now;
@@ -522,12 +611,7 @@ void KombiMedia::worker() {
         pthread_mutex_lock(&mu_);
         answered_ += logic.answered() - base;       // base = what of this logic's count is already in answered_
         base = logic.answered();
-        {                                           // for wheelPress(): is iDrive's list up, since when, cursor where
-            const bool up = open && logic.open();
-            if (up && !listOpen_) openSinceMs_ = now;
-            listOpen_ = up;
-            cursor_ = logic.cursor();
-        }
+        if (!open) listOpen_ = false;
     }
     pthread_mutex_unlock(&mu_);
     if (open) src_->close();

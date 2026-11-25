@@ -53,6 +53,13 @@ std::string favouriteDisabledPath() { return marker; }
 struct OverlayWatch { enum { kSettingsState = 14 }; };
 }
 bool fileExists(const char* p) { return access(p, F_OK) == 0; }
+const int kF15Choice = 3;
+int choice = 1;
+int clusterChoice() { return choice; }
+struct DaemonState { int overlay; };
+DaemonState readDaemonState() { return DaemonState{0}; }
+bool g_holding = false, g_hideSent = false;
+void sendToDaemon(const char*) {}
 bool g_focusKnown = false, g_settingsFocused = false, g_colourFocused = false;
 bmw::PluginApp* g_app;
 const unsigned kSettingsState = 14;
@@ -69,6 +76,7 @@ int main(int argc, char** argv) {
     FILE* f = fopen(marker.c_str(), "w"); assert(f); fclose(f);
     onSettingsFocus(0, bmw::Parcel(true));
     assert(app.writes == 1 && app.value);             // existing marker, no toggle needed
+    choice = kF15Choice;
     assert(unlink(marker.c_str()) == 0);
     onSettingsFocus(0, bmw::Parcel(false));
     assert(app.writes == 1 && app.value);             // focus loss must not refresh

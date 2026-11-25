@@ -318,10 +318,11 @@ const long        kAutostartDelayS = 15;
 // ActiveSeating intro (libActiveSeating StateTutorial::startWidgetInit: DataTableBase(&map, 1), map[0] = TextID(0x58),
 // updateModel(274, table); state property 24 = 3). Plain labels / Richtext labels are one row, cut at ~34 characters.
 const unsigned    kAboutModel      = 37;
-// HUD profile (rhmiapp-82): three radio buttons, BMW's own pattern (SecurityMenu.xml:1159). The
+// HUD profile (rhmiapp-82): radio buttons, BMW's own pattern (SecurityMenu.xml:1159). The
 // choice is one word in /var/opt/aa/cluster; nbt-aad reads it when NBT_CLUSTER is unset. 6WB has no display
 // driver yet, so it is offered with that stated and the daemon says so rather than quietly doing 6WA's job.
 const char* const kClusterFlag       = "cluster";
+const unsigned    kClusterState      = 54;
 // Car manufacturer choice (rhmiapp-96): /var/opt/aa/vehicle -> the daemon exports NBT_VEHICLE at start, and
 // car_config.hpp then skips carplay.ini. "auto" keeps today's behaviour (carplay.ini decides).
 // In the data dir (nbt_paths.hpp), so a package install's daemon finds what this page wrote.
@@ -333,8 +334,8 @@ const unsigned    kVehicleModels[5]  = { 450, 451, 452, 453, 454 };
 const unsigned    kVehicleState      = 18;
 const unsigned    kStatusModel       = 430;
 std::string g_vehicleAtEntry;
-const unsigned    kClusterModels[3]  = { 401, 402, 403 };
-const char* const kClusterValues[3]  = { "j29", "6wa", "6wb" };
+const unsigned    kClusterModels[4]  = { 401, 402, 403, 455 };
+const char* const kClusterValues[4]  = { "j29", "6wa", "6wb", "6wa-f15" };
 const unsigned    kAboutText       = 17;
 // "Save logs to USB" checkbox (rhmiapp-10): <checkbox action="26" model="38"> in hmiState 14, flag
 // usblog (nbt::usblog). Off = no log files at all; on = both logs on the first /mnt/umass* stick.
@@ -1833,13 +1834,13 @@ void writeClusterChoice(const char* value) {
 int clusterChoice() {
     char v[24];
     if (!nbt::flagText(kClusterFlag, v, sizeof(v))) return -1;
-    for (int i = 0; i < 3; ++i) if (!strcmp(v, kClusterValues[i])) return i;
+    for (int i = 0; i < 4; ++i) if (!strcmp(v, kClusterValues[i])) return i;
     return -1;
 }
 
 void showClusterType(bmw::PluginApp* app) {
     const int sel = clusterChoice();
-    for (int i = 0; i < 3; ++i) app->updateModel(kClusterModels[i], i == sel);
+    for (int i = 0; i < 4; ++i) app->updateModel(kClusterModels[i], i == sel);
     alog("settings: HUD profile %s", sel < 0 ? "(unset: NBT_CLUSTER or j29)" : kClusterValues[sel]);
 }
 
@@ -1851,6 +1852,14 @@ bool onClusterPick(int which) {
 bool onClusterJ29(void*, const bmw::Parcel&) { return onClusterPick(0); }
 bool onCluster6wa(void*, const bmw::Parcel&) { return onClusterPick(1); }
 bool onCluster6wb(void*, const bmw::Parcel&) { return onClusterPick(2); }
+const int kF15Choice = 3;
+bool onCluster6waF15(void*, const bmw::Parcel&) { return onClusterPick(kF15Choice); }
+bool onClusterFocus(void*, const bmw::Parcel& p) {
+    bool focused = false;
+    p.readBool(focused);
+    if (focused && g_app) showClusterType(g_app);
+    return true;
+}
 
 // The stored choice, always a known value ("auto" when the file is missing or odd).
 std::string readVehicleChoice() {
@@ -2384,7 +2393,11 @@ bool onNoLogToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
 }
 
 bool speechBtOn() { return nbt::flagSet(kSpeechBtFlag); }
-void showSpeechBt(bmw::PluginApp* app) { app->updateModel(kSpeechBtModel, speechBtOn()); }
+bool g_speechBtShown = false;
+void showSpeechBt(bmw::PluginApp* app) {
+    app->updateModel(kSpeechBtModel, speechBtOn());
+    g_speechBtShown = true;
+}
 bool onSpeechBtToggle(void* /*app*/, const bmw::Parcel& /*args*/) {
     toggleFlagFile(kSpeechBtFlag,
                    "Prompts on car radio (Bluetooth beta: nav prompter + eSRC_NAV_AUTO; NBT_SPEECH_BT in nbt-aad.env wins)");
@@ -2486,6 +2499,9 @@ void showVersions(bmw::PluginApp* app) {
 }
 bool onVersionFocus(void* /*app*/, const bmw::Parcel& /*p*/) { showVersions(g_runApp); return false; }
 
+bool g_hudCyrillicShown = false;
+void showHudCyrillic(bmw::PluginApp* app);
+
 void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
@@ -2506,6 +2522,8 @@ void statusRun(void* /*self*/) {
     if (!g_nativeAudioShown) showNativeAudio(app);
     if (!g_lciMediaShown) showLciMedia(app);
     if (!g_cpCompatShown) showCpCompat(app);
+    if (!g_speechBtShown) showSpeechBt(app);
+    if (!g_hudCyrillicShown) showHudCyrillic(app);
     servicePfOps(app);
     if (!g_stopPid) recoverScreenIfUnclean();            // killed / crashed outside Force Stop
     serviceStop();
@@ -2690,7 +2708,7 @@ time_t g_setSnapTime = 0;
 void settingsPageEntered() {
     if (g_setSnapPending) return;                        // keep the snapshot of the first visit since the last check
     g_setSnap = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
-    if (g_app) showVehicleChoice(g_app);              // remember the manufacturer too, for the restart decision
+    g_vehicleAtEntry = readVehicleChoice();
     g_setSnapPending = true;
     g_setSnapTime = time(NULL);
 }
@@ -2759,9 +2777,8 @@ bool onMenuFocus(void*, const bmw::Parcel& p) {
 }
 
 // Settings page (hmiState 14, rhmiapp-39): pure XML navigation (hmiAction 80 -> state 14), like the About page. The
-// focus notification is used for two things: the twelve checkbox models are refreshed from their flag files every time
-// the page is shown (a flag changed by hand, or a model the HMI dropped, then still shows the truth), and the page
-// counts as "our own UI" for the hold and for the overlay watch.
+// Settings controls are initialized by the status poll and updated when toggled. The focus callback only handles
+// screen ownership and takes the settings snapshot for the restart decision.
 // Favourites bar switch (rhmiapp-98): one checkbox on the Settings page, no submenu. It reads
 // "Disable Favorites Bar" and is ticked exactly when the disabled marker exists - the file is the state, the tick
 // only reflects it, the same rule every other row on this page follows.
@@ -2782,7 +2799,8 @@ bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
 // text path reads (hud6wa_display.cpp). Off by default: the cluster font has to carry the glyphs. The env var still
 // wins, so a hand-set NBT_HUD_CYRILLIC=0 turns it off even with the box ticked.
 void showHudCyrillic(bmw::PluginApp* app) {
-    if (app) app->updateModel(251, nbt::flagSet(nbt::kHudCyrillicFlagName));
+    app->updateModel(251, nbt::flagSet(nbt::kHudCyrillicFlagName));
+    g_hudCyrillicShown = true;
 }
 bool onHudCyrillicToggle(void*,const bmw::Parcel&) {
     const char* n = nbt::kHudCyrillicFlagName;
@@ -2806,16 +2824,23 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
     alog("settings state %u focus -> %d", kSettingsState, (int)f);
     if (!f) return true;
     g_colourFocused=false;
+    const bool f15 = clusterChoice() == kF15Choice;
+    if (f15 && readDaemonState().overlay) {
+        // Settings is native iDrive UI. Release the picture and exclusive focus while the phone stays connected.
+        g_holding = false;
+        g_hideSent = true;
+        sendToDaemon("hide");
+        alog("settings: moved Android Auto to the background");
+    }
     g_ow.onOwnState(nbt::OverlayWatch::kSettingsState, nowMs());   // iDrive is in our menu, not on a car screen
     settingsPageEntered();                               // checkbox snapshot for the restart on leaving
-    if (g_app) {
+    if (g_app && !f15) {
         showAutostart(g_app);
         showUsbLog(g_app);
         showMenuIdrive(g_app);
         showDriveMode(g_app);
         showKombiNav(g_app);
         showHudCyrillic(g_app);
-        showFavouriteBar(g_app);
         showClusterType(g_app);
         showWarnings(g_app);
         showUsbAa(g_app);
@@ -2827,6 +2852,7 @@ bool onSettingsFocus(void*, const bmw::Parcel& p) {
         showSpeechBt(g_app);
         alog("settings: thirteen checkbox models refreshed");
     }
+    if (g_app) showFavouriteBar(g_app);  // Refresh the externally editable Favorites marker on re-entry.
     return true;
 }
 
@@ -2862,6 +2888,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, 411, &onClusterJ29);
     addAction(self, 412, &onCluster6wa);
     addAction(self, 413, &onCluster6wb);
+    addAction(self, 415, &onCluster6waF15);
     addAction(self, 421, &onVehiclePick<0>); addAction(self, 422, &onVehiclePick<1>);
     addAction(self, 423, &onVehiclePick<2>); addAction(self, 424, &onVehiclePick<3>);
     addAction(self, 425, &onVehiclePick<4>);
@@ -2897,6 +2924,10 @@ bool appOnInit(bmw::PluginApp* self) {
         s.object = self;
         s.stub = &onSettingsFocus;
         self->addHandler(kSettingsState, kHandlerFocus, s);
+        bmw::ActionDelegate cluster;
+        cluster.object = self;
+        cluster.stub = &onClusterFocus;
+        self->addHandler(kClusterState, kHandlerFocus, cluster);
         bmw::ActionDelegate vp;                          // Version page: fill the two labels when shown
         vp.object = self;
         vp.stub = &onVersionFocus;

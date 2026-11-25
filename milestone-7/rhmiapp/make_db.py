@@ -28,11 +28,12 @@ TEXTS = {1: "Android Auto", 2: "Android Auto: Connecting...",   # 2 = entry text
          51: "Switch 2 Finger Gesture to Mute",   # 51 = gesture checkbox (native audio; 50 is kept for PR #285)
          49: "Song title in gauge cluster",   # 49 = now-playing checkbox (kombi_nav idle text, 6WA street line)
          48: "Prompts on car radio (BT, beta)",     # 48 = BT speech checkbox (rhmiapp-66)
-         # 400 / 404-406 = the HUD profile row, page title and its three choices.
+         # 400 / 404-406 = the HUD profile row, page title and choices.
          400: "HUD profiles",
          404: "G Series/Supra",
          405: "F-series (6WA)",
          406: "6WB (no driver yet)",
+         408: "F-Series (6WA-F15)",
          407: "Cyrillic street names in HUD",   # 407 = 6WA HUD Cyrillic checkbox (rhmiapp-99)
          22: "Show iDrive warnings",   # 22 = iDrive warnings checkbox (rhmiapp-32)
          23: "Settings",   # 23 = Settings row (hmiState 10) / page title (hmiState 14), rhmiapp-39
@@ -152,7 +153,7 @@ LANG_TEXTS = {
         336: "Nincs Bluetooth: töröld a telefont az autóban, párosítsd újra",  # No Bluetooth link: forget phone in car, pair again
         337: "Telefon nincs Wi-Fi-n: töröld az autóban, párosítsd újra",       # Phone not on Wi-Fi: forget phone in car, pair again
         338: "Az autó elutasítja a telefont: lásd coding-requirements.md (GitHub)",  # Car refused phone: see coding-requirements.md (GitHub)
-        # 400-407: HUD profilok (sor, oldalcím, három választás) és a 6WA HUD cirill opció
+        # 400-407: HUD profilok (sor, oldalcím, választások) és a 6WA HUD cirill opció
         400: "HUD profilok",                                        # HUD profiles
         404: "G sorozat/Supra",                                     # G Series/Supra
         405: "F-széria (6WA)",                                      # F-series (6WA)

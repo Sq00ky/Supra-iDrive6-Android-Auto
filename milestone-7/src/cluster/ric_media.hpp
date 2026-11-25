@@ -26,7 +26,8 @@
 //     row 0 "Previous title" or row 2 "Next title"), so a press of the wheel (MOST 15/02 fkt C31, car/mfl.hpp) is
 //     turned into Android's previous / next key for the row the cluster shows the cursor on - only while the list
 //     was already on the display, so the press that merely brings the list up skips nothing. The wheel's rotation
-//     is never mapped: it moves iDrive's cursor, and that is all it should do.
+//     normally moves iDrive's cursor. A recent turn followed by a press can select a direction on cars with this
+//     thumb-wheel protocol when neither a cluster track list nor a direct track key has been seen.
 //
 // MediaList is the decision logic (no I/O, host-tested in tests/test_ric_media.cpp); KombiMedia is the worker that
 // listens (cluster/ric_sniff.hpp), and sends on its own connection to the KOMBI.
@@ -237,6 +238,7 @@ public:
     // Waits a short while (about 200 ms at most) and appends whole Ethernet frames. Below 0 = the source is gone.
     virtual int read(std::vector<Bytes>* frames) = 0;
     virtual void close() = 0;
+    virtual void logStats() {}  // optional diagnostics when no KOMBI traffic was decoded
 };
 
 class KombiMedia {
@@ -248,15 +250,17 @@ public:
 
     // Reads NBT_KOMBI_TRACKS, NBT_KOMBI_TRACKS_MODE, _IF, _INDEX and NBT_KOMBI_NAV_HOST / _PORT, prints what is
     // in effect and starts the worker (idle until something plays). audioModeOk = the audio mode is not Bluetooth.
-    // source: host tests only (not owned).
-    void start(bool audioModeOk, FrameSource* source = NULL);
+    // source: host tests only (not owned). NBT_MFL_WHEEL_FALLBACK overrides the vehicle's fallback default.
+    void start(bool audioModeOk, FrameSource* source = NULL, bool fallbackByDefault = false);
     void stop();
     // The phone's current song and whether it is playing. Any thread, never blocks on I/O.
     void update(const std::string& song, bool playing);
     unsigned answered();
+    // A mapped Next/Previous input was received. Prefer that input over the direction fallback for this run.
+    void directTrackKeySeen();
     // A press of the thumb wheel just arrived (any thread): kPressPrev / kPressNext when the cluster list is up with
-    // its cursor on that row, kPressNone otherwise (*why then says why).
-    int wheelPress(std::string* why);
+    // its cursor on that row, or from a recent nonzero turn when the fallback is enabled.
+    int wheelPress(std::string* why, int turn = 0);
     // Has any packet from iDrive to the KOMBI been seen on the interface since start? False on cars whose cluster is
     // not on vlan73 (BMW F-series), where a thumb-wheel press falls back to WheelTurns.
     bool kombiSeen();
@@ -272,7 +276,7 @@ private:
     pthread_cond_t cv_;
     bool running_, stop_;
     std::string title_;
-    bool show_;
+    bool show_, playing_, wheelFallback_, reverseWheel_, seenTrackList_, seenDirectTrackKey_;
     unsigned answered_;
     bool listOpen_;             // under mu_: what the worker last saw of iDrive's list, for wheelPress()
     bool kombiSeen_;            // under mu_: a packet to the KOMBI was seen (kombiSeen())

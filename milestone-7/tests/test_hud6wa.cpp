@@ -47,11 +47,12 @@ struct FakePort : public Port {
     int mw, mh;              // the picture buffer's size once "measured" (ImageGetSize); 0 = no answer
     bool claimable;          // claim() takes the HUD from the navigation we yield to
     int claims;
-    FakePort() : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady), mw(0),
-                 mh(0), claimable(false), claims(0) {}
+    const HudProfile& profile;
+    explicit FakePort(const HudProfile& p = k6wa) : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady), mw(0),
+                 mh(0), claimable(false), claims(0), profile(p) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
-        for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(k6wa)));
+        for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(profile)));
         assert(b.calls.size() <= Config().maxBatch);
         batches.push_back(b);
         return result;
@@ -325,6 +326,103 @@ static void testShowBatches() {
 
     // Every maneuver type's batch keeps the limits (FakePort::submit checks each call and the length).
     for (int t = 0; t <= 60; ++t) assert(d.showManeuver(view(t, "Testroad", "1", 2, 1000), 5, true, false) == 0);
+}
+
+static void testF15Batches() {
+    assert(k6wa.glyph.x0 == 70 && !k6wa.singlePicture);
+    assert(k6waF15.bufA == 4 && k6waF15.bufB == 5 && k6waF15.singlePicture);
+    assert(k6waF15.street == 0x0C && k6waF15.distance == 0x10 && k6waF15.unit == 0x0D);
+    assert(k6waF15.glyph.x0 == 35 && k6waF15.glyph.y0 == 20 &&
+           k6waF15.glyph.x1 == 136 && k6waF15.glyph.y1 == 110 && k6waF15.fill == 4);
+    assert(!k6waF15.routeA && !k6waF15.laneA);
+    // The F30-specific 176x126 calibration must not move the F15's already verified box.
+    HudProfile fitted = k6waF15;
+    fitMeasured(0, 0, fitted);
+    assert(fitted.canvas.x0 == 35 && fitted.glyph.x1 == 136);
+    fitMeasured(176, 126, fitted);
+    assert(fitted.canvas.x1 == 175 && fitted.glyph.x0 == 35 && fitted.glyph.y1 == 110);
+    fitMeasured(126, 77, fitted);
+    assert(fitted.canvas.x1 == 125 && fitted.glyph.x1 < 126 && fitted.glyph.y1 < 77);
+    FakePort port(k6waF15);
+    Hud6waDisplay display(port, k6waF15, false);
+    Settings settings = arrows();
+    settings.hud_bar = true;
+    display.setSettings(settings);
+    NavView v = view(8, "Testroad Alpha", "300", 1, 300);
+    assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    assert(display.showManeuver(v, 1, true, true) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 2 && display.visibleBuffer() == 5);
+    for (size_t n = 0; n < port.batches.size(); ++n) {
+        bool panel = false, polygon = false, text = false, bar = false;
+        const Batch& batch = port.batches[n];
+        for (size_t i = 0; i < batch.calls.size(); ++i) {
+            const Call& call = batch.calls[i];
+            if (call.fkt == kSetVisibility && call.handle() == 1) panel = call.payload[2] == 1;
+            if (call.fkt == kAddPolygon) {
+                polygon = true;
+                assert(call.handle() == 5);
+            }
+            if (call.fkt == kTextareaSetText) {
+                assert(panel && (text || call.afterReplies));
+                text = true;
+            }
+            assert(call.fkt != kSwitchVisibility);
+            if (call.fkt == kPotentiometerSetValue) {
+                bar = true;
+                assert(call.handle() == 0x13 && call.payload[5] == 255 && call.payload[6] == 2);
+            }
+        }
+        assert(panel && polygon && text && bar);
+    }
+    v.step_m = 150;
+    assert(display.updateDistance(v, 2) == ClusterDisplay::kOk);
+    assert(port.batches.back().calls.size() == 1);
+    assert(port.batches.back().calls[0].fkt == kPotentiometerSetValue && port.batches.back().calls[0].payload[5] == 128);
+    assert(display.clear(NULL));
+    const Batch& clear = port.batches.back();
+    assert(clear.calls.size() == 6);
+    const uint16_t hide[] = {0x13, 0x0C, 0x10, 0x0D, 1};
+    expectCall(clear.calls[0], kRemoveAllItems, 5);
+    for (size_t i = 0; i < sizeof(hide) / sizeof(hide[0]); ++i) {
+        expectCall(clear.calls[i + 1], kSetVisibility, hide[i]);
+        assert(clear.calls[i + 1].payload[2] == 0);
+    }
+    assert(clear.calls.back().afterReplies);
+}
+
+static void testF15RouteRestart() {
+    FakePort port(k6waF15);
+    Hud6waDisplay display(port, k6waF15, false);
+    Settings settings = arrows();
+    settings.show_departure = true;
+    settings.clear_route_end = true;
+    nbt::kombinav::Core core(display, settings);
+    NavView departure = view(1, "", "0", 1, 0);
+    core.step(&departure, 0);
+    core.step(&departure, 10);
+    assert(core.shown() && port.batches.size() == 1);
+    core.step(NULL, 11, "guidance ended", true);
+    assert(!core.shown() && port.batches.back().label == "clear");
+    core.idle("Song one", 11.2);
+    assert(core.idleShown() && port.batches.back().label == "media");
+    expectCall(port.batches.back().calls[0], kRemoveAllItems, 5);
+    core.idle("", 11.3);                        // between tracks, the phone can briefly report nothing playing
+    assert(!core.idleShown() && port.batches.back().label == "clear");
+    core.idle("Song two", 11.4);
+    assert(core.idleShown() && port.batches.back().label == "media");
+    core.idle("Song three", 11.5);
+    const Batch& title = port.batches.back();
+    assert(title.label == "media-text" && title.calls.size() == 3);
+    expectCall(title.calls[0], kSetVisibility, 1);
+    expectCall(title.calls[1], kSetVisibility, 0x0C);
+    expectCall(title.calls[2], kTextareaSetText, 0x0C);
+    assert(title.calls[2].afterReplies && title.calls[2].allowTimeout);
+    core.step(&departure, 12);
+    assert(core.shown() && !core.idleShown() && port.batches.back().label == "maneuver");
+    NavView turn = view(8, "Next Road", "100", 1, 100);
+    core.step(&turn, 13);
+    core.step(&departure, 14);
+    assert(core.shown() && core.current().aa_type == 8);
 }
 
 static void testClearBatch() {
@@ -1573,6 +1671,8 @@ int main() {
     testFitMeasured();
     testTexts();
     testShowBatches();
+    testF15Batches();
+    testF15RouteRestart();
     testClearBatch();
     testHold();
     testRemind();

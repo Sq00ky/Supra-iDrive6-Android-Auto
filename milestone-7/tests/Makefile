@@ -63,6 +63,7 @@ SRC_test_ctl_wizard        :=
 SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
+SRC_test_hudprobe          :=
 SRC_test_j29_golden        := $(SRC_KOMBI_NAV)
 SRC_test_frame_queue       :=
 SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp

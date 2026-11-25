@@ -164,6 +164,23 @@ static void testMeasure() {
     printf("  measure: a late answer taken, its copies ours, another handle and an error let go, asked again on a move, not on a repeat\n");
 }
 
+static void testReplyBarrier() {
+    Core k = readyCore();
+    Batch b("ordered");
+    b.add(kSetVisibility, setVisibility(1, true));
+    b.add(kSetVisibility, setVisibility(2, true));
+    b.add(kTextareaSetText, setText(2, "A"), true);
+    b.add(kTextareaSetText, setText(3, "B"));
+    assert(k.submit(b, 0) == kQueued);
+    most::Msg first, second, text;
+    assert(k.next(1, first) && k.next(1, second) && !k.next(1, text));
+    k.onMessage(answer(second).v, 2);
+    assert(!k.next(2, text));
+    k.onMessage(answer(first).v, 3);
+    assert(k.next(3, text) && text.fkt == kTextareaSetText);
+    assert(k.next(3, text) && text.fkt == kTextareaSetText);
+}
+
 static void testStatusAndOffline() {
     Core k(config());
     Status s;
@@ -693,6 +710,27 @@ static void testLateAnswers() {
     assert(k.status() == kFailed && k.stats().timeouts == 1);
 }
 
+// An optional call (the song title) that gets no answer is skipped, not a failure. Since #316 the answer window is
+// replyMs (a cold cluster answers seconds late), so the skip comes at replyMs, not after 1.5 s.
+static void testMediaTextTimeout() {
+    Config c = config();
+    Core k = readyCore(c);
+    Batch media("media-text");
+    media.add(kTextareaSetText, setText(3, "Song"), false, true);
+    assert(k.submit(media, 0) == kQueued);
+    most::Msg text;
+    assert(k.next(0, text));
+    assert(k.submit(batchOf(1), 10) == kQueued);
+    k.tick(c.replyMs - 1);
+    assert(k.status() == kReady && k.stats().timeouts == 0);
+    k.tick(c.replyMs);
+    assert(k.status() == kReady && k.stats().timeouts == 1);
+    Wire late = answer(text);
+    k.onMessage(late.v, c.replyMs + 1);
+    assert(k.stats().strays == 1);
+    assert(pumpAnswered(k, c.replyMs + 2) == 1 && !k.busy());
+}
+
 static void testErrorAnswers() {
     Core k = readyCore();
     assert(k.submit(batchOf(1), 0) == kQueued);
@@ -982,6 +1020,7 @@ static void testWatchOnly() {
 int main() {
     testStatusAndOffline();
     testMeasure();
+    testReplyBarrier();
     testRequestBytes();
     testRefusals();
     testBackToBackAndWindow();
@@ -999,6 +1038,7 @@ int main() {
     testLateErrorAfterTakeover();
     testTimeoutAndReset();
     testLateAnswers();
+    testMediaTextTimeout();
     testErrorAnswers();
     testLinkDropKeepsNav();
     testLateAnswerAfterLinkDrop();
