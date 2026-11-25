@@ -239,6 +239,9 @@ Batch Hud6waDisplay::routeBatch(const Picture& pic) const {
     Batch b("route", true, kSlotRoute);
     uint16_t hidden = route_visible_ == p_.routeA ? p_.routeB : p_.routeA;
     b.add(kRemoveAllItems, removeAllItems(hidden));
+    // These F30 polygons include their own edges; clearing items does not initialize the native image pen.
+    if (readableHud(p_) && p_.routeA == 7 && p_.routeB == 8 && !pic.empty())
+        b.add(kSetLineWidth, setLineWidth(hidden, 0));
     addItems(b, hidden, pic);
     b.add(kSwitchVisibility, switchVisibility(route_visible_, hidden));
     b.add(kRemoveAllItems, removeAllItems(route_visible_));

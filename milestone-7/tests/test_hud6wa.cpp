@@ -2880,7 +2880,96 @@ static void testNightOutlinePolicy() {
     Shape restored=packetPolygons(port.batches.back());assert(restored.size()==day.size());samePolygons(restored,0,day);
 }
 
+// RemoveAllItems clears contents; it must not be assumed to reset an image's drawing pen.
+struct NativePenWitness {
+    int width[32], fill[32];
+    NativePenWitness() { for(int i=0;i<32;++i){width[i]=6;fill[i]=7;} }
+    void apply(const Batch& batch, bool resetRequired) {
+        int resetHandle=-1;
+        for(size_t i=0;i<batch.calls.size();++i){
+            const Call& c=batch.calls[i];unsigned h=c.handle();assert(h<32);
+            if(c.fkt==kRemoveAllItems) resetHandle=-1; // retain native width/fill across item clears
+            else if(c.fkt==kSetLineWidth){assert(c.payload[2]==0);width[h]=0;resetHandle=h;}
+            else if(c.fkt==kSetFillColor)fill[h]=c.payload[2];
+            else if(c.fkt==kAddPolygon && resetRequired){
+                assert((h==7||h==8) && resetHandle==(int)h && width[h]==0);
+                assert(fill[h]==4 || fill[h]==7); // fills and explicit daytime edges; RGB is the cluster palette
+            }
+        }
+    }
+};
+
+static void testNativeOverlayPen() {
+    HudProfile p=k6wa;fitMeasured(126,77,p);FakePort port;Hud6waDisplay d(port,p,false);
+    Settings settings=arrows();settings.junction=true;settings.hud_night=true;d.setSettings(settings);
+    NavView v=timed(6,"Road","157",1,157,14);
+    NativePenWitness witness;
+    assert(d.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+    const Batch first=port.batches.back();assert(first.slot==kSlotRoute);
+    witness.apply(first,true);
+    assert(first.calls[0].fkt==kRemoveAllItems && first.calls[1].fkt==kSetLineWidth);
+    const uint16_t firstHandle=first.calls[1].handle();
+    v.step_m=40;d.sameManeuver(v,1);assert(d.keepUp(v,1)==ClusterDisplay::kOk);
+    const Batch second=port.batches.back();assert(second.slot==kSlotRoute);
+    witness.apply(second,true);assert(second.calls[1].handle()!=firstHandle);
+    // Simulate another writer leaving a pen, then check that reuse of each buffer sets it again.
+    witness.width[7]=22;witness.width[8]=22;
+    v.step_m=10;d.sameManeuver(v,2);assert(d.keepUp(v,2)==ClusterDisplay::kOk);
+    witness.apply(port.batches.back(),true);
+    assert(witness.width[5]==6 && witness.width[6]==6); // accepted ring buffers are untouched
+    Picture route;
+    for(int night=0;night<=1;++night){
+        route.clear();unified::route(6,p,4,route,night!=0);
+        Settings st=arrows();st.hud_night=night!=0;
+        Hud6waDisplay current(port,p,false);current.setSettings(st);
+        Batch b=current.routeBatch(route);int n=0;for(size_t j=0;j<b.calls.size();++j)if(b.calls[j].fkt==kSetLineWidth)++n;
+        assert(n==1);witness.width[7]=6;witness.width[8]=6;witness.apply(b,true);
+        Batch main=current.pictureBatch("ring",route,HudTexts(),false);
+        Batch lanes=current.lanesBatch(route);
+        for(size_t j=0;j<main.calls.size();++j)assert(main.calls[j].fkt!=kSetLineWidth);
+        for(size_t j=0;j<lanes.calls.size();++j)assert(lanes.calls[j].fkt!=kSetLineWidth);
+        Hud6waDisplay fallback(port,k6wa,false);fallback.setSettings(st);
+        Batch other=fallback.routeBatch(route);for(size_t j=0;j<other.calls.size();++j)assert(other.calls[j].fkt!=kSetLineWidth);
+    }
+    setenv("NBT_HUD_GLYPH","37 23 82 68",1);
+    Batch pinned=d.routeBatch(route);for(size_t j=0;j<pinned.calls.size();++j)assert(pinned.calls[j].fkt!=kSetLineWidth);
+    unsetenv("NBT_HUD_GLYPH");
+    HudProfile otherMap=p;otherMap.routeA=9;otherMap.routeB=10;
+    Hud6waDisplay mapped(port,otherMap,false);mapped.setSettings(settings);
+    Batch unmapped=mapped.routeBatch(route);
+    for(size_t j=0;j<unmapped.calls.size();++j)assert(unmapped.calls[j].fkt!=kSetLineWidth);
+    Batch empty=d.routeBatch(Picture());for(size_t j=0;j<empty.calls.size();++j)assert(empty.calls[j].fkt!=kSetLineWidth);
+}
+
+// The measured F30 colour roles apply to both schemes; the cluster changes index4 on its own.
+static void testMeasuredF30ColourRoles() {
+    HudProfile p=k6wa;fitMeasured(126,77,p);
+    assert(p.fill==4 && p.route==4 && p.road==3);
+    for(int type=0;type<=52;++type){
+        bool mirror;const unified::Glyph* g=unified::glyph(type,mirror);if(!g)continue;
+        Picture roads,route;
+        unified::roads(type,p,true,roads,true);
+        for(size_t i=0;i<roads.size();++i)assert(roads[i].colour==3);
+        for(int stage=0;stage<=4;++stage){
+            route.clear();unified::route(type,p,stage,route,true);
+            assert(!route.empty());
+            // A destination's existing interior mask is separate from the arrow/road roles.
+            for(size_t i=0;i<route.size();++i)
+                assert(route[i].colour==4 || (g->hole.count && i+1==route.size() && route[i].colour==7));
+        }
+    }
+    for(int clockwise=0;clockwise<2;++clockwise){
+        ShapeSpec spec=shapeFor(clockwise?33:35,true,225);Picture ring;
+        assert(ring60::picture(spec,p,ring,3));bool background=false,active=false;
+        for(size_t i=0;i<ring.size();++i){assert(ring[i].colour==3 || ring[i].colour==4);
+            background=background || ring[i].colour==3;active=active || ring[i].colour==4;}
+        assert(background && active);
+    }
+}
+
 int main() {
+    testNativeOverlayPen();
+    testMeasuredF30ColourRoles();
     testNightOutlinePolicy();
     testShapesInside();
     testShapeFamilies();
