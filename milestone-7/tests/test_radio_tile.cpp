@@ -16,6 +16,11 @@ static void fmAudible(RadioState& s) {
     tableMsg(s, bytes(kTableFm));
 }
 
+static void fmHeard(RadioState& s, int pi, uint32_t freqKHz = 100000) {
+    fmAudible(s);
+    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", freqKHz, pi), 1);
+}
+
 static void dabStationShown(RadioState& s, uint32_t nowMs = 0) {
     dabAudible(s);
     dabMsg(s, kMostFktDabStation, dabStation(0xD001, "TESTFUNK", "Testfunk Radio"), nowMs);
@@ -72,8 +77,7 @@ static void testWithoutTitle() {
 
 static void testFmTitleBold() {
     RadioState s;
-    fmAudible(s);
-    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD002), 1);
+    fmHeard(s, 0xD002);
     fmMsg(s, kMostFktDlPlus, dlPlus("Probe Titel", "Probe Artist"));
     const RadioTileView v = radioTileView(s, false, kLater);
     assert(v.song == "Probe Titel" && v.artist == "Probe Artist" && v.source == "FM");
@@ -180,8 +184,7 @@ static void testFallbackNames() {
 
 static void testFmWithName() {
     RadioState s;
-    fmAudible(s);
-    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD002));
+    fmHeard(s, 0xD002);
     const RadioTileView v = radioTileView(s, false, 10);
     assert(v.show && v.song == "TESTFUNK" && v.album == "TESTFUNK" && v.source == "FM");
 }
@@ -203,11 +206,6 @@ static void testArt() {
     const RadioTileView v = radioTileView(s, false, 10);
     assert(v.art == s.dab.slide && v.art != s.dab.logo);
     assert(radioTileArt(s, kTunerDab) == s.dab.slide);
-}
-
-static void fmHeard(RadioState& s, int pi, uint32_t freqKHz = 100000) {
-    fmAudible(s);
-    fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", freqKHz, pi), 1);
 }
 
 static void testFmArtSameProgramme() {

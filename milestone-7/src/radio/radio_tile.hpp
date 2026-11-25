@@ -56,9 +56,9 @@ inline std::vector<uint8_t> radioPlaceholderArt() {
 
 // The one place the art passes before it is sent. FM borrows the DAB picture only for the same programme (PI == SId).
 inline std::vector<uint8_t> radioTileArt(const RadioState& s, int kind) {
-    if (kind != kTunerDab && (s.fm.id == 0 || s.fm.idIsFreq || s.fm.id != s.dab.id)) return radioPlaceholderArt();
-    if (!s.dab.slide.empty()) return s.dab.slide;
-    if (!s.dab.logo.empty()) return s.dab.logo;
+    const bool dabPicture = kind == kTunerDab || (s.fm.id != 0 && !s.fm.idIsFreq && s.fm.id == s.dab.id);
+    if (dabPicture && !s.dab.slide.empty()) return s.dab.slide;
+    if (dabPicture && !s.dab.logo.empty()) return s.dab.logo;
     return radioPlaceholderArt();
 }
 

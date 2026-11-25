@@ -92,7 +92,7 @@ static void expectMsg(int fd, int timeoutMs, const Bytes& want) {
 
 static Bytes status(int state, const char* source) { return localMediaStatus(state, source, std::vector<int>()); }
 
-static Bytes metadata(const char* song, const char* artist, const char* album, const Bytes& art = Bytes()) {
+static Bytes metadata(const char* song, const char* artist, const char* album, const Bytes& art = radioPlaceholderArt()) {
     return localMediaMetadata(song, artist, album, art);
 }
 
@@ -161,7 +161,7 @@ static void tuneTestfunk(RadioTap& tap) {
 
 static void expectTestfunk(int fd) {
     expectMsg(fd, 2000, status(2, "DAB"));
-    expectMsg(fd, 1000, metadata("Testfunk Radio", "Testlauftext eins", "Testfunk Radio", radioPlaceholderArt()));
+    expectMsg(fd, 1000, metadata("Testfunk Radio", "Testlauftext eins", "Testfunk Radio"));
 }
 
 // The phone opens channel 18: the tile the tap has goes out at once, status first, and only once.
@@ -190,7 +190,7 @@ static void testChangesAreCoalesced() {
     usleep(50000);
     const uint32_t tLast = monoMs();
     dab(tap, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"));
-    const Bytes want = metadata("Testtitel", "Testinterpret", "Testfunk Radio", radioPlaceholderArt());
+    const Bytes want = metadata("Testtitel", "Testinterpret", "Testfunk Radio");
     int metas = 0;
     uint32_t firstAt = 0;
     Bytes m;
@@ -224,7 +224,7 @@ static void testHoldThenStation() {
     assert(!nextTileMessage(sv[1], 2500, m));
     dab(tap, kMostFktDabStation, dabStation(0xD002, "TESTFUNK", ""));
     expectMsg(sv[1], 1000, status(2, "DAB"));
-    expectMsg(sv[1], 1000, metadata("TESTFUNK", "", "TESTFUNK", radioPlaceholderArt()));
+    expectMsg(sv[1], 1000, metadata("TESTFUNK", "", "TESTFUNK"));
     assert(!nextTileMessage(sv[1], 700, m));   // the end of the hold sends nothing more
 
     const uint32_t t1 = monoMs();
@@ -232,7 +232,7 @@ static void testHoldThenStation() {
     assert(!nextTileMessage(sv[1], 2500, m));
     expectMsg(sv[1], 1000, status(2, "DAB"));
     assert(monoMs() - t1 >= (uint32_t)kTuneHoldMs);
-    expectMsg(sv[1], 1000, metadata("DAB", "", "", radioPlaceholderArt()));
+    expectMsg(sv[1], 1000, metadata("DAB", "", ""));
     endSession(s, tap, sv);
 }
 
@@ -296,7 +296,7 @@ static void testPhonePlaybackStopsTile() {
     AASession* s = newSession(tap, sv);
     dab(tap, kMostFktDabStation, dabStation(0xD001, "TESTFUNK", "Testfunk Radio"));
     openTile(sv[1]);
-    const Bytes meta = metadata("Testfunk Radio", "", "Testfunk Radio", radioPlaceholderArt());
+    const Bytes meta = metadata("Testfunk Radio", "", "Testfunk Radio");
     expectMsg(sv[1], 2000, status(2, "DAB"));
     expectMsg(sv[1], 1000, meta);
     phoneSends(sv[1], 12, phoneMedia(2));
@@ -316,10 +316,10 @@ static void testNewSessionStartsOver() {
     dab(tap, kMostFktDabStation, dabStation(0xD001, "TESTFUNK", "Testfunk Radio"));
     openTile(sv[1]);
     expectMsg(sv[1], 2000, status(2, "DAB"));
-    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "", "Testfunk Radio", radioPlaceholderArt()));
+    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "", "Testfunk Radio"));
     phoneSends(sv[1], 12, phoneMedia(2));
     expectMsg(sv[1], 1000, status(1, "DAB"));
-    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "", "Testfunk Radio", radioPlaceholderArt()));
+    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "", "Testfunk Radio"));
     s->stop();
     close(sv[1]);
 
@@ -329,7 +329,7 @@ static void testNewSessionStartsOver() {
     assert(!nextTileMessage(sv[1], 600, m));
     openTile(sv[1]);
     expectMsg(sv[1], 2000, status(2, "DAB"));
-    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "Testlauftext zwei", "Testfunk Radio", radioPlaceholderArt()));
+    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "Testlauftext zwei", "Testfunk Radio"));
     endSession(s, tap, sv);
 }
 
@@ -347,7 +347,7 @@ static void testOtherMessagesIgnored() {
     assert(!nextTileMessage(sv[1], 600, m));
     dab(tap, kMostFktDynamicLabel, label("Testlauftext zwei"));
     expectMsg(sv[1], 2000, status(2, "DAB"));
-    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "Testlauftext zwei", "Testfunk Radio", radioPlaceholderArt()));
+    expectMsg(sv[1], 1000, metadata("Testfunk Radio", "Testlauftext zwei", "Testfunk Radio"));
     endSession(s, tap, sv);
 }
 
