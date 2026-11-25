@@ -1624,6 +1624,9 @@ Host tests in `tests/` build with a Linux g++ (WSL is fine). `make check` builds
 `test_session_lifecycle` under ThreadSanitizer; `make -C tests run-test_pcm` runs one. Each test's sources are
 listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
 
+See [tests/README.md](tests/README.md) for the complete Linux/Apple Silicon environment, Docker recipe and CI command.
+The full suite requires `protoc` and a working 32-bit compiler; missing tools fail instead of skipping tests.
+
 | Test | Covers |
 |---|---|
 | `test_sdr`, `test_sdr_drop` | Service discovery, channel drop list, audio mode, system-audio sink |
