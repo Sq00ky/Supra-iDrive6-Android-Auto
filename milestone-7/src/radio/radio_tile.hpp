@@ -17,7 +17,7 @@ enum { kSettleMs = 300, kMaxDelayMs = 1000, kTuneHoldMs = 3000 };
 
 struct RadioTileView {
     bool show;                  // false: send nothing now
-    bool hold;                  // the shown tuner tunes while playing: keep the last tile until holdUntilMs
+    bool hold;                  // the shown tuner tunes or waits for DL+ while playing: keep the last tile until holdUntilMs
     uint32_t holdUntilMs;
     const char* holdReason;     // NULL unless hold
     int state;                  // 1 stopped, 2 playing

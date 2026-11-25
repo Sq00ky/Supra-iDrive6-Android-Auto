@@ -136,7 +136,7 @@ static void testHoldOnlyForShownTuner() {
     fmMsg(s, kMostFktFmStation, fmStation("TESTFUNK", 100000, 0xD001), 500);
     fmMsg(s, kMostFktFmStation, fmStation("", 101000, 0xD002), 1000);
     assert(s.fm.tuning && s.tuner == kTunerDab && s.audible == 1);
-    const RadioTileView v = radioTileView(s, false, kLater);
+    const RadioTileView v = radioTileView(s, false, 3500);   // the DL+ wait is over, the FM tune hold is not
     assert(v.show && !v.hold && v.source == "DAB" && v.song == "Testfunk Radio" && v.artist == "Lauftext Probe");
 }
 
@@ -215,6 +215,48 @@ static void testWaitOnlyForShownTuner() {
     assert(s.fm.plusWaiting && s.tuner == kTunerDab);
     const RadioTileView v = radioTileView(s, false, 1100);
     assert(v.show && !v.hold && v.source == "DAB");
+}
+
+static void testLateDlPlusInsideWait() {
+    RadioState s;
+    dabStationShown(s);
+    dabMsg(s, kMostFktDynamicLabel, label("Testtitel - Testinterpret"), 1000);
+    assert(radioTileView(s, false, 3899).hold);
+    dabMsg(s, kMostFktDlPlus, dlPlus("Testtitel", "Testinterpret"), 3900);
+    const RadioTileView v = radioTileView(s, false, 3900);
+    assert(v.show && !v.hold && v.song == "Testtitel");
+}
+
+static void testWaitAcrossClockWrap() {
+    RadioState s;
+    dabStationShown(s);
+    const uint32_t start = 0xFFFFFF00u;
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext"), start);
+    RadioTileView v = radioTileView(s, false, start + 2000);
+    assert(!v.show && v.hold && v.holdUntilMs == start + 3000);
+    assert(radioTileView(s, false, start + 3001).show);
+}
+
+static void testFirstTextAfterStationNoWait() {
+    RadioState s;
+    dabAudible(s);
+    dabMsg(s, kMostFktDabStation, bytes(kDabTuning), 0);
+    dabMsg(s, kMostFktDabStation, dabStation(0xD001, "TESTFUNK", "Testfunk Radio"), 500);
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext eins"), 800);
+    RadioTileView v = radioTileView(s, false, 1100);
+    assert(v.show && !v.hold && v.song == "Testfunk Radio" && v.artist == "Testlauftext eins");
+    dabMsg(s, kMostFktDynamicLabel, label("Testlauftext zwei"), 1200);
+    v = radioTileView(s, false, 1300);
+    assert(!v.show && v.hold && v.holdUntilMs == 4200);
+}
+
+static void testSourceSwitchClearsWaits() {
+    RadioState s;
+    dabStationShown(s);
+    fmMsg(s, kMostFktRadioText, radioText("Testlauftext"), 1000);
+    fmAudible(s);
+    const RadioTileView v = radioTileView(s, false, 1600);
+    assert(v.show && !v.hold && v.source == "FM");
 }
 
 static void testFallbackNames() {
@@ -468,6 +510,10 @@ int main() {
     testLateDlPlusSwitchesOnce();
     testStoppedDoesNotWait();
     testWaitOnlyForShownTuner();
+    testLateDlPlusInsideWait();
+    testWaitAcrossClockWrap();
+    testFirstTextAfterStationNoWait();
+    testSourceSwitchClearsWaits();
     testFallbackNames();
     testFmWithName();
     testPlaceholderJpeg();

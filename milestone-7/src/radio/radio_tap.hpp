@@ -33,7 +33,7 @@ public:
         pthread_mutex_unlock(&mu_);
     }
 
-    // nowMs: CLOCK_MONOTONIC ms, the session's clock. On a visible change one log line, then the callback.
+    // nowMs: CLOCK_MONOTONIC ms, the session's clock. On a visible change (or a DL+ that ends a wait) one log line, then the callback.
     void apply(uint8_t fblock, uint16_t fkt, const uint8_t* p, size_t n, uint32_t nowMs) {
         char line[512];
         pthread_mutex_lock(&mu_);

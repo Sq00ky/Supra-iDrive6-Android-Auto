@@ -23,13 +23,14 @@ struct TunerContent {
     uint32_t tuneStartMs;
     bool plusWaiting;             // new text seen, its DL+/RT+ not yet
     uint32_t plusWaitStartMs;
+    bool freshStation;            // no text since the station change: the first one starts no wait
     bool spoke;                   // any message since start
     uint32_t id;                  // DAB: SId; FM: PI, or the frequency without PI; 0 unknown
     bool idIsFreq;                // FM: id is the frequency
     uint32_t freqKHz;             // FM
     TunerContent()
         : slideId(-1), pendingSlide(-1), tuning(false), tuneStartMs(0), plusWaiting(false), plusWaitStartMs(0),
-          spoke(false), id(0), idIsFreq(false), freqKHz(0) {}
+          freshStation(false), spoke(false), id(0), idIsFreq(false), freqKHz(0) {}
 };
 
 struct RadioState {
@@ -38,7 +39,7 @@ struct RadioState {
     bool slideAnnounceSeen;       // any C44 or DAB station change since start
     TunerContent dab, fm;
     std::vector<std::pair<uint32_t, std::string> > dabNames;   // SId -> station name, newest last
-    uint32_t generation;          // bumped on every visible change
+    uint32_t generation;          // bumped on every visible change, or a DL+ that ends a wait
     RadioState() : audible(-1), tuner(kTunerNone), slideAnnounceSeen(false), generation(0) {}
 };
 
@@ -88,6 +89,7 @@ inline bool dropContent(TunerContent& t) {
     t.artist.clear();
     t.text.clear();
     t.plusWaiting = false;
+    t.freshStation = true;
     ch |= clearImg(t.slide);
     ch |= clearImg(t.logo);
     t.slideId = -1;
@@ -96,6 +98,10 @@ inline bool dropContent(TunerContent& t) {
 }
 
 inline void textChanged(TunerContent& t, uint32_t nowMs) {
+    if (t.freshStation) {
+        t.freshStation = false;
+        return;
+    }
     if (t.text.empty() || (t.plusWaiting && nowMs - t.plusWaitStartMs < (uint32_t)kPlusWaitMs)) return;
     t.plusWaiting = true;
     t.plusWaitStartMs = nowMs;
@@ -282,6 +288,7 @@ inline bool applyConnectionTable(RadioState& s, const uint8_t* p, size_t n, bool
         const int kind = mostIsDabSource(src) ? kTunerDab : kTunerFm;
         if (s.tuner != kind) {
             s.tuner = kind;
+            s.dab.plusWaiting = s.fm.plusWaiting = false;
             ch = true;
         }
     }
