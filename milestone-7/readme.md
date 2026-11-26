@@ -943,7 +943,7 @@ On/off settings accept `1`/`0`; most also accept `on`/`off`, `yes`/`no` and `tru
 | Setting | Default | Effect |
 |---|---|---|
 | `NBT_LOG_FILE` | (none) | Append the daemon log to this file; it survives a head-unit reset. Same name = appended |
-| `NBT_USB_LOG_KEEP` | 1 | With **Save logs to USB**: how many old logs to keep per log file (`1`-`99`). A log over 64 MB when it is opened becomes `*.old.log`, the one before moves on to `*.old2.log` and so on; the oldest beyond this number is deleted. Each old log is about 64 MB |
+| `NBT_USB_LOG_KEEP` | 1 | With **Save logs to USB**: how many old logs to keep per log file (`1`-`99`). A log over 64 MB when it is opened becomes `*.old.log`, the one before moves on to `*.old2.log` and so on; the oldest beyond this number is deleted, as is any `*.old2.log` … `*.old99.log` above it (save a log you want to keep under another name). Each old log is about 64 MB |
 | `NBT_MENU_RETURN` | home | Where iDrive goes once connected: `media` = Media/Radio list, `off` = stay in our menu |
 | `NBT_RX_TIMEOUT_S` | 5 | Seconds without data from the phone before iDrive gets the screen back; `0` = off (2 before v1.9.32) |
 | `NBT_VIDEO_QUEUE` | 15 | Maximum queued video frames (`1`-`60`). Lower it to reduce memory use and backlog on slower head units |
