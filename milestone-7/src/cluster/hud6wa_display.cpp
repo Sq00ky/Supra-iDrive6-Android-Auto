@@ -4,6 +4,7 @@
 #include "cluster/hudterm_digits.hpp"
 #include "cluster/hudterm_ring.hpp"
 #include "cluster/hud_ring60.hpp"
+#include "cluster/hud_roundabout_exit.hpp"
 #include "cluster/hud_unified.hpp"
 #include "cluster/mapbox_hud.hpp"   // Mapbox maneuver glyphs (NBT_HUD_GLYPHS); falls back to the parametric shapes
 
@@ -213,6 +214,7 @@ void drawHudRoute(const Layout& layout, int tail, const HudProfile&, const Junct
 
 bool arrowPicture(const ShapeSpec& spec, const HudProfile& p, Picture& pic, int exitNumber = 0, bool night = false) {
     if (spec.kind == kShapeRoundabout) {
+        if (isRoundaboutExit(spec)) return roundaboutExitPicture(spec, p, pic);
         if (readableHud(p)) return ring60::picture(spec, p, pic, exitNumber);
         return roundaboutPicture(spec, p, pic, exitNumber);
     }
@@ -502,7 +504,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
         if (!arrowPicture(spec, p_, pic, number, s_.hud_night))
             log("exit number %d omitted: no room for a readable number in this canvas", number);
         what = describeSpec(spec);
-        if (spec.kind == kShapeRoundabout && number) {
+        if (spec.kind == kShapeRoundabout && !isRoundaboutExit(spec) && number) {
             char n[24];
             snprintf(n, sizeof(n), " number %d", number);
             what += n;
@@ -514,7 +516,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     const int level = distanceBarLevel(v);
     appendDistanceBar(b, level, true);
     log("PAINT path=%s mode=%s renderer=%s buffer=%u ink=%u road=%u near-eligible=%d pins=%d%d%d canvas=%d,%d-%d,%d glyph=%d,%d-%d,%d",
-        junction ? "near-roads" : spec.kind == kShapeRoundabout ? "ring" : "far", s_.hud_night ? "night" : "day",
+        junction ? "near-roads" : isRoundaboutExit(spec) ? "roundabout-exit" : spec.kind == kShapeRoundabout ? "ring" : "far", s_.hud_night ? "night" : "day",
         readableHud(p_) ? "unified" : "fallback",
         (unsigned)b.calls.front().handle(), (unsigned)(junction ? paint.route : p_.fill), (unsigned)p_.road,
         explicitF30Near(p_) ? 1 : 0, getenv("NBT_HUD_CANVAS") ? 1 : 0,getenv("NBT_HUD_GLYPH") ? 1 : 0,

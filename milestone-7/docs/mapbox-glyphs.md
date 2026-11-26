@@ -33,6 +33,11 @@ For other profiles and explicit canvas/glyph pins, `NBT_HUD_GLYPHS=1` (or `on` /
    the exit number changes the angle. Known inputs 1..29 are drawn at 30 degrees and 331..359 at 330; 360 keeps its
    returning branch, and the raw input stays in the diagnostic log. The older low-level `mbxRoundabout()` helper remains covered separately.
 
+Android Auto types 44/46 are a separate departure step starting inside the roundabout. Both glyph modes draw a
+partial circular road with an outgoing arrow, mirrored for clockwise travel. This picture uses the main buffer at
+all distances, without a caption or an entry-relative exit angle. Other roundabout types keep their approved
+geometry, fitting and digits. The diagnostic reads `roundabout exit cw/ccw` for this phase.
+
 Unknown-angle arrows follow circular bands with tangent 90-degree heads and a plain entrance of the same width.
 They use a separate fitting envelope so their new outline cannot move a known-angle ring. At the reference
 66-unit scale, single-digit unknown captions stay 24px high; two-digit captions use 15px to clear the tangent

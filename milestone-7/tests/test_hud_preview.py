@@ -24,6 +24,27 @@ def render(*args):
 
 
 class PreviewTest(unittest.TestCase):
+    def test_exit_roundabout_stays_standalone_in_both_modes_and_all_stages(self):
+        reference = {}
+        for mode in range(2):
+            for stage in range(5):
+                cells = render(stage, mode)
+                exits = [next(c for c in cells if c.get('data-type') == str(t)) for t in (44, 46)]
+                for cell in exits:
+                    polys = cell.findall('.//s:polygon', NS)
+                    self.assertEqual(len(polys), 3)  # departure arrow under context/route arcs; no exit number
+                    self.assertEqual([int(p.get('data-native-colour')) for p in polys], [4, 3, 4])
+                    self.assertNotIn('near', ''.join(cell.itertext()))
+                    wire = [p.attrib for p in polys]
+                    if stage == 0 and mode == 0:
+                        reference[cell.get('data-type')] = wire
+                    else:
+                        self.assertEqual(wire, reference[cell.get('data-type')])
+                for left, right in zip(exits[0].findall('.//s:polygon', NS), exits[1].findall('.//s:polygon', NS)):
+                    a = [tuple(map(int, p.split(','))) for p in left.get('points').split()]
+                    b = [tuple(map(int, p.split(','))) for p in right.get('points').split()]
+                    self.assertEqual(a, [(124-x, y) for x, y in b])
+
     def test_measured_near_indices_and_stable_geometry(self):
         samples = {}
         for scheme, active in (("day", 7), ("night", 5)):

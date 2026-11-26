@@ -58,6 +58,8 @@ struct ShapeSpec {
     bool operator!=(const ShapeSpec& o) const { return !(*this == o); }
 };
 
+inline bool isRoundaboutExit(const ShapeSpec& spec) { return spec.aa_type == 44 || spec.aa_type == 46; }
+
 // ---- integer trigonometry -------------------------------------------------------------------------------------------
 
 // sin(deg) * 4096, any whole degree.
@@ -130,7 +132,9 @@ inline std::string describeSpec(const ShapeSpec& s) {
     switch (s.kind) {
         case kShapeUTurn: snprintf(b, sizeof(b), "u-turn %s", s.angle < 0 ? "left" : "right"); break;
         case kShapeRoundabout:
-            if (s.exit) snprintf(b, sizeof(b), "roundabout %s exit %d", s.clockwise ? "cw" : "ccw", s.exit);
+            if (isRoundaboutExit(s))
+                snprintf(b, sizeof(b), "roundabout exit %s", s.clockwise ? "cw" : "ccw");
+            else if (s.exit) snprintf(b, sizeof(b), "roundabout %s exit %d", s.clockwise ? "cw" : "ccw", s.exit);
             else snprintf(b, sizeof(b), "roundabout %s exit unknown", s.clockwise ? "cw" : "ccw");
             break;
         case kShapeFlag: snprintf(b, sizeof(b), "flag"); break;

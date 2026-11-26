@@ -14,6 +14,7 @@
 #include "cluster/mapbox_hud.hpp"
 #include "cluster/hudterm_ring.hpp"
 #include "cluster/hud_ring60.hpp"
+#include "cluster/hud_roundabout_exit.hpp"
 #include "cluster/hud_unified.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
@@ -3110,7 +3111,79 @@ static void testRealWorkerNightPaint() {
     KombiNav::kFlagFile=oldFlag;KombiNav::kManualFile=oldManual;KombiNav::kShownFile=oldShown;unlink(shown.c_str());rmdir(dir);
 }
 
+static void testRoundaboutDeparturePhase() {
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_FILL");
+    for (int mode = 0; mode < 2; ++mode) for (int cw = 0; cw < 2; ++cw) {
+        setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
+        FakePort port; port.mw = 126; port.mh = 77;
+        Hud6waDisplay display(port,k6wa,false);
+        kombinav::NavMessages messages;
+        kntest::Bytes body = kntest::navState(cw ? 33 : 35,"Roundabout",225);
+        assert(messages.store(0x8006,&body[0],body.size()));
+        NavView v; assert(kombinav::viewFromMessages(messages,v));
+        assert(v.has_exit_angle && v.exit_angle == 225 && v.has_exit_number && v.exit_number == 2);
+        assert(display.showManeuver(v,0,true,true) == ClusterDisplay::kOk);
+        Picture approach = batchPicture(port.batches.back());
+
+        body = kntest::navState(cw ? 44 : 46,"Exit road");
+        assert(messages.store(0x8006,&body[0],body.size()));
+        assert(kombinav::viewFromMessages(messages,v));
+        assert(!v.has_exit_angle && !v.has_exit_number);
+        v.has_step_m = true; v.step_m = 10; v.has_step_s = true; v.step_s = 1;
+        assert(display.showManeuver(v,1,true,true) == ClusterDisplay::kOk);
+        assert(!display.nearShown() && display.routeStage() == 0);
+        Picture departure = batchPicture(port.batches.back());
+        assert(departure.size() == 3 && approach.size() != departure.size());
+        assert(departure[0].colour == 4 && departure[1].colour == 3 && departure[2].colour == 4);
+        assert(pictureColourAt(departure,cw ? 64 : 60,35) == 3); // no rectangular shaft heel over the context arc
+        assert(describeSpec(shapeFor(v.aa_type,false,0)) == (cw ? "roundabout exit cw" : "roundabout exit ccw"));
+        FakePort freshPort; freshPort.mw = 126; freshPort.mh = 77;
+        Hud6waDisplay fresh(freshPort,k6wa,false);
+        assert(fresh.showManeuver(v,0,true,true) == ClusterDisplay::kOk);
+        samePictureItems(batchPicture(freshPort.batches.back()),departure);
+        const int angles[] = {0,225,360}, numbers[] = {0,3,100};
+        for (int a = 0; a < 3; ++a) {
+            v.has_exit_angle = v.has_exit_number = true; v.exit_angle = angles[a]; v.exit_number = numbers[a];
+            assert(display.showManeuver(v,2+a,true,true) == ClusterDisplay::kOk);
+            samePictureItems(batchPicture(port.batches.back()),departure);
+        }
+        NavView close = timed(8,"Near road","10",1,10,1);
+        assert(display.showManeuver(close,6,true,true) == ClusterDisplay::kOk && display.nearShown());
+        assert(display.showManeuver(v,7,true,true) == ClusterDisplay::kOk && !display.nearShown());
+        const Batch& batch = port.batches.back();
+        bool clearedA = false, clearedB = false;
+        for (size_t i = 0; i < batch.calls.size(); ++i) {
+            const Call& c = batch.calls[i];
+            if (c.fkt == kRemoveAllItems && c.handle() == 7) clearedA = true;
+            if (c.fkt == kRemoveAllItems && c.handle() == 8) clearedB = true;
+            if (c.fkt == kAddPolygon) assert(c.handle() == 5 || c.handle() == 6);
+        }
+        assert(clearedA && clearedB);
+        samePictureItems(batchPicture(batch),departure);
+    }
+    unsetenv("NBT_HUD_GLYPHS");
+    // Fit and serialize the actual driver output on other measured buffers and a manually pinned box.
+    const int widths[] = {0,126,176,120,8,11}, heights[] = {0,77,126,72,8,11};
+    for (int p = 0; p < 7; ++p) for (int cw = 0; cw < 2; ++cw) {
+        HudProfile profile = k6wa;
+        if (p == 6) { setenv("NBT_HUD_GLYPH","95 46 125 76",1); applyHudEnv(profile); fitMeasured(126,77,profile); }
+        else if (widths[p]) fitMeasured(widths[p],heights[p],profile);
+        FakePort port; Hud6waDisplay display(port,profile,false);
+        Picture pic = batchPicture(display.showBatch(true,HudTexts(),shapeFor(cw ? 44 : 46,false,0)));
+        assert(!pic.empty()); checkPictureBounds(pic,profile); checkKnownBatch(pic,profile);
+        for (size_t i = 0; i < pic.size(); ++i) {
+            const Poly& poly = pic[i].poly;
+            assert(simplePolygon(poly));
+            for (size_t a = 0; a < poly.pts.size(); ++a) for (size_t b = a+1; b < poly.pts.size(); ++b)
+                assert(poly.pts[a].x != poly.pts[b].x || poly.pts[a].y != poly.pts[b].y);
+        }
+        unsetenv("NBT_HUD_GLYPH");
+    }
+    printf("  roundabout departure: 35/33 -> 46/44, no stale angle/number, hidden heel, overlay cleanup, native bounds\n");
+}
+
 int main() {
+    testRoundaboutDeparturePhase();
     testExplicitF30NearPackets();
     testRealWorkerNightPaint();
     testNativeOverlayPen();
