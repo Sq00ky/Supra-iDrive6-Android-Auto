@@ -3134,8 +3134,9 @@ static void testRoundaboutDeparturePhase() {
         assert(!display.nearShown() && display.routeStage() == 0);
         Picture departure = batchPicture(port.batches.back());
         assert(departure.size() == 3 && approach.size() != departure.size());
-        assert(departure[0].colour == 4 && departure[1].colour == 3 && departure[2].colour == 4);
-        assert(pictureColourAt(departure,cw ? 64 : 60,35) == 3); // no rectangular shaft heel over the context arc
+        assert(departure[0].colour == 3 && departure[1].colour == 4 && departure[2].colour == 4);
+        assert(pictureColourAt(departure,cw ? 64 : 60,35) == 4); // shaft covers the corner where the arcs meet
+        assert(pictureColourAt(departure,cw ? 64 : 60,40) == -1); // no heel below the inner circular edge
         assert(describeSpec(shapeFor(v.aa_type,false,0)) == (cw ? "roundabout exit cw" : "roundabout exit ccw"));
         FakePort freshPort; freshPort.mw = 126; freshPort.mh = 77;
         Hud6waDisplay fresh(freshPort,k6wa,false);

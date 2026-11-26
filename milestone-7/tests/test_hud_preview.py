@@ -32,8 +32,8 @@ class PreviewTest(unittest.TestCase):
                 exits = [next(c for c in cells if c.get('data-type') == str(t)) for t in (44, 46)]
                 for cell in exits:
                     polys = cell.findall('.//s:polygon', NS)
-                    self.assertEqual(len(polys), 3)  # departure arrow under context/route arcs; no exit number
-                    self.assertEqual([int(p.get('data-native-colour')) for p in polys], [4, 3, 4])
+                    self.assertEqual(len(polys), 3)  # departure arrow over context/route arcs; no exit number
+                    self.assertEqual([int(p.get('data-native-colour')) for p in polys], [3, 4, 4])
                     self.assertNotIn('near', ''.join(cell.itertext()))
                     wire = [p.attrib for p in polys]
                     if stage == 0 and mode == 0:
