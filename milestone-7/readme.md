@@ -1071,7 +1071,7 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_NAV_WARN_S`, `NBT_KOMBI_NAV_MAIN_S` | `time`: seconds before the maneuver it shows (default `50`, `10`..`120`) and is shown again (default `20`, `0`..`60`, below the first; `0` = never again). Shown again turns the 6WA's nav panel back on, if it was dismissed with the stalk button |
 | `NBT_KOMBI_NAV_MWAY_WARN_M`, `NBT_KOMBI_NAV_MWAY_MAIN_M` | `time`: off-ramps and forks also show this many metres before them (default `2000`) and again at (default `1000`), `200`..`5000` |
 | `NBT_KOMBI_NAV_APPROACH_MI` | `distance`, and `time` when the phone sends no seconds: show a maneuver only within this many miles (default `1`, `0.1`..`9.9`; `0` = at once, and on its own it turns the approach `off`). Set, it wins over the **Show directions at any distance** checkbox |
-| `NBT_NO_LOG` | `1` turns every log sink off (daemon RAM + USB log, stdout/stderr, app log and slog), the same as ticking **Disable logging (performance test)**; it wins over the checkbox. Useful to measure whether logging costs anything; the one-shot `--pf-*` / `--license` commands keep their output |
+| `NBT_NO_LOG` | `1` turns every log sink off (daemon RAM + USB log, stdout/stderr, app log and slog), the same as ticking **Disable logging (performance test)**; it wins over the checkbox. Useful to measure whether logging costs anything; the one-shot `--pf-*` / `--license` / `--screenshot` commands keep their output |
 | `NBT_KOMBI_MEDIA_DIR` | J29 song title: the arrow, as the KOMBI direction enum (default `0` = none; `1` straight on) |
 | `NBT_KOMBI_MEDIA_DIST`, `NBT_KOMBI_MEDIA_UNIT` | J29 song title: the distance text (default empty) and its unit byte (default: the template's). With direction `0` the cluster shows neither |
 | `NBT_KOMBI_MEDIA_CHARS` | J29 song title: longest title shown (default `40`, `1`..`60`; longer ones end in `...`) |
@@ -1311,7 +1311,28 @@ on screen.
 Send:
 - `nbt-aad.log` and `nbt-aad-app.log` from the USB stick (tick **Save logs to USB** first);
 - `/opt/sys/etc/nbt_version.txt`;
+- a screenshot if it shows the problem (see below);
 - what you did and what you saw, with times.
+
+### Screenshot of the display
+
+`nbt-aad --screenshot` writes a PNG of the whole centre display (iDrive, Android Auto and what NBT-AAD draws on top) to
+stdout. Run it from the laptop:
+
+```
+ssh <options> root@<hu-ip> "on -f /net/hu-omap/ /opt/aa/nbt-aad --screenshot" > shot.png
+```
+
+- `<options>` are the `ssh` options that worked for the install ([install.md](../install.md)). With NBTApps the daemon is
+  `/var/opt/nbtapp/apps/com.github.sq00ky.android-auto/nbt-aad`.
+- Windows: `>` keeps the picture intact in `cmd.exe` and PowerShell 7.4+. Windows PowerShell 5.1 (`powershell.exe`)
+  corrupts it; there use `cmd /c "ssh ... > shot.png"`.
+- No `ssh -t`, and not from the head unit's own shell: with a terminal as output the command refuses (exit 3).
+- One line goes to stderr, e.g. `screenshot ok 1280x480 ...`. Exit code 0 is success; otherwise the line names the step
+  that failed.
+- **Privacy:** the map shows places and street names. Crop or black them out before you post a screenshot.
+- Not the HUD or the cluster. The picture is black while the favourite preview is up over Android Auto.
+- Older daemons don't know the option: they start normally instead and bring a running Android Auto to the front.
 
 ## Probe the cluster and HUD layout
 
@@ -1711,7 +1732,7 @@ listed in `tests/Makefile`; binaries and logs go to `tests/build/`.
     reports, over `media_ack.hpp`) + `aa_media_msgs.hpp` (media-channel messages);
   - cluster/HUD arrows: `kombi_nav` (+ `cluster/nav_msg.hpp`, `cluster/j29_graph.hpp`, `cluster/j29_graph_template.hpp`),
     `kombi_client`;
-  - other: `crash_handler`, `license_text.hpp`.
+  - other: `crash_handler`, `license_text.hpp`, `screenshot` (`nbt-aad --screenshot`, + `screenshot_png.hpp`).
 - `include/`: `a2i_client.h`, `dsi_controller.h`, `screen_video.h`.
 - `rhmiapp/`: the iDrive PluginApp. `plugin/`: the legacy HmiMain3D plugin.
 - `test_controls.cpp`: the controller monitor / wizard. `test_display.cpp`: a display test.
