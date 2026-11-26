@@ -24,6 +24,29 @@ def render(*args):
 
 
 class PreviewTest(unittest.TestCase):
+    def test_measured_near_indices_and_stable_geometry(self):
+        samples = {}
+        for scheme, active in (("day", 7), ("night", 5)):
+            cells = render(4, 0, scheme)
+            turn = next(c for c in cells if c.get("data-type") == "6")
+            polys = turn.findall(".//s:polygon", NS)
+            indices = [int(p.get("data-native-colour")) for p in polys]
+            self.assertEqual(set(indices), {3, active})
+            self.assertEqual(indices.count(active), 2)  # body + head, no extra contour polygons
+            samples[scheme] = [p.get("points") for p in polys]
+        self.assertEqual(samples["day"], samples["night"])
+
+    def test_far_and_ring_keep_their_working_palette(self):
+        for scheme in ("day", "night"):
+            cells = render(0, 0, scheme)
+            far = next(c for c in cells if c.get("data-type") == "6")
+            indices = [int(p.get("data-native-colour")) for p in far.findall(".//s:polygon", NS)]
+            self.assertIn(4, indices)
+            self.assertNotIn(5, indices)
+            ring = next(c for c in cells if c.get("data-type") == "32" and c.get("data-angle") == "90"
+                        and c.get("data-number") == "12")
+            self.assertEqual({int(p.get("data-native-colour")) for p in ring.findall(".//s:polygon", NS)}, {3, 4})
+
     def test_every_type_and_known_angle_two_digit_numbers(self):
         for mode in range(2):
             for stage in range(5):

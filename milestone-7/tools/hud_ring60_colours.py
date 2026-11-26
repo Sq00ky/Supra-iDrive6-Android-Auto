@@ -50,7 +50,7 @@ canvas{width:252px;height:154px;image-rendering:pixelated;background:#000;margin
 <p>Сериализованные полигоны C++-драйвера. У 360° вход доходит до уровня острия; 180° сохранены.</p>
 ROWS
 <p>Кадр 126×77 → показ 2×. RGB — целевая цветовая схема: физическая палитра и яркость не измерены.</p>
-<script>const cases=CASES,palettes={day:{arrow:'#f1f1ea',road:'#E6A064'},night:{arrow:'#E6A064',road:'#817f79'}};
+<script>const cases=CASES,palettes={day:{arrow:'#f1f1ea',road:'#E6A064'},night:{arrow:'#E6A064',road:'#815d43'}};
 for(const c of document.querySelectorAll('canvas')){
  const g=c.getContext('2d'),palette=palettes[c.dataset.theme];g.fillStyle='#000';g.fillRect(0,0,126,77);
  // One nonzero fill per consecutive colour prevents Canvas AA seams between touching simple polygons.

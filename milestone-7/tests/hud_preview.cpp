@@ -24,7 +24,7 @@ struct PreviewPort : Port {
 };
 
 // Follow the actual double-buffer switches and route updates before painting the visible layers.
-static void polygons(const PreviewPort& port, bool lanes = false) {
+static void polygons(const PreviewPort& port, bool lanes = false, bool palette = false, bool night = false) {
     std::map<int, Picture> layers;
     std::map<int, int> colours;
     std::map<int, bool> visible;
@@ -51,8 +51,15 @@ static void polygons(const PreviewPort& port, bool lanes = false) {
         if ((lanes && h >= 2) || !visible[order[h]]) continue;
         const Picture& pic = layers[order[h]];
         for (size_t i = 0; i < pic.size(); ++i) {
-            const char* colour = pic[i].colour == k6wa.fill ? "#ffe4ab" : pic[i].colour == k6wa.edge ? "#000" : "#777";
-            printf("<polygon fill=\"%s\" points=\"", colour);
+            const int index = pic[i].colour;
+            const bool nearInk = (order[h] == k6wa.routeA || order[h] == k6wa.routeB) && (index == 5 || index == 7);
+            const char* colour = index == k6wa.fill || nearInk ? "#ffe4ab" : index == k6wa.edge ? "#000" : "#777";
+            if (palette) {
+                // Illustrative RGB only: measured hue roles, not a luminance model of the windscreen.
+                colour = index == 7 || (index == 4 && !night) ? "#f1f1ea" : index == 3 ? (night ? "#815d43" : "#d68f48") :
+                         index == 2 || index == 4 || index == 5 || index == 6 ? "#E6A064" : "none";
+            }
+            printf("<polygon data-native-colour=\"%d\" fill=\"%s\" points=\"", index, colour);
             for (size_t j = 0; j < pic[i].poly.pts.size(); ++j)
                 printf("%d,%d ", pic[i].poly.pts[j].x, pic[i].poly.pts[j].y);
             puts("\"/>");
@@ -61,15 +68,19 @@ static void polygons(const PreviewPort& port, bool lanes = false) {
 }
 
 int main(int argc, char** argv) {
+    const bool palette = argc >= 2 && (!strcmp(argv[argc-1],"day") || !strcmp(argv[argc-1],"night"));
+    const bool night = palette && !strcmp(argv[argc-1],"night");
+    if (palette) --argc;
     int stage = 0, mode = 0; char extra;
     int matrix = argc == 4 ? (strcmp(argv[3], "ccw") == 0 ? 1 : strcmp(argv[3], "cw") == 0 ? 2 : strcmp(argv[3], "lanes") == 0 ? 3 : -1) : 0;
     if (argc > 4 || (argc >= 2 && sscanf(argv[1], "%d%c", &stage, &extra) != 1) || stage < 0 || stage > 4
         || (argc >= 3 && sscanf(argv[2], "%d%c", &mode, &extra) != 1) || mode < 0 || mode > 1 || matrix < 0) {
-        fputs("usage: hud_preview [0=far, 1..4=near route stage] [0=parametric, 1=Mapbox] [ccw|cw ring matrix, or lanes]\n", stderr);
+        fputs("usage: hud_preview [0=far, 1..4=near route stage] [0=parametric, 1=Mapbox] [ccw|cw ring matrix, or lanes] [day|night RGB illustration]\n", stderr);
         return 2;
     }
     // An inherited tuning pin would make a supposed default preview misleading.
     unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_LANES_BOX");
+    unsetenv("NBT_HUD_FILL");
     struct RingCase { int angle, number; };
     const RingCase rings[] = {
         {1, 5}, {45, 5}, {90, 5}, {135, 5}, {180, 5}, {225, 5}, {270, 5}, {315, 5}, {360, 5},
@@ -85,6 +96,7 @@ int main(int argc, char** argv) {
     printf("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">\n", width, header + rows * 110, width, header + rows * 110);
     puts("<rect width=\"100%\" height=\"100%\" fill=\"#111\"/><g fill=\"#ddd\" font-family=\"sans-serif\" font-size=\"11\">");
     printf("<text x=\"12\" y=\"20\">F30 126x77 — %s, %s; production polygons (not a photograph of the HUD)</text>\n", mode ? "Mapbox" : "Parametric", stage ? "near route stages" : "plain arrows");
+    if (palette) printf("<text x=\"12\" y=\"34\">%s; measured index roles, illustrative RGB; brightness/glass not simulated</text>\n",night?"Night":"Day");
     if (matrix && !laneSheet) printf("<text x=\"12\" y=\"40\">%s: input angles include 1/359 (drawn as 30/330); columns = no number, 1..8.</text>\n", matrix == 1 ? "CCW / right-hand traffic" : "CW / left-hand traffic");
     {
         setenv("NBT_HUD_GLYPHS", mode ? "1" : "0", 1);
@@ -103,12 +115,12 @@ int main(int argc, char** argv) {
             v.has_step_s = true; v.step_s = stage ? 3 : 100;
             PreviewPort port;
             Hud6waDisplay d(port, k6wa, false);
-            Settings settings; settings.junction = stage != 0; settings.hud_lanes = laneSheet; d.setSettings(settings);
+            Settings settings; settings.junction = stage != 0; settings.hud_lanes = laneSheet; settings.hud_night=night; d.setSettings(settings);
             if (d.showManeuver(v, 0, true, true) != ClusterDisplay::kOk) return 1;
             if (stage && stage < 4) { v.step_m = stage * 10; d.sameManeuver(v, 1); if (d.keepUp(v, 1) != ClusterDisplay::kOk) return 1; }
             if (laneSheet) {
                 printf("<g data-shape=\"%d\" data-highlight=\"%d\" transform=\"translate(%d,%d)\"><text x=\"0\" y=\"11\">Lane %d / %s</text><svg x=\"0\" y=\"24\" width=\"184\" height=\"17\" viewBox=\"0 0 184 17\"><rect width=\"184\" height=\"17\" fill=\"black\"/>",n/2+1,n%2,10+n%columns*pitch,header-10+n/columns*110,n/2+1,n%2 ? "selected" : "other");
-                polygons(port,true); puts("</svg></g>"); continue;
+                polygons(port,true,palette,night); puts("</svg></g>"); continue;
             }
             ShapeSpec rendered = shapeFor(type, v.has_exit_angle, v.exit_angle);
             int cell = n;
@@ -122,7 +134,7 @@ int main(int argc, char** argv) {
             }
             if (stage) printf(" %s%d", d.nearShown() ? "near" : "arrow", d.routeStage());
             puts("</text><svg x=\"0\" y=\"18\" width=\"126\" height=\"77\" viewBox=\"0 0 126 77\"><rect width=\"126\" height=\"77\" fill=\"black\"/>");
-            polygons(port);
+            polygons(port,false,palette,night);
             puts("</svg></g>");
         }
     }

@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 using namespace nbt;
@@ -2076,11 +2077,12 @@ static void testReadableNearArrows() {
                     assert(full.size() >= 4);
                     roads.assign(full.begin(),full.end()-4); route.assign(full.end()-4,full.end());
                 }
-                assert(route.size() == 4 && route[0].colour == profile.edge && route[1].colour == profile.edge);
-                assert(route[2].colour == profile.route && route[3].colour == profile.route);
-                samePictureItems(Picture(1,route[1]),Picture(1,far[far.size()-3]));
-                samePictureItems(Picture(1,route[3]),Picture(1,far.back()));
-                const Poly& body = route[2].poly; int cap = -32768;
+                assert(route.size() == (overlay ? 2u : 4u));
+                if (overlay) assert(route[0].colour == 7 && route[1].colour == 7);
+                else { assert(route[0].colour == profile.edge && route[1].colour == profile.edge);
+                       assert(route[2].colour == profile.route && route[3].colour == profile.route); }
+                samePolygons(picturePolygons(Picture(1,route.back())),0,picturePolygons(Picture(1,far.back())));
+                const Poly& body = route[overlay ? 0 : 2].poly; int cap = -32768;
                 assert(body.pts.size() == farBody.pts.size());
                 for (size_t i = 0; i < body.pts.size(); ++i) if (farBody.pts[i].y == farCap) cap = body.pts[i].y;
                 assert(cap <= previousCap); previousCap = cap;
@@ -2093,11 +2095,13 @@ static void testReadableNearArrows() {
                     if (d) ++moved;
                 }
                 assert(!delta || moved == 2);
+                if (!overlay) {
                 assert(route[0].poly.pts.size() == farEdge.pts.size());
                 for (size_t i = 0; i < farEdge.pts.size(); ++i) {
                     assert(route[0].poly.pts[i].x == farEdge.pts[i].x);
                     int d = route[0].poly.pts[i].y-farEdge.pts[i].y;
                     assert(d == 0 || d == delta);
+                }
                 }
                 for (size_t i = 0; i < route.size(); ++i) {
                     assert(simplePolygon(route[i].poly) && route[i].poly.pts.size() <= 99);
@@ -2106,7 +2110,10 @@ static void testReadableNearArrows() {
                         assert(p.x >= 0 && p.x <= 125 && p.y >= 0 && p.y <= 76);
                     }
                 }
-                Picture full = roads; full.insert(full.end(),route.begin(),route.end());
+                Picture full;
+                for(size_t i=0;i<roads.size();++i)if(overlay || roads[i].colour==3)full.push_back(roads[i]);
+                if(overlay) { Picture ink=route; for(size_t i=0;i<ink.size();++i)ink[i].colour=4; full.insert(full.end(),ink.begin(),ink.end()); }
+                else full.insert(full.end(),route.end()-2,route.end());
                 int key = type*5+stage;
                 if (!mode && !overlay) scenes[key] = full; else samePictureItems(full,scenes[key]);
                 ++checked;
@@ -2893,7 +2900,7 @@ struct NativePenWitness {
             else if(c.fkt==kSetFillColor)fill[h]=c.payload[2];
             else if(c.fkt==kAddPolygon && resetRequired){
                 assert((h==7||h==8) && resetHandle==(int)h && width[h]==0);
-                assert(fill[h]==4 || fill[h]==7); // fills and explicit daytime edges; RGB is the cluster palette
+                assert(fill[h]==4 || fill[h]==5 || fill[h]==7); // legacy supplied pictures and explicit F30 near ink
             }
         }
     }
@@ -2916,7 +2923,7 @@ static void testNativeOverlayPen() {
     witness.width[7]=22;witness.width[8]=22;
     v.step_m=10;d.sameManeuver(v,2);assert(d.keepUp(v,2)==ClusterDisplay::kOk);
     witness.apply(port.batches.back(),true);
-    assert(witness.width[5]==6 && witness.width[6]==6); // accepted ring buffers are untouched
+    assert(witness.width[5]==6 && witness.width[6]==6); // this witness has replayed only route batches
     Picture route;
     for(int night=0;night<=1;++night){
         route.clear();unified::route(6,p,4,route,night!=0);
@@ -2941,7 +2948,7 @@ static void testNativeOverlayPen() {
     Batch empty=d.routeBatch(Picture());for(size_t j=0;j<empty.calls.size();++j)assert(empty.calls[j].fkt!=kSetLineWidth);
 }
 
-// The measured F30 colour roles apply to both schemes; the cluster changes index4 on its own.
+// Base profile/far/ring roles stay unchanged; explicit near policy is tested through serialized driver batches.
 static void testMeasuredF30ColourRoles() {
     HudProfile p=k6wa;fitMeasured(126,77,p);
     assert(p.fill==4 && p.route==4 && p.road==3);
@@ -2967,7 +2974,145 @@ static void testMeasuredF30ColourRoles() {
     }
 }
 
+
+static void requireZeroPen(const Batch& b) {
+    int cleared=-1,zero=-1; bool polygon=false;
+    for(size_t i=0;i<b.calls.size();++i){
+        const Call& c=b.calls[i];
+        if(c.fkt==kRemoveAllItems){cleared=c.handle();zero=-1;}
+        if(c.fkt==kSetLineWidth){assert(c.handle()==cleared && c.payload[2]==0);zero=c.handle();}
+        if(c.fkt==kAddPolygon){assert(zero==c.handle());polygon=true;}
+    }
+    assert(polygon);
+}
+
+static void testExplicitF30NearPackets() {
+    unsetenv("NBT_HUD_CANVAS");unsetenv("NBT_HUD_GLYPH");unsetenv("NBT_HUD_FILL");
+    HudProfile p=k6wa;fitMeasured(126,77,p);
+    const int types[]={6,8,11,25};
+    for(size_t t=0;t<sizeof(types)/sizeof(types[0]);++t){
+        FakePort port;Hud6waDisplay d(port,p,false);Settings s;d.setSettings(s);
+        NavView v=timed(types[t],"Paint Road","10000",1,10000,600);
+        assert(d.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+        assert(!d.nearShown()); // motorway manoeuvres can already be near at800m
+        const Picture far=batchPicture(port.batches.back());
+        assert(!far.empty());
+        assert(far.size()>=2 && far[far.size()-2].colour==4 && far.back().colour==4);
+        for(size_t i=0;i<far.size();++i)assert(far[i].colour==3 || far[i].colour==4 || far[i].colour==7);
+        const bool modes[]={false,true,false};
+        for(size_t mode=0;mode<3;++mode){
+            s.hud_night=modes[mode];d.setSettings(s);v.step_m=100;v.step_s=5;
+            const size_t before=port.batches.size();
+            assert(d.showManeuver(v,1+mode*5,true,false)==ClusterDisplay::kOk && d.nearShown());
+            assert(port.batches.size()==before+2);
+            Picture roads=batchPicture(port.batches[before]);
+            for(size_t i=0;i<port.batches[before].calls.size();++i)assert(port.batches[before].calls[i].fkt!=kSetLineWidth);
+            bool mirror;const unified::Glyph* g=unified::glyph(types[t],mirror);assert(g);
+            assert(roads.size()==g->nearCount); // one road fill per branch: no duplicate edge polygon
+            for(size_t i=0;i<roads.size();++i)assert(roads[i].colour==3);
+            for(int stage=4;stage>=1;--stage){
+                if(stage!=4){v.step_m=stage*25;d.sameManeuver(v,mode*5+5-stage);assert(d.keepUp(v,mode*5+5-stage)==ClusterDisplay::kOk);}
+                assert(d.routeStage()==stage);const Batch& b=port.batches.back();requireZeroPen(b);
+                Picture route=batchPicture(b);assert(route.size()==2); // body and head, no edge copies
+                for(size_t i=0;i<route.size();++i)assert(route[i].colour==(modes[mode]?5:7));
+                samePolygons(picturePolygons(Picture(1,route.back())),0,picturePolygons(Picture(1,far.back())));
+                assert(b.calls.size()<=64);
+            }
+        }
+    }
+    // Accepted far/ring ink remains4 and the ring geometry never changes with the software night bit.
+    for(int cw=0;cw<2;++cw)for(int angle=0;angle<=360;angle+=90){
+        FakePort port;Hud6waDisplay d(port,p,false);Settings s=arrows();Picture reference;
+        NavView v=timed(cw?33:35,"Ring Road","100",1,100,5);
+        v.has_exit_angle=angle!=0;v.exit_angle=angle;v.has_exit_number=true;v.exit_number=3;
+        for(int mode=0;mode<3;++mode){s.hud_night=mode==1;d.setSettings(s);assert(d.showManeuver(v,mode,true,true)==ClusterDisplay::kOk);
+            const Batch& b=port.batches.back();Picture ink=batchPicture(b);assert(!ink.empty());
+            assert(ink.back().colour==4); // the accepted centred caption keeps its native fill role
+            for(size_t i=0;i<ink.size();++i)assert(ink[i].colour==3 || ink[i].colour==4);
+            for(size_t i=0;i<b.calls.size();++i)assert(b.calls[i].fkt!=kSetLineWidth);
+            if(!mode)reference=ink;else samePictureItems(ink,reference);
+        }
+    }
+    // Explicit override retains the previous fill/route split, even on the measured F30 geometry.
+    setenv("NBT_HUD_FILL","2",1);HudProfile custom=k6wa;applyHudEnv(custom);fitMeasured(126,77,custom);
+    for(int night=0;night<2;++night){
+        FakePort port;Hud6waDisplay d(port,custom,false);Settings s;s.hud_night=night!=0;d.setSettings(s);
+        NavView v=timed(8,"Override Road","800",1,800,60);assert(d.showManeuver(v,0,true,true)==ClusterDisplay::kOk);
+        Picture far=batchPicture(port.batches.back());bool fill=false;for(size_t i=0;i<far.size();++i)fill=fill||far[i].colour==2;assert(fill);
+        v.step_m=100;v.step_s=5;assert(d.showManeuver(v,1,true,false)==ClusterDisplay::kOk);
+        Picture near=batchPicture(port.batches.back());bool route=false;for(size_t i=0;i<near.size();++i)route=route||near[i].colour==4;assert(route);
+    }
+    unsetenv("NBT_HUD_FILL");
+}
+
+// Real KombiNav worker -> real MOST serializer -> fake DSI. Replies are deliberately not immediate.
+struct HudPaintWire {
+    struct Reply { most::Msg msg; unsigned due; };
+    size_t cursor;unsigned tick;std::vector<Reply> pending;std::vector<most::Msg> sent;
+    bool measured;
+    HudPaintWire():cursor(0),tick(0),measured(false){}
+    void step(){
+        std::vector<fake_dsi::Call> calls=fake_dsi::snapshot();
+        for(;cursor<calls.size();++cursor){
+            const fake_dsi::Call& c=calls[cursor];if(c.kind!=fake_dsi::Call::kRequest || c.id!=most::kReqProcessMessage)continue;
+            most::Msg m;assert(c.payload.size()>=4 && most::parseMessage(&c.payload[4],c.payload.size()-4,m));
+            if(m.fblock!=0x82 || m.inst!=0)continue;
+            assert(m.src==0x2077 && m.dst==0x0123 && m.opType==most::kOpStartResultAck);
+            sent.push_back(m);Reply r;r.msg=m;r.msg.src=m.dst;r.msg.dst=m.src;r.msg.txType=0;r.msg.varTag=2;r.msg.varVal=0;r.msg.opType=most::kOpResultAck;
+            r.due=tick+(m.fkt==kGetSize?10:2);
+            if(m.fkt==kGetSize){assert(m.data==getSize(5));r.msg.data=getSize(5);putBe16(r.msg.data,126);putBe16(r.msg.data,77);}
+            pending.push_back(r);
+        }
+        for(size_t i=0;i<pending.size();){
+            if(pending[i].due>tick){++i;continue;}
+            if(pending[i].msg.fkt==kGetSize)measured=true;
+            std::vector<uint8_t> b=most::buildMessage(pending[i].msg);fake_dsi::data(most::kInfoMessage,&b[0],b.size());pending.erase(pending.begin()+i);
+        }
+        ++tick;usleep(10000);
+    }
+    bool nearFrame(size_t first,int active)const{
+        int fill[16],width[16];unsigned polygons[16];uint16_t main=0,route=0;
+        for(int h=0;h<16;++h){fill[h]=-1;width[h]=-1;polygons[h]=0;}
+        bool correct=true;
+        for(size_t i=first;i<sent.size();++i){const most::Msg& m=sent[i];if(m.data.size()<2)continue;unsigned h=rdBe16(&m.data[0]);if(h>=16)continue;
+            if(m.fkt==kRemoveAllItems)polygons[h]=0;
+            if(m.fkt==kSetFillColor)fill[h]=m.data[2];
+            if(m.fkt==kSetLineWidth)width[h]=m.data[2];
+            if(m.fkt==kAddPolygon){++polygons[h];if(h==5||h==6)correct=correct&&fill[h]==3&&width[h]==-1;if(h==7||h==8)correct=correct&&fill[h]==active&&width[h]==0;}
+            if(m.fkt==kSwitchVisibility){uint16_t shown=rdBe16(&m.data[2]);if(shown==5||shown==6)main=shown;if(shown==7||shown==8)route=shown;}
+        }
+        return correct && measured && main && route && polygons[main]==1 && polygons[route]==2 && pending.empty();
+    }
+};
+
+static void testRealWorkerNightPaint() {
+    const char* oldFlag=KombiNav::kFlagFile;const char* oldManual=KombiNav::kManualFile;const char* oldShown=KombiNav::kShownFile;
+    char dir[]="/tmp/hudpaint_workerXXXXXX";assert(mkdtemp(dir));std::string shown=std::string(dir)+"/shown";
+    KombiNav::kFlagFile=KombiNav::kManualFile="/nonexistent/hudpaint";KombiNav::kShownFile=shown.c_str();
+    setenv("NBT_CLUSTER","6wa",1);setenv("NBT_KOMBI_NAV","1",1);setenv("NBT_KOMBI_NAV_YIELD","0",1);setenv("NBT_KOMBI_MEDIA","0",1);
+    unsetenv("NBT_HUDTERM");unsetenv("NBT_HUD_CANVAS");unsetenv("NBT_HUD_GLYPH");unsetenv("NBT_HUD_FILL");fake_dsi::reset();
+    {
+        most::Client client;KombiNav nav;nav.postNightMode(true);nav.start(&client);assert(client.start("PAINTTEST"));fake_dsi::attach();
+        std::vector<uint8_t> r;most::putLe32(r,77);most::putLe16(r,0x2077);fake_dsi::data(most::kInfoClientResponse,&r[0],r.size());
+        r.clear();most::putLe32(r,1);most::putLe16(r,0x0123);most::putLe16(r,most::registryKey(0x82,0));fake_dsi::data(most::kAttrRegistry,&r[0],r.size());
+        HudPaintWire wire;for(int i=0;i<30;++i)wire.step();assert(wire.measured); // delayed size before guidance -> known F30 guard
+        kntest::Bytes status=kntest::status(1),state=kntest::navState(8,"Wire Paint Road"),pos=kntest::curPos(100,"100",1);
+        KombiNav::navStatusCallback(0x8003,&status[0],status.size(),&nav);KombiNav::navStatusCallback(0x8006,&state[0],state.size(),&nav);KombiNav::navStatusCallback(0x8007,&pos[0],pos.size(),&nav);
+        const bool modes[]={true,false,true,false};
+        for(size_t mode=0;mode<4;++mode){
+            size_t first=wire.sent.size();nav.postNightMode(modes[mode]);bool found=false;
+            for(int i=0;i<250 && !found;++i){wire.step();found=wire.nearFrame(first,modes[mode]?5:7);}
+            assert(found);for(int i=0;i<8;++i)wire.step(); // retire all ACKs before taking the next mode's packet slice
+        }
+        nav.onSessionEnded();for(int i=0;i<50;++i)wire.step();nav.stop();fake_dsi::detach();
+    }
+    unsetenv("NBT_CLUSTER");unsetenv("NBT_KOMBI_NAV");unsetenv("NBT_KOMBI_NAV_YIELD");unsetenv("NBT_KOMBI_MEDIA");
+    KombiNav::kFlagFile=oldFlag;KombiNav::kManualFile=oldManual;KombiNav::kShownFile=oldShown;unlink(shown.c_str());rmdir(dir);
+}
+
 int main() {
+    testExplicitF30NearPackets();
+    testRealWorkerNightPaint();
     testNativeOverlayPen();
     testMeasuredF30ColourRoles();
     testNightOutlinePolicy();

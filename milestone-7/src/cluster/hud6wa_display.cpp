@@ -62,6 +62,9 @@ bool sameLanes(const std::vector<AaLane>& a, const std::vector<AaLane>& b) {
 }
 
 namespace {
+bool readableHud(const HudProfile& p);
+bool explicitF30Near(const HudProfile& p);
+HudProfile nearPaintProfile(const HudProfile& p, bool night);
 // A picture's items into handle h: the fill colour set whenever it changes (it applies to the items added after it).
 void addItems(Batch& b, uint16_t h, const Picture& pic) {
     int fill = -1;
@@ -192,6 +195,17 @@ bool readableHud(const HudProfile& p) {
         && p.glyph.x1 == 82 && p.glyph.y1 == 68;
 }
 
+bool explicitF30Near(const HudProfile& p) {
+    return readableHud(p) && !getenv("NBT_HUD_FILL") && p.bufA == 5 && p.bufB == 6 && p.routeA == 7 && p.routeB == 8;
+}
+
+HudProfile nearPaintProfile(const HudProfile& p, bool night) {
+    HudProfile paint = p;
+    // F30 swatches: 7 stays white and 5 stays orange; index4's automatic night colour is not relied on here.
+    if (explicitF30Near(p)) paint.route = night ? 5 : 7;
+    return paint;
+}
+
 void drawHudRoute(const Layout& layout, int tail, const HudProfile&, const JunctionColours& colours,
                   Picture& picture) {
     drawRoute(layout, tail, colours, kJunctionStyle, picture, -1, mbxEnabled());
@@ -239,7 +253,7 @@ Batch Hud6waDisplay::routeBatch(const Picture& pic) const {
     Batch b("route", true, kSlotRoute);
     uint16_t hidden = route_visible_ == p_.routeA ? p_.routeB : p_.routeA;
     b.add(kRemoveAllItems, removeAllItems(hidden));
-    // These F30 polygons include their own edges; clearing items does not initialize the native image pen.
+    // F30 route items are filled polygons; clearing items does not initialize the native image pen.
     if (readableHud(p_) && p_.routeA == 7 && p_.routeB == 8 && !pic.empty())
         b.add(kSetLineWidth, setLineWidth(hidden, 0));
     addItems(b, hidden, pic);
@@ -374,11 +388,17 @@ ClusterDisplay::Result Hud6waDisplay::sendRoute(int type) {
     if (!shadow_ && port_.waiting(kSlotRoute)) return kOk;   // drawn on a later step, from the newest stage
     Picture pic;
     int tail = tailFor(layout_, stage_, kStages);
-    if (readableHud(p_)) unified::route(type,p_,stage_,pic,s_.hud_night);
+    const HudProfile paint = nearPaintProfile(p_,s_.hud_night);
+    if (readableHud(p_)) unified::route(type,paint,stage_,pic,explicitF30Near(p_) || s_.hud_night);
     else { drawHudRoute(layout_,tail,p_,colours(),pic); fitJunction(pic); }
     Batch b = routeBatch(pic);
     log("ROUTE stage %d/%d, tail %d | %u calls%s", stage_, (int)kStages, tail, (unsigned)b.calls.size(),
         shadow_ ? " (shadow: not sent)" : "");
+    log("PAINT path=near-route mode=%s renderer=%s buffer=%u ink=%u road=%u explicit=%d fill-pin=%d pen0=%d",
+        s_.hud_night ? "night" : "day", readableHud(p_) ? "unified" : "fallback",
+        (unsigned)b.calls.front().handle(), (unsigned)paint.route, (unsigned)paint.road,
+        explicitF30Near(p_) ? 1 : 0, getenv("NBT_HUD_FILL") ? 1 : 0,
+        readableHud(p_) && p_.routeA == 7 && p_.routeB == 8 && !pic.empty() ? 1 : 0);
     SubmitResult sr;
     bool ok = submit(b, &sr);
     sent_any_ = true;
@@ -459,12 +479,13 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     HudTexts t = hudTexts(v, p_);
     ShapeSpec spec = shapeFor(v.aa_type, v.has_exit_angle, v.exit_angle);
     bool junction = near_ && has_layout_;
+    const HudProfile paint = nearPaintProfile(p_,s_.hud_night);
     Picture pic;
     std::string what;
     if (junction) {
         if (readableHud(p_)) {
-            unified::roads(v.aa_type,p_,true,pic,s_.hud_night);
-            if (!routeInOverlay()) unified::route(v.aa_type,p_,stage_,pic,s_.hud_night);
+            unified::roads(v.aa_type,paint,true,pic,explicitF30Near(p_) || s_.hud_night);
+            if (!routeInOverlay()) unified::route(v.aa_type,paint,stage_,pic,explicitF30Near(p_) || s_.hud_night);
         } else {
             drawRoads(layout_,colours(),kJunctionStyle,pic);
             if (!routeInOverlay()) drawHudRoute(layout_,tailFor(layout_,stage_,kStages),p_,colours(),pic);
@@ -492,6 +513,13 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     if (isNew) barRange_ = 0;
     const int level = distanceBarLevel(v);
     appendDistanceBar(b, level, true);
+    log("PAINT path=%s mode=%s renderer=%s buffer=%u ink=%u road=%u near-eligible=%d pins=%d%d%d canvas=%d,%d-%d,%d glyph=%d,%d-%d,%d",
+        junction ? "near-roads" : spec.kind == kShapeRoundabout ? "ring" : "far", s_.hud_night ? "night" : "day",
+        readableHud(p_) ? "unified" : "fallback",
+        (unsigned)b.calls.front().handle(), (unsigned)(junction ? paint.route : p_.fill), (unsigned)p_.road,
+        explicitF30Near(p_) ? 1 : 0, getenv("NBT_HUD_CANVAS") ? 1 : 0,getenv("NBT_HUD_GLYPH") ? 1 : 0,
+        getenv("NBT_HUD_FILL") ? 1 : 0,p_.canvas.x0,p_.canvas.y0,p_.canvas.x1,p_.canvas.y1,
+        p_.glyph.x0,p_.glyph.y0,p_.glyph.x1,p_.glyph.y1);
     log("%s type %d -> %s | '%s' '%s' | road '%s' -> '%s' | %u calls%s", isNew ? "SHOW" : "REDRAW", v.aa_type,
         what.c_str(), t.distance.c_str(), t.unit.c_str(), v.road.c_str(), t.street.c_str(), (unsigned)b.calls.size(),
         shadow_ ? " (shadow: not sent)" : "");

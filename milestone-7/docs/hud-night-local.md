@@ -51,3 +51,10 @@ check body/head fill, fringes, visibility and unchanged geometry. Verify far/nea
 stop the experiment if the arrow disappears, a setter is refused, or white fill remains. If it remains white,
 capture factory/native paint attributes rather than selecting a different unmeasured palette or FillMode.
 No installation, publication or HMI restart is part of this local candidate.
+
+## Follow-up after the owner test
+
+After a manual restart the owner reported correct orange far arrows but white near arrows. The next narrow
+candidate and its actual-worker tests are described in [hud-f30-near-colours.md](hud-f30-near-colours.md).
+It explicitly selects stable near indices7/5, omits near contour polygons and preserves the working far/ring path.
+The older pen-only candidate above must not be treated as a confirmed physical colour fix.
