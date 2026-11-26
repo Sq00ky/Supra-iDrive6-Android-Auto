@@ -12,6 +12,14 @@ The following tool can be used to install Android Auto: https://turbocode.shop/n
 If you have issues, please put it in this issue: https://github.com/Sq00ky/Supra-iDrive6-Android-Auto/issues/24
 
 
+# Install with NBT Manager
+[NBT Manager](https://nbtfoundry.github.io) (NBTFoundry, free and open source) installs NBT-AAD as one of its applications and updates it from a phone app: no SSH, SCP or flash drive after the first install.
+
+1. Install NBT Manager once, with the same ENET cable and a computer: see [Get started](https://nbtfoundry.github.io/#start). Its installer enables SSH through the same Bavarian SSH service when needed.
+2. In the NBT Manager phone app, install **Android Auto** from **Get apps** (while it is a beta, switch **Betas** on there).
+
+Its package is free of charge and builds NBT-AAD from source under the PolyForm Noncommercial License, with the Required Notice; the changes it carries are listed in [its README](https://github.com/NBTFoundry/nf-android-auto#readme). Report problems with that package [there](https://github.com/NBTFoundry/nf-android-auto/issues), not here.
+
 # DIY Install Guide
 **Note: Releases are in the release folder. The milestones are source code, designed to be built, and then deployed. For releases, see: https://github.com/Sq00ky/Supra-iDrive6-Android-Auto/releases**
 ## Overview
