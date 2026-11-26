@@ -101,6 +101,7 @@ SRC_test_nav_prompt_policy :=
 SRC_test_speech_focus      := src/audio/speech_focus.cpp
 SRC_test_speech_format     :=
 SRC_test_route_policy      :=
+SRC_test_screenshot_png    :=
 SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
 SRC_test_video_geometry    := src/sdr_builder.cpp
@@ -137,7 +138,7 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_text_ids run-test_rhmi_actions run-test_settings_refresh tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_text_ids run-test_rhmi_actions run-test_settings_refresh run-test_screenshot_png_py tsan
 	@echo "[CHECK] all host tests passed"
 
 .PHONY: run-test_text_ids
@@ -156,6 +157,10 @@ run-test_rhmi_actions:
 .PHONY: run-test_settings_refresh
 run-test_settings_refresh:
 	@python3 test_settings_refresh.py
+
+.PHONY: run-test_screenshot_png_py
+run-test_screenshot_png_py: $(OUT)/test_screenshot_png
+	@python3 test_screenshot_png.py $<
 
 $(OUT):
 	@mkdir -p $(OUT)
