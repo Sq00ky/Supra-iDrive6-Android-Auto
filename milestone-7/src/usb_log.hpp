@@ -14,11 +14,15 @@
 // nbt_paths.hpp); the daemon and the app look for a writable USB stick under /mnt (iDrive mounts sticks
 // as /mnt/umass<...>) and append to <stick>/nbt-aad.log and <stick>/nbt-aad-app.log. A stick plugged in later is
 // picked up within a few seconds; a removed stick stops the file logging until one is back.
+// A file over kMaxBytes at open becomes <name>.old.log, older ones move on to .old2.log ...; NBT_USB_LOG_KEEP (1-99,
+// default 1) is how many old logs stay.
 // NBT_LOG_FILE=<path> in nbt-aad.env still forces a daemon log file regardless of the checkbox.
 
+#include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -31,9 +35,20 @@ namespace usblog {
 static const char* const kFlagName   = "usblog";   // <data dir>/usblog from the checkbox, <app dir>/usblog by hand
 static const char* const kDaemonName = "nbt-aad.log";
 static const char* const kAppName    = "nbt-aad-app.log";
-static const long        kMaxBytes   = 64L * 1024L * 1024L;    // bigger at open -> renamed to *.old.log
+static const long        kMaxBytes   = 64L * 1024L * 1024L;    // bigger at open -> rotated to *.old.log
+static const int         kMaxKeep    = 99;
 
 inline bool enabled() { return flagSet(kFlagName); }
+
+// NBT_USB_LOG_KEEP value -> 1..kMaxKeep; unset, empty, not a number or below 1 -> 1.
+inline int keepCount(const char* v) {
+    if (!v) return 1;
+    char* end;
+    long k = strtol(v, &end, 10);
+    while (isspace((unsigned char)*end)) ++end;
+    if (*end || k < 1) return 1;
+    return k > kMaxKeep ? kMaxKeep : (int)k;
+}
 
 inline bool isWritableDir(const char* p) {
     struct stat st;
@@ -58,18 +73,33 @@ inline bool findStick(char* out, size_t n, const char* root = "/mnt") {
     return ok;
 }
 
-// <stick>/<name>; a file over kMaxBytes is first renamed to <stick>/<name without .log>.old.log (replacing it).
-inline void logPath(char* out, size_t n, const char* stick, const char* name, long maxBytes = kMaxBytes) {
+// Old log number gen: .old.log for 1, .old<gen>.log above.
+inline void oldPath(char* out, size_t n, const char* stick, const char* name, int gen) {
+    char num[12] = "";
+    if (gen > 1) snprintf(num, sizeof(num), "%d", gen);
+    size_t l = strlen(name);
+    if (l > 4 && strcmp(name + l - 4, ".log") == 0) snprintf(out, n, "%s/%.*s.old%s.log", stick, (int)(l - 4), name, num);
+    else snprintf(out, n, "%s/%s.old%s", stick, name, num);
+}
+
+// <stick>/<name>; a file over maxBytes is first rotated: old logs from number keep up to kMaxKeep are deleted, the
+// others move up one number, the file becomes .old.log. No rename targets an existing file.
+inline void logPath(char* out, size_t n, const char* stick, const char* name, long maxBytes = kMaxBytes, int keep = 1) {
     snprintf(out, n, "%s/%s", stick, name);
     struct stat st;
-    if (stat(out, &st) == 0 && (long)st.st_size > maxBytes) {
-        char old[160];
-        size_t l = strlen(name);
-        if (l > 4 && strcmp(name + l - 4, ".log") == 0) snprintf(old, sizeof(old), "%s/%.*s.old.log", stick, (int)(l - 4), name);
-        else snprintf(old, sizeof(old), "%s/%s.old", stick, name);
-        unlink(old);
-        rename(out, old);
+    if (stat(out, &st) != 0 || (long)st.st_size <= maxBytes) return;
+    char from[192], to[192];
+    for (int g = kMaxKeep; g >= keep; --g) {
+        oldPath(to, sizeof(to), stick, name, g);
+        unlink(to);
     }
+    for (int g = keep - 1; g >= 1; --g) {
+        oldPath(from, sizeof(from), stick, name, g);
+        oldPath(to, sizeof(to), stick, name, g + 1);
+        rename(from, to);
+    }
+    oldPath(to, sizeof(to), stick, name, 1);
+    rename(out, to);
 }
 
 } // namespace usblog
