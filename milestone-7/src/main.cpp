@@ -2274,7 +2274,8 @@ static void serviceUsbLog(bool atStart) {
     char stick[128];
     if (!on || !nbt::usblog::findStick(stick, sizeof(stick))) return;
     char path[192];
-    nbt::usblog::logPath(path, sizeof(path), stick, nbt::usblog::kDaemonName);
+    nbt::usblog::logPath(path, sizeof(path), stick, nbt::usblog::kDaemonName, nbt::usblog::kMaxBytes,
+                         nbt::usblog::keepCount(getenv("NBT_USB_LOG_KEEP")));
     if (isatty(1)) printf("[Log] Save logs to USB is on: logging to %s\n", path);
     fflush(stdout);
     if (g_ramLog) printf("[Log] USB stick found: logging to %s (the RAM log %s stops here)\n", path, nbt::ramlog::kDaemonPath);
