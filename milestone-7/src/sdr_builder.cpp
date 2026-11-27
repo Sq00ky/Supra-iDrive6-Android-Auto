@@ -16,7 +16,7 @@ namespace nbt {
 SdrIdentity::SdrIdentity()
     : carMake("Toyota"), carModel("GR Supra"), carYear("2020"),
       vehicleId("6f1c2a40-5a1e-4c7e-9e21-0a90bd51e0a7"),
-      huMake("Toyota"), huModel("NBT Evo ID6"), swBuild("nbt-aad"), swVersion("1.9.120") {
+      huMake("Toyota"), huModel("NBT Evo ID6"), swBuild("nbt-aad"), swVersion("1.9.121") {
     // BMW group cars (carplay.ini logo / Manufacturer, or NBT_VEHICLE=bmw|mini|rollsroyce): the phone shows the
     // make on its exit icon. Own vehicle id per make so the phone keeps separate per-car settings.
     // NBT_CAR_* / NBT_HU_* still override.
