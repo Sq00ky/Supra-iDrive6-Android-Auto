@@ -59,7 +59,9 @@ namespace kombinav {
 struct HudTexts {
     std::string street, distance, unit;
 };
-HudTexts hudTexts(const NavView& v, const hudterm::HudProfile& p);
+HudTexts hudTexts(const NavView& v, const hudterm::HudProfile& p);               // scripts from hudTextScripts()
+HudTexts hudTexts(const NavView& v, const hudterm::HudProfile& p, int scripts);  // hudterm::TextScripts
+int hudTextScripts();   // kTextAll, or with NBT_HUD_UNICODE=0 the old filter (kTextLatin / kTextCyrillic)
 const char* hudUnitText(int aa_unit);   // "m", "km", "mi", "ft", "yd"; "" when unknown
 
 bool sameLanes(const std::vector<AaLane>& a, const std::vector<AaLane>& b);
@@ -159,6 +161,10 @@ private:
     bool lanes_dirty_;       // something of ours may be in the lane layer
     bool idle_;              // the idle text is what we show (no maneuver)
     double idle_t_;          // when its panel was last switched on
+    int scripts_;            // hudterm::TextScripts for the street and idle texts; kTextLatin once the font refused one
+    uint32_t refusals_seen_; // the terminal's text refusal count last looked at
+public:
+    int textScripts() const { return scripts_; }   // tests
 };
 
 } // namespace kombinav

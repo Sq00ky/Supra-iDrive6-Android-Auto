@@ -47,9 +47,11 @@ struct FakePort : public Port {
     int mw, mh;              // the picture buffer's size once "measured" (ImageGetSize); 0 = no answer
     bool claimable;          // claim() takes the HUD from the navigation we yield to
     int claims;
+    uint32_t refusals;       // TextareaSetText calls the "cluster" refused (a glyph its font lacks)
+    uint16_t refusedHandle;
     const HudProfile& profile;
     explicit FakePort(const HudProfile& p = k6wa) : st(kReady), ep(0), result(kQueued), idle(true), wait(false), resets(0), afterReset(kReady), mw(0),
-                 mh(0), claimable(false), claims(0), profile(p) {}
+                 mh(0), claimable(false), claims(0), refusals(0), refusedHandle(0), profile(p) {}
     SubmitResult submit(const Batch& b) {
         if (st != kReady) return kNotReady;
         for (size_t i = 0; i < b.calls.size(); ++i) assert(callOk(b.calls[i], handlesOf(profile)));
@@ -64,6 +66,7 @@ struct FakePort : public Port {
     bool waitIdle(uint32_t) { return st == kReady && idle; }
     bool measuredSize(int& w, int& h) const { if (!mw) return false; w = mw; h = mh; return true; }
     bool claim() { ++claims; if (st == kNavActive && claimable) st = kReady; return st == kReady; }
+    uint32_t textRefusals(uint16_t* h) const { if (h) *h = refusedHandle; return refusals; }
 };
 
 static std::vector<std::string> g_log;
@@ -233,6 +236,38 @@ static void testTexts() {
     // then to UTF-16BE in setText). "\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80" is the UTF-8 for "Твер".
     assert(toClusterText("\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80", "", 32, false) == "");
     assert(toClusterText("\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80", "", 32, false, true) == "\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80");
+    assert(toClusterText("\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80", "", 32, false, kTextAll) == "\xd0\xa2\xd0\xb2\xd0\xb5\xd1\x80");
+
+    // Every script with no ASCII form (kTextAll, the 6WA default). "\xed\x85\x8c\xed\x97\xa4\xeb\x9e\x80\xeb\xa1\x9c" is
+    // the UTF-8 for the Hangul street name "Teheran-ro".
+    const std::string teheran = "\xed\x85\x8c\xed\x97\xa4\xeb\x9e\x80\xeb\xa1\x9c";
+    assert(toClusterText(teheran + " 123", "-./", 32, false) == "123");                 // the old filter: digits only
+    assert(toClusterText(teheran + " 123", "-./", 32, false, kTextCyrillic) == "123");
+    assert(toClusterText(teheran + " 123", "-./", 32, false, kTextAll) == teheran + " 123");
+    assert(toClusterText("\xec\x84\x9c\xec\x9a\xb8 \xe2\x86\x92 \xeb\xb6\x80\xec\x82\xb0", "", 32, false, kTextAll) ==
+           "\xec\x84\x9c\xec\x9a\xb8 \xeb\xb6\x80\xec\x82\xb0");                          // arrow (U+2192) -> space
+    assert(toClusterText("\xe5\x8c\x97\xe4\xba\xac\xe3\x80\x81\xe8\xb7\xaf", "", 32, false, kTextAll) ==
+           "\xe5\x8c\x97\xe4\xba\xac \xe8\xb7\xaf");                                      // CJK, ideographic comma
+    assert(toClusterText("\xef\xbc\x91\xef\xbc\x92\xef\xbc\xa1", "", 32, false) == "12A");   // fullwidth -> ASCII
+    assert(toClusterText("\xce\x91\xce\xb8\xce\xae\xce\xbd\xce\xb1", "", 32, false, kTextAll) ==
+           "\xce\x91\xce\xb8\xce\xae\xce\xbd\xce\xb1");                                   // Greek "Athina"
+    assert(toClusterText("\xd7\xaa\xd7\x9c Aviv", "", 32, false, kTextAll) == "Aviv");    // Hebrew (RTL) left out
+    assert(toClusterText("Emoji \xf0\x9f\x9a\x97 Way", "", 32, false, kTextAll) == "Emoji Way");
+    assert(toClusterText("Gro\xc3\x9fweg", "", 32, false, kTextAll) == "Grossweg");      // Latin: still its ASCII form
+    // cut by code points: 33 Hangul syllables (99 bytes) -> 32 syllables (96 bytes)
+    std::string hangul33;
+    for (int i = 0; i < 33; ++i) hangul33 += "\xea\xb0\x80";                             // U+AC00
+    assert(toClusterText(hangul33, "", 32, false, kTextAll).size() == 96);
+    assert(toClusterText(hangul33, "", 5, false, kTextAll) == "\xea\xb0\x80\xea\xb0\x80\xea\xb0\x80\xea\xb0\x80\xea\xb0\x80");
+    // what reaches the cluster: UTF-16BE
+    assert(setText(2, teheran.c_str()).size() == 3 + 2 * 4 + 2);
+    std::vector<uint8_t> ga = setText(2, "\xea\xb0\x80");
+    const uint8_t gaWant[] = { 0x00, 0x02, 0x00, 0xAC, 0x00, 0x00, 0x00 };
+    assert(ga.size() == sizeof(gaWant) && memcmp(&ga[0], gaWant, sizeof(gaWant)) == 0);
+    HudTexts k = kombinav::hudTexts(view(7, (teheran + " 123").c_str(), "300", 1, 300), k6wa, kTextAll);
+    assert(k.street == teheran + " 123" && k.distance == "300" && k.unit == "m");
+    k = kombinav::hudTexts(view(7, (teheran + " 123").c_str(), "300", 1, 300), k6wa, kTextLatin);
+    assert(k.street == "123");
 
     HudTexts t = kombinav::hudTexts(view(7, "Sample Lane Beta", "1,2", 3, 1200), k6wa);
     assert(t.street == "Sample Lane Beta" && t.distance == "1.2" && t.unit == "km");
@@ -251,6 +286,55 @@ static void expectCall(const Call& c, uint16_t fkt, uint16_t h) {
         printf("expected %03X h%u, got %s\n", fkt, h, describeCall(c).c_str());
         assert(false);
     }
+}
+
+// The street text the batch writes, or "?" when it writes none.
+static std::string streetSent(const Batch& b, uint16_t street) {
+    for (size_t i = 0; i < b.calls.size(); ++i)
+        if (b.calls[i].fkt == kTextareaSetText && b.calls[i].handle() == street) {
+            const std::vector<uint8_t>& p = b.calls[i].payload;
+            std::string s;                                // UTF-16BE back to UTF-8 (BMP)
+            for (size_t k = 3; k + 1 < p.size(); k += 2) {
+                uint32_t cp = (uint32_t)((p[k] << 8) | p[k + 1]);
+                if (!cp) break;
+                if (cp < 0x80) s += (char)cp;
+                else if (cp < 0x800) { s += (char)(0xC0 | (cp >> 6)); s += (char)(0x80 | (cp & 0x3F)); }
+                else {
+                    s += (char)(0xE0 | (cp >> 12));
+                    s += (char)(0x80 | ((cp >> 6) & 0x3F));
+                    s += (char)(0x80 | (cp & 0x3F));
+                }
+            }
+            return s;
+        }
+    return "?";
+}
+
+// Every script by default; once the cluster refuses a street text with non-Latin letters (its font lacks them), the
+// texts go back to Latin letters and the maneuver is drawn again with them.
+static void testUnicodeFallback() {
+    g_log.clear();
+    FakePort port;
+    Hud6waDisplay d(port, k6wa, false);
+    d.setSettings(arrows());
+    d.setLog(&logFn, NULL);
+    assert(d.textScripts() == kTextAll);
+    const std::string teheran = "\xed\x85\x8c\xed\x97\xa4\xeb\x9e\x80\xeb\xa1\x9c 123";
+    NavView v = view(8, teheran.c_str(), "300", 1, 300);
+    assert(d.showManeuver(v, 0, true, true) == ClusterDisplay::kOk && port.batches.size() == 1);
+    assert(streetSent(port.batches[0], k6wa.street) == teheran);
+
+    port.refusals = 1;                                    // a distance text refused: not the font's letters
+    port.refusedHandle = k6wa.distance;
+    assert(d.showManeuver(v, 1, false, false) == ClusterDisplay::kOk);
+    assert(d.textScripts() == kTextAll && streetSent(port.batches.back(), k6wa.street) == teheran);
+
+    port.refusals = 2;                                    // the street text refused: Latin letters from now on
+    port.refusedHandle = k6wa.street;
+    assert(d.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+    assert(d.textScripts() == kTextLatin && logged("Latin letters only from now on"));
+    assert(streetSent(port.batches.back(), k6wa.street) == "123");
+    assert(d.idleText("\xea\xb0\x80 Song") == "Song");
 }
 
 static void testShowBatches() {
@@ -1270,7 +1354,8 @@ static void testIdleText() {
     assert(d.idleText("Example Song - Sample Artist") == "Example Song - Sample Artist");
     assert(d.idleText("Za\xC5\xBC\xC3\xB3\xC5\x82\xC4\x87, g\xC4\x99\xC5\x9Bl\xC4\x85 (live)") == "Zazolc gesla live");
     assert(d.idleText("An Invented Title That Is Far Too Long For The Line").size() == 32);
-    assert(d.idleText("\xE6\x97\xA5\xE6\x9C\xAC").empty());            // nothing the font has
+    assert(d.idleText("\xE6\x97\xA5\xE6\x9C\xAC") == "\xE6\x97\xA5\xE6\x9C\xAC");   // CJK kept (kTextAll default)
+    assert(d.idleText("\xE2\x99\xAA\xE2\x99\xAB").empty());            // symbols only: nothing to show
 
     assert(d.showIdleText("", 0) == ClusterDisplay::kOk && port.batches.empty() && !d.sentAny());
     assert(d.showIdleText("Example Song - Sample Artist", 0) == ClusterDisplay::kOk && port.batches.size() == 1);
@@ -1377,7 +1462,7 @@ static void testCoreIdle() {
     core.step(NULL, 0);
     core.idle("", 0);
     assert(!core.idleShown() && port.batches.empty());            // nothing playing: nothing sent
-    core.idle("\xE6\x97\xA5\xE6\x9C\xAC", 0);
+    core.idle("\xE2\x99\xAA\xE2\x99\xAB", 0);                     // music symbols only
     assert(!core.idleShown() && port.batches.empty());            // nothing of it can be shown
     core.idle("Example Song - Sample Artist", 1);
     assert(core.idleShown() && !core.shown() && port.batches.size() == 1 && port.batches[0].label == "media");
@@ -1670,6 +1755,7 @@ int main() {
     testRoundaboutExit();
     testFitMeasured();
     testTexts();
+    testUnicodeFallback();
     testShowBatches();
     testF15Batches();
     testF15RouteRestart();

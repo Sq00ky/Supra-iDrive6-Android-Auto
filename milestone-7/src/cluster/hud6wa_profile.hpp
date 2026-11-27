@@ -146,6 +146,13 @@ inline void applyHudEnv(HudProfile& p) {
     if (parseRect(getenv("NBT_HUD_LANES_BOX"), r)) p.lanes = r;
     const char* f = getenv("NBT_HUD_FILL");
     if (f && *f) p.fill = (uint8_t)atoi(f);
+    // NBT_HUD_STREET_MAX: the longest street text in characters (1..kMaxTextChars). Hangul and CJK letters are about
+    // twice as wide as Latin ones, so a Korean or Chinese name may need fewer than the profile's to fit the HUD.
+    const char* sm = getenv("NBT_HUD_STREET_MAX");
+    if (sm && *sm) {
+        int n = atoi(sm);
+        if (n >= 1 && n <= (int)kMaxTextChars) p.streetChars = (size_t)n;
+    }
     // NBT_HUD_HIDE "21 22": handles (decimal) the cluster draws over the panel itself -> SetVisibility-off each picture.
     const char* hd = getenv("NBT_HUD_HIDE");
     if (hd && *hd) {

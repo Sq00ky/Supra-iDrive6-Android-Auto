@@ -141,6 +141,8 @@ public:
     uint16_t host() const { return host_; }
     // The cluster's answer to the measureHandle ImageGetSize, once it has arrived; false until then.
     bool measuredSize(int& w, int& h) const;
+    // TextareaSetText calls the cluster answered with an error (a glyph its font lacks), and the last one's handle.
+    uint32_t textRefusals(uint16_t* lastHandle) const;
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
     // A status change since the last call, for the listener.
@@ -192,6 +194,8 @@ private:
     int sizeW_, sizeH_;
     std::vector<uint8_t> movedTo_;   // the last place the cluster named in kGuidanceMovedFkt
     bool haveMovedTo_;
+    uint32_t textRefusals_;          // TextareaSetText answered with an error, since the start
+    uint16_t lastRefusedText_;       // the handle of the last one
 };
 
 // What a HUDTerminal cluster driver needs from the transport: HudTerminal, or a test's fake.
@@ -214,6 +218,9 @@ public:
     // navQuietMs, even with its route still on screen (Core::claim). True when the terminal is then ready. Default
     // false: a test fake need not implement it.
     virtual bool claim() { return false; }
+    // How many TextareaSetText calls the cluster refused since the start, and the last one's handle: a driver that sent
+    // letters the font may lack sends that text again without them. Default 0: a test fake need not implement it.
+    virtual uint32_t textRefusals(uint16_t* lastHandle) const { if (lastHandle) *lastHandle = 0; return 0; }
 };
 
 // A Core on its own thread. attach() before the client's start(). The listener runs on the terminal's thread with no
@@ -242,6 +249,7 @@ public:
     bool waitIdle(uint32_t ms);
     bool measuredSize(int& w, int& h) const;
     bool claim();
+    uint32_t textRefusals(uint16_t* lastHandle) const;
     TerminalStats stats() const;
     void logHealth();                             // one line, from main's 60 s loop
 
