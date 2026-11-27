@@ -31,6 +31,10 @@ void detach();
 void data(uint32_t id, const void* payload, uint32_t len);
 
 bool opened();
+// Optional host-test barrier/failure injection, configured before worker threads start.
+typedef bool (*RequestHook)(uint32_t id, const std::vector<uint8_t>& payload, void* user);
+void setRequestHook(RequestHook hook, void* user);
+std::vector<Call> snapshot();
 
 } // namespace fake_dsi
 
