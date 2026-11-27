@@ -230,14 +230,6 @@
         <synonyms/>
       </textIdModel>
       <raBoolModel id="250"/>
-      <textIdModel id="230" textId="301"><synonyms/></textIdModel>
-      <textIdModel id="231" textId="302"><synonyms/></textIdModel>
-      <textIdModel id="232" textId="303"><synonyms/></textIdModel>
-      <textIdModel id="233" textId="304"><synonyms/></textIdModel>
-      <textIdModel id="234" textId="305"><synonyms/></textIdModel>
-      <textIdModel id="235" textId="306"><synonyms/></textIdModel>
-      <textIdModel id="236" textId="307"><synonyms/></textIdModel>
-      <textIdModel id="237" textId="308"><synonyms/></textIdModel>
     </models>
     <events>
       <focusEvent id="54" target="16"/>

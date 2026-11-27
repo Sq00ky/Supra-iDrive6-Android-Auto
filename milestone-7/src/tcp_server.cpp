@@ -21,7 +21,18 @@ namespace nbt {
 // Low-latency + dead-peer detection for AA sockets. Small frames (media ACKs, input)
 // must not wait for Nagle/delayed-ACK; a vanished wireless phone must eventually
 // produce an error instead of an eternal recv().
+// Close-on-exec: nbt-aad starts long-lived children (sloginfo -w for the iDrive-route watch, popen/system helpers).
+// A child that inherits the listener keeps 172.16.224.1:5277 bound after we close it, so re-creating the listener
+// fails (EADDRINUSE), we fall back to every interface, and the phone's connects land on the orphaned socket in the
+// child, which never accepts them (car log #341, v1.9.119: "could not bind ... Address already in use", 0 accepted,
+// fixed only by restarting nbt-aad).
+static void noInherit(int fd) {
+    int f = fcntl(fd, F_GETFD);
+    if (f >= 0) fcntl(fd, F_SETFD, f | FD_CLOEXEC);
+}
+
 static void tuneSocket(int fd) {
+    noInherit(fd);
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
@@ -135,6 +146,7 @@ int TcpServer::openListener() {
         perror("[TcpServer] socket creation failed");
         return -1;
     }
+    noInherit(fd);
 
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
