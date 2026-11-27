@@ -53,7 +53,7 @@ Core::Core(const Config& cfg)
     : cfg_(cfg), linkUp_(false), self_(0), host_(0), failed_(false), navActive_(false), routeOn_(false),
       frameOff_(false),
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false),
-      nextCall_(0), batchStartMs_(0), recent_(cfg.replyMs), tag_(1), epoch_(0),
+      nextCall_(0), batchStartMs_(0), recent_(cfg.copyMs), tag_(1), epoch_(0),
       measureDue_(false), measureInFlight_(false), measureLate_(false), measureSentMs_(0), haveSize_(false), sizeW_(0), sizeH_(0),
       haveMovedTo_(false) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
@@ -82,17 +82,34 @@ void Core::dropWork(uint32_t now) {
     inFlight_.clear();
 }
 
-// An answer to a call dropped within replyMs: taken off the list. Older entries are let go.
-bool Core::takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now) {
+void Core::expireDropped(uint32_t now) {
     size_t k = 0;
     for (size_t i = 0; i < dropped_.size(); ++i)
         if (left(dropped_[i].sentMs, cfg_.replyMs, now) > 0) dropped_[k++] = dropped_[i];
     dropped_.resize(k);
+}
+
+// An answer to a call dropped within replyMs: taken off the list. Older entries are let go.
+bool Core::takeDropped(uint16_t fkt, bool byHandle, uint16_t handle, uint32_t now) {
+    expireDropped(now);
     for (size_t i = 0; i < dropped_.size(); ++i) {
         if (dropped_[i].fkt != fkt || (byHandle && dropped_[i].handle != handle)) continue;
         dropped_.erase(dropped_.begin() + i);
         return true;
     }
+    return false;
+}
+
+// A call of ours still waiting for this function and handle, or dropped within replyMs: a message from the host to
+// another address is its copy. A cold cluster sends the copy late, and before our answer.
+bool Core::awaited(const most::View& m, uint32_t now) const {
+    if (m.len < 2) return false;
+    uint16_t h = rdBe16(m.data);
+    for (size_t i = 0; i < inFlight_.size(); ++i)
+        if (inFlight_[i].fkt == m.fkt && inFlight_[i].handle == h) return true;
+    for (size_t i = 0; i < dropped_.size(); ++i)
+        if (dropped_[i].fkt == m.fkt && dropped_[i].handle == h && left(dropped_[i].sentMs, cfg_.replyMs, now) > 0)
+            return true;
     return false;
 }
 
@@ -235,12 +252,14 @@ bool Core::merge(Batch& into, const Batch& b) {
     for (size_t i = 0; i < b.calls.size(); ++i) {
         const Call& c = b.calls[i];
         size_t k = 0;
-        if (c.fkt == kTextareaSetText)
-            while (k < m.calls.size() && !(m.calls[k].fkt == kTextareaSetText && m.calls[k].handle() == c.handle())) ++k;
+        if (c.fkt == kTextareaSetText || c.fkt == kPotentiometerSetValue)
+            while (k < m.calls.size() && !(m.calls[k].fkt == c.fkt && m.calls[k].handle() == c.handle())) ++k;
         else
             k = m.calls.size();
-        if (k < m.calls.size()) m.calls[k].payload = c.payload;
-        else m.calls.push_back(c);
+        if (k < m.calls.size()) {
+            m.calls[k].payload = c.payload;
+            m.calls[k].allowTimeout = c.allowTimeout;
+        } else m.calls.push_back(c);
     }
     if (m.calls.size() > cfg_.maxBatch) return false;
     into = m;
@@ -268,6 +287,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
     }
     if (!haveCurrent_ || nextCall_ >= current_.calls.size()) return false;
     const Call& c = current_.calls[nextCall_];
+    if (c.afterReplies && !inFlight_.empty()) return false;
     if (!buildCall(host_, c, tag_, cfg_.handles, out)) {   // checked at submit: only a host change could do this
         fail("a queued call no longer builds", now);
         return false;
@@ -279,6 +299,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
     f.fkt = c.fkt;
     f.handle = c.handle();
     f.sentMs = now;
+    f.allowTimeout = c.allowTimeout;
     inFlight_.push_back(f);
     recent_.add(c.fkt, f.handle, now);
     ++stats_.calls;
@@ -315,7 +336,7 @@ void Core::onMessage(const most::View& m, uint32_t now) {
     // The cluster's copy of an answer to us. A late answer to the measurement is past recent_'s window, and its copy
     // may come before our own: while it is awaited, a size for the measured handle is ours too, not the navigation.
     bool measureCopy = measureInFlight_ && m.fkt == kGetSize && m.len >= 2 && rdBe16(m.data) == cfg_.measureHandle;
-    if (m.src == host_ && (measureCopy || recent_.isCopy(m.fkt, m.data, m.len, now))) {
+    if (m.src == host_ && (measureCopy || recent_.isCopy(m.fkt, m.data, m.len, now) || awaited(m, now))) {
         ++stats_.copies;
         return;
     }
@@ -349,7 +370,11 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
     size_t i = 0;
     while (i < inFlight_.size() && !(inFlight_[i].fkt == m.fkt && (!byHandle || inFlight_[i].handle == h))) ++i;
     bool matched = i < inFlight_.size();
-    if (matched) inFlight_.erase(inFlight_.begin() + i);
+    if (matched) {
+        if (now - inFlight_[i].sentMs > cfg_.copyMs) ++stats_.slow;
+        inFlight_.erase(inFlight_.begin() + i);
+    }
+    if (byHandle) recent_.add(m.fkt, h, now);        // its copy to the navigation may follow: ours
     if (error && !matched && takeDropped(m.fkt, byHandle, h, now)) {
         ++stats_.lateErrors;
         printf("[HudTerm] %s(%X) to %03X %s handle %u, a call dropped when the terminal left ready: not a failure\n",
@@ -363,8 +388,9 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
                          matched ? "" : " (matches no call in flight)");
         for (size_t k = 0; k < m.len && k < 12 && n < (int)sizeof(why) - 4; ++k)
             n += snprintf(why + n, sizeof(why) - n, " %02x", m.data[k]);
-        if (m.fkt == kTextareaSetText && matched) {   // the cluster's font refused a text (a glyph it lacks): cosmetic —
-            printf("[HudTerm] %s: text refused, guidance kept\n", why);   // keep the arrow up instead of failing.
+        if (matched && (m.fkt == kTextareaSetText || m.fkt == kPotentiometerSetValue)) {
+            printf("[HudTerm] %s: %s refused, guidance kept\n", why,
+                   m.fkt == kTextareaSetText ? "text" : "distance bar");
             finishIfDone(now);                          // matched only: an unrelated error still fails the terminal
             return;
         }
@@ -447,17 +473,26 @@ bool Core::claim(uint32_t now) {
 void Core::tick(uint32_t now) {
     // No answer to ImageGetSize in time. A cold cluster answers it later (after an iDrive restart, #264), so keep
     // listening and take it then; meanwhile the defaults stand. Never a failure, never asked again.
-    if (measureInFlight_ && !measureLate_ && left(measureSentMs_, cfg_.replyMs, now) == 0) {
+    if (measureInFlight_ && !measureLate_ && left(measureSentMs_, cfg_.copyMs, now) == 0) {
         measureLate_ = true;
         printf("[HudTerm] no answer to ImageGetSize in %u ms: still listening, the defaults meanwhile\n",
-               (unsigned)cfg_.replyMs);
+               (unsigned)cfg_.copyMs);
     }
-    if (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
+    while (status_ == kReady && !inFlight_.empty() && left(inFlight_[0].sentMs, cfg_.replyMs, now) == 0) {
+        InFlight f = inFlight_.front();
         ++stats_.timeouts;
         char why[96];
-        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms", inFlight_[0].fkt, fktName(inFlight_[0].fkt),
-                 inFlight_[0].handle, cfg_.replyMs);
-        fail(why, now);
+        snprintf(why, sizeof(why), "no answer to %03X %s handle %u in %u ms", f.fkt, fktName(f.fkt), f.handle, cfg_.replyMs);
+        if (!f.allowTimeout) {
+            fail(why, now);
+            break;
+        }
+        printf("[HudTerm] %s, skipped optional media text\n", why);
+        inFlight_.erase(inFlight_.begin());
+        f.sentMs = now;
+        expireDropped(now);
+        dropped_.push_back(f);
+        finishIfDone(now);
     }
     if (navActive_ && !routeOn_ && left(lastNavMs_, cfg_.navQuietMs, now) == 0) {
         navActive_ = false;
@@ -625,11 +660,12 @@ void HudTerminal::logHealth() {
     uint16_t host = core_.host();
     pthread_mutex_unlock(&lock_);
     printf("[HudTerm] %s, host %04X: batches %u (done %u, dropped %u, replaced %u, merged %u, refused %u), calls %u, "
-           "answers %u, copies %u, strays %u, nav msgs %u, timeouts %u, errors %u (late %u), remeasures %u\n",
+           "answers %u, copies %u, strays %u, nav msgs %u, timeouts %u, errors %u (late %u), remeasures %u, "
+           "slow answers %u\n",
            statusName(s), host, t.batches - l.batches, t.batchesDone - l.batchesDone, t.batchesDropped - l.batchesDropped,
            t.replaced - l.replaced, t.merged - l.merged, t.refused - l.refused, t.calls - l.calls, t.answers - l.answers, t.copies - l.copies,
            t.strays - l.strays, t.navMsgs - l.navMsgs, t.timeouts - l.timeouts, t.errors - l.errors,
-           t.lateErrors - l.lateErrors, t.remeasures - l.remeasures);
+           t.lateErrors - l.lateErrors, t.remeasures - l.remeasures, t.slow - l.slow);
 }
 
 void HudTerminal::onMessage(const most::View& m) {

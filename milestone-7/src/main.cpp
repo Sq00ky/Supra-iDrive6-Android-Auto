@@ -164,6 +164,7 @@ static nbt::AASession g_session;
 static nbt::kombinav::KombiNav g_kombiNav;   // Android Auto turn arrows on the J29 cluster / HUD (opt-in)
 static nbt::gesture::Sniffer g_gestureSniff;     // two-finger gesture -> next track in native audio (gesture_sniff.hpp)
 static nbt::riclist::KombiMedia g_kombiMedia;
+static bool g_useProfileWheelPolicy = false;
 static nbt::riclist::WheelTurns g_wheelTurns;      // thumb-wheel row from the rotation, when no cluster list is seen (#299)   // the track title in the cluster's track list (Native Functionality Media Controls Restore)
 static nbt::most::Client g_most;             // the one MOST observe client, started once its consumers have attached
 static nbt::car::CcsInput g_ccs;             // iDrive controller and voice button: a consumer of g_most
@@ -533,6 +534,16 @@ static bool ctlClaimOrForward() {
 static uint16_t g_aaPort = 5277;
 static volatile int g_btLink = 0;              // wireless thread: phone's Bluetooth setup link (/dev/btspp0) is open
 static volatile uint32_t g_btIdleSince = 0;     // wireless thread: waiting for that link since (monoSecs; 0 = not waiting)
+static int g_noJoinRun = 0;                     // wireless thread: Wi-Fi handshakes in a row the phone never connected after
+static const int kNoJoinHintTries = 3;          // ... before iDrive says "forget the phone, pair again" (a slow join is not a bad pairing)
+// Seconds to wait for the phone's TCP connect after it closes Bluetooth having accepted the Wi-Fi details: joining
+// the hotspot and DHCP can take longer than the old 8 s (car log #341: the phone was still in the ARP table as
+// "incomplete" when we gave up). NBT_WIFI_JOIN_WAIT_S=5..90, default 20.
+static int wifiJoinWaitS() {
+    const char* e = getenv("NBT_WIFI_JOIN_WAIT_S");
+    int v = (e && *e) ? atoi(e) : 20;
+    return v < 5 ? 5 : v > 90 ? 90 : v;
+}
 static volatile uint32_t g_noJoinAt = 0;        // wireless thread: phone took the Wi-Fi details, never joined (monoSecs)
 static int g_wfdMissing = nbt::WFD_MISSING_NOTHING;   // DIRECT: what the last link could not offer (logNoApConfig)
 static volatile int g_apCfgState = -1;   // wireless thread's apCfgState: -1 not checked, 0 no usable Wi-Fi, 1 present
@@ -1471,7 +1482,7 @@ static void* wirelessThread(void*) {
                     break;
                 }
                 if (!g_sessionActive && (tick % 10) == 5) logStations("waiting for phone TCP connect");
-                if (!everActive && !g_sessionActive && tick == nbt::kHintJoinWaitS) {
+                if (!everActive && !g_sessionActive && tick == nbt::kHintJoinWaitS && g_noJoinRun + 1 >= kNoJoinHintTries) {
                     g_noJoinAt = monoSecs();   // iDrive: re-pair now, not after the phone gives up (~36 s + retries)
                     printf("[Wireless] [%9.3f] phone took the Wi-Fi details %d s ago and has not connected: iDrive says "
                            "forget the phone in the car and pair again (it keeps trying)\n", upSec(), tick);
@@ -1485,13 +1496,20 @@ static void* wirelessThread(void*) {
             // A phone that joined the Wi-Fi usually drops Bluetooth before its TCP connect arrives: give it a
             // few seconds before counting this as a "never joined" try.
             if (toUsb) continue;       // not a failed wireless try: no recovery, no passphrase rotation
-            for (int w = 0; !everActive && g_running && w < 40; ++w) {
+            const int joinWait = wifiJoinWaitS();
+            for (int w = 0; !everActive && g_running && w < joinWait * 5; ++w) {
                 if (wirelessSessionActive()) everActive = true;
                 else usleep(200000);
             }
             if (!everActive) {
-                g_noJoinAt = monoSecs();   // iDrive: "Phone not on Wi-Fi: forget phone in car, pair again"
+                ++g_noJoinRun;
+                printf("[Wireless] phone did not connect within %d s of closing Bluetooth (%d of %d in a row before iDrive "
+                       "suggests pairing again)\n", joinWait, g_noJoinRun, kNoJoinHintTries);
+                if (g_noJoinRun >= kNoJoinHintTries)
+                    g_noJoinAt = monoSecs();   // iDrive: "Phone not on Wi-Fi: forget phone in car, pair again"
                 recoverWifiPath("phone took the Wi-Fi details but did not connect");
+            } else {
+                g_noJoinRun = 0;
             }
             if (everActive) {
                 apNoJoin = 0;
@@ -1678,6 +1696,7 @@ static void startSession(int client_fd, nbt::TcpServer* server, nbt::Transport t
     g_sessionActive = true;
     nbt::btResetRefusedRun();   // a working session ends any "car refused the phone" (coding) run
     g_noJoinAt = 0;
+    g_noJoinRun = 0;
     resetMedia("new session");
     if (server) server->markSessionActive();
     if (g_video && nbt::VideoManager::cpHandoff()) g_video->prepareForSession();   // decoder ready before frames
@@ -2091,8 +2110,8 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
             return;
         }
         std::string why;
-        int a = g_kombiMedia.wheelPress(&why);
-        if (a == nbt::riclist::kPressNone && !g_kombiMedia.kombiSeen()) {
+        int a = g_kombiMedia.wheelPress(&why, ev.delta);
+        if (a == nbt::riclist::kPressNone && !g_useProfileWheelPolicy && !g_kombiMedia.kombiSeen()) {
             // No packet to an Ethernet KOMBI ever seen (BMW F-series: the cluster is on MOST): the wheel's last notch.
             const char* w = "";
             a = g_wheelTurns.press(monoMs(), &w);
@@ -2112,7 +2131,11 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
             if (ev.down) printf("[Media] %s ignored: Native Functionality Media Controls Restore is off\n", ev.what);
             return;
         }
-        if (ev.down) sendMediaKey(ev.keycode, ev.what);
+        if (ev.down) {
+            if (ev.keycode == nbt::AAK_MEDIA_NEXT || ev.keycode == nbt::AAK_MEDIA_PREVIOUS)
+                g_kombiMedia.directTrackKeySeen();
+            sendMediaKey(ev.keycode, ev.what);
+        }
         return;   // iDrive's copy of the key is its own business: nothing here acts on it in a non-Bluetooth mode
     }
     if (ev.what && !strcmp(ev.what, "PTT")) {     // steering-wheel voice button long press (NBT_PTT_ASSISTANT), any screen
@@ -2167,7 +2190,7 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.119-hudprofiles"
+#define NBT_AAD_BUILD "v1.9.120"
 
 // Marker the RHMI app scans for (scanFileFor) to show the daemon version without spawning it:
 // keep the prefix exact.
@@ -2499,7 +2522,12 @@ int main(int argc, char* argv[]) {
     g_tcp = &tcp_server;
     g_kombiNav.start(&g_most);     // idle until "Turn arrows in cluster/HUD" (or NBT_KOMBI_NAV=1) is on; before
                                    // g_most starts: NBT_CLUSTER=6wa attaches to it
-    g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT);   // idle until the phone plays something
+    char clusterFlag[24];
+    const char* profile = nbt::clusterProfile(clusterFlag, sizeof(clusterFlag));
+    const bool f15Wheel = car.make == nbt::MAKE_BMW && !strcmp(profile, "6wa-f15");
+    // An explicit fallback setting or a measured BMW profile selects the two-second roll-and-press policy.
+    g_useProfileWheelPolicy = f15Wheel || nbt::envFlag("NBT_MFL_WHEEL_FALLBACK") == 1;   // =0 must not count as on
+    g_kombiMedia.start(audio_mode != nbt::AUDIO_MODE_BT, NULL, f15Wheel);
     if (audio_mode == nbt::AUDIO_MODE_BT)
         printf("[Gesture] two-finger gesture capture off: audio mode is Bluetooth (iDrive skips the phone itself)\n");
     else if (nbt::envFlag("NBT_GESTURE_SNIFF") == 0)

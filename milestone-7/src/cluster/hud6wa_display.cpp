@@ -80,7 +80,7 @@ void addHides(Batch& b, const HudProfile& p) {
 
 Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
     : port_(port), p_(p), base_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
-      redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), has_layout_(false),
+      redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), barRange_(0), barLevel_(-1), has_layout_(false),
       near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
       route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false), idle_(false), idle_t_(0) {}
 
@@ -152,24 +152,32 @@ JunctionColours Hud6waDisplay::colours() const {
 
 Batch Hud6waDisplay::pictureBatch(const char* label, const Picture& pic, const HudTexts& t, bool emptyRoute) const {
     Batch b(label, true, kSlotMain);
-    uint16_t hidden = visible_ == p_.bufA ? p_.bufB : p_.bufA;
-    b.add(kRemoveAllItems, removeAllItems(hidden));
-    addItems(b, hidden, pic);
-    b.add(kSwitchVisibility, switchVisibility(visible_, hidden));
-    b.add(kRemoveAllItems, removeAllItems(visible_));
+    const uint16_t target = p_.singlePicture || visible_ == p_.bufA ? p_.bufB : p_.bufA;
+    b.add(kRemoveAllItems, removeAllItems(target));
+    addItems(b, target, pic);
+    if (p_.singlePicture) {
+        if (fresh_) {
+            b.add(kSetVisibility, setVisibility(p_.bufA, false));
+            b.add(kSetVisibility, setVisibility(target, true));
+        }
+    } else {
+        b.add(kSwitchVisibility, switchVisibility(visible_, target));
+        b.add(kRemoveAllItems, removeAllItems(visible_));
+    }
     if (emptyRoute && routeInOverlay()) {
         b.add(kRemoveAllItems, removeAllItems(p_.routeA));
         b.add(kRemoveAllItems, removeAllItems(p_.routeB));
     }
+    if (p_.panelBeforeText) b.add(kSetVisibility, setVisibility(p_.frame, true));
     if (fresh_) {
         b.add(kSetVisibility, setVisibility(p_.street, true));
         b.add(kSetVisibility, setVisibility(p_.distance, true));
         b.add(kSetVisibility, setVisibility(p_.unit, true));
     }
-    b.add(kTextareaSetText, setText(p_.street, t.street.c_str()));
+    b.add(kTextareaSetText, setText(p_.street, t.street.c_str()), p_.panelBeforeText);
     b.add(kTextareaSetText, setText(p_.distance, t.distance.c_str()));
     b.add(kTextareaSetText, setText(p_.unit, t.unit.c_str()));
-    b.add(kSetVisibility, setVisibility(p_.frame, true));
+    if (!p_.panelBeforeText) b.add(kSetVisibility, setVisibility(p_.frame, true));
     addHides(b, p_);                                    // kill the cluster's own strips (0x15/0x16) after frame-on
     return b;
 }
@@ -226,10 +234,11 @@ Batch Hud6waDisplay::lanesBatch(const Picture& pic) const {
 
 Batch Hud6waDisplay::clearBatch() const {
     Batch b("clear", true, kSlotAll);
-    b.add(kSetVisibility, setVisibility(p_.frame, false));
-    b.add(kRemoveAllItems, removeAllItems(p_.bufA));
+    if (!p_.panelBeforeText) b.add(kSetVisibility, setVisibility(p_.frame, false));
+    if (!p_.singlePicture) b.add(kRemoveAllItems, removeAllItems(p_.bufA));
     b.add(kRemoveAllItems, removeAllItems(p_.bufB));
-    b.add(kSwitchVisibility, switchVisibility(p_.bufA, p_.bufB));   // always: after a restart or lost work we may not know
+    if (!p_.singlePicture) b.add(kSwitchVisibility, switchVisibility(p_.bufA, p_.bufB));
+    if (s_.hud_bar && p_.distanceBar) b.add(kSetVisibility, setVisibility(p_.distanceBar, false));
     if (s_.junction && routeInOverlay()) {
         b.add(kRemoveAllItems, removeAllItems(p_.routeA));
         b.add(kRemoveAllItems, removeAllItems(p_.routeB));
@@ -240,10 +249,18 @@ Batch Hud6waDisplay::clearBatch() const {
         b.add(kRemoveAllItems, removeAllItems(p_.laneB));
         b.add(kSwitchVisibility, switchVisibility(p_.laneA, p_.laneB));
     }
-    b.add(kTextareaSetText, setText(p_.street, ""));
-    b.add(kTextareaSetText, setText(p_.distance, ""));
-    b.add(kTextareaSetText, setText(p_.unit, ""));
-    b.add(kSetVisibility, setVisibility(p_.street, false));
+    if (p_.panelBeforeText) {
+        // This terminal can drop empty text writes during cleanup. Each fresh draw restores and replaces its fields.
+        b.add(kSetVisibility, setVisibility(p_.street, false));
+        b.add(kSetVisibility, setVisibility(p_.distance, false));
+        b.add(kSetVisibility, setVisibility(p_.unit, false));
+        b.add(kSetVisibility, setVisibility(p_.frame, false), true);
+    } else {
+        b.add(kTextareaSetText, setText(p_.street, ""));
+        b.add(kTextareaSetText, setText(p_.distance, ""));
+        b.add(kTextareaSetText, setText(p_.unit, ""));
+        b.add(kSetVisibility, setVisibility(p_.street, false));
+    }
     return b;
 }
 
@@ -432,6 +449,9 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     }
     bool emptyRoute = !junction && route_dirty_;
     Batch b = pictureBatch(isNew ? "maneuver" : "redraw", pic, t, emptyRoute);
+    if (isNew) barRange_ = 0;
+    const int level = distanceBarLevel(v);
+    appendDistanceBar(b, level, true);
     log("%s type %d -> %s | '%s' '%s' | road '%s' -> '%s' | %u calls%s", isNew ? "SHOW" : "REDRAW", v.aa_type,
         what.c_str(), t.distance.c_str(), t.unit.c_str(), v.road.c_str(), t.street.c_str(), (unsigned)b.calls.size(),
         shadow_ ? " (shadow: not sent)" : "");
@@ -439,13 +459,14 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
     bool ok = submit(b, &sr);
     sent_any_ = true;
     if (!ok) return sr == kRefused ? kInternal : health(NULL);
-    visible_ = visible_ == p_.bufA ? p_.bufB : p_.bufA;
+    if (!p_.singlePicture) visible_ = visible_ == p_.bufA ? p_.bufB : p_.bufA;
     fresh_ = false;
     redraw_ = false;
     held_ = false;
     claim_ = false;
     epoch_ = e;
     shown_ = t;
+    barLevel_ = level;
     near_shown_ = junction;
     idle_ = false;                                    // the maneuver's street text has replaced the idle text
     if (emptyRoute) route_dirty_ = false;
@@ -466,7 +487,7 @@ std::string Hud6waDisplay::idleText(const std::string& utf8) const {
 // emptied so that nothing is left under the text.
 Batch Hud6waDisplay::idleBatch(const std::string& line) const {
     Batch b("media", true, kSlotMain);
-    b.add(kRemoveAllItems, removeAllItems(p_.bufA));
+    if (!p_.singlePicture) b.add(kRemoveAllItems, removeAllItems(p_.bufA));
     b.add(kRemoveAllItems, removeAllItems(p_.bufB));
     if (route_dirty_ && routeInOverlay()) {
         b.add(kRemoveAllItems, removeAllItems(p_.routeA));
@@ -476,15 +497,17 @@ Batch Hud6waDisplay::idleBatch(const std::string& line) const {
         b.add(kRemoveAllItems, removeAllItems(p_.laneA));
         b.add(kRemoveAllItems, removeAllItems(p_.laneB));
     }
+    if (p_.panelBeforeText) b.add(kSetVisibility, setVisibility(p_.frame, true));
     if (fresh_) {
         b.add(kSetVisibility, setVisibility(p_.street, true));
         b.add(kSetVisibility, setVisibility(p_.distance, true));
         b.add(kSetVisibility, setVisibility(p_.unit, true));
     }
-    b.add(kTextareaSetText, setText(p_.street, line.c_str()));
-    b.add(kTextareaSetText, setText(p_.distance, ""));
-    b.add(kTextareaSetText, setText(p_.unit, ""));
-    b.add(kSetVisibility, setVisibility(p_.frame, true));
+    b.add(kTextareaSetText, setText(p_.street, line.c_str()), p_.panelBeforeText, p_.panelBeforeText);
+    b.add(kTextareaSetText, setText(p_.distance, ""), false, p_.panelBeforeText);
+    if (s_.hud_bar && p_.distanceBar) b.add(kSetVisibility, setVisibility(p_.distanceBar, false));
+    b.add(kTextareaSetText, setText(p_.unit, ""), false, p_.panelBeforeText);
+    if (!p_.panelBeforeText) b.add(kSetVisibility, setVisibility(p_.frame, true));
     return b;
 }
 
@@ -499,8 +522,14 @@ ClusterDisplay::Result Hud6waDisplay::showIdleText(const std::string& line, doub
     // Like a maneuver, the whole picture is built on what the batches before it leave: it waits for the queue.
     if (whole && !shadow_ && port_.waiting(kSlotMain)) return kOk;
     Batch b = whole ? idleBatch(line) : Batch(changed ? "media-text" : "media-refresh");
-    if (changed) b.add(kTextareaSetText, setText(p_.street, line.c_str()));
-    if (!whole) b.add(kSetVisibility, setVisibility(p_.frame, true));
+    if (changed && p_.panelBeforeText) {
+        b.add(kSetVisibility, setVisibility(p_.frame, true));
+        b.add(kSetVisibility, setVisibility(p_.street, true));
+        b.add(kTextareaSetText, setText(p_.street, line.c_str()), true, true);
+    } else if (!whole) {
+        if (changed) b.add(kTextareaSetText, setText(p_.street, line.c_str()));
+        b.add(kSetVisibility, setVisibility(p_.frame, true));
+    }
     if (refresh) log("MEDIA panel on again%s", shadow_ ? " (shadow: not sent)" : "");
     else log("MEDIA '%s' | %u calls%s", line.c_str(), (unsigned)b.calls.size(), shadow_ ? " (shadow: not sent)" : "");
     SubmitResult sr;
@@ -519,9 +548,26 @@ ClusterDisplay::Result Hud6waDisplay::showIdleText(const std::string& line, doub
         stage_shown_ = 0;
     }
     shown_.street = line;
+    barLevel_ = -1;
+    barRange_ = 0;
     idle_ = true;
     idle_t_ = now;
     return kOk;
+}
+
+int Hud6waDisplay::distanceBarLevel(const NavView& v) {
+    double metres;
+    if (!s_.hud_bar || !p_.distanceBar || departHere(v) ||
+        !distanceMetres(v, metres) || !(metres >= 0 && metres < 100000000.0)) return -1;
+    if (metres > barRange_) barRange_ = metres;
+    return barRange_ > 0 ? (int)(255.0 * (metres / barRange_) + 0.5) : -1;
+}
+
+void Hud6waDisplay::appendDistanceBar(Batch& b, int level, bool redraw) const {
+    if (!s_.hud_bar || !p_.distanceBar || (!redraw && level == barLevel_)) return;
+    if (level >= 0) b.add(kPotentiometerSetValue, setBarValue(p_.distanceBar, (uint8_t)level));
+    if (redraw || (level >= 0) != (barLevel_ >= 0))
+        b.add(kSetVisibility, setVisibility(p_.distanceBar, level >= 0));
 }
 
 ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
@@ -531,6 +577,8 @@ ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
     Batch b("distance");
     if (t.distance != shown_.distance) b.add(kTextareaSetText, setText(p_.distance, t.distance.c_str()));
     if (t.unit != shown_.unit) b.add(kTextareaSetText, setText(p_.unit, t.unit.c_str()));
+    const int level = distanceBarLevel(v);
+    appendDistanceBar(b, level, false);
     addHides(b, p_);                                    // the cluster redraws its strips as the distance changes
     if (b.calls.empty()) return kOk;
     log("DIST '%s' '%s'%s", t.distance.c_str(), t.unit.c_str(), shadow_ ? " (shadow: not sent)" : "");
@@ -540,6 +588,7 @@ ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
     if (!ok) return sr == kRefused ? kInternal : health(NULL);
     shown_.distance = t.distance;
     shown_.unit = t.unit;
+    barLevel_ = level;
     return kOk;
 }
 
@@ -589,6 +638,8 @@ bool Hud6waDisplay::clear(std::string* detail) {
         return false;
     }
     visible_ = p_.bufB;
+    barLevel_ = -1;
+    barRange_ = 0;
     route_visible_ = p_.routeB;
     route_dirty_ = false;
     if (lanesOn()) {
@@ -603,6 +654,8 @@ bool Hud6waDisplay::clear(std::string* detail) {
 }
 
 void Hud6waDisplay::forget() {
+    barLevel_ = -1;
+    barRange_ = 0;
     sent_any_ = false;
     claim_ = true;
     fresh_ = true;

@@ -11,6 +11,19 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.120 / rhmiapp-97: NBTApps install fix, wireless connect fix, BMW F15 HUD profile, Turkish, log privacy.**
+> - **#332**: dropped 8 orphaned textIdModels (230-237 -> texts 301-308, the old favourites submenu) that every language
+>   lacked; the NBTApps installer refused the release. `tests/test_text_ids.py` now fails `make check` on any missing text.
+> - **F15 HUD profile** (@LeongKY, #326): opt-in `F-Series (6WA-F15)` under HUD profiles, plus `tools/hudprobe`.
+>   `NBT_MFL_WHEEL_FALLBACK=0` no longer counts as on.
+> - **HUD late answers** (@sabifa, #316): a cold cluster's late answers no longer turn the arrows off.
+> - **Turkish** texts (@Deepblow0, #320).
+> - **Wireless connect after a slow join** (#341): listener sockets are close-on-exec (a long-lived child such as
+>   `sloginfo -w` kept 5277 bound, so re-creating the listener failed until a restart); 20 s for the phone's connect
+>   after Bluetooth closes (`NBT_WIFI_JOIN_WAIT_S`, was 8 s); the re-pair hint only after 3 failed joins in a row.
+> - **Log privacy** (#324): GPS position, full phone Bluetooth address, raw DSI payloads, raw Bluetooth handshake
+>   bytes and per-frame Android Auto lines only with `NBT_VERBOSE=1` (which now needs a real 1/on).
+>
 > **v1.9.117 / rhmiapp-94: native audio media controls, nav prompts on their own channel, volume pill labels.**
 > - **Nav prompts in native audio** play on the car's nav prompt channel again while Android Auto music plays
 >   (navigation volume; the car mutes the music for the prompt). **Nav prompts mixed into Music** (Settings, off by
@@ -382,7 +395,7 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > was already on the display for 300 ms, so the press that brings the list up skips nothing. The wheel's rotation is not
 > mapped to anything: it moves iDrive's cursor. Needs "Native Functionality Media Controls Restore" like the skip buttons.
 > `NBT_KOMBI_TRACKS_PRESS=0` turns it off, `=<fkt[:value]>` names another function. Log:
-> `[Media] thumb-wheel press on Next title -> AA key 87`, or `[KombiMedia] thumb-wheel press: nothing sent (<why>)`.
+> `[Media] thumb-wheel next track -> AA key 87`, or `[KombiMedia] thumb-wheel press: nothing sent (<why>)`.
 > v1.9.61 on the car (2026-11-10): eight presses on "Next title" and four on "Previous title" each skipped on the
 > phone, and the list showed the new title.
 >
@@ -983,6 +996,7 @@ Leave these unset unless you are testing.
 | `NBT_ALT_WIFI=DIRECT\|CARPLAY`, `NBT_WFD_IF`, `NBT_WFD_SSID` | **Default `CARPLAY`**; also the Settings checkbox **Use WiFi Direct Network** (= `DIRECT`; a set `NBT_ALT_WIFI` wins). `BOTH` was removed in v1.9.37 and now means `CARPLAY`. Which Wi-Fi the phone is offered, one per run with no fallback. `CARPLAY` (unset) = the CarPlay hotspot. `DIRECT` = the car's Wi-Fi Direct group only, no fallback (for cars without the CarPlay licence, where `iap2.cfg` is missing but `wfd0` runs because Miracast is coded): passphrase decoded from `/var/opt/conn/WFDPass.conf` (hex, XOR `NBTEvo0715`), SSID from `NBT_WFD_SSID`, `ifconfig <if>`, `mwud` 127.0.0.1:9096, or derived as `DIRECT-03-` + the WLAN device name from the WLAN persistency (the J29: `DIRECT-03-Toyota51807`). `NBT_WFD_IF` (default `wfd0`) and `NBT_WFD_SSID` pin the interface and the group name. The passphrase is logged once per value so it can be typed into a phone by hand. Not car-verified yet |
 | `NBT_SPP_UUID_CON` | Connect UUID registered with the car's SPP service (default = AA UUID) |
 | `NBT_SPP_REREG_S` | While no Android Auto Bluetooth link is open, register the service again every this many seconds for 2 minutes, then every 30 s (default 5; `0` = off) |
+| `NBT_WIFI_JOIN_WAIT_S` | Seconds to wait for the phone's TCP connect after it took the Wi-Fi details and closed Bluetooth (default 20, 5..90; was 8). iDrive suggests pairing again only after 3 such tries in a row |
 | `NBT_BT_TRACE` | `1` = read-only Bluetooth diagnostics: log, with uptime, when the phone connects to / drops from the car over Bluetooth and which services it has (`DeviceListChanged: phone ... is connected`), to see why the phone does not open the Android Auto link after the car sleeps and wakes. Off by default, not car-verified |
 | `NBT_VOICE_SCENARIO_NAME` | Speech scenario name, e.g. `Carplay_Siri_1mic_RefCh` |
 | `NBT_BT_SRC`, `NBT_BT_SINK`, `NBT_BT_RELEASE=1` | Audio source/sink for Bluetooth mode (default `0x3a` / `0x1`); release the source when the phone leaves |
@@ -1016,6 +1030,7 @@ Leave these unset unless you are testing.
 | `NBT_SPEECH_BT` | `1` = the **Prompts on car radio (BT, beta)** checkbox (`/var/opt/aa/speech-bt`; a set `NBT_SPEECH_BT` wins either way). Bluetooth audio mode only: turns the speech path on with the browser defaults (`/input_mono_0`, `0x1a`, sink `0x1`) and keeps channel 8 as GUIDANCE. Unset = off, the BT default (prompts over A2DP as before). |
 | `NBT_SPEECH_HOLD_MS` | The focus is released this long after the queued audio has played, then the endpoint is closed (default `500`, `0`..`5000`) |
 | `NBT_AUDIO_STAGE`, `NBT_MEDIA_RATE`, `NBT_ROUTE_MODE`, `NBT_ROUTE_MEDIA`, `NBT_ROUTE_NAV`, `NBT_ROUTE_SINK` | A2I pipeline (`NBT_AUDIO_BT=0` only). Stages 0-2 are car-stable but not audible yet. Test parked only |
+| `NBT_VERBOSE=1` | Full logging for debugging: every Android Auto frame and its first bytes, TLS records, pings, video frames, the raw Bluetooth Wi-Fi handshake bytes, the car's GPS position, the phone's full Bluetooth address and raw DSI payloads. Off by default, so a log posted on GitHub does not show where the car is (#324); turn it off again afterwards |
 | `NBT_MIC_DUMP=1` | Dump captured mic PCM |
 | `NBT_VID_INSETS=top,bottom,left,right\|off` | Phone UI insets, calculated from the video canvas and panel size: on 1280x480 `0,240,0,0` at 720p and `0,180,0,0` at 480p. MINI round display (`1180_480` coding) side insets: 40 px at 720p (car-verified on a MINI F60), 25 px at 480p. `off` keeps the manifest's insets |
 | `NBT_TOUCH_OX` / `NBT_TOUCH_OY` | Touch offset in canvas pixels (default 0; MINI `1180_480` round display: x -20 at 720p, tester-verified on a MINI F60; -12.5 at 480p) |
@@ -1064,10 +1079,13 @@ Leave these unset unless you are testing.
 | `NBT_KOMBI_TRACKS` | Android Auto track title in the instrument cluster's track list and the thumb-wheel press on Previous / Next title (J29, native audio only). Default: follows **Native Functionality Media Controls Restore**; `1` / `0` wins either way |
 | `NBT_KOMBI_TRACKS_MODE` | `slot` (default): the title is written into iDrive's own title text model. `list`: iDrive's list is answered with a list naming a text model of our own (not shown by the cluster so far) |
 | `NBT_KOMBI_TRACKS_PRESS` | With `NBT_KOMBI_TRACKS=1`: the steering-wheel function whose press picks the row under the cluster list's cursor (default `C31`, the thumb-wheel press; `0` = off; `fkt[:value]` hex as the `[MFL]` log prints it) |
-| `NBT_KOMBI_TRACKS_IF`, `NBT_KOMBI_TRACKS_INDEX` | The interface iDrive's requests to the KOMBI are read from (default `vlan73`) and the index of our own text model (default `0x7E01`) |
-| `NBT_KOMBI_NAV_SHOW_BAR=1` | Keep the cluster's red distance bar (hidden by default: without an iDrive route its percentage means nothing) |
+| `NBT_KOMBI_TRACKS_IF`, `NBT_KOMBI_TRACKS_INDEX` | Override the capture interface. By default the daemon uses the interface for an on-link route to the KOMBI, or `vlan73` if it cannot find one. The default text model index is `0x7E01`. |
+| `NBT_MFL_WHEEL_FALLBACK=1` | Enable the Native Audio thumb-wheel fallback on other cars that report MOST `C30` rotation around `7F` and a `C31` press. With media controls restored, turn then press within two seconds. Once an Ethernet track list or mapped Next/Previous key is seen, the fallback stops for that daemon run. The `6wa-f15` BMW profile enables this policy by default. Other profiles use the upstream wheel policy unless explicitly configured. Set to `0` to disable it. |
+| `NBT_MFL_WHEEL_INVERT=1` | Reverse the thumb-wheel fallback direction. |
+| `NBT_KOMBI_NAV_SHOW_BAR` | With `6wa-f15`, the factory HUD distance bar is enabled by default and counts down from the first reported distance to each turn. Set `0` to hide it. On J29, `1` keeps the factory distance bar visible. |
 | `NBT_KOMBI_NAV_YIELD=0` | Don't watch the system log for iDrive routes |
 | `NBT_KOMBI_NAV_LANES=0` | No lane row in the cluster / HUD (the arrows stay) |
+| `NBT_CLUSTER=6wa-f15` | Opt in to the BMW F15 layout on MOST HUDTerminal 82/00. In iDrive, open Android Auto → Settings → HUD profiles, choose **F-Series (6WA-F15)**, then restart Android Auto. The iDrive guidance display setting selects the windshield or the instrument cluster. |
 | `NBT_HUD_JUNCTION=0` | 6WA cluster (`NBT_CLUSTER=6wa`): keep the arrow all the way to the turn. By default the arrow gives way to a junction view at the main prompt (see `NBT_KOMBI_NAV_MAIN_S`) or within `NBT_HUD_NEAR_M`, like the factory navigation's near view: the maneuver's roads (in and out, both branches of a fork or an exit, a roundabout's ring and exit number) with the route drawn over them, its tail shorter in four steps on the way in. Android Auto sends no map, so other side roads are not drawn |
 | `NBT_HUD_NEAR_M` | 6WA: the junction view comes in this close to the maneuver whatever the time (default `300`, `50`..`2000`) |
 | `NBT_HUD_LANES=1` | 6WA: the phone's lanes in the cluster's lane layer, left of the picture. Off by default: where the cluster shows that layer is not known yet |
@@ -1292,6 +1310,73 @@ Send:
 - `nbt-aad.log` and `nbt-aad-app.log` from the USB stick (tick **Save logs to USB** first);
 - `/opt/sys/etc/nbt_version.txt`;
 - what you did and what you saw, with times.
+
+## Probe the cluster and HUD layout
+
+Build the standalone QNX ARM tool with `make -C milestone-7 hudprobe`. Copy it to
+the head unit and run it over SSH while parked, with NBT-AAD and any other HUD
+add-on stopped. It uses the head unit's MOST service directly.
+
+```sh
+chmod +x /tmp/hudprobe
+/tmp/hudprobe
+```
+
+The probe checks TCP reachability at the configured Ethernet KOMBI address
+(`NBT_KOMBI_NAV_HOST` and `NBT_KOMBI_NAV_PORT` in the probe's environment) and lists
+the MOST HUDTerminal instances in the registry. It queries `82/00` and `82/02`
+separately, enumerates picture surfaces and dimensions for handles `0x01`–`0x40`,
+and reports a layout family when there is enough evidence. The same terminal
+can feed different physical displays on different cars, and an Ethernet TCP
+reply alone identifies a candidate endpoint.
+
+If the surfaces are empty, or you need the text and frame handles, run
+`/tmp/hudprobe --observe 30` and start a factory
+BMW navigation route during the listen window. It reports any setup replies it
+observes, including the street, distance, unit, picture and bar item handles.
+It also records handles referenced by factory guidance drawing calls. Text
+contents are omitted. If the setup happened before the probe attached, only
+the handles used while it is listening may appear. The probe sends
+only picture-size queries on MOST in this mode.
+
+### Visual HUD layout test
+
+Copy `tools/hudprobe-layouts.txt` to `/tmp/hudprobe-layouts.txt` on the head unit.
+Exit all navigation routes and stop NBT-AAD or other HUD add-ons before using
+visual mode. Open an SSH terminal with a TTY (`ssh -t` if needed), then run
+
+```sh
+/tmp/hudprobe --visual /tmp/hudprobe-layouts.txt
+```
+
+The probe shows a temporary rectangle with a centre cross and top-left dot on
+one terminal at a time. For each screen, enter `full`, `none`, `?`, or the clipped
+edges (`l` left, `r` right, `t` top, `b` bottom, e.g. `rt`). The report records
+both answers, the geometry and whether the terminal acknowledged draw and clear.
+It attempts to hide the panel and clear the picture before moving on, including
+on quit, disconnect, interruption or an answer timeout. The default timeout is
+45 seconds for both answers together. Add `--answer-seconds 90` after the layout
+file if the operator needs longer to relay observations. If cleanup is
+unconfirmed, the run stops and the report identifies the affected layout.
+
+Edit the text file to change the order, handles, pixel bounds or colour, or add
+up to 16 tests. Each row contains `name terminal panel buffer left top right bottom colour [swap-from]`.
+Terminal is `0` or `2`. Use decimal or `0x`-prefixed hex for numbers. The optional
+`swap-from` handle tests the terminal's buffer swap instead of setting the
+target buffer visible directly. Save the SSH terminal output to retain the
+report.
+
+### HUD text test
+
+With the vehicle parked, factory guidance ended and other HUD apps stopped,
+run `/tmp/hudprobe --text --answer-seconds 90` from an interactive SSH terminal.
+It sends short ASCII markers to `0x0C`, `0x0D`, and `0x10` on `82/00` using
+UTF-16BE, ISO-8859-15, and UTF-8, records which writes the terminal accepted,
+and asks what actually appeared. Use `--markers A B C` after the timeout
+option to change the three markers, in handle order. The probe clears test
+text between encodings. In read-only `--observe` mode, it can also report
+the encoding and likely role of factory text it observes, without saving the
+text itself.
 
 ## Other cars: controller setup wizard
 

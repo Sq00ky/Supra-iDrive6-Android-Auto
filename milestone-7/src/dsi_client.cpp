@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "dsi_client.hpp"
+#include "log_privacy.hpp"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -197,8 +198,9 @@ void DsiClient::onDataTramp(void* self, void* istream) {
     const uint8_t* pl = *reinterpret_cast<const uint8_t* const*>(s + 0x10);
     uint32_t len  = *reinterpret_cast<const uint32_t*>(s + 0x08);
     if (!c->quiet_) {
-        printf("[DsiClient] RX type=0x%x id=0x%x seq=%u len=%u:", type, id, seq, len);
-        for (uint32_t i = 0; pl && i < len && i < 48; ++i) printf(" %02x", pl[i]);
+        printf("[DsiClient] RX type=0x%x id=0x%x seq=%u len=%u%s", type, id, seq, len, nbt::logVerbose() ? ":" : "");
+        // The payload bytes carry the phone's name and Bluetooth address (and more): NBT_VERBOSE=1 only (#324).
+        for (uint32_t i = 0; nbt::logVerbose() && pl && i < len && i < 48; ++i) printf(" %02x", pl[i]);
         printf("\n");
         fflush(stdout);
     }

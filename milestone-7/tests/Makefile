@@ -63,6 +63,7 @@ SRC_test_ctl_wizard        :=
 SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
+SRC_test_hudprobe          :=
 SRC_test_j29_golden        := $(SRC_KOMBI_NAV)
 SRC_test_frame_queue       :=
 SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
@@ -136,8 +137,12 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_rhmi_actions run-test_settings_refresh tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_text_ids run-test_rhmi_actions run-test_settings_refresh tsan
 	@echo "[CHECK] all host tests passed"
+
+.PHONY: run-test_text_ids
+run-test_text_ids:
+	@python3 test_text_ids.py
 
 .PHONY: run-test_favourite_resources
 run-test_favourite_resources:
