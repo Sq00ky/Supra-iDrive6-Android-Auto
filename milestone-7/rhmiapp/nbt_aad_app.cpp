@@ -419,6 +419,10 @@ const unsigned    kPfRowModel[3]   = { 134, 138, 139 };   // textIdModels: insta
 // Version page (hmiState 15) and the "Show directions at any distance" checkbox (rhmiapp-55-navset)
 const unsigned    kVersionState     = 15;
 const unsigned    kVersionRowAction = 81;    // hmiAction 81 -> state 15
+const unsigned    kActMediaCompatibility = 600;
+const unsigned    kMediaCompatibilityState = 60;
+const unsigned    kMediaCompatibilityStatus = 603;
+const unsigned    kMediaCompatibilitySupport = 604;
 const unsigned    kVersionRowModel  = 165;   // textIdModel "Version"
 const unsigned    kDaemonVerModel   = 163;   // raDataModel Richtext: daemon build tag
 const unsigned    kAppVerModel      = 164;   // raDataModel Richtext: this app
@@ -2502,10 +2506,40 @@ bool onVersionFocus(void* /*app*/, const bmw::Parcel& /*p*/) { showVersions(g_ru
 
 bool g_hudCyrillicShown = false;
 void showHudCyrillic(bmw::PluginApp* app);
+bool g_mediaCompatibilityFocused=false;
+unsigned g_mediaCompatibilityRevision=~0u;
+void showMediaCompatibility(bmw::PluginApp* app, bool force=false) {
+    if (!app) return;
+    char summary[192];
+    const unsigned revision=nbt::native_media::compatibilityStatus(summary,sizeof(summary));
+    if (!force && revision==g_mediaCompatibilityRevision) return;
+    app->updateModel(kMediaCompatibilityStatus,bmw::BasicString<char>(summary));
+    bmw::Map<unsigned,bmw::Variant> cells;
+    bmw::DataTableBase table(&cells,1);
+    for (unsigned i=0;i<nbt::native_media::kProfileCount;++i) {
+        bmw::Variant& value=cells[i]; delete value.m_obj;
+        value.m_obj=new bmw::Variant::ObjectContainer<bmw::TextID>(
+            bmw::TextID(nbt::native_media::kProfiles[i]->supportTextId));
+    }
+    app->updateModel(kMediaCompatibilitySupport,table);
+    g_mediaCompatibilityRevision=revision;
+}
+bool onMediaCompatibilityFocus(void*,const bmw::Parcel& parcel) {
+    parcel.readBool(g_mediaCompatibilityFocused);
+    if (g_mediaCompatibilityFocused) showMediaCompatibility(g_runApp,true);
+    return false;
+}
+bool onMediaCompatibilityCheck(void*,const bmw::Parcel&) {
+    const bool queued=nbt::native_media::requestCompatibilityCheck();
+    alog("Media compatibility diagnostic %s; hook state unchanged",queued?"queued":"unavailable");
+    showMediaCompatibility(g_runApp,true);
+    return true;
+}
 
 void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
+    if (g_mediaCompatibilityFocused) showMediaCompatibility(app);
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_kombiMediaShown) showKombiMedia(app);
     if (!g_gestureMuteShown) showGestureMute(app);
@@ -2915,6 +2949,7 @@ bool appOnInit(bmw::PluginApp* self) {
     addAction(self, kActPfUninstall, &onPfUninstallRow);
     addAction(self,248,&onFavouriteBarToggle);
     addAction(self,426,&onHudCyrillicToggle);
+    addAction(self,kActMediaCompatibility,&onMediaCompatibilityCheck);
     g_initTime = time(NULL);
     {
         bmw::ActionDelegate d;
@@ -2933,6 +2968,9 @@ bool appOnInit(bmw::PluginApp* self) {
         vp.object = self;
         vp.stub = &onVersionFocus;
         self->addHandler(kVersionState, kHandlerFocus, vp);
+        bmw::ActionDelegate mediaCompatibility;
+        mediaCompatibility.object=self; mediaCompatibility.stub=&onMediaCompatibilityFocus;
+        self->addHandler(kMediaCompatibilityState,kHandlerFocus,mediaCompatibility);
         bmw::ActionDelegate f;
         f.object = self;
         f.stub = &onAaFocus;
@@ -2962,6 +3000,8 @@ void appOnError(bmw::PluginApp* /*self*/, unsigned code, const bmw::BasicString<
 void appOnFinalize(bmw::PluginApp* self) {
     alog("onFinalize");
     nbt::native_media::stop();
+    g_mediaCompatibilityFocused=false;
+    g_mediaCompatibilityRevision=~0u;
     g_runApp = NULL;
     self->onFinalize();
 }

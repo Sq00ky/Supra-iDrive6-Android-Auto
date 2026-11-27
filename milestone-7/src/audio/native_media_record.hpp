@@ -7,12 +7,41 @@
 
 namespace nbt {
 
+enum NativeMediaCursor { kNativeMediaCursorNone = 0, kNativeMediaCursorPrev = 1, kNativeMediaCursorNext = 2 };
+// Yandex Music reports Stopped between titles without closing the Native Audio stream.
+inline bool nativeMediaTrackAvailable(unsigned state) { return state == 1 || state == 2; }
+
+// Native BT keeps the selected button when the popup closes; only a source/session reset clears it.
+struct NativeMediaSelection {
+    NativeMediaCursor cursor;
+    uint32_t eventMs;
+    NativeMediaSelection() : cursor(kNativeMediaCursorNone), eventMs(0) {}
+    void clear() { cursor = kNativeMediaCursorNone; eventMs = 0; }
+    NativeMediaCursor selected() const { return cursor == kNativeMediaCursorPrev ? cursor : kNativeMediaCursorNext; }
+    void touch(uint32_t nowMs, bool press = true) {
+        if (press || cursor != kNativeMediaCursorNone) { cursor = selected(); eventMs = nowMs; }
+    }
+    void turn(uint8_t value, uint32_t nowMs) {
+        if (value < 0x7F) cursor = kNativeMediaCursorNext;
+        else if (value > 0x7F) cursor = kNativeMediaCursorPrev;
+        if (cursor != kNativeMediaCursorNone) eventMs = nowMs;
+    }
+};
+
 struct NativeMediaSnapshot {
     bool active;
     uint32_t updatedMs, writerPid, sequence;
+    NativeMediaCursor cursor;
+    uint32_t cursorMs;
     char song[kMediaValueMax + 1], artist[kMediaValueMax + 1];
-    NativeMediaSnapshot() : active(false), updatedMs(0), writerPid(0), sequence(0) { song[0] = artist[0] = 0; }
+    NativeMediaSnapshot() : active(false), updatedMs(0), writerPid(0), sequence(0),
+        cursor(kNativeMediaCursorNone), cursorMs(0) { song[0] = artist[0] = 0; }
 };
+
+inline NativeMediaCursor nativeMediaCursor(const NativeMediaSnapshot& record, uint32_t nowMs) {
+    if (!record.active || (uint32_t)(nowMs - record.updatedMs) >= kMediaStaleMs) return kNativeMediaCursorNone;
+    return record.cursor == kNativeMediaCursorPrev ? record.cursor : kNativeMediaCursorNext;
+}
 
 inline size_t nativeMediaUtf16(const char* text, uint16_t* out) {
     size_t n = 0, i = 0;
@@ -88,9 +117,10 @@ inline bool nativeMediaGeneration(const char* head, size_t n, uint32_t& pid, uin
 inline bool parseNativeMediaRecord(const char* p, size_t n, uint32_t nowMs, NativeMediaSnapshot& out) {
     out = NativeMediaSnapshot();
     if (!p || !n || n > kMediaRecordMax || p[n - 1] != '\n' || memchr(p, 0, n)) return false;
+    NativeMediaSnapshot record;
     unsigned seen = 0;
     uint32_t begin = 0, end = 0, pid = 0, endPid = 0, native = 0, have = 0;
-    bool playing = false;
+    bool trackAvailable = false;
     size_t at = 0;
     while (at < n) {
         const char* line = p + at;
@@ -112,20 +142,29 @@ inline bool parseNativeMediaRecord(const char* p, size_t n, uint32_t nowMs, Nati
             if (!nativeMediaUint(value, len, native) || native > 1) return false;
         } else if (key == 10 && !memcmp(line, "updated_ms", key)) {
             bit = 8;
-            if (!nativeMediaUint(value, len, out.updatedMs)) return false;
+            if (!nativeMediaUint(value, len, record.updatedMs)) return false;
+        } else if (key == 13 && !memcmp(line, "native_cursor", key)) {
+            bit = 256;
+            if (len == 4 && !memcmp(value, "none", len)) record.cursor = kNativeMediaCursorNone;
+            else if (len == 4 && !memcmp(value, "prev", len)) record.cursor = kNativeMediaCursorPrev;
+            else if (len == 4 && !memcmp(value, "next", len)) record.cursor = kNativeMediaCursorNext;
+            else return false;
+        } else if (key == 16 && !memcmp(line, "native_cursor_ms", key)) {
+            bit = 512;
+            if (!nativeMediaUint(value, len, record.cursorMs)) return false;
         } else if (key == 4 && !memcmp(line, "have", key)) {
             bit = 16;
             if (!nativeMediaUint(value, len, have) || have > 3) return false;
         } else if (key == 5 && !memcmp(line, "state", key)) {
             bit = 32;
-            playing = len == 7 && !memcmp(value, "playing", len);
-            if (!playing && !(len == 6 && !memcmp(value, "paused", len)) &&
-                !(len == 7 && (!memcmp(value, "stopped", len) || !memcmp(value, "unknown", len)))) return false;
+            trackAvailable = len == 7 && (!memcmp(value, "playing", len) || !memcmp(value, "stopped", len));
+            if (!trackAvailable && !(len == 6 && !memcmp(value, "paused", len)) &&
+                !(len == 7 && !memcmp(value, "unknown", len))) return false;
         } else if ((key == 4 && !memcmp(line, "song", key)) || (key == 6 && !memcmp(line, "artist", key))) {
             const bool song = key == 4;
             bit = song ? 64 : 128;
             if (len > kMediaValueMax) return false;
-            char* text = song ? out.song : out.artist;
+            char* text = song ? record.song : record.artist;
             for (size_t i = 0; i < len; ++i)
                 if ((unsigned char)value[i] < 0x20 || (unsigned char)value[i] == 0x7F) return false;
             memcpy(text, value, len);
@@ -135,20 +174,30 @@ inline bool parseNativeMediaRecord(const char* p, size_t n, uint32_t nowMs, Nati
         seen |= bit;
         at = (size_t)(nl - p) + 1;
     }
-    if (seen != 255 || begin != end || pid != endPid) { out = NativeMediaSnapshot(); return false; }
-    out.writerPid = pid;
-    out.sequence = begin;
-    out.active = native && playing && have == 3 && out.song[0] &&
-                 (uint32_t)(nowMs - out.updatedMs) < kMediaStaleMs;
+    if ((seen != 255 && seen != 1023) || begin != end || pid != endPid) return false;
+    record.writerPid = pid;
+    record.sequence = begin;
+    record.active = native && trackAvailable && have == 3 && record.song[0] &&
+                    (uint32_t)(nowMs - record.updatedMs) < kMediaStaleMs;
+    out = record;
     return true;
 }
 
-inline std::string nativeMediaRecord(const MediaState& st, bool native, uint32_t sequence, uint32_t pid) {
+inline std::string nativeMediaRecord(const MediaState& st, bool native, uint32_t sequence, uint32_t pid,
+                                     const NativeMediaSelection* selection = NULL) {
     char head[48], tail[96];
     snprintf(head, sizeof(head), "native_begin=%u:%u\n", (unsigned)pid, (unsigned)sequence);
     snprintf(tail, sizeof(tail), "native=%u\nupdated_ms=%u\nnative_end=%u:%u\n", native ? 1u : 0u,
              (unsigned)st.updatedMs, (unsigned)pid, (unsigned)sequence);
-    return std::string(head) + mediaRecord(st) + tail;
+    std::string cursor;
+    if (selection) {
+        char line[80];
+        snprintf(line, sizeof(line), "native_cursor=%s\nnative_cursor_ms=%u\n",
+            selection->cursor == kNativeMediaCursorNext ? "next" : selection->cursor == kNativeMediaCursorPrev ? "prev" : "none",
+            (unsigned)selection->eventMs);
+        cursor = line;
+    }
+    return std::string(head) + mediaRecord(st) + cursor + tail;
 }
 
 } // namespace nbt

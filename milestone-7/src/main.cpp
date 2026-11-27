@@ -1920,6 +1920,7 @@ static uint32_t monoMs() {
 // Bluetooth, where the phone already plays over A2DP and the car's own AVRCP handling owns those keys.
 static const char* const kMediaFile = "/dev/shmem/nbt-aad-media";
 static nbt::MediaState g_media;
+static nbt::NativeMediaSelection g_mediaSelection;
 static pthread_mutex_t g_mediaMutex = PTHREAD_MUTEX_INITIALIZER;
 static bool g_mediaKeysToPhone = false;   // set at start-up from the audio mode
 static bool g_wheelMediaKeys = false;     // "Native Functionality Media Controls Restore" (nbt_env.hpp lciMediaKeysEnabled())
@@ -1931,7 +1932,7 @@ static bool g_mediaDirty = false;
 // Caller holds g_mediaMutex. One fixed record written over the old bytes before the file is shortened (QNX /dev/shmem
 // has no rename, and the app must never read a half-written line).
 static void writeMediaRecordLocked() {
-    const std::string rec = nbt::nativeMediaRecord(g_media, g_mediaNative, ++g_mediaSequence, (uint32_t)getpid());
+    const std::string rec = nbt::nativeMediaRecord(g_media, g_mediaNative, ++g_mediaSequence, (uint32_t)getpid(), &g_mediaSelection);
     int fd = open(kMediaFile, O_WRONLY | O_CREAT, 0666);
     static bool s_warned = false;
     if (fd < 0) {
@@ -1946,9 +1947,33 @@ static void writeMediaRecordLocked() {
     if (w == (ssize_t)rec.size()) g_mediaDirty = false;
 }
 
+static void mirrorNativeMediaWheel(int delta, bool turn, bool down = true) {
+    pthread_mutex_lock(&g_mediaMutex);
+    const uint32_t now = monoMs();
+    const nbt::NativeMediaSelection before = g_mediaSelection;
+    if (!g_wheelMediaKeys || !g_mediaNative || !nbt::nativeMediaTrackAvailable(g_media.state) || !g_media.haveStatus ||
+        !g_media.haveMetadata || g_media.song.empty() || (uint32_t)(now - g_media.updatedMs) >= nbt::kMediaStaleMs)
+        g_mediaSelection.clear();
+    else if (turn) g_mediaSelection.turn((uint8_t)(delta + 0x7F), now);
+    else g_mediaSelection.touch(now, down);
+    if (before.cursor != g_mediaSelection.cursor || before.eventMs != g_mediaSelection.eventMs) {
+        g_mediaWriteMs = now;
+        writeMediaRecordLocked();
+    }
+    pthread_mutex_unlock(&g_mediaMutex);
+}
+
+static nbt::NativeMediaCursor nativeMediaWheelCursor() {
+    pthread_mutex_lock(&g_mediaMutex);
+    const nbt::NativeMediaCursor cursor = g_mediaNative ? g_mediaSelection.selected() : nbt::kNativeMediaCursorNone;
+    pthread_mutex_unlock(&g_mediaMutex);
+    return cursor;
+}
+
 static void resetMedia(const char* why) {
     pthread_mutex_lock(&g_mediaMutex);
     g_media.clear();
+    g_mediaSelection.clear();
     g_mediaNative = false;
     g_mediaWriteMs = 0;
     writeMediaRecordLocked();
@@ -1963,6 +1988,7 @@ static void refreshNativeMediaSource() {
     pthread_mutex_lock(&g_mediaMutex);
     if (native != g_mediaNative) {
         g_mediaNative = native;
+        if (!native) g_mediaSelection.clear();
         writeMediaRecordLocked();
     }
     pthread_mutex_unlock(&g_mediaMutex);
@@ -1974,6 +2000,7 @@ static void expireMedia() {
     const bool expired = nbt::mediaExpire(g_media, now);
     if (expired) {
         g_mediaNative = false;
+        g_mediaSelection.clear();
         writeMediaRecordLocked();
         g_kombiNav.setNowPlaying(std::string());
         g_kombiMedia.update(std::string(), false);
@@ -1990,17 +2017,22 @@ static void onMediaStatus(uint16_t msg_id, const uint8_t* body, size_t len, void
     (void)user_data;
     pthread_mutex_lock(&g_mediaMutex);
     const uint32_t now = monoMs();
+    const std::string previousSource = g_media.source;
     const bool expired = nbt::mediaExpire(g_media, now);
     const bool changed = nbt::mediaMerge(g_media, msg_id, body, len, now) || expired;
     const bool native = g_browserAudio && g_browserAudio->mediaListActive();
     const bool sourceChanged = native != g_mediaNative;
     g_mediaNative = native;
+    const bool clearSelection = expired || sourceChanged || g_media.source != previousSource || !native ||
+        !nbt::nativeMediaTrackAvailable(g_media.state) || !g_media.haveStatus || !g_media.haveMetadata || g_media.song.empty();
+    const bool selectionChanged = clearSelection && g_mediaSelection.cursor != nbt::kNativeMediaCursorNone;
+    if (clearSelection) g_mediaSelection.clear();
     g_kombiMedia.update(nbt::mediaClean(g_media.song), g_media.state == 2);   // 2 = playing
     if (changed) printf("[Media] %s\n", nbt::mediaLine(g_media).c_str());
-    if (changed || sourceChanged || msg_id == 0x8001) g_mediaDirty = true;
-    const bool clear = changed && (!native || g_media.state != 2 || g_media.song.empty());
+    if (changed || sourceChanged || selectionChanged || msg_id == 0x8001) g_mediaDirty = true;
+    const bool clear = changed && (!native || !nbt::nativeMediaTrackAvailable(g_media.state) || g_media.song.empty());
     if (g_mediaDirty &&
-        (clear || sourceChanged || g_mediaWriteMs == 0 || (uint32_t)(now - g_mediaWriteMs) >= 200)) {
+        (clear || sourceChanged || selectionChanged || g_mediaWriteMs == 0 || (uint32_t)(now - g_mediaWriteMs) >= 200)) {
         g_mediaWriteMs = now;
         writeMediaRecordLocked();
     }
@@ -2140,10 +2172,11 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
     if (ev.what && !strcmp(ev.what, "MFL_ROTARY")) {   // thumb-wheel turn: only remembered, for the press below
         g_wheelTurns.turn((uint8_t)(ev.delta + 0x7F), monoMs());
+        mirrorNativeMediaWheel(ev.delta, true);
         return;
     }
     if (ev.what && !strcmp(ev.what, "MFL_WHEEL")) {   // thumb-wheel press: the row under the cluster list's cursor
-        if (!ev.down) { g_wheelTurns.touch(monoMs()); return; }
+        if (!ev.down) { g_wheelTurns.touch(monoMs()); mirrorNativeMediaWheel(0, false, false); return; }
         if (!g_wheelMediaKeys) {
             printf("[Media] thumb-wheel press ignored: Native Functionality Media Controls Restore is off\n");
             return;
@@ -2153,15 +2186,19 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
         if (a == nbt::riclist::kPressNone && !g_useProfileWheelPolicy && !g_kombiMedia.kombiSeen()) {
             // No packet to an Ethernet KOMBI ever seen (BMW F-series: the cluster is on MOST): the wheel's last notch.
             const char* w = "";
-            a = g_wheelTurns.press(monoMs(), &w);
-            printf("[KombiMedia] thumb-wheel press: no cluster list on the network (MOST cluster), row from the wheel's "
-                   "last turn: %s\n", a == nbt::riclist::kPressNext ? "Next title" : a == nbt::riclist::kPressPrev
+            const nbt::NativeMediaCursor cursor = nativeMediaWheelCursor();
+            a = cursor == nbt::kNativeMediaCursorPrev ? nbt::riclist::kPressPrev :
+                cursor == nbt::kNativeMediaCursorNext ? nbt::riclist::kPressNext : g_wheelTurns.press(monoMs(), &w);
+            printf("[KombiMedia] thumb-wheel press: no cluster list on the network (MOST cluster), row from %s: %s\n",
+                   cursor == nbt::kNativeMediaCursorNone ? "the wheel's last turn" : "Native Audio selection",
+                   a == nbt::riclist::kPressNext ? "Next title" : a == nbt::riclist::kPressPrev
                                                                       ? "Previous title" : w);
             if (a == nbt::riclist::kPressNone) why = w;
         }
         if (a == nbt::riclist::kPressNext) sendMediaKey(nbt::AAK_MEDIA_NEXT, "thumb-wheel press on Next title");
         else if (a == nbt::riclist::kPressPrev) sendMediaKey(nbt::AAK_MEDIA_PREVIOUS, "thumb-wheel press on Previous title");
         else printf("[KombiMedia] thumb-wheel press: nothing sent (%s)\n", why.c_str());
+        mirrorNativeMediaWheel(0, false);
         return;   // never reaches the phone as a key of its own
     }
     if (ev.what && (!strcmp(ev.what, "MFL_NEXT") || !strcmp(ev.what, "MFL_PREV") ||

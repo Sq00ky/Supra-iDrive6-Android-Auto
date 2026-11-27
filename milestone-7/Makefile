@@ -115,7 +115,7 @@ RHMI_LIBS = $(wildcard $(RHMI_LIBDIR)/libAppFramework.A.so $(RHMI_LIBDIR)/libCor
 .PHONY: rhmiapp
 rhmiapp: rhmiapp/libNbtAad.so
 
-rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp rhmiapp/overlay_watch.hpp rhmiapp/native_media_hook.hpp src/audio/native_media_record.hpp src/audio/media_state.hpp src/audio/aa_media_meta.hpp src/favourite_colour.hpp src/favourite_picker.hpp
+rhmiapp/libNbtAad.so: rhmiapp/nbt_aad_app.cpp rhmiapp/overlay_watch.hpp rhmiapp/native_media_hook.hpp rhmiapp/native_media_profiles.hpp rhmiapp/native_media_compatibility.hpp src/audio/native_media_record.hpp src/audio/media_state.hpp src/audio/aa_media_meta.hpp src/favourite_colour.hpp src/favourite_picker.hpp
 	@echo [BUILD] PluginApp $@
 	$(PLUGIN_CXX) $(PLUGIN_CXXFLAGS) -I./src -shared -Wl,-soname,libNbtAad.so -o $@ rhmiapp/nbt_aad_app.cpp $(RHMI_LIBS) -Wl,--allow-shlib-undefined -lang-c++
 	@echo [DONE] Built $@ - install with NbtAad.manifest, NbtAad.xml, NbtAad_ALL_*.zip into Plugins/NbtAad

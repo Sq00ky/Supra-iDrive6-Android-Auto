@@ -1,9 +1,13 @@
 # Native Audio in the F30 high media list
 
+Firmware selection and diagnostic behavior are described in
+[Native media compatibility](native-media-compatibility.md). The Build66
+addresses and private layout now live in a compiled compatibility profile.
+
 The Build66 adapter replaces two existing placeholder rows with the current
 Android Auto title and artist while Browser Audio owns the media route. It uses
-the existing native high publisher and subscribers. Wheel input and audio-source
-selection are unchanged.
+the existing native high publisher and subscribers. Raw input decoding and
+audio-source selection are unchanged.
 
 ## Two different native states
 
@@ -40,11 +44,58 @@ can carry rear-control notices and is excluded entirely. Android Auto over USB
 is a separate transport from the factory USB media-device state.
 
 Both accepted windows still require the exact two-row shape, a supported HMI,
-fresh complete metadata, playback and a granted Native Audio media route.
+fresh complete metadata, a Playing/Stopped status and an open stream on the
+granted Native Audio media route.
 Localized label text is never used as the guard. Radio, telephone, real device
 lists, changed row layouts and other HMI builds retain their native behavior.
 Stopping, pausing or losing the Native Audio route restores each unchanged
 adapter-owned row to its saved native value.
+
+A partial in-place metadata write is rejected without withdrawing the last
+complete view. Its original freshness deadline still applies. A complete inactive
+record or removal of the record file withdraws the view immediately.
+
+## Bluetooth-style presentation
+
+This feature adds the stock Bluetooth high-list vocabulary: previous/current/next
+rows, native skip symbols and a selected row. The current title occupies the
+centre row; the artist uses the native list header. Each text is bounded to
+25 UTF-16 units. The accepted two-label implementation remains the fallback.
+
+The factory C491/C495 model stays two-row. Only outgoing native properties use
+temporary three-row views. Content, position and list information are published
+with the same native generation to the same existing subscriber cohort. Empty or
+different subscriber lists retain the two-label view. A partially failed send
+discards the richer view and schedules one fresh native-generation redraw.
+The adapter also answers native Content and Info Gets from the last committed
+view, preserving row-ID, selector and requester semantics. Position Get retains
+the factory's unsupported response. Subscription initialization and repeated
+subscriptions use the same cached position count and focus as the rich content,
+including the Position property's separate mode0 publication path.
+If the metadata reader holds its lock during publication, the IC thread uses
+the committed frame while it is still fresh and schedules a retry. This applies
+to Get responses and complete native update transactions; it does not extend
+playback freshness or retain a partially failed transaction.
+Yandex Music can report `stopped` between titles while its Native Audio stream
+and route remain open. That status retains the list and selection, including
+when new metadata precedes `playing`. Closing the stream, losing its route,
+missing/expired metadata or stopping AAD still withdraws the list immediately.
+
+Wheel decisions and Android Auto key dispatch still have one owner. The daemon
+shares the Native Audio previous/next choice with the existing MOST wheel-press
+handler and mirrors it, with the last wheel activity time, into the metadata record.
+Closing the popup keeps the chosen button; the informational title is never selected.
+Before the first selection, Next is shown and used by a press. Playback heartbeats
+do not reopen the popup. Pause, source loss, player change, metadata expiry
+and shutdown clear the presentation state. No native Bluetooth or CarPlay input
+controller is activated and no additional key callback is installed.
+Previous sends the existing Android Auto Previous command once; restart-from-beginning
+versus previous-track behavior remains the phone player's decision.
+
+The instrument cluster and HUD consume this native high-list protocol. Exact
+header placement, orange highlighting and truncation remain physical display
+checks; a virtual MOST consumer verifies the emitted layout and selection but
+does not emulate the cluster's own renderer.
 
 ## Settings and upstream documentation
 
@@ -55,8 +106,9 @@ adapter-owned row to its saved native value.
   on6WA. The [v1.9.116 release notes](https://github.com/Sq00ky/Supra-iDrive6-Android-Auto/releases/tag/v1.9.116)
   distinguish it from J29's native track-list support. It is not required for
   the F30 high-list adapter and can remain off.
-- **Native Functionality Media Controls Restore** remains as configured; this
-  patch does not change wheel or console controls.
+- **Native Functionality Media Controls Restore** enables the existing wheel
+  media handler. Its Native Audio choice now follows the remembered upper/lower
+  button; raw input decoding, console keys and single key dispatch stay unchanged.
 - **Nav prompts mixed into Music** changes prompt audio routing, not native
   media-list recognition or Unicode metadata.
 
@@ -64,20 +116,12 @@ BMW's public [Bluetooth audio FAQ](https://faq.bmwusa.com/s/article/Connectivity
 describes external Bluetooth devices and their activation in MEDIA. It does not
 document these internal window IDs or the aftermarket Browser Audio adapter.
 
-## Display and validation
+## Accepted navigation artwork
 
-The supported native window keeps its existing two label rows: title first,
-artist second, each limited to 25 UTF-16 units without splitting a surrogate pair.
-This is not the Bluetooth previous/current/next layout; selectable rows and
-selection highlighting are a separate feature.
-
-An F30 owner confirmed current Cyrillic title and artist in the HUD. With the
-engine stopped and NBT, Android Auto and music still running, the same active
-metadata appeared in the instrument cluster after the HUD switched off. This
-does not establish identical display dimensions or test cleanup after AAD stops.
-
-Host tests cover metadata parsing, freshness, source changes, daemon shutdown,
-private-hook lifecycle and conditional restoration of individual native rows.
-The exact Build66 emulator also exercises both native windows with the production
-plugin and verifies restoration on pause, source loss, expiry and session stop.
-Other HMI builds fail closed; no navigation artwork or input dispatch is changed.
+This branch includes the accepted PR318 (`ce0229d`), including PR317 (`9daf2be`),
+without changing its geometry. `d7e436b` alone did not include those PRs.
+For the automatically measured F30 picture126x77, the unified ordinary artwork
+works in both glyph modes; the separate ring renderer handles exit angle,
+number and unknown-angle cases. See [hud-unified.md](hud-unified.md).
+Host polygon/protocol checks and previews do not establish physical HUD
+readability or that a real navigation app sends the expected exit data.

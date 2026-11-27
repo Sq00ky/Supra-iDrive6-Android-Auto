@@ -102,12 +102,13 @@ static void metadata(const char* title, const char* artist, uint32_t now) {
 static void tick(uint32_t now) { clockMs = now; expireMedia(); }
 static void cleared(uint32_t now) {
     assert(!snapshot(now).active);
+    assert(snapshot(now).cursor == nbt::kNativeMediaCursorNone && snapshot(now).cursorMs == 0);
     assert(g_kombiNav.text.empty() && g_kombiMedia.text.empty() && !g_kombiMedia.playing);
     assert(record().find("song=\n") != std::string::npos && !g_mediaDirty);
 }
 int main() {
     signal(SIGPIPE, SIG_IGN);
-    (void)g_mediaKeysToPhone; (void)g_wheelMediaKeys;
+    (void)g_mediaKeysToPhone; g_wheelMediaKeys = true;
     resetMedia("new session"); cleared(900);
     browser.active = true;
     status(2, "Player A", 1000);
@@ -115,27 +116,73 @@ int main() {
     assert(g_mediaDirty && !snapshot(1010).active);
     tick(1250);
     assert(snapshot(1250).active && !strcmp(snapshot(1250).artist, "Автор A"));
+    assert(nativeMediaWheelCursor() == nbt::kNativeMediaCursorNext);
     status(2, "Player A", 1300);
     tick(1500);
     assert(snapshot(1500).active && snapshot(1500).updatedMs == 1300);
+    mirrorNativeMediaWheel(-1, true);
+    assert(nbt::nativeMediaCursor(snapshot(1500), 1500) == nbt::kNativeMediaCursorNext);
 
     // The actual stream callback immediately withdraws native eligibility; no media key is involved.
+    g_mediaDirty = true;
     onAudioState(9, false, 0, 0, NULL);
-    assert(!snapshot(1500).active);
+    assert(!snapshot(1500).active && snapshot(1500).cursor == nbt::kNativeMediaCursorNone);
     onAudioState(9, true, 48000, 2, NULL);
-    assert(snapshot(1500).active);
+    assert(snapshot(1500).active && snapshot(1500).cursor == nbt::kNativeMediaCursorNone);
+    mirrorNativeMediaWheel(1, true);
     status(3, "Player A", 1510);
-    assert(!snapshot(1510).active); // pause must not wait for the 200ms throttle
+    assert(!snapshot(1510).active && snapshot(1510).cursor == nbt::kNativeMediaCursorNone); // immediate pause clear
     status(2, "Player B", 1600);
     assert(!snapshot(1600).active && record().find("Автор A") == std::string::npos);
     metadata("Трек B", "Автор B", 1610);
     tick(1850);
     assert(snapshot(1850).active && !strcmp(snapshot(1850).song, "Трек B"));
+    mirrorNativeMediaWheel(-1, true);
     std::vector<uint8_t> malformed(1, 0xFF);
     send(0x8001, malformed, 12000);
     assert(g_media.updatedMs == 1600);
     tick(1600 + nbt::kMediaStaleMs);
     cleared(1600 + nbt::kMediaStaleMs);
+
+    // Closing the popup does not forget the button; heartbeats are not wheel activity.
+    status(2, "Selection A", 20000); metadata("Track", "Artist", 20010); tick(20250);
+    mirrorNativeMediaWheel(1, true);
+    assert(nbt::nativeMediaCursor(snapshot(20250), 20250) == nbt::kNativeMediaCursorPrev);
+    status(2, "Selection A", 23000); tick(23250);
+    assert(snapshot(23250).cursorMs == 20250);
+    // Saved Yandex Music trace: Stopped -> new metadata -> Playing, with no media stream close.
+    status(1, "Selection A", 23500); tick(23750);
+    assert(snapshot(23750).active && snapshot(23750).cursor == nbt::kNativeMediaCursorPrev);
+    metadata("Next track", "Next artist", 23760); tick(24000);
+    assert(snapshot(24000).active && !strcmp(snapshot(24000).song, "Next track"));
+    assert(snapshot(24000).cursor == nbt::kNativeMediaCursorPrev);
+    status(2, "Selection A", 24251); tick(24500);
+    assert(snapshot(24500).active && nbt::nativeMediaCursor(snapshot(24500), 24500) == nbt::kNativeMediaCursorPrev);
+    clockMs = 24501; mirrorNativeMediaWheel(0, false);
+    assert(snapshot(24501).cursor == nbt::kNativeMediaCursorPrev && snapshot(24501).cursorMs == 24501);
+    assert(nativeMediaWheelCursor() == nbt::kNativeMediaCursorPrev);
+    // Other captured ordering: Stopped -> Playing -> metadata. No native placeholder in either ordering.
+    status(1, "Selection A", 24510); tick(24750);
+    assert(snapshot(24750).active && snapshot(24750).cursor == nbt::kNativeMediaCursorPrev);
+    status(2, "Selection A", 24760); metadata("Third track", "Third artist", 24770); tick(25000);
+    assert(snapshot(25000).active && !strcmp(snapshot(25000).song, "Third track"));
+    status(1, "Selection A", 25001);
+    onAudioState(9, false, 0, 0, NULL); // A real stream close still clears even with Stopped playback status.
+    assert(!snapshot(25001).active && snapshot(25001).cursor == nbt::kNativeMediaCursorNone);
+    onAudioState(9, true, 48000, 2, NULL);
+    assert(snapshot(25001).active);
+    clockMs = 25002; mirrorNativeMediaWheel(-1, true);
+    status(2, "Selection B", 25010);
+    assert(snapshot(25010).cursor == nbt::kNativeMediaCursorNone && !snapshot(25010).active);
+    metadata("Track B", "Artist B", 25020); tick(25250); mirrorNativeMediaWheel(-1, true);
+    resetMedia("selection session ended"); cleared(25250);
+    for (unsigned dirty = 0; dirty != 2; ++dirty) {
+        const uint32_t now = 27000 + dirty * 500;
+        status(2, "Cleanup", now); metadata("Track", "Artist", now + 10); tick(now + 250);
+        mirrorNativeMediaWheel(-1, true);
+        g_mediaDirty = dirty != 0;
+        resetMedia("clean or dirty selection reset"); cleared(now + 250);
+    }
 
     // A heartbeat arriving before the main tick cannot resurrect pre-gap metadata.
     status(2, "Player C", 30000);
@@ -166,6 +213,7 @@ int main() {
         metadata("Current track", "Current artist", 50010 + cycle * 1000);
         tick(50250 + cycle * 1000);
         assert(snapshot(clockMs).active);
+        mirrorNativeMediaWheel(-1, true);
         stopDaemonSession();
         assert(!g_session.isActive() && disconnects == 0);
         cleared(clockMs); // No TTL advance and no synthetic native=0 write.
@@ -173,7 +221,7 @@ int main() {
         stopDaemonSession(); cleared(clockMs); // Idempotent cleanup.
         close(sockets[1]);
     }
-    puts("PASS native media lifecycle: heartbeat, pending flush, stream stop, pause, player change, expiry, reset and real session shutdown/restart");
+    puts("PASS native media lifecycle: captured Stopped/Playing/metadata orderings, heartbeat, stream close, pause, player change, expiry and real session shutdown/restart");
 }
 '''.replace("BLOCK", block).replace("AUDIO", audio).replace("SHUTDOWN", shutdown)
 
@@ -227,6 +275,156 @@ int main() {
     args.emit_qnx.write_text(fixture)
     raise SystemExit(0)
 assert compiler, "A POSIX C++ compiler is required"
+
+# Real MOST decoder -> real main callback -> real sendMediaKey; only the phone sink and non-input consumers are fakes.
+key_start = source.index("static void sendMediaKey(")
+key_end = source.index("// The gesture camera's", key_start)
+knob_start = source.index("static void onKnobEvent(")
+knob_end = source.index("\n#define NBT_AAD_BUILD", knob_start)
+input_harness = r'''
+#include "audio/native_media_record.hpp"
+#include "car/ccs_input.hpp"
+#include "cluster/ric_media.hpp"
+#include "most_fixture.hpp"
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fstream>
+#include <iterator>
+#include <utility>
+#include <vector>
+static std::vector<std::pair<uint32_t, bool> > phoneKeys;
+namespace nbt {
+struct AASession {
+    void postKeyEvent(uint32_t key, bool down) { phoneKeys.push_back(std::make_pair(key, down)); }
+    void postRelativeEvent(uint32_t, int) { assert(false); }
+};
+}
+static nbt::AASession g_session;
+static bool g_sessionActive = true, g_inputToPhone = false;
+static uint32_t clockMs, g_backDownMs, g_keyToPhoneMs, g_knobInputMs;
+static int g_backState, g_hideReq;
+static uint32_t monoMs() { return clockMs; }
+static uint32_t backHoldMs() { return 0; }
+static bool menuOpensIdrive() { return false; }
+static nbt::riclist::WheelTurns g_wheelTurns;
+struct Nav { void setNowPlaying(const std::string&) {} } g_kombiNav;
+struct Tracks {
+    void update(const std::string&, bool) {}
+    int wheelPress(std::string* why) { if (why) *why = "fake MOST cluster"; return nbt::riclist::kPressNone; }
+    bool kombiSeen() { return false; }
+} g_kombiMedia;
+struct Browser { bool mediaListActive() { return true; } } browser;
+static Browser* g_browserAudio = &browser;
+BLOCK
+KEY
+KNOB
+static nbt::NativeMediaSnapshot snapshot(uint32_t now) {
+    std::ifstream in("media.record");
+    const std::string record((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    nbt::NativeMediaSnapshot out;
+    assert(nbt::parseNativeMediaRecord(record.data(), record.size(), now, out));
+    return out;
+}
+static void frame(uint16_t fkt, uint8_t value, uint32_t now) {
+    clockMs = now;
+    nbt::most::Msg m;
+    m.txType = 0; m.varTag = 2; m.varVal = 0; m.dst = 0x205D; m.src = 0x1001;
+    m.fblock = 0x15; m.inst = 2; m.fkt = fkt; m.opType = nbt::most::kOpStatus; m.hdrTag = 0;
+    m.data.assign(1, value);
+    const std::vector<uint8_t> wire = nbt::most::buildMessage(m);
+    fake_dsi::data(nbt::most::kInfoMessage, &wire[0], (uint32_t)wire.size());
+}
+static void pair(size_t index, uint32_t key) {
+    assert(phoneKeys.size() == index + 2);
+    assert(phoneKeys[index] == std::make_pair(key, true));
+    assert(phoneKeys[index + 1] == std::make_pair(key, false));
+}
+int main() {
+    setenv("NBT_KOMBI_TRACKS", "1", 1); setenv("NBT_MFL_LOG", "0", 1);
+    unsetenv("NBT_KOMBI_TRACKS_PRESS"); unsetenv("NBT_MFL_NEXT"); unsetenv("NBT_MFL_PREV");
+    unsetenv("NBT_MFL_PLAYPAUSE");
+    fake_dsi::reset();
+    nbt::most::Client client; nbt::car::CcsInput input;
+    assert(input.attach(client, nbt::car::CcsConfig(), &onKnobEvent, &g_session));
+    most_fixture::startClient(client);
+    g_wheelMediaKeys = g_mediaKeysToPhone = true;
+    g_media.state = 2; g_media.song = "Track"; g_media.artist = "Artist";
+    g_media.haveStatus = g_media.haveMetadata = true; g_media.updatedMs = 1000; g_mediaNative = true;
+    const uint8_t playing[] = {8, 2}; clockMs = 1000;
+    onMediaStatus(0x8001, playing, sizeof(playing), NULL);
+
+    frame(0xC30, 0x7F, 1000); frame(0xC31, 0, 1010); frame(0xC31, 1, 1020);
+    frame(0xC31, 1, 1030); frame(0xC31, 0, 1040);
+    pair(0, nbt::AAK_MEDIA_NEXT); // Initial display and the first press agree on the lower button.
+    assert(snapshot(1040).cursor == nbt::kNativeMediaCursorNext);
+    frame(0xC30, 0x7E, 1200); frame(0xC30, 0x7E, 1210);
+    assert(snapshot(1210).cursorMs == 1200); // A repeated raw status is not another event.
+    frame(0xC30, 0x7F, 1250);
+    pair(0, nbt::AAK_MEDIA_NEXT);
+    assert(snapshot(1250).cursor == nbt::kNativeMediaCursorNext);
+    frame(0xC31, 1, 1300); pair(2, nbt::AAK_MEDIA_NEXT);
+    for (uint32_t now = 1310; now != 1350; now += 10) frame(0xC31, 1, now);
+    frame(0xC31, 0, 1350); pair(2, nbt::AAK_MEDIA_NEXT);
+    frame(0xC30, 0x80, 1400); frame(0xC30, 0x7F, 1450);
+    frame(0xC31, 1, 1500); frame(0xC31, 0, 1550); pair(4, nbt::AAK_MEDIA_PREVIOUS);
+
+    // Passive UI polling and drawing preparation cannot become another media-command source.
+    for (unsigned i = 0; i != 100; ++i) {
+        const nbt::NativeMediaSnapshot current = snapshot(1600);
+        assert(nbt::nativeMediaCursor(current, 1600) == nbt::kNativeMediaCursorPrev);
+        uint16_t text[26]; nbt::nativeMediaText(current.song, text); nbt::nativeMediaText(current.artist, text);
+    }
+    clockMs = 1600; expireMedia(); pair(4, nbt::AAK_MEDIA_PREVIOUS);
+    frame(0xC30, 0x7E, 2000); frame(0xC30, 0x7F, 2050);
+    assert(nbt::nativeMediaCursor(snapshot(6050), 6050) == nbt::kNativeMediaCursorNext);
+    assert(nbt::nativeMediaCursor(snapshot(6051), 6051) == nbt::kNativeMediaCursorNext);
+    frame(0xC31, 1, 6051); frame(0xC31, 0, 6070);
+    pair(6, nbt::AAK_MEDIA_NEXT);
+    assert(snapshot(6070).cursor == nbt::kNativeMediaCursorNext);
+    frame(0xC30, 0x80, 8000); frame(0xC30, 0x7F, 8050);
+    assert(snapshot(13000).cursor == nbt::kNativeMediaCursorPrev); // Rest retains the last known direction.
+    g_media.position = 57; // Restart-current versus previous-track semantics belong to the player.
+    frame(0xC31, 1, 13050); frame(0xC31, 0, 13060); pair(8, nbt::AAK_MEDIA_PREVIOUS);
+
+    const uint16_t skip[] = {0xC07, 0x511};
+    uint32_t now = 13100;
+    for (unsigned i = 0; i != 2; ++i) for (uint8_t value = 1; value != 3; ++value) {
+        const size_t count = phoneKeys.size();
+        frame(skip[i], value, now++); frame(skip[i], value, now++); frame(skip[i], 0, now++);
+        pair(count, value == 1 ? nbt::AAK_MEDIA_PREVIOUS : nbt::AAK_MEDIA_NEXT);
+    }
+    const size_t count = phoneKeys.size();
+    g_wheelMediaKeys = false; frame(0xC07, 2, now++); frame(0xC07, 0, now++);
+    g_wheelMediaKeys = true; g_mediaKeysToPhone = false;
+    frame(0x511, 2, now++); frame(0x511, 0, now++);
+    g_mediaKeysToPhone = true; g_sessionActive = false;
+    frame(0xC07, 2, now++); frame(0xC07, 0, now++);
+    assert(phoneKeys.size() == count);
+    g_sessionActive = true;
+    clockMs = 14000; onMediaStatus(0x8001, playing, sizeof(playing), NULL);
+    clockMs = 20000; onMediaStatus(0x8001, playing, sizeof(playing), NULL);
+    frame(0xC30, 0x80, 20010); frame(0xC30, 0x7F, 20020);
+    frame(0xC31, 1, 20030); pair(count, nbt::AAK_MEDIA_PREVIOUS);
+    frame(0xC31, 1, 25040); frame(0xC31, 0, 25050); pair(count, nbt::AAK_MEDIA_PREVIOUS);
+    assert(nbt::nativeMediaCursor(snapshot(25050), 25050) == nbt::kNativeMediaCursorPrev);
+    frame(0xC31, 1, 25060); frame(0xC31, 0, 25070); pair(count + 2, nbt::AAK_MEDIA_PREVIOUS);
+    // The Native Audio behavior must not change the legacy MOST fallback for other sources.
+    g_mediaNative = false;
+    frame(0xC31, 1, 30071); frame(0xC31, 0, 30072);
+    assert(phoneKeys.size() == count + 4);
+    assert(snapshot(30072).cursor == nbt::kNativeMediaCursorNone);
+    g_mediaNative = true;
+    frame(0xC31, 1, 30080); frame(0xC31, 0, 30090); pair(count + 4, nbt::AAK_MEDIA_NEXT);
+    refreshNativeMediaSource(); resetMedia("input fixture ended");
+    pair(count + 4, nbt::AAK_MEDIA_NEXT);
+    puts("PASS native media input: real C30/C31, remembered buttons after timeout, one pair per press, legacy fallback and C07/511 dispatch gates");
+}
+'''.replace("BLOCK", block).replace("KEY", source[key_start:key_end]).replace("KNOB", source[knob_start:knob_end])
+
 with tempfile.TemporaryDirectory(prefix="native-media-lifecycle-") as temp:
     work = Path(temp)
     cpp, exe = work / "lifecycle.cpp", work / "lifecycle"
@@ -236,4 +434,11 @@ with tempfile.TemporaryDirectory(prefix="native-media-lifecycle-") as temp:
                     *[str(ROOT / "src" / name) for name in (
                         "aa_session.cpp", "aa_cryptor.cpp", "audio/audio_acks.cpp", "crash_handler.cpp", "sdr_builder.cpp")],
                     "-lssl", "-lcrypto", "-lm", "-o", str(exe)], check=True)
+    subprocess.run([str(exe)], cwd=work, check=True)
+    cpp, exe = work / "input.cpp", work / "input"
+    cpp.write_text(input_harness)
+    subprocess.run([compiler, "-std=gnu++0x", "-Wall", "-pthread", "-I" + str(ROOT / "src"),
+                    "-I" + str(ROOT / "include"), "-I" + str(ROOT / "tests"), str(cpp),
+                    str(ROOT / "src/car/ccs_input.cpp"), str(ROOT / "src/most/client.cpp"),
+                    str(ROOT / "tests/fake_dsi_client.cpp"), "-o", str(exe)], check=True)
     subprocess.run([str(exe)], cwd=work, check=True)
