@@ -26,6 +26,9 @@ for app in apps:
         assert action.get('id') in handlers, ('unregistered XML action', action.attrib)
 
 main = apps[0]
+# BMW allocates native state IDs in XML order; preserve every existing state.
+assert [s.get('id') for s in main.find('hmiStates')] == [
+    '10', '12', '13', '11', '14', '15', '54', '18', '60']
 cyrillic = next(c for c in main.iter('checkbox')
                 if c.get('text') == 'Cyrillic street names in HUD')
 vehicle = next(s for s in main.find('hmiStates') if s.get('text') == 'Car manufacturer')
@@ -33,4 +36,11 @@ auto = next(c for c in vehicle.iter('radiobutton') if c.get('text') == 'Auto')
 assert cyrillic.get('action') != auto.get('action'), 'Cyrillic and manufacturer Auto share an action'
 assert handlers[cyrillic.get('action')] == 'onHudCyrillicToggle'
 assert handlers[auto.get('action')] == 'onVehiclePick<0>'
+compatibility = next(s for s in main.find('hmiStates') if s.get('id') == '60')
+check = next(c for c in compatibility.iter('button') if c.get('text') == 'Check compatibility')
+assert handlers[check.get('action')] == 'onMediaCompatibilityCheck'
+assert check.get('action') not in {cyrillic.get('action'), auto.get('action')}
+entry = next(c for c in main.iter('button') if c.get('text') == 'Media compatibility')
+nav = next(a for a in main.find('actions') if a.get('id') == entry.get('action'))
+assert nav.tag == 'hmiAction' and nav.get('target') == compatibility.get('id')
 print('test_rhmi_actions: all passed')

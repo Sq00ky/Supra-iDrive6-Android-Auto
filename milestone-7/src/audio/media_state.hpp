@@ -32,7 +32,7 @@
 
 namespace nbt {
 
-enum { kMediaValueMax = 96, kMediaRecordMax = 1024 };
+enum { kMediaValueMax = 96, kMediaRecordMax = 1024, kMediaStaleMs = 15000 };
 
 struct MediaState {
     unsigned state;             // 0 unknown, 1 stopped, 2 playing, 3 paused (the phone's enum)
@@ -41,12 +41,16 @@ struct MediaState {
     bool shuffle, repeat, repeatOne;
     unsigned long artBytes;
     bool haveStatus, haveMetadata;
-    unsigned long updatedMs;    // when the last message arrived (monotonic, owner's clock)
+    uint32_t updatedMs;         // last valid playback status, or first data while waiting for one
 
     MediaState() : state(0), duration(0), position(0), shuffle(false), repeat(false), repeatOne(false),
                    artBytes(0), haveStatus(false), haveMetadata(false), updatedMs(0) {}
 
     void clear() { *this = MediaState(); }
+    void clearTrack() {
+        song.clear(); artist.clear(); album.clear(); playlist.clear();
+        duration = 0; artBytes = 0; haveMetadata = false;
+    }
 };
 
 // A value as it can go into the record: no control characters (a phone app name with a newline would forge a line),
@@ -85,40 +89,58 @@ inline bool mediaBodyComplete(const uint8_t* p, size_t n) {
     return r.ok();
 }
 
-// Merge one channel-12 message into `st`. Returns true when anything changed (the caller only rewrites the record then).
-inline bool mediaMerge(MediaState& st, uint16_t msgId, const uint8_t* body, size_t len) {
+// Merge one complete channel-12 message. A valid repeated playback state renews freshness even when unchanged.
+inline bool mediaMerge(MediaState& st, uint16_t msgId, const uint8_t* body, size_t len, uint32_t nowMs = 0) {
     if (msgId != 0x8001 && msgId != 0x8003) return false;
     if (!mediaBodyComplete(body, len)) return false;
+    const bool first = !st.haveStatus && !st.haveMetadata;
     if (msgId == 0x8001) {
         AaMediaStatus m;
-        if (!aaParseMediaStatus(body, len, m)) return false;
+        if (!aaParseMediaStatus(body, len, m) || m.state > 3) return false;
+        if (first || ((m.fields & AaMediaStatus::kState) && m.state >= 1)) st.updatedMs = nowMs;
         bool changed = false;
-        if (m.state && m.state != st.state) { st.state = m.state; changed = true; }
-        if (!m.source.empty() && m.source != st.source) { st.source = mediaClean(m.source); changed = true; }
-        if (m.position != st.position) { st.position = m.position; changed = true; }
-        if (m.shuffle != st.shuffle) { st.shuffle = m.shuffle; changed = true; }
-        if (m.repeat != st.repeat) { st.repeat = m.repeat; changed = true; }
-        if (m.repeatOne != st.repeatOne) { st.repeatOne = m.repeatOne; changed = true; }
+        const std::string source = mediaClean(m.source);
+        if ((m.fields & AaMediaStatus::kSource) && source != st.source) {
+            // Metadata has no player id: do not carry a known player's track into the next player.
+            if (!st.source.empty()) {
+                st.clearTrack(); st.position = 0; st.shuffle = st.repeat = st.repeatOne = false;
+                st.state = 0;
+            }
+            st.source = source; changed = true;
+        }
+        if ((m.fields & AaMediaStatus::kState) && m.state != st.state) { st.state = m.state; changed = true; }
+        if ((m.fields & AaMediaStatus::kPosition) && m.position != st.position) { st.position = m.position; changed = true; }
+        if ((m.fields & AaMediaStatus::kShuffle) && m.shuffle != st.shuffle) { st.shuffle = m.shuffle; changed = true; }
+        if ((m.fields & AaMediaStatus::kRepeat) && m.repeat != st.repeat) { st.repeat = m.repeat; changed = true; }
+        if ((m.fields & AaMediaStatus::kRepeatOne) && m.repeatOne != st.repeatOne) { st.repeatOne = m.repeatOne; changed = true; }
         if (!st.haveStatus) { st.haveStatus = true; changed = true; }
         return changed;
     }
-    if (msgId == 0x8003) {
-        AaMediaMetadata m;
-        if (!aaParseMediaMetadata(body, len, m)) return false;
-        bool changed = false;
-        // An empty field is "the phone did not send it", not "it was cleared": keep the last known value.
-        std::string song = mediaClean(m.song), artist = mediaClean(m.artist), album = mediaClean(m.album),
-                    playlist = mediaClean(m.playlist);
-        if (!song.empty() && song != st.song) { st.song = song; changed = true; }
-        if (!artist.empty() && artist != st.artist) { st.artist = artist; changed = true; }
-        if (!album.empty() && album != st.album) { st.album = album; changed = true; }
-        if (!playlist.empty() && playlist != st.playlist) { st.playlist = playlist; changed = true; }
-        if (m.duration && m.duration != st.duration) { st.duration = m.duration; changed = true; }
-        if (m.albumArtBytes != (size_t)st.artBytes) { st.artBytes = (unsigned long)m.albumArtBytes; changed = true; }
-        if (!st.haveMetadata) { st.haveMetadata = true; changed = true; }
-        return changed;
-    }
-    return false;
+    AaMediaMetadata m;
+    if (!aaParseMediaMetadata(body, len, m)) return false;
+    if (first) st.updatedMs = nowMs;
+    const MediaState before = st;
+    const std::string song = mediaClean(m.song), artist = mediaClean(m.artist);
+    if (((m.fields & AaMediaMetadata::kSong) && (song.empty() || song != st.song)) ||
+        ((m.fields & AaMediaMetadata::kSong) && (m.fields & AaMediaMetadata::kArtist) &&
+         !st.artist.empty() && !artist.empty() && artist != st.artist)) st.clearTrack();
+    if (m.fields & AaMediaMetadata::kSong) st.song = song;
+    if (m.fields & AaMediaMetadata::kArtist) st.artist = artist;
+    if (m.fields & AaMediaMetadata::kAlbum) st.album = mediaClean(m.album);
+    if (m.fields & AaMediaMetadata::kPlaylist) st.playlist = mediaClean(m.playlist);
+    if (m.fields & AaMediaMetadata::kDuration) st.duration = m.duration;
+    if (m.fields & AaMediaMetadata::kArt) st.artBytes = (unsigned long)m.albumArtBytes;
+    st.haveMetadata = true;
+    return st.song != before.song || st.artist != before.artist || st.album != before.album ||
+           st.playlist != before.playlist || st.duration != before.duration || st.artBytes != before.artBytes ||
+           st.haveMetadata != before.haveMetadata;
+}
+
+// Status arrives about once a second; metadata alone must not keep an old playing state alive.
+inline bool mediaExpire(MediaState& st, uint32_t nowMs) {
+    if ((!st.haveStatus && !st.haveMetadata) || (uint32_t)(nowMs - st.updatedMs) < kMediaStaleMs) return false;
+    st.clear();
+    return true;
 }
 
 inline const char* mediaStateName(unsigned s) {
@@ -157,9 +179,7 @@ inline std::string mediaRecord(const MediaState& st) {
     return r;
 }
 
-// What a cluster's one text line shows of it (cluster/nav_core.hpp setNowPlaying): the song title while it plays,
-// "" otherwise. Only the title: the 6WA's street text is about 23 characters wide (car, F36), and an artist after
-// the title was cut off mid-word.
+// Existing navigation idle text; the factory native media list uses a separate publisher.
 inline std::string mediaClusterLine(const MediaState& st) {
     if (st.state != 2 || st.song.empty()) return std::string();
     return st.song;
