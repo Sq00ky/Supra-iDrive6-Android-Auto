@@ -106,6 +106,11 @@ const HudProfile k6waF15 = {
     {0}, 0, true, true, 0x13,
 };
 
+// This fixed role map is independent of manually pinned drawing rectangles.
+inline bool compactNativeBarProfile(const HudProfile& p) {
+    return p.frame == 1 && p.street == 2 && p.distance == 3 && p.unit == 4 && p.bufA == 5 && p.bufB == 6;
+}
+
 // The handles a profile lets the driver use: nothing else can be sent (cluster/hudterm.hpp buildCall).
 inline HandleSet handlesOf(const HudProfile& p) {
     HandleSet h;

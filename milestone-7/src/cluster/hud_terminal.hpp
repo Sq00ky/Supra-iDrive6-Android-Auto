@@ -79,8 +79,9 @@ struct Config {
     bool logBatches;         // a line per finished batch (otherwise only status changes, refusals and failures)
     uint16_t measureHandle;  // ImageGetSize is asked for this handle once the terminal is ready, for the driver to fit
                              // its box to the cluster's real buffer (0 = don't; the shadow mode leaves it 0)
+    bool nativeBars;         // fixed compact 6WA roles: optional guarded hides after a main drawing batch
     Config() : navFrame(-1), replyMs(10000), copyMs(1500), navQuietMs(5000), maxInFlight(8), maxBatch(32),
-               logBatches(false), measureHandle(0) {}
+               logBatches(false), measureHandle(0), nativeBars(false) {}
 };
 
 // What a batch draws: its own slot's waiting batch is the only one it may take the place of or merge into.
@@ -130,7 +131,11 @@ public:
     SubmitResult submit(const Batch& b, uint32_t now);
 
     // The next message to send, if any, already counted as in flight. After a failed send, sendFailed().
-    bool next(uint32_t now, most::Msg& out);
+    bool next(uint32_t now, most::Msg& out, bool* native = NULL);
+    void identityChanged(); // discard native-bar proof, retain legacy geometry and re-arm its one-shot probe
+    uint32_t nativeGeneration() const { return nativeGeneration_; }
+    bool nativeSendAllowed(const most::Msg& actual, uint32_t generation, uint32_t now);
+    void nativeNotSent(const most::Msg& m, uint32_t stamp, uint32_t now);
     void sendFailed(uint32_t now);
 
     Status status() const { return status_; }
@@ -139,6 +144,7 @@ public:
     bool waiting(int slot) const;
     uint32_t epoch() const { return epoch_; }      // changes whenever submitted work was dropped
     uint16_t host() const { return host_; }
+    uint16_t selfAddress() const { return self_; }
     // The cluster's answer to the measureHandle ImageGetSize, once it has arrived; false until then.
     bool measuredSize(int& w, int& h) const;
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
@@ -150,6 +156,8 @@ public:
 private:
     struct InFlight { uint16_t fkt, handle; uint32_t sentMs; bool allowTimeout; };
 
+    bool nativeReady() const;
+    bool wantsNativeBars();
     void onAnswer(const most::View& m, uint32_t now);
     void onNav(const most::View& m, uint32_t now);
     bool merge(Batch& into, const Batch& b);
@@ -192,6 +200,8 @@ private:
     int sizeW_, sizeH_;
     std::vector<uint8_t> movedTo_;   // the last place the cluster named in kGuidanceMovedFkt
     bool haveMovedTo_;
+    bool compactSize_, proofPending_, currentNative_, ownFrameOn_;
+    uint32_t nativeGeneration_;
 };
 
 // What a HUDTerminal cluster driver needs from the transport: HudTerminal, or a test's fake.
@@ -258,6 +268,11 @@ private:
     static void regTramp(const std::vector<most::RegistryEntry>& reg, void* self);
     static void movedTramp(const most::View& m, void* self);
     static bool clientSend(const most::Msg& m, void* self);
+    struct NativeSend {
+        HudTerminal* terminal; uint32_t generation, stamp; bool allowed;
+    };
+    static bool nativeGuard(const most::Msg& actual, void* user);
+    void syncIdentity(uint32_t identity, uint16_t address);
     void run();
     void wake();
 
@@ -271,6 +286,7 @@ private:
     pthread_cond_t cond_;
     pthread_t thread_;
     bool running_, stop_;
+    uint32_t clientIdentity_;
     TerminalStats lastHealth_;
 };
 

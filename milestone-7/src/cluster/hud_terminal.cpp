@@ -55,7 +55,7 @@ Core::Core(const Config& cfg)
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.copyMs), tag_(1), epoch_(0),
       measureDue_(false), measureInFlight_(false), measureLate_(false), measureSentMs_(0), haveSize_(false), sizeW_(0), sizeH_(0),
-      haveMovedTo_(false) {
+      haveMovedTo_(false), compactSize_(false), proofPending_(false), currentNative_(false), ownFrameOn_(false), nativeGeneration_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
 }
@@ -67,11 +67,64 @@ bool Core::measuredSize(int& w, int& h) const {
     return true;
 }
 
+// Geometry remains usable while the optional destructive hide capability waits for fresh evidence.
+void Core::identityChanged() {
+    compactSize_ = proofPending_ = ownFrameOn_ = false;
+    ++nativeGeneration_;
+    if (cfg_.nativeBars) {
+        measureInFlight_ = measureLate_ = false;
+        measureDue_ = cfg_.measureHandle != 0;
+    }
+}
+
+bool Core::nativeReady() const {
+    return cfg_.nativeBars && cfg_.maxBatch >= 2 && cfg_.navFrame == 1 && cfg_.measureHandle == 5 && compactSize_ && ownFrameOn_ && status_ == kReady;
+}
+
+bool Core::wantsNativeBars() {
+    bool refresh = false;
+    for (size_t i = 0; i < current_.calls.size(); ++i) {
+        const Call& c = current_.calls[i];
+        if (c.fkt == kSetVisibility && c.handle() == cfg_.navFrame) {
+            ownFrameOn_ = c.payload[2] != 0;
+            refresh = true;
+        }
+        if (c.fkt == kTextareaSetText && (c.handle() == 3 || c.handle() == 4)) refresh = true;
+    }
+    return ownFrameOn_ && refresh;
+}
+
+bool Core::nativeSendAllowed(const most::Msg& m, uint32_t generation, uint32_t now) {
+    if (!currentNative_ || !nativeReady() || generation != nativeGeneration_ || m.src != self_ || m.dst != host_ ||
+        m.fblock != kFBlock || m.inst != kInst || m.fkt != kSetVisibility ||
+        (m.data != setVisibility(21,false) && m.data != setVisibility(22,false))) return false;
+    bool pending = false;
+    for (size_t i = 0; i < inFlight_.size(); ++i)
+        if (inFlight_[i].fkt == m.fkt && inFlight_[i].handle == rdBe16(&m.data[0])) {
+            inFlight_[i].sentMs = now; // reply timeout starts after waiting for the physical send lock
+            pending = true;
+        }
+    if (!pending) return false;
+    recent_.add(m.fkt,rdBe16(&m.data[0]),now);
+    return true;
+}
+
+void Core::nativeNotSent(const most::Msg& m, uint32_t stamp, uint32_t now) {
+    const uint16_t h = rdBe16(&m.data[0]);
+    recent_.remove(m.fkt,h,stamp);
+    for (size_t i = 0; i < inFlight_.size(); ++i)
+        if (inFlight_[i].fkt == m.fkt && inFlight_[i].handle == h) { inFlight_.erase(inFlight_.begin()+i); break; }
+    if (currentNative_) nextCall_ = current_.calls.size();
+    finishIfDone(now);
+}
+
 void Core::dropWork(uint32_t now) {
     stats_.batchesDropped += (haveCurrent_ ? 1 : 0) + (uint32_t)pending_.size();
     if (haveCurrent_ || !pending_.empty()) ++epoch_;
     haveCurrent_ = false;
     current_ = Batch();
+    currentNative_ = false;
+    ownFrameOn_ = false;
     pending_.clear();
     nextCall_ = 0;
     for (size_t i = 0; i < inFlight_.size(); ++i) {
@@ -137,6 +190,7 @@ void Core::fail(const char* why, uint32_t now) {
 void Core::setLink(bool up, uint16_t self, uint32_t now) {
     if (!up) {
         if (!linkUp_) return;
+        identityChanged();
         linkUp_ = false;          // self_ stays, so late answers to our old address are not taken for the navigation
         refresh("link down", now);
         return;
@@ -148,6 +202,7 @@ void Core::setLink(bool up, uint16_t self, uint32_t now) {
         return;
     }
     if (linkUp_ && self == self_) return;
+    identityChanged();
     linkUp_ = true;
     self_ = self;
     failed_ = false;
@@ -163,6 +218,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
     char why[64];
     if (host) snprintf(why, sizeof(why), "82/00 host %04X%s", host, host_ ? " (changed)" : "");
     else snprintf(why, sizeof(why), "no 82/00 host on a ring node in the registry");
+    identityChanged();
     host_ = host;
     failed_ = false;
     navActive_ = false;
@@ -173,7 +229,7 @@ void Core::setHost(uint16_t host, uint32_t now) {
     dropped_.clear();                          // answers from the old host are not ours to match
     haveSize_ = false;                         // a new host's buffer is measured afresh
     measureInFlight_ = measureLate_ = false;
-    measureDue_ = false;                        // refresh() re-arms it if the new host is ready
+    measureDue_ = cfg_.measureHandle != 0;      // also a ready-to-ready host change needs a fresh answer
     refresh(why, now);
 }
 
@@ -266,7 +322,8 @@ bool Core::merge(Batch& into, const Batch& b) {
     return true;
 }
 
-bool Core::next(uint32_t now, most::Msg& out) {
+bool Core::next(uint32_t now, most::Msg& out, bool* native) {
+    if (native) *native = false;
     if (status_ != kReady) return false;
     if (inFlight_.size() >= cfg_.maxInFlight) return false;
     // The one-shot buffer measurement goes first, ahead of any drawing and outside inFlight_: its answer is captured in
@@ -278,6 +335,7 @@ bool Core::next(uint32_t now, most::Msg& out) {
             ++tag_;
             measureDue_ = false;
             measureInFlight_ = true;
+            proofPending_ = cfg_.nativeBars;
             measureSentMs_ = now;
             recent_.add(kGetSize, cfg_.measureHandle, now);
             ++stats_.calls;
@@ -285,10 +343,16 @@ bool Core::next(uint32_t now, most::Msg& out) {
         }
         measureDue_ = false;                   // cannot build (host or handle): keep the defaults
     }
+    if (currentNative_ && !nativeReady()) {
+        nextCall_ = current_.calls.size();
+        finishIfDone(now);
+    }
     if (!haveCurrent_ || nextCall_ >= current_.calls.size()) return false;
     const Call& c = current_.calls[nextCall_];
     if (c.afterReplies && !inFlight_.empty()) return false;
-    if (!buildCall(host_, c, tag_, cfg_.handles, out)) {   // checked at submit: only a host change could do this
+    HandleSet allowed = cfg_.handles;
+    if (currentNative_) { allowed.allow(21); allowed.allow(22); }
+    if (!buildCall(host_, c, tag_, allowed, out)) {   // checked at submit: only a host change could do this
         fail("a queued call no longer builds", now);
         return false;
     }
@@ -301,7 +365,8 @@ bool Core::next(uint32_t now, most::Msg& out) {
     f.sentMs = now;
     f.allowTimeout = c.allowTimeout;
     inFlight_.push_back(f);
-    recent_.add(c.fkt, f.handle, now);
+    if (!currentNative_) recent_.add(c.fkt, f.handle, now);
+    if (native) *native = currentNative_;
     ++stats_.calls;
     return true;
 }
@@ -314,6 +379,20 @@ void Core::finishIfDone(uint32_t now) {
     if (cfg_.logBatches)
         printf("[HudTerm] batch '%s': %u calls answered in %u ms\n", current_.label.c_str(),
                (unsigned)current_.calls.size(), now - batchStartMs_);
+    bool wantsBars = !currentNative_ && wantsNativeBars();
+    bool bars = nativeReady() && wantsBars;
+    currentNative_ = false;
+    if (bars) {
+        Batch b("native bars");
+        // Manual hide permissions retain their original path; do not duplicate them.
+        for (int h = 21; h <= 22; ++h)
+            if (!cfg_.handles.has(h)) b.add(kSetVisibility,setVisibility(h,false));
+        if (!b.calls.empty()) {
+            current_ = b; currentNative_ = true; nextCall_ = 0; batchStartMs_ = 0;
+            ++stats_.batches;
+            return;
+        }
+    }
     haveCurrent_ = false;
     if (pending_.empty()) {
         current_ = Batch();
@@ -335,7 +414,7 @@ void Core::onMessage(const most::View& m, uint32_t now) {
     if (m.src != host_ && m.dst != host_) return;             // not this terminal
     // The cluster's copy of an answer to us. A late answer to the measurement is past recent_'s window, and its copy
     // may come before our own: while it is awaited, a size for the measured handle is ours too, not the navigation.
-    bool measureCopy = measureInFlight_ && m.fkt == kGetSize && m.len >= 2 && rdBe16(m.data) == cfg_.measureHandle;
+    bool measureCopy = (measureInFlight_ || proofPending_) && m.fkt == kGetSize && m.len >= 2 && rdBe16(m.data) == cfg_.measureHandle;
     if (m.src == host_ && (measureCopy || recent_.isCopy(m.fkt, m.data, m.len, now) || awaited(m, now))) {
         ++stats_.copies;
         return;
@@ -348,6 +427,19 @@ void Core::onMessage(const most::View& m, uint32_t now) {
 // an answer to a call we dropped a moment ago is let go (see the header).
 void Core::onAnswer(const most::View& m, uint32_t now) {
     if (m.op == most::kOpProcessingAck || m.op == most::kOpProcessing) return;   // still working: the timeout stands
+    // The legacy fitter accepts additional replies. Only a solicited current-primary ResultAck is hide proof.
+    if (proofPending_ && most::classify(m) == most::kNormal && m.fkt == kGetSize && m.op == most::kOpResultAck &&
+        (m.len == 6 || (m.len == 7 && m.data[2] == 1)) && rdBe16(m.data) == cfg_.measureHandle) {
+        const uint8_t* a = m.data + (m.len == 7 ? 3 : 2);
+        int w = rdBe16(a), h = rdBe16(a+2);
+        if (w >= 24 && h >= 24 && w <= 1023 && h <= 1023) {
+            compactSize_ = w == 126 && h == 77;
+            proofPending_ = false;
+            if (compactSize_) ++epoch_; // late evidence redraws the same view even with pinned/equal geometry
+        }
+    }
+    if (m.fkt == kGetSize && (m.op == most::kOpError ||
+        (m.op == most::kOpErrorAck && m.len >= 2 && rdBe16(m.data) == cfg_.measureHandle))) proofPending_ = false;
     bool sized = (m.op == most::kOpResultAck || m.op == most::kOpStatus) && (m.len == 6 || m.len == 7);
     if (m.fkt == kGetSize && measureInFlight_ && (!sized || rdBe16(m.data) == cfg_.measureHandle)) {
         // The buffer measurement, outside inFlight_ (a size for another handle is not it: matched below, a stray).
@@ -447,6 +539,7 @@ void Core::onNav(const most::View& m, uint32_t now) {
 void Core::guidanceMoved(const most::View& m) {
     if (!cfg_.measureHandle || !host_ || m.src != host_) return;
     if (haveMovedTo_ && m.len == movedTo_.size() && (m.len == 0 || memcmp(m.data, &movedTo_[0], m.len) == 0)) return;
+    identityChanged();
     movedTo_.assign(m.data, m.data + m.len);
     haveMovedTo_ = true;
     measureInFlight_ = measureLate_ = false;
@@ -525,7 +618,7 @@ bool Core::takeStatusChange(Status& s) {
 
 HudTerminal::HudTerminal(const Config& cfg)
     : core_(cfg), client_(NULL), send_(NULL), sendUser_(NULL), statusCb_(NULL), statusUser_(NULL), running_(false),
-      stop_(false) {
+      stop_(false), clientIdentity_(0) {
     memset(&lastHealth_, 0, sizeof(lastHealth_));
     pthread_mutex_init(&lock_, NULL);
     pthread_condattr_t a;
@@ -669,7 +762,10 @@ void HudTerminal::logHealth() {
 }
 
 void HudTerminal::onMessage(const most::View& m) {
+    uint32_t identity = client_ ? client_->identityEpoch() : 0;
+    uint16_t address = client_ ? client_->selfAddress() : 0;
     pthread_mutex_lock(&lock_);
+    syncIdentity(identity,address);
     core_.onMessage(m, nowMs());
     wake();
     pthread_mutex_unlock(&lock_);
@@ -724,6 +820,25 @@ bool HudTerminal::clientSend(const most::Msg& m, void* self) {
     return t->client_ && t->client_->send(m);
 }
 
+void HudTerminal::syncIdentity(uint32_t identity, uint16_t address) {
+    if (identity == clientIdentity_) return;
+    clientIdentity_ = identity;
+    core_.identityChanged();
+    if (address && core_.status() != kOffline) core_.setLink(true,address,nowMs());
+}
+
+bool HudTerminal::nativeGuard(const most::Msg& actual, void* user) {
+    NativeSend* n = static_cast<NativeSend*>(user);
+    HudTerminal* t = n->terminal;
+    uint32_t identity = t->client_ ? t->client_->identityEpoch() : 0;
+    pthread_mutex_lock(&t->lock_);
+    t->syncIdentity(identity,actual.src);
+    n->stamp = nowMs();
+    n->allowed = !t->stop_ && t->core_.nativeSendAllowed(actual,n->generation,n->stamp);
+    pthread_mutex_unlock(&t->lock_);
+    return n->allowed;
+}
+
 void* HudTerminal::threadMain(void* self) {
     static_cast<HudTerminal*>(self)->run();
     return NULL;
@@ -734,17 +849,32 @@ void* HudTerminal::threadMain(void* self) {
 void HudTerminal::run() {
     pthread_mutex_lock(&lock_);
     while (!stop_) {
+        pthread_mutex_unlock(&lock_);
+        uint32_t identity = client_ ? client_->identityEpoch() : 0;
+        uint16_t address = client_ ? client_->selfAddress() : 0;
+        pthread_mutex_lock(&lock_);
+        syncIdentity(identity,address);
         uint32_t now = nowMs();
         core_.tick(now);
         most::Msg m;
-        while (!stop_ && core_.next(now, m)) {
+        bool native;
+        while (!stop_ && core_.next(now, m, &native)) {
+            NativeSend n = { this, core_.nativeGeneration(), 0, false };
+            if (native) m.src = core_.selfAddress();
             SendFn fn = send_;
             void* user = sendUser_;
             pthread_mutex_unlock(&lock_);
-            bool ok = fn && fn(m, user);
+            bool ok;
+            if (native && client_ && fn == &HudTerminal::clientSend && user == this) ok = client_->sendGuarded(m,&HudTerminal::nativeGuard,&n);
+            else if (native) {
+                // Scripted sender: the production path above checks after the real MOST send lock.
+                most::Msg actual = m;
+                ok = nativeGuard(actual,&n) && fn && fn(m,user);
+            } else ok = fn && fn(m, user);
             pthread_mutex_lock(&lock_);
             now = nowMs();
-            if (!ok) core_.sendFailed(now);
+            if (!ok && native) core_.nativeNotSent(m,n.stamp,now);
+            if (!ok && (!native || n.allowed)) core_.sendFailed(now);
         }
         Status s;
         if (core_.takeStatusChange(s)) {

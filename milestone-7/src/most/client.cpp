@@ -41,7 +41,7 @@ const char* linkStateName(LinkState s) {
 }
 
 Client::Client()
-    : nKeys_(0), nListeners_(0), nRegListeners_(0), nSendKeys_(0), tap_(NULL), tapUser_(NULL), infoTap_(NULL), infoTapUser_(NULL), started_(false), requiredOk_(true), rawLog_(false), stage_(0), routedNonNormalLogged_(0), state_(kDetached),
+    : nKeys_(0), nListeners_(0), nRegListeners_(0), nSendKeys_(0), tap_(NULL), tapUser_(NULL), infoTap_(NULL), infoTapUser_(NULL), started_(false), requiredOk_(true), rawLog_(false), stage_(0), routedNonNormalLogged_(0), identityEpoch_(0), state_(kDetached),
       attached_(false), answered_(false), clientId_(kClientRefused), deviceId_(0), haveComm_(false), comm_(0),
       commOkSeen_(false), longestWindowMs_(0), lastHealthMs_(0) {
     name_[0] = 0;
@@ -201,7 +201,17 @@ bool Client::notify(DsiClient* c, uint32_t attr) {
 
 // The DSI library's comment says a send belongs on the connection thread. Sending from another thread, with one lock
 // around every send, is what tools/hud_probe did on the car, and the cluster answered every call.
-bool Client::send(const Msg& m) {
+uint32_t Client::identityEpoch() const {
+    pthread_mutex_lock(&lock_);
+    uint32_t e = identityEpoch_;
+    pthread_mutex_unlock(&lock_);
+    return e;
+}
+
+bool Client::send(const Msg& m) { return sendGuarded(m, NULL, NULL); }
+
+bool Client::sendGuarded(const Msg& m, SendGuard guard, void* user) {
+    if (guard) pthread_mutex_lock(&sendLock_);
     bool allowed = false;
     uint16_t key = registryKey(m.fblock, m.inst);
     for (int i = 0; i < nSendKeys_; ++i)
@@ -214,6 +224,7 @@ bool Client::send(const Msg& m) {
     if (!allowed || !shape || !up) {
         ++total_.sendRefused;
         pthread_mutex_unlock(&lock_);
+        if (guard) pthread_mutex_unlock(&sendLock_);
         return false;
     }
     pthread_mutex_unlock(&lock_);
@@ -224,7 +235,11 @@ bool Client::send(const Msg& m) {
     putLe32(req, client);
     std::vector<uint8_t> body = buildMessage(out);
     req.insert(req.end(), body.begin(), body.end());
-    bool ok = request(&dsi_, kReqProcessMessage, req);
+    bool ok;
+    if (guard) {
+        ok = guard(out, user) && dsi_.sendRequest(kReqProcessMessage, req);
+        pthread_mutex_unlock(&sendLock_);
+    } else ok = request(&dsi_, kReqProcessMessage, req);
     pthread_mutex_lock(&lock_);
     if (ok) ++total_.sent;
     else ++total_.sendRefused;
@@ -235,6 +250,7 @@ bool Client::send(const Msg& m) {
 void Client::onAttached(DsiClient* c) {
     printf("[MOST] attached to %s.%s: registering client %s\n", kServerRole, kServerInterface, name_);
     pthread_mutex_lock(&lock_);
+    ++identityEpoch_;
     attached_ = true;
     answered_ = false;
     haveComm_ = false;
@@ -252,6 +268,7 @@ void Client::onDetached() {
     printf("[MOST] detached from the server\n");
     stage_ = 0;
     pthread_mutex_lock(&lock_);
+    ++identityEpoch_;
     attached_ = false;
     answered_ = false;
     haveComm_ = false;
@@ -277,6 +294,7 @@ void Client::onData(DsiClient* c, uint32_t id, const uint8_t* p, uint32_t len) {
         bool refused = client == kClientRefused;
         printf("[MOST] registered: clientId=%u deviceId=0x%04X%s\n", client, dev, refused ? "  (REGISTRATION REFUSED)" : "");
         pthread_mutex_lock(&lock_);
+        ++identityEpoch_;
         answered_ = true;
         clientId_ = client;
         deviceId_ = dev;

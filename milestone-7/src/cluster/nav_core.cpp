@@ -501,6 +501,7 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         hudterm::Config c;
         c.handles = hudterm::handlesOf(p);
         c.navFrame = p.frame;
+        c.nativeBars = !shadow_ && hudterm::compactNativeBarProfile(p);
         c.logBatches = !shadow_;
         c.measureHandle = shadow_ ? 0 : (p.singlePicture ? p.bufB : p.bufA);   // ask the buffer's real size once ready; the display fits the box to it
         if (p.panelBeforeText) {
