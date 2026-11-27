@@ -1008,35 +1008,51 @@ bool pidAlive(int pid) {
 // Independent of the state file: a running nbt-aad answers "ping" on UDP 127.0.0.1:52790.
 // Probing with bind() stole that port when the state file was read in the same instant the daemon
 // rewrote it, so the menu then started a second daemon.
-bool controlPortBusy() {
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd < 0) return false;
+//
+// Never wait here by default (#364). Every iDrive plugin's callbacks run on one shared pool of bmw::Looper threads
+// (libCoreFramework Dispatcher, prio 11, above the HMI main thread). The old 200 ms select() ran on that pool on every
+// 1 s status poll whenever the state file was missing (nbt-aad not started), and on every hmi.graphicalContext
+// change. With another plugin busy on the same pool (iDriveDeck ShiftDeck/BoostDeck) HmiMain3D froze within ~15 s
+// (G30, 2026-11-26; the same apps without this plugin did not). Now one persistent non-blocking socket: each call
+// collects the pongs to earlier pings, sends a new ping and answers from the last pong (< 3 s old).
+// wait = true keeps the old 200 ms answer for one-off driver actions (Start / Stop / entry button / autostart).
+uint32_t nowMs();
+bool controlPortBusy(bool wait = false) {
+    static int s_fd = -1;
+    static uint32_t s_pongMs = 0;                        // nowMs() of the last pong; 0 = never
+    if (s_fd < 0) {
+        s_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (s_fd < 0) return false;
+        fcntl(s_fd, F_SETFD, FD_CLOEXEC);                // not into nbt-aad / lm children (#341)
+        fcntl(s_fd, F_SETFL, fcntl(s_fd, F_GETFL) | O_NONBLOCK);
+    }
+    char buf[8];
+    ssize_t n;
+    while ((n = recv(s_fd, buf, sizeof(buf), 0)) >= 0)  // non-blocking: answers to earlier pings
+        if (n >= 4 && memcmp(buf, "pong", 4) == 0) s_pongMs = nowMs() | 1;
     struct sockaddr_in a;
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
     a.sin_port = htons(kDaemonCtlPort);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    const char ping[] = "ping";
-    bool busy = false;
-    if (sendto(fd, ping, 4, 0, (struct sockaddr*)&a, sizeof(a)) == 4) {
+    if (sendto(s_fd, "ping", 4, 0, (struct sockaddr*)&a, sizeof(a)) == 4 && wait) {
         fd_set rf;
         FD_ZERO(&rf);
-        FD_SET(fd, &rf);
+        FD_SET(s_fd, &rf);
         struct timeval tv;
         tv.tv_sec = 0;
         tv.tv_usec = 200000;
-        if (select(fd + 1, &rf, NULL, NULL, &tv) > 0) {
-            char buf[8];
-            ssize_t n = recv(fd, buf, sizeof(buf), 0);
-            busy = (n >= 4 && memcmp(buf, "pong", 4) == 0);
-        }
+        if (select(s_fd + 1, &rf, NULL, NULL, &tv) > 0)
+            while ((n = recv(s_fd, buf, sizeof(buf), 0)) >= 0)
+                if (n >= 4 && memcmp(buf, "pong", 4) == 0) return (s_pongMs = nowMs() | 1), true;
+        return false;
     }
-    close(fd);
-    return busy;
+    return s_pongMs && (uint32_t)(nowMs() - s_pongMs) < 3000u;
 }
 
 // pid > 0: running with a known pid. pid == -1: running (control port taken) but no usable state file.
-DaemonState readDaemonState() {
+// fresh = true: wait up to 200 ms for the control-port answer (driver actions only; see controlPortBusy).
+DaemonState readDaemonState(bool fresh = false) {
     DaemonState d;
     strcpy(d.state, "idle");
     d.pid = 0;
@@ -1056,7 +1072,7 @@ DaemonState readDaemonState() {
             return d;
         }
     }
-    if (controlPortBusy()) {
+    if (controlPortBusy(fresh)) {
         static bool s_logged = false;
         if (!s_logged) { alog("nbt-aad is running but %s is missing or stale (old daemon build?)", kStateFile); s_logged = true; }
         strcpy(d.state, "running");
@@ -1216,7 +1232,16 @@ void onCameraContext(int vc, const char* widget, const char* title) {
     }
 }
 
+bool onGraphicalContextBody(const bmw::BasicString<unsigned short>& value);
 bool onGraphicalContext(void*, const bmw::BasicString<unsigned short>& value) {
+    const uint32_t t0 = nowMs();
+    bool r = onGraphicalContextBody(value);
+    const uint32_t dt = nowMs() - t0;
+    if (dt > 20) alog("slow %s handler: %u ms", kGctxProperty, dt);
+    return r;
+}
+
+bool onGraphicalContextBody(const bmw::BasicString<unsigned short>& value) {
     char text[300];
     size_t n = 0;
     const unsigned short* p = value.raw();
@@ -1276,7 +1301,7 @@ bool hideOnHardKey() {
 }
 
 void fireHold(bmw::PluginApp* app, const char* why);
-DaemonState readDaemonState();
+DaemonState readDaemonState(bool fresh);
 
 bool onAaFocus(void*, const bmw::Parcel& p) {
     bool f = false;
@@ -1589,7 +1614,7 @@ void startDaemonOrShow() {
     g_autostartPid = 0;                               // the driver is taking over the automatic handoff
     g_popupAside = false;                            // the driver asked for Android Auto: clear a warning step-aside
     g_ow.reset(nowMs());
-    DaemonState d = readDaemonState();
+    DaemonState d = readDaemonState(true);               // the driver pressed Start: never launch a second daemon
     g_wantHome = true;
     g_startTime = time(NULL);
     if (d.pid != 0) {
@@ -1610,7 +1635,7 @@ void startDaemonOrShow() {
 
 void beginStop(bool restart) {
     g_autostartPid = 0;
-    DaemonState d = readDaemonState();
+    DaemonState d = readDaemonState(true);               // driver action
     g_restartAfterStop = restart;
     if (d.pid == 0) {
         alog("%s: nbt-aad is not running", restart ? "restart" : "force stop");
@@ -2339,6 +2364,7 @@ void serviceAutostart() {
     g_autostartDone = true;
     if (!autostartOn()) return;
     DaemonState d = readDaemonState();
+    if (d.pid == 0) d = readDaemonState(true);          // once per boot, before launching: a real answer
     if (d.pid != 0) { alog("start with the car: nbt-aad already running (pid %d)", d.pid); return; }
     if (!bootGuardAllows()) return;
     const nbt::FilePath flag = nbt::dataFile(kAutostartFlag), manual = nbt::appFile(kAutostartFlag);
@@ -2502,9 +2528,20 @@ bool onVersionFocus(void* /*app*/, const bmw::Parcel& /*p*/) { showVersions(g_ru
 bool g_hudCyrillicShown = false;
 void showHudCyrillic(bmw::PluginApp* app);
 
+void statusRunBody(bmw::PluginApp* app);
+
+// The poll runs on iDrive's shared plugin thread pool (see controlPortBusy); log any tick slower than 20 ms
+// (nbt-aad-app.log stays readable over SSH even while iDrive is frozen).
 void statusRun(void* /*self*/) {
     bmw::PluginApp* app = g_runApp;
     if (!app) return;                                   // finalized: stop polling
+    const uint32_t t0 = nowMs();
+    statusRunBody(app);
+    const uint32_t dt = nowMs() - t0;
+    if (dt > 20) alog("slow status tick: %u ms", dt);
+}
+
+void statusRunBody(bmw::PluginApp* app) {
     if (!g_anyDistShown) showAnyDist(app);
     if (!g_kombiMediaShown) showKombiMedia(app);
     if (!g_gestureMuteShown) showGestureMute(app);
@@ -2630,7 +2667,7 @@ bool onEntryAction(void* self, const bmw::Parcel& /*args*/) {
     // Fire event 53 from the app that owns our menu (g_runApp: the one whose events 50-52 are car-proven); `self` is
     // this entry's own pluginApp, which may be a separate instance without event 53.
     bmw::PluginApp* app = g_runApp ? g_runApp : static_cast<bmw::PluginApp*>(self);
-    DaemonState d = readDaemonState();
+    DaemonState d = readDaemonState(true);               // driver action: may launch
     bool connected = d.pid != 0 && !strcmp(d.state, "connected");
     nbt::entrykey::Action a = nbt::entrykey::decide(d.pid != 0, connected, d.pid != 0 && d.overlay != 0, g_stopPid != 0);
     alog("entry button pressed (raAction %u): nbt-aad %s (pid %d, overlay %d%s)", kEntryAction, d.state, d.pid,
