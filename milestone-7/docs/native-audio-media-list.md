@@ -116,12 +116,13 @@ BMW's public [Bluetooth audio FAQ](https://faq.bmwusa.com/s/article/Connectivity
 describes external Bluetooth devices and their activation in MEDIA. It does not
 document these internal window IDs or the aftermarket Browser Audio adapter.
 
-## Accepted navigation artwork
+## Validation scope
 
-This branch includes the accepted PR318 (`ce0229d`), including PR317 (`9daf2be`),
-without changing its geometry. `d7e436b` alone did not include those PRs.
-For the automatically measured F30 picture126x77, the unified ordinary artwork
-works in both glyph modes; the separate ring renderer handles exit angle,
-number and unknown-angle cases. See [hud-unified.md](hud-unified.md).
-Host polygon/protocol checks and previews do not establish physical HUD
-readability or that a real navigation app sends the expected exit data.
+The owner accepted the BT-style list, title/artist, remembered previous/next
+selection and track changes on BMW F30 / 6WA / HUD with Build66 / NBTevo_N18032I.
+The acceptance came from the integrated local candidate `9c90ca5`, with the
+`df316e6` media library. This main-based PR carries the same adapter, record
+format and compatibility profile; its new commit is not a separate car test.
+
+Navigation graphics, roundabouts and native speed-bar suppression are maintained
+in separate PRs #317, #318 and #346. They are not included in this media patch.

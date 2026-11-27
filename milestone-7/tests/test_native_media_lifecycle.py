@@ -304,7 +304,7 @@ struct AASession {
 };
 }
 static nbt::AASession g_session;
-static bool g_sessionActive = true, g_inputToPhone = false;
+static bool g_sessionActive = true, g_inputToPhone = false, g_useProfileWheelPolicy = false;
 static uint32_t clockMs, g_backDownMs, g_keyToPhoneMs, g_knobInputMs;
 static int g_backState, g_hideReq;
 static uint32_t monoMs() { return clockMs; }
@@ -314,7 +314,9 @@ static nbt::riclist::WheelTurns g_wheelTurns;
 struct Nav { void setNowPlaying(const std::string&) {} } g_kombiNav;
 struct Tracks {
     void update(const std::string&, bool) {}
-    int wheelPress(std::string* why) { if (why) *why = "fake MOST cluster"; return nbt::riclist::kPressNone; }
+    unsigned directKeys = 0;
+    void directTrackKeySeen() { ++directKeys; }
+    int wheelPress(std::string* why, int) { if (why) *why = "fake MOST cluster"; return nbt::riclist::kPressNone; }
     bool kombiSeen() { return false; }
 } g_kombiMedia;
 struct Browser { bool mediaListActive() { return true; } } browser;
@@ -419,6 +421,13 @@ int main() {
     assert(snapshot(30072).cursor == nbt::kNativeMediaCursorNone);
     g_mediaNative = true;
     frame(0xC31, 1, 30080); frame(0xC31, 0, 30090); pair(count + 4, nbt::AAK_MEDIA_NEXT);
+    // Current upstream profile policy owns wheel decisions when enabled; do not use the MOST fallback.
+    g_useProfileWheelPolicy = true;
+    const size_t beforeProfilePress = phoneKeys.size();
+    frame(0xC31, 1, 31000); frame(0xC31, 0, 31010);
+    assert(phoneKeys.size() == beforeProfilePress);
+    assert(g_kombiMedia.directKeys > 0);
+    g_useProfileWheelPolicy = false;
     refreshNativeMediaSource(); resetMedia("input fixture ended");
     pair(count + 4, nbt::AAK_MEDIA_NEXT);
     puts("PASS native media input: real C30/C31, remembered buttons after timeout, one pair per press, legacy fallback and C07/511 dispatch gates");
