@@ -394,7 +394,7 @@ const char* KombiNav::kMediaManualFile = NULL;
 unsigned KombiNav::kWatchSkip = 0;
 
 KombiNav::KombiNav()
-    : last_msg_t_(0), session_ended_(false), quit_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
+    : last_msg_t_(0), night_mode_(false), session_ended_(false), quit_(false), started_(false), handle_(0xC8), host_("160.48.199.96"),
       port_(30502), yield_enabled_(true), forced_(-1), media_forced_(-1), enabled_(false), media_enabled_(false),
       t_setting_(-1e9), prev_guidance_(false),
       disabled_session_(false), backoff_until_(0), link_failures_(0), marked_(false), fallback_noted_(false),
@@ -454,6 +454,12 @@ bool KombiNav::mediaSettingOn() {
 bool KombiNav::mediaEnabledNow() const {
     if (media_forced_ >= 0) return media_forced_ == 1;
     return kombiMediaFlagSet();
+}
+
+void KombiNav::postNightMode(bool night) {
+    pthread_mutex_lock(&mu_);
+    night_mode_ = night;
+    pthread_mutex_unlock(&mu_);
 }
 
 void KombiNav::setNowPlaying(const std::string& line) {
@@ -779,16 +785,21 @@ void KombiNav::tick(double now) {
 
     NavMessages m;
     double last_msg;
-    bool ended;
+    bool ended, night;
     std::string playing;
     pthread_mutex_lock(&mu_);
     m = msgs_;
+    night = night_mode_;
     last_msg = last_msg_t_;
     ended = session_ended_;
     session_ended_ = false;
     if (media_enabled_) playing = now_playing_;
     pthread_mutex_unlock(&mu_);
 
+    if (settings_.hud_night != night) {
+        settings_.hud_night = night;
+        core_->setSettings(settings_);
+    }
     if (ended) {
         if (core_->shown() || core_->sentAny()) core_->clear("Android Auto session ended");
         core_->resetStop();

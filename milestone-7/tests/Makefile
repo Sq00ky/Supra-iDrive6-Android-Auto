@@ -63,6 +63,10 @@ SRC_test_ctl_wizard        :=
 SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
+SRC_test_hud_digits        :=
+SRC_test_hud_ring60        :=
+SRC_test_hud_ramps         :=
+SRC_test_mapbox_wings      := tests/mapbox_wings_other_tu.cpp
 SRC_test_hudprobe          :=
 SRC_test_j29_golden        := $(SRC_KOMBI_NAV)
 SRC_test_frame_queue       :=
@@ -137,7 +141,7 @@ TESTS := $(patsubst SRC_%,%,$(filter SRC_test_%,$(.VARIABLES)))
 .PHONY: all check tsan clean $(TESTS) $(addprefix run-,$(TESTS)) run-test_media_payload run-test_aa_proto32 run-test_schema
 all: $(TESTS)
 
-check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_text_ids run-test_rhmi_actions run-test_settings_refresh tsan
+check: $(addprefix run-,$(TESTS)) run-test_aa_proto32 run-test_media_payload run-test_schema run-test_favourite_resources run-test_text_ids run-test_rhmi_actions run-test_settings_refresh run-test_hud_preview run-test_hud_unified run-test_hud_ring60_golden tsan
 	@echo "[CHECK] all host tests passed"
 
 .PHONY: run-test_text_ids
@@ -156,6 +160,37 @@ run-test_rhmi_actions:
 .PHONY: run-test_settings_refresh
 run-test_settings_refresh:
 	@python3 test_settings_refresh.py
+
+# Review the production driver's far arrow and all four near-route stages at native HUD resolution.
+.PHONY: hud-preview hud-matrix run-test_hud_preview run-test_hud_unified
+hud-preview: $(OUT)/hud_preview
+	@for mode in 0 1; do for stage in 0 1 2 3 4; do $(OUT)/hud_preview $$stage $$mode > $(OUT)/hud-arrows-$$mode-$$stage.svg || exit 1; done; done
+	@for mode in 0 1; do $(OUT)/hud_preview 0 $$mode lanes > $(OUT)/hud-lanes-$$mode.svg || exit 1; done
+	@echo "HUD preview sheets: $(OUT)/hud-arrows-{0,1}-{0..4}.svg"
+
+hud-matrix: $(OUT)/hud_preview
+	@for direction in ccw cw; do for mode in 0 1; do for stage in 0 1 2 3 4; do $(OUT)/hud_preview $$stage $$mode $$direction > $(OUT)/hud-rings-$$direction-$$mode-$$stage.svg || exit 1; done; done; done
+	@echo "Ring matrices: $(OUT)/hud-rings-{ccw,cw}-{0,1}-{0..4}.svg"
+
+run-test_hud_unified: $(OUT)/hud_preview
+	@python3 $(ROOT)/tools/gen_unified_hud.py --check
+	@python3 test_hud_unified.py $(OUT)/hud_preview > $(OUT)/test_hud_unified.log 2>&1 \
+	  && echo "[PASS] test_hud_unified.py" || { echo "[FAIL] test_hud_unified.py"; cat $(OUT)/test_hud_unified.log; exit 1; }
+
+.PHONY: run-test_hud_ring60_golden
+run-test_hud_ring60_golden: $(OUT)/test_hud_ring60
+	@python3 $(ROOT)/tools/gen_ring60_hud.py --check
+	@python3 test_hud_ring60.py $(OUT)/test_hud_ring60 > $(OUT)/test_hud_ring60_golden.log 2>&1 \
+	  && echo "[PASS] test_hud_ring60.py" || { echo "[FAIL] test_hud_ring60.py"; cat $(OUT)/test_hud_ring60_golden.log; exit 1; }
+
+run-test_hud_preview: $(OUT)/hud_preview
+	@python3 test_hud_preview.py $(OUT)/hud_preview > $(OUT)/test_hud_preview.log 2>&1 \
+	  && echo "[PASS] test_hud_preview.py" || { echo "[FAIL] test_hud_preview.py"; cat $(OUT)/test_hud_preview.log; exit 1; }
+
+$(OUT)/hud_preview: hud_preview.cpp $(addprefix $(ROOT)/,$(SRC_test_hud6wa)) \
+                   $(wildcard $(ROOT)/src/*.hpp $(ROOT)/src/*/*.hpp $(ROOT)/include/*.h $(ROOT)/include/*.hpp) \
+                   fake_dsi_client.hpp | $(OUT)
+	$(HOST_CXX) $(CXXFLAGS) -o $@ $(filter %.cpp,$^) $(LDLIBS)
 
 $(OUT):
 	@mkdir -p $(OUT)
@@ -176,6 +211,9 @@ run-$(1): $(OUT)/$(1)
 	  && echo "[PASS] $(1)" || { echo "[FAIL] $(1) (tests/$(OUT)/$(1).log)"; tail -20 tests/$(OUT)/$(1).log; exit 1; }
 endef
 $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
+
+# With multiple source files, -MF records only the last one's headers. Rebuild the HUD integrations for glyph changes.
+$(OUT)/test_hud6wa $(OUT)/test_kombi_nav $(OUT)/test_j29_golden: $(wildcard $(ROOT)/src/cluster/*.hpp)
 
 # This one #includes aa_session.cpp, so it is not in its SRC list, and with several sources -MF keeps only the last one's
 # dependencies: without this line, a change to the session would not rebuild it.
@@ -225,3 +263,8 @@ clean:
 	rm -rf $(OUT)
 
 -include $(wildcard $(OUT)/*.d)
+
+.PHONY: run-test_hud_night_signal
+check: run-test_hud_night_signal
+run-test_hud_night_signal:
+	@python3 test_hud_night_signal.py

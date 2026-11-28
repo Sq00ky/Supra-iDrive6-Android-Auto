@@ -74,7 +74,7 @@ public:
     Hud6waDisplay(hudterm::Port& port, const hudterm::HudProfile& p, bool shadow);
 
     const char* name() const { return p_.name; }
-    void setSettings(const Settings& s) { s_ = s; }
+    void setSettings(const Settings& s);
     void setLog(LogFn log, void* user) { log_fn_ = log; log_user_ = user; }
 
     bool sameManeuver(const NavView& v, double now);
@@ -124,7 +124,7 @@ private:
     }
     int distanceBarLevel(const NavView& v);
     void appendDistanceBar(hudterm::Batch& b, int level, bool redraw) const;
-    Result sendRoute();
+    Result sendRoute(int type);
     Result sendLanes(const NavView& v);
 
     hudterm::Port& port_;

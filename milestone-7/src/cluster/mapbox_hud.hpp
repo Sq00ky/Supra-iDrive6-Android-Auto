@@ -34,8 +34,30 @@ inline Point mbxPoint(int x, int y, bool mirror, const Rect& box) {
                       box.y0 + (y - 20) * (box.y1 - box.y0) / 100);
 }
 
+inline int mbxCanonicalFamily(int family) {
+    switch (family) {
+        case 2: return 3;
+        case 4: return 5;
+        case 6: return 7;
+        case 8: return 9;
+        case 25: case 32: case 33: return 26;
+        case 28: return 29;
+        case 37: return 38;
+        default: return family;
+    }
+}
+
+// Namespace-const arrays have a separate copy in each translation unit. Select metadata by family, never address.
+inline const mbx::CurveBody* mbxCurveBody(int family) {
+    const int key = mbxCanonicalFamily(family);
+    for (size_t i = 0; i < sizeof(mbx::kCurveBodies)/sizeof(mbx::kCurveBodies[0]); ++i)
+        if (mbx::kCurveBodies[i].family == key) return &mbx::kCurveBodies[i];
+    return 0;
+}
+
 // Append a glyph's convex pieces to the picture. tone 0 (route) -> the fill colour; tone 1 (context) -> the road tone.
-inline void mbxGlyph(const mbx::Piece* g, unsigned n, bool mirror, const HudProfile& prof, Picture& pic) {
+inline void mbxGlyph(const mbx::Piece* g, unsigned n, bool mirror, const HudProfile& prof, Picture& pic,
+                     const mbx::CurveBody* body) {
     for (unsigned i = 0; i < n; i++) {
         const mbx::Piece& pc = g[i];
         std::vector<Point> q;
@@ -45,6 +67,15 @@ inline void mbxGlyph(const mbx::Piece* g, unsigned n, bool mirror, const HudProf
         it.colour = pc.tone ? prof.road : prof.fill;
         it.poly = shapes::poly(q);
         pic.push_back(it);
+    }
+    if (body) {
+        std::vector<Point> q;
+        for (unsigned j = 0; j < body->n; ++j) {
+            int x = mirror ? 2400-body->p[j][0] : body->p[j][0], y = body->p[j][1];
+            q.push_back(shapes::pt(prof.glyph.x0+(x-700)*(prof.glyph.x1-prof.glyph.x0)/1000,
+                                  prof.glyph.y0+(y-200)*(prof.glyph.y1-prof.glyph.y0)/1000));
+        }
+        Item it; it.colour = prof.fill; it.poly = shapes::poly(q); pic.push_back(it);
     }
 }
 
@@ -73,6 +104,21 @@ inline bool mbxGlyphForFamily(int fam, const mbx::Piece*& g, unsigned& n, bool& 
         case 38: g = mbx::kFork;             n = mbx::kForkN;             return true;   // fork right
         default: return false;   // roundabout (14/15) and anything else -> parametric
     }
+}
+
+// Fitting to post-wing bounds would resize the unchanged shaft and tip along with the narrower wings.
+inline bool mbxOriginalBounds(int family, Rect& bounds) {
+    const mbx::Piece* glyph; unsigned count; bool mirror;
+    if (!mbxGlyphForFamily(family, glyph, count, mirror)) return false;
+    const int key = mbxCanonicalFamily(family);
+    for (size_t i = 0; i < sizeof(mbx::kOriginalBounds) / sizeof(mbx::kOriginalBounds[0]); ++i) {
+        const mbx::OriginalBounds& b = mbx::kOriginalBounds[i];
+        if (b.family != key) continue;
+        bounds = Rect{ (int16_t)(mirror ? 240 - b.x1 : b.x0), b.y0,
+                       (int16_t)(mirror ? 240 - b.x0 : b.x1), b.y1 };
+        return true;
+    }
+    return false;   // destination and non-arrow glyphs retain their current bounds
 }
 
 // ---- Mapbox roundabout -----------------------------------------------------------------------------------------------
@@ -154,12 +200,13 @@ inline bool mbxManeuver(const ShapeSpec& spec, const HudProfile& prof, Picture& 
     if (!mbxEnabled()) return false;
     int fam = kombinav::kombiDirection(spec.aa_type);
     if (fam == 14 || fam == 15) {   // roundabout: 14 = clockwise (left-hand traffic)
+        if (!spec.exit) return false;   // unknown angle: the plain ring with its exit number
         mbxRoundabout(spec.exit, spec.clockwise, prof, pic);
         return true;
     }
     const mbx::Piece* g; unsigned n; bool mir;
     if (!mbxGlyphForFamily(fam, g, n, mir)) return false;
-    mbxGlyph(g, n, mir, prof, pic);
+    mbxGlyph(g, n, mir, prof, pic, mbxCurveBody(fam));
     return true;
 }
 

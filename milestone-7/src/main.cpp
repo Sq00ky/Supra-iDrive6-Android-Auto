@@ -2737,6 +2737,7 @@ int main(int argc, char* argv[]) {
             if (n >= 0 && n != night_posted) {
                 printf("[Night] car is in %s mode: Android Auto %s\n", n ? "night" : "day", n ? "dark theme" : "light theme");
                 g_session.postNightMode(n != 0);
+                g_kombiNav.postNightMode(n != 0);
                 night_posted = n;
             }
         }

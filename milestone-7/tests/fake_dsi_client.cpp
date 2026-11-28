@@ -3,6 +3,7 @@
 #include "fake_dsi_client.hpp"
 
 #include <stdint.h>
+#include <pthread.h>
 #include <string.h>
 
 namespace fake_dsi {
@@ -13,6 +14,16 @@ std::string openedIface, openedRole;
 int openedMajor = 0, openedMinor = 0;
 
 static nbt::DsiClient* g_client = NULL;
+static pthread_mutex_t g_callsLock = PTHREAD_MUTEX_INITIALIZER;
+static RequestHook g_requestHook = NULL;
+static void* g_requestUser = NULL;
+void setRequestHook(RequestHook hook, void* user) { g_requestHook = hook; g_requestUser = user; }
+std::vector<Call> snapshot() {
+    pthread_mutex_lock(&g_callsLock);
+    std::vector<Call> result = calls;
+    pthread_mutex_unlock(&g_callsLock);
+    return result;
+}
 
 // What the fake's onDataTramp takes in place of the library's CDSIIStream.
 struct Frame {
@@ -23,6 +34,7 @@ struct Frame {
 
 void reset() {
     calls.clear();
+    g_requestHook = NULL; g_requestUser = NULL;
     openResult = true;
     openedIface.clear();
     openedRole.clear();
@@ -53,7 +65,9 @@ static void record(Call::Kind k, uint32_t id, const std::vector<uint8_t>* payloa
     c.kind = k;
     c.id = id;
     if (payload) c.payload = *payload;
+    pthread_mutex_lock(&g_callsLock);
     calls.push_back(c);
+    pthread_mutex_unlock(&g_callsLock);
 }
 
 } // namespace fake_dsi
@@ -118,7 +132,7 @@ bool DsiClient::setNotification(uint32_t attr) {
 bool DsiClient::sendRequest(uint32_t requestId, const std::vector<uint8_t>& payload) {
     if (!attached_) return false;
     fake_dsi::record(fake_dsi::Call::kRequest, requestId, &payload);
-    return true;
+    return !fake_dsi::g_requestHook || fake_dsi::g_requestHook(requestId,payload,fake_dsi::g_requestUser);
 }
 
 } // namespace nbt

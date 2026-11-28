@@ -119,6 +119,9 @@ inline Point offsetAt(const Path& p, size_t i, int off) {
 
 } // namespace junction
 
+// cot(80 degrees), used by ordinary and roundabout exit wings at their own coordinate scale.
+inline int wingFold(int wing, int neck) { return ((wing - neck) * 722 + 2048) / 4096; }
+
 // The path as one polygon w wide, with an arrowhead headL long and 2 * headW wide at its end when headL > 0: the left
 // edge forward, the head, the right edge back. 2 * points (+ 3 with a head).
 inline Poly thickPath(const Path& p, int w, int headL = 0, int headW = 0) {
@@ -163,6 +166,7 @@ inline bool junctionLayout(int aa_type, bool has_exit_angle, int64_t exit_angle,
     Path p;
     if (s.kind == kShapeFlag) return false;
     if (s.kind == kShapeRoundabout) {
+        if (!s.exit) return false;   // no exit geometry to build a junction from
         // The entry at the bottom of the ring, the exit where the picture's arrow leaves it (cluster/hudterm_shapes.hpp
         // drawRoundabout): clockwise travel (left-hand traffic) reaches the left side first.
         L.ring = true;
@@ -277,14 +281,43 @@ inline void drawRoads(const Layout& L, const JunctionColours& c, const JunctionS
 }
 
 // The route with a tail `tail` long (clamped to 8..maxTail) up to where the maneuver begins: its dark edge, then the
-// route over it.
-inline void drawRoute(const Layout& L, int tail, const JunctionColours& c, const JunctionStyle& st, Picture& out) {
+// route over it. A nonnegative tipAdvance keeps the original tip while a longer head extends back along the route.
+inline void drawRoute(const Layout& L, int tail, const JunctionColours& c, const JunctionStyle& st, Picture& out,
+                      int tipAdvance = -1, bool mapboxWings = false) {
     if (tail > L.maxTail) tail = L.maxTail;
     if (tail < 8) tail = 8;
     Path p;
     p.start(L.ex, L.ey + tail);
     p.line(0, tail);
     p.append(L.route);
+    if (tipAdvance >= 0 || mapboxWings) {
+        const Point end = p.pts.back();
+        int heading = p.heads.back();
+        int advance = tipAdvance >= 0 ? tipAdvance : st.headL;
+        Point base = shapes::along(end.x, end.y, heading, advance - st.headL, 0);
+        int neck = st.routeCore / 2;
+        int wing = mapboxWings ? neck + ((st.headW - neck) * 7 + 5) / 10 : st.headW;
+        // cot(80 degrees): move only the wings, keeping the tip, neck and stem in place.
+        int fold = mapboxWings ? wingFold(wing, neck) : 0;
+        // A broad head may overlap the incoming stem on a sharp turn. Paint their union as simple polygons.
+        for (int pass = 0; pass < 2; ++pass) {
+            int edge = pass ? 0 : st.edgeHead;
+            Item item; item.colour = pass ? c.route : c.edge;
+            item.poly = thickPath(p, pass ? st.routeCore : st.routeW);
+            out.push_back(item);
+            std::vector<Point> head;
+            head.push_back(shapes::along(base.x, base.y, heading, -fold, -wing - edge));
+            head.push_back(shapes::along(end.x, end.y, heading, advance + edge, 0));
+            head.push_back(shapes::along(base.x, base.y, heading, -fold, wing + edge));
+            if (mapboxWings) {
+                head.push_back(shapes::along(base.x, base.y, heading, 0, neck + edge));
+                head.push_back(shapes::along(base.x, base.y, heading, 0, -neck - edge));
+            }
+            item.poly = shapes::poly(head);
+            out.push_back(item);
+        }
+        return;
+    }
     Item it;
     it.colour = c.edge;
     it.poly = thickPath(p, st.routeW, st.headL + st.edgeHead, st.headW + st.edgeHead);

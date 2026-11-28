@@ -174,6 +174,7 @@ public:
     // What the phone is playing, as one line ("" = nothing playing), from the media status callback (session thread).
     // Shown as the cluster's idle text when "now playing in the cluster" is on and the driver has one (the 6WA).
     void setNowPlaying(const std::string& line);
+    void postNightMode(bool night); // car state from main; copied under the existing worker mutex
     // From onSessionEnded (session thread).
     void onSessionEnded();
     // From the fatal-signal handler: async-signal-safe cancel if an arrow may be up.
@@ -220,6 +221,7 @@ private:
     NavMessages msgs_;           // guarded by mu_
     std::string now_playing_;    // guarded by mu_
     double last_msg_t_;          // guarded by mu_
+    bool night_mode_;          // guarded by mu_; last valid car state, default legacy day
     bool session_ended_;         // guarded by mu_
     bool quit_;                  // guarded by mu_
     bool started_;

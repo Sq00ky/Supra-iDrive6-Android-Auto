@@ -58,6 +58,7 @@ struct Settings {
     bool junction;         // 6WA: a junction view (roads and route) in place of the arrow near a maneuver
                            // (NBT_HUD_JUNCTION=0 turns it off)
     double near_m;         // 6WA: the junction view comes in at the main prompt (kApproachTime), or this close
+    bool hud_night;        // known car night mode: suppress uncalibrated F30 outline layers
     bool hud_lanes;        // 6WA: the phone's lanes in their own layer (NBT_HUD_LANES=1; off until their place is known)
     double media_refresh_s; // the idle text's panel is switched on again this often (0 = only when the text changes)
     double media_show_s;    // the idle text is cleared again this long after it changed (0 = it stays while it plays)
@@ -65,7 +66,7 @@ struct Settings {
                  approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), hud_bar(false), show_departure(false), clear_route_end(false),
                  grace_s(8.0), first_dist_s(3.0),
                  min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1),
-                 junction(true), near_m(300), hud_lanes(false), media_refresh_s(0), media_show_s(0) {}
+                 junction(true), near_m(300), hud_night(false), hud_lanes(false), media_refresh_s(0), media_show_s(0) {}
 };
 
 typedef void (*LogFn)(const char* line, void* user);

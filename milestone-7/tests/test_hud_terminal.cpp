@@ -236,10 +236,12 @@ static void testRefusals() {
     t.resize(t.size() - 2);
     shape.add(kTextareaSetText, t);
     assert(k.submit(shape, 0) == kRefused);
-    assert(k.submit(batchOf(33), 0) == kRefused);                             // over maxBatch
+    assert(k.submit(batchOf(config().maxBatch + 1), 0) == kRefused);           // over maxBatch
     most::Msg m;
     assert(!k.next(0, m) && !k.busy() && k.stats().refused == 6 && k.stats().calls == 0);
     assert(k.status() == kReady);                                             // a refusal is not a failure
+    assert(k.submit(batchOf(config().maxBatch), 0) == kQueued);
+    assert(pumpAnswered(k, 1) == (int)config().maxBatch);
 }
 
 static void testBackToBackAndWindow() {

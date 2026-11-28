@@ -54,6 +54,8 @@ struct HudProfile {
 };
 
 // The 6WA, as our F20 showed it:
+// F30 owner swatches (2026-11-26, main6 and route8): 4 white by day/orange by night; 3 dim orange in both;
+// 7 white in both. No grey found in0..31 at night. The F20 colour comments below are not a portable palette.
 //   - fill 4 is the factory navigation's colour for its main picture (white at night on our car; other colour schemes
 //     of a related cluster firmware make it orange: the scheme is the cluster's choice)
 //   - junction view colours from the car's colour sweep: 7 black, 3 light grey, 4 white. Whether black covers grey on
@@ -182,6 +184,33 @@ inline void fitMeasured(int w, int h, HudProfile& p) {
         p.glyph.x0 = (int16_t)((w * 37 + 63) / 126); p.glyph.x1 = (int16_t)((w * 82 + 63) / 126);
         p.glyph.y0 = (int16_t)((h * 23 + 38) / 77);  p.glyph.y1 = (int16_t)((h * 68 + 38) / 77);
     }
+}
+
+// The ring fitting box, from the measured base profile. Ordinary glyph fitting remains separate; env pins win.
+inline Rect ringGlyphBox(const HudProfile& p) {
+    Rect box = p.glyph;
+    if (!getenv("NBT_HUD_GLYPH") && p.canvas.x1 > p.canvas.x0 && p.canvas.y1 > p.canvas.y0) {
+        int cw = p.canvas.x1 - p.canvas.x0 + 1, ch = p.canvas.y1 - p.canvas.y0 + 1;
+        // Keep the car-tested ring size (53 then +25% on a 126x77 HUD) without enlarging ordinary arrows.
+        bool cut = k6wa.glyph.x0 < p.canvas.x0 || k6wa.glyph.y0 < p.canvas.y0 ||
+                   k6wa.glyph.x1 > p.canvas.x1 || k6wa.glyph.y1 > p.canvas.y1;
+        if (!(cw == 176 && ch == 126) && cut) {
+            int side = (cw < ch ? cw : ch) * 25 / 36;
+            if (side > 100) side = 100;
+            int x = p.canvas.x0 + (cw - side) / 2, y = p.canvas.y0 + (ch - side + 1) * 2 / 3;
+            box.x0 = x; box.y0 = y; box.x1 = x + side; box.y1 = y + side;
+        }
+        int w = (box.x1 - box.x0) * 5 / 4, h = (box.y1 - box.y0) * 5 / 4;
+        if (w > p.canvas.x1 - p.canvas.x0) w = p.canvas.x1 - p.canvas.x0;
+        if (h > p.canvas.y1 - p.canvas.y0) h = p.canvas.y1 - p.canvas.y0;
+        int x = (box.x0 + box.x1 - w) / 2, y = (box.y0 + box.y1 - h) / 2;
+        if (x < p.canvas.x0) x = p.canvas.x0;
+        if (y < p.canvas.y0) y = p.canvas.y0;
+        if (x + w > p.canvas.x1) x = p.canvas.x1 - w;
+        if (y + h > p.canvas.y1) y = p.canvas.y1 - h;
+        box.x0 = x; box.y0 = y; box.x1 = x + w; box.y1 = y + h;
+    }
+    return box;
 }
 
 } // namespace hudterm
