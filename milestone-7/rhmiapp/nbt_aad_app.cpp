@@ -467,6 +467,23 @@ const char* const kDscProperty     = "driving.DSCActive";
 // nbt-aad.env in the conf dir (src/nbt_paths.hpp), NULL when there is none.
 FILE* openDaemonEnv() { return fopen(nbt::confFile(nbt::kDaemonEnvName).c_str(), "r"); }
 
+// Value of the last NAME= line in nbt-aad.env (in out, without the line end), NULL if there is none. Does not log.
+const char* envValue(const char* name, char* out, size_t n) {
+    FILE* f = openDaemonEnv();
+    if (!f) return NULL;
+    char line[160];
+    size_t l = strlen(name);
+    bool found = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, name, l) != 0 || line[l] != '=') continue;
+        snprintf(out, n, "%s", line + l + 1);
+        out[strcspn(out, "\r\n")] = 0;
+        found = true;
+    }
+    fclose(f);
+    return found ? out : NULL;
+}
+
 // PluginApp vtable slots (index from the address point)
 enum { kSlotOnError = 21, kSlotOnInit = 22, kSlotOnFinalize = 23, kVtblSlots = 34 };
 
@@ -491,7 +508,10 @@ bool appLogPath(char* out, size_t n) {
         char stick[128];
         if (nbt::usblog::enabled() && nbt::usblog::findStick(stick, sizeof(stick))) {
             if (!g_appLogRotated) {                       // size check once per HMI run
-                nbt::usblog::logPath(g_appLogPath, sizeof(g_appLogPath), stick, nbt::usblog::kAppName);
+                char keep[16];
+                nbt::usblog::logPath(g_appLogPath, sizeof(g_appLogPath), stick, nbt::usblog::kAppName,
+                                     nbt::usblog::kMaxBytes,
+                                     nbt::usblog::keepCount(envValue("NBT_USB_LOG_KEEP", keep, sizeof(keep))));
                 g_appLogRotated = true;
             } else {
                 snprintf(g_appLogPath, sizeof(g_appLogPath), "%s/%s", stick, nbt::usblog::kAppName);
