@@ -42,6 +42,7 @@ The following versions have been tested and confirmed working:
 |NBTevo_R19144I|BMW X3|G01|2018|
 |NBTevo_Y21432J|BMW M2|F87|2020|
 ||BMW 340i|F30|2018|
+||BMW 3 Series|F30|2017|
 |NBTevo_Y22292I|BMW 3 Series|F30|2012 [Retrofit]|
 |NBTevo_Y22292I|BMW X1|F48|2019|
 |NBTevo_Y24073J|BMW 3 Series|F30|2017|
