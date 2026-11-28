@@ -163,6 +163,7 @@ inline bool junctionLayout(int aa_type, bool has_exit_angle, int64_t exit_angle,
     Path p;
     if (s.kind == kShapeFlag) return false;
     if (s.kind == kShapeRoundabout) {
+        if (!s.exit) return false;   // no exit geometry to build a junction from
         // The entry at the bottom of the ring, the exit where the picture's arrow leaves it (cluster/hudterm_shapes.hpp
         // drawRoundabout): clockwise travel (left-hand traffic) reaches the left side first.
         L.ring = true;

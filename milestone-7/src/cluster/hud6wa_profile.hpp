@@ -184,6 +184,33 @@ inline void fitMeasured(int w, int h, HudProfile& p) {
     }
 }
 
+// The ring fitting box, from the measured base profile. Ordinary glyph fitting remains separate; env pins win.
+inline Rect ringGlyphBox(const HudProfile& p) {
+    Rect box = p.glyph;
+    if (!getenv("NBT_HUD_GLYPH") && p.canvas.x1 > p.canvas.x0 && p.canvas.y1 > p.canvas.y0) {
+        int cw = p.canvas.x1 - p.canvas.x0 + 1, ch = p.canvas.y1 - p.canvas.y0 + 1;
+        // Keep the car-tested ring size (53 then +25% on a 126x77 HUD) without enlarging ordinary arrows.
+        bool cut = k6wa.glyph.x0 < p.canvas.x0 || k6wa.glyph.y0 < p.canvas.y0 ||
+                   k6wa.glyph.x1 > p.canvas.x1 || k6wa.glyph.y1 > p.canvas.y1;
+        if (!(cw == 176 && ch == 126) && cut) {
+            int side = (cw < ch ? cw : ch) * 25 / 36;
+            if (side > 100) side = 100;
+            int x = p.canvas.x0 + (cw - side) / 2, y = p.canvas.y0 + (ch - side + 1) * 2 / 3;
+            box.x0 = x; box.y0 = y; box.x1 = x + side; box.y1 = y + side;
+        }
+        int w = (box.x1 - box.x0) * 5 / 4, h = (box.y1 - box.y0) * 5 / 4;
+        if (w > p.canvas.x1 - p.canvas.x0) w = p.canvas.x1 - p.canvas.x0;
+        if (h > p.canvas.y1 - p.canvas.y0) h = p.canvas.y1 - p.canvas.y0;
+        int x = (box.x0 + box.x1 - w) / 2, y = (box.y0 + box.y1 - h) / 2;
+        if (x < p.canvas.x0) x = p.canvas.x0;
+        if (y < p.canvas.y0) y = p.canvas.y0;
+        if (x + w > p.canvas.x1) x = p.canvas.x1 - w;
+        if (y + h > p.canvas.y1) y = p.canvas.y1 - h;
+        box.x0 = x; box.y0 = y; box.x1 = x + w; box.y1 = y + h;
+    }
+    return box;
+}
+
 } // namespace hudterm
 } // namespace nbt
 

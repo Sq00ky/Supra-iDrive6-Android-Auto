@@ -154,6 +154,7 @@ inline bool mbxManeuver(const ShapeSpec& spec, const HudProfile& prof, Picture& 
     if (!mbxEnabled()) return false;
     int fam = kombinav::kombiDirection(spec.aa_type);
     if (fam == 14 || fam == 15) {   // roundabout: 14 = clockwise (left-hand traffic)
+        if (!spec.exit) return false;   // unknown angle: the plain ring with its exit number
         mbxRoundabout(spec.exit, spec.clockwise, prof, pic);
         return true;
     }

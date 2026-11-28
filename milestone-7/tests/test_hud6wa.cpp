@@ -12,6 +12,7 @@
 // Every road name and distance here is invented.
 #include "cluster/nav_core.hpp"
 #include "cluster/mapbox_hud.hpp"
+#include "cluster/hudterm_ring.hpp"
 #include "fake_dsi_client.hpp"
 #include "kombi_nav_test_util.hpp"
 #include <algorithm>
@@ -171,10 +172,10 @@ static void testShapeFamilies() {
     assert(describeSpec(shapeFor(24, false, 0)) == "arrow +45 stub -20");
     assert(describeSpec(shapeFor(25, false, 0)) == "arrow -40 stub +40");
     for (int t = 39; t <= 42; ++t) assert(describeSpec(shapeFor(t, false, 0)) == "flag");
-    assert(describeSpec(shapeFor(34, false, 0)) == "roundabout ccw exit 180");   // no angle: straight across
+    assert(describeSpec(shapeFor(34, false, 0)) == "roundabout ccw exit unknown");   // no angle: no invented exit
     assert(describeSpec(shapeFor(34, true, 90)) == "roundabout ccw exit 90");
     assert(describeSpec(shapeFor(33, true, 270)) == "roundabout cw exit 270");
-    assert(describeSpec(shapeFor(34, true, 400)) == "roundabout ccw exit 180");  // out of range: ignored
+    assert(describeSpec(shapeFor(34, true, 400)) == "roundabout ccw exit unknown");  // out of range: unknown
     assert(describeSpec(shapeFor(0, false, 0)) == "arrow +0");                    // unknown: straight on
 }
 
@@ -706,8 +707,9 @@ static void testJunctionGeometry() {
                 Layout L;
                 bool has = junctionLayout(t, angles[a] >= 0, angles[a], numbers[n] > 0, numbers[n], k6wa.glyph,
                                           k6wa.canvas.y1, L);
-                if (kombinav::kombiDirection(t) == 10) {
-                    assert(!has);                                // the destination keeps its flag
+                int family = kombinav::kombiDirection(t);
+                if (family == 10 || ((family == 14 || family == 15) && (angles[a] < 1 || angles[a] > 360))) {
+                    assert(!has);   // destination, or unknown roundabout geometry: use the plain picture
                     continue;
                 }
                 assert(has && L.maxTail >= 8 && !L.roads.empty());
@@ -876,6 +878,541 @@ static kombinav::AaLane oneLane(int shape, bool take) {
     return kombinav::AaLane(1, kombinav::LaneDirection(shape, take));
 }
 
+// Read the actual wire polygons so caption checks do not depend on the production layout helper.
+static Shape packetPolygons(const Batch& batch) {
+    Shape out;
+    for (size_t i = 0; i < batch.calls.size(); ++i) {
+        const Call& c = batch.calls[i];
+        if (c.fkt != kAddPolygon) continue;
+        Poly p; p.type = (PolyType)c.payload[4];
+        for (size_t j = 0; j < c.payload[5]; ++j)
+            p.pts.push_back(shapes::pt((int16_t)rdBe16(&c.payload[6 + j * 4]),
+                                      (int16_t)rdBe16(&c.payload[8 + j * 4])));
+        out.push_back(p);
+    }
+    return out;
+}
+
+static Rect boundsForTest(const Shape& s) {
+    assert(!s.empty() && !s[0].pts.empty());
+    Rect b = {s[0].pts[0].x, s[0].pts[0].y, s[0].pts[0].x, s[0].pts[0].y};
+    for (size_t i = 0; i < s.size(); ++i)
+        for (size_t j = 0; j < s[i].pts.size(); ++j) {
+            b.x0 = std::min(b.x0, s[i].pts[j].x); b.x1 = std::max(b.x1, s[i].pts[j].x);
+            b.y0 = std::min(b.y0, s[i].pts[j].y); b.y1 = std::max(b.y1, s[i].pts[j].y);
+        }
+    return b;
+}
+
+static void samePolygons(const Shape& actual, size_t offset, const Shape& expected, int dx = 0, int dy = 0) {
+    assert(actual.size() >= offset + expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const Poly& a = actual[offset + i]; const Poly& e = expected[i];
+        assert(a.type == e.type && a.pts.size() == e.pts.size());
+        for (size_t j = 0; j < e.pts.size(); ++j) {
+            if (a.pts[j].x != e.pts[j].x + dx || a.pts[j].y != e.pts[j].y + dy)
+                fprintf(stderr, "polygon mismatch offset=%u poly=%u point=%u: actual=%d,%d expected=%d,%d\n",
+                        (unsigned)offset, (unsigned)i, (unsigned)j, a.pts[j].x, a.pts[j].y,
+                        e.pts[j].x + dx, e.pts[j].y + dy);
+            assert(a.pts[j].x == e.pts[j].x + dx && a.pts[j].y == e.pts[j].y + dy);
+        }
+    }
+}
+
+// Frozen from the approved analytic prototype, not from roundaboutPicture(): three identical curved arrows
+// rotated by 120 degrees, then by 35 degrees, followed by a plain incoming rectangle. F30 pixels.
+static Shape approvedCirculation() {
+    static const int count[] = {29,29,29,4};
+    static const int xy[][58] = {
+        {66,8,69,9,72,10,75,11,78,13,80,15,83,18,84,20,86,23,87,26,88,30,88,33,88,36,93,38,84,45,78,35,83,36,83,33,83,31,82,28,81,25,80,23,78,21,77,19,75,17,72,16,70,15,68,14,65,13},
+        {83,50,81,53,78,55,75,57,72,58,69,59,66,60,63,60,59,60,56,60,53,59,50,57,47,56,43,59,42,48,53,48,50,51,52,53,55,54,57,54,60,55,62,55,65,55,68,54,70,53,73,52,75,51,77,49,78,47},
+        {38,44,37,41,36,37,36,34,36,31,37,28,38,24,39,21,41,19,43,16,45,14,48,12,51,10,49,5,60,10,55,20,53,15,51,16,49,18,47,20,45,22,44,24,43,26,42,29,41,31,41,34,41,37,42,39,43,42},
+        {59,55,65,55,65,76,59,76}
+    };
+    Shape out;
+    for (size_t i = 0; i < 4; ++i) {
+        Poly poly; poly.type = kPolygon;
+        for (int j = 0; j < count[i]; ++j) poly.pts.push_back(shapes::pt(xy[i][2*j], xy[i][2*j+1]));
+        out.push_back(poly);
+    }
+    return out;
+}
+
+static void sameRect(const Rect& a, const Rect& b) {
+    assert(a.x0 == b.x0 && a.x1 == b.x1 && a.y0 == b.y0 && a.y1 == b.y1);
+}
+
+static void checkCirculation(const Shape& actual, const HudProfile& p, const Rect& frame,
+                             int number, bool clockwise, bool standardHud = false) {
+    sameRect(ringGlyphBox(p), frame);
+    const RingLayout layout = ringLayout(p);
+    int wanted = std::min(frame.x1-frame.x0, frame.y1-frame.y0);
+    assert(layout.side > 0 && layout.side <= wanted);
+    // The frozen template spans about 62 pixels symmetrically around x and 71 in y at side 66.
+    // Permit its subpixel extrema, but reject gratuitous shrinking even if the resulting picture would fit.
+    int available = std::min((p.canvas.x1-p.canvas.x0)*66/62, (p.canvas.y1-p.canvas.y0)*66/71);
+    assert(layout.side >= std::min(wanted, available)-1);
+    if (standardHud) assert(layout.cx == 62 && layout.cy == 34 && layout.side == 66);
+    const Shape approved = approvedCirculation();
+    assert(actual.size() >= approved.size());
+    for (size_t i = 0; i < approved.size(); ++i) {
+        assert(actual[i].type == kPolygon && actual[i].pts.size() <= approved[i].pts.size());
+        if (standardHud) {
+            assert(actual[i].pts.size() == approved[i].pts.size());
+            for (size_t j = 0; j < approved[i].pts.size(); ++j) {
+                int x = approved[i].pts[j].x - 62;
+                if (i < 3 && !clockwise) x = -x;
+                assert(actual[i].pts[j].x == 62+x && actual[i].pts[j].y == approved[i].pts[j].y);
+            }
+        } else {
+            // The frozen reference has half-pixel rounding; the final fit adds another half pixel. Check
+            // both directions so deduplicating rounded neighbours cannot hide a missing head or bent arc.
+            double tolerance = 0.51 + 0.51 * layout.side / 66;
+            for (int direction = 0; direction < 2; ++direction) {
+                size_t count = direction ? approved[i].pts.size() : actual[i].pts.size();
+                size_t other = direction ? actual[i].pts.size() : approved[i].pts.size();
+                for (size_t j = 0; j < count; ++j) {
+                    bool close = false;
+                    for (size_t k = 0; k < other; ++k) {
+                        Point a = actual[i].pts[direction ? k : j], e = approved[i].pts[direction ? j : k];
+                        int x = e.x-62, y = e.y-34;
+                        if (i < 3 && !clockwise) x = -x;
+                        if (fabs(a.x-layout.cx-x*layout.side/66.0) <= tolerance &&
+                            fabs(a.y-layout.cy-y*layout.side/66.0) <= tolerance) { close = true; break; }
+                    }
+                    assert(close);
+                }
+            }
+        }
+    }
+    const Poly& entrance = actual[3];
+    assert(entrance.pts.size() == 4);     // plain attachment: no incoming arrowhead
+    assert(entrance.pts[0].x == entrance.pts[3].x && entrance.pts[1].x == entrance.pts[2].x);
+    assert(entrance.pts[0].y == entrance.pts[1].y && entrance.pts[2].y == entrance.pts[3].y);
+    assert(entrance.pts[0].x < entrance.pts[1].x && entrance.pts[0].y < entrance.pts[3].y);
+    for (size_t i = 0; i < actual.size(); ++i) {
+        assert(actual[i].type == kPolygon && actual[i].pts.size() >= 3 && actual[i].pts.size() <= 99);
+        assert(area2(actual[i].pts) > 0);
+        for (size_t j = 0; j < actual[i].pts.size(); ++j) {
+            Point q = actual[i].pts[j];
+            assert(q.x >= p.canvas.x0 && q.x <= p.canvas.x1 && q.y >= p.canvas.y0 && q.y <= p.canvas.y1);
+        }
+    }
+    int h = layout.side * (number > 9 ? 18 : 24) / 66;
+    if (number < 1 || number > 99 || h < 6) { assert(actual.size() == 4); return; }
+    if (standardHud) assert(h == (number > 9 ? 18 : 24));
+    Shape expected;
+    digits::drawNumber(number, layout.cx, layout.cy - h/2, h, expected);
+    assert(actual.size() == 4 + expected.size());
+    samePolygons(actual, 4, expected);   // the central text is upright in both traffic directions
+    Shape body(actual.begin(), actual.begin()+4), caption(actual.begin()+4, actual.end());
+    Rect before = boundsForTest(body), after = boundsForTest(actual);
+    sameRect(before, after);            // a number cannot enlarge, shrink or displace the ring
+    const double hole = 20.0 * layout.side / 66 + 1;
+    for (size_t i = 0; i < caption.size(); ++i)
+        for (size_t j = 0; j < caption[i].pts.size(); ++j) {
+            double dx = caption[i].pts[j].x-layout.cx, dy = caption[i].pts[j].y-layout.cy;
+            assert(dx*dx + dy*dy <= hole*hole);   // safely inside the empty centre, away from curved arrows
+        }
+}
+
+static void checkCirculationPacket(const Batch& b, const HudProfile& p, const Rect& frame,
+                                   int number, bool clockwise, bool standardHud = false) {
+    checkCirculation(packetPolygons(b), p, frame, number, clockwise, standardHud);
+    int colour = -1;
+    for (size_t i = 0; i < b.calls.size(); ++i) {
+        if (b.calls[i].fkt == kSetFillColor) colour = b.calls[i].payload[2];
+        if (b.calls[i].fkt == kAddPolygon) assert(colour == p.fill);
+    }
+    assert(b.calls.size() <= Config().maxBatch && b.calls.size() <= 64);
+}
+
+// Missing/invalid angle never invents an exit direction: show circulation and only the supplied valid number.
+static void testUnknownRoundabout() {
+    assert(shapeFor(34, false, 0).exit == 0);
+    assert(describeSpec(shapeFor(34, false, 0)) == "roundabout ccw exit unknown");
+    const int widths[] = {0,126,176,120}, heights[] = {0,77,126,72};
+    const Rect expanded[] = {{57,4,182,129},{29,9,95,75},{44,29,122,120},{29,9,91,71}};
+    struct ExitNumber { bool has; int value, shown; };
+    const ExitNumber numbers[] = {
+        {false,5,0},{true,0,0},{true,-1,0},{true,1,1},
+        {true,9,9},{true,10,10},{true,99,99},{true,100,0}
+    };
+    struct ExitAngle { bool has; int value; };
+    const ExitAngle angles[] = {{false,0},{false,90},{true,-1},{true,0},{true,361},{true,400}};
+    unsetenv("NBT_HUD_CANVAS");
+    unsigned cases = 0;
+    for (int mb = 0; mb <= 1; ++mb) {
+        setenv("NBT_HUD_GLYPHS", mb ? "1" : "0", 1);
+        for (int measured = 0; measured < 4; ++measured)
+            for (int pinned = 0; pinned <= 1; ++pinned) {
+                if (pinned) setenv("NBT_HUD_GLYPH", "4 5 34 35", 1);
+                else unsetenv("NBT_HUD_GLYPH");
+                HudProfile profile = k6wa; applyHudEnv(profile);
+                if (measured) fitMeasured(widths[measured], heights[measured], profile);
+                Rect box = pinned ? profile.glyph : expanded[measured];
+                for (int type = 33; type <= 34; ++type)
+                    for (int junction = 0; junction <= 1; ++junction)
+                        for (size_t n = 0; n < sizeof(numbers)/sizeof(numbers[0]); ++n)
+                            for (size_t a = 0; a < sizeof(angles)/sizeof(angles[0]); ++a) {
+                                FakePort port; Hud6waDisplay display(port, profile, false);
+                                Settings settings = arrows(); settings.junction = junction != 0; display.setSettings(settings);
+                                NavView v = view(type, "", "580", 1, 580);
+                                v.has_exit_number = numbers[n].has; v.exit_number = numbers[n].value;
+                                v.has_exit_angle = angles[a].has; v.exit_angle = angles[a].value;
+                                ShapeSpec spec = shapeFor(type, angles[a].has, angles[a].value);
+                                assert(spec.exit == 0);
+                                assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+                                assert(!display.nearShown() && port.batches.size() == 1);
+                                checkCirculationPacket(port.batches[0], profile, box, numbers[n].shown,
+                                                       spec.clockwise, measured == 1 && !pinned);
+                                Picture unknown;
+                                assert(!mbxManeuver(spec, profile, unknown) && unknown.empty());
+                                Layout layout;
+                                assert(!junctionLayout(type, angles[a].has, angles[a].value, numbers[n].has,
+                                                       numbers[n].value, profile.glyph, profile.canvas.y1, layout));
+                                ++cases;
+                            }
+            }
+    }
+    assert(cases == 3072);
+    unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_GLYPHS");
+
+    // Refit from the original profile as guidance moves HUD -> cluster -> HUD -> MINI -> HUD.
+    FakePort port; Hud6waDisplay display(port, k6wa, false); display.setSettings(arrows());
+    NavView v = view(34, "", "580", 1, 580); v.has_exit_number = true; v.exit_number = 4;
+    const int moves[] = {1,2,1,3,1};
+    for (size_t i = 0; i < sizeof(moves)/sizeof(moves[0]); ++i) {
+        int index = moves[i]; port.mw = widths[index]; port.mh = heights[index];
+        assert(display.showManeuver(v, (double)i, i == 0, true) == ClusterDisplay::kOk);
+        assert(!display.nearShown() && port.batches.size() == i+1);
+        HudProfile profile = k6wa; fitMeasured(widths[index], heights[index], profile);
+        checkCirculationPacket(port.batches.back(), profile, expanded[index], 4, false, index == 1);
+    }
+}
+
+static void testUnknownCanvasPins() {
+    unsetenv("NBT_HUD_GLYPH");
+    const char* pins[] = {"70 20 170 120", "10 20 135 96"};
+    const Rect expected[] = {{70,20,170,120},{39,29,105,95}};
+    for (size_t p = 0; p < sizeof(pins)/sizeof(pins[0]); ++p) {
+        setenv("NBT_HUD_CANVAS", pins[p], 1);
+        HudProfile profile = k6wa; applyHudEnv(profile);
+        // P2 is a fitting-box regression, independent of the newly chosen circulation contour and caption.
+        sameRect(ringGlyphBox(profile), expected[p]);
+        for (int type = 33; type <= 34; ++type) {
+            FakePort port; Hud6waDisplay display(port, profile, false); display.setSettings(arrows());
+            NavView v = view(type, "", "80", 1, 80); v.has_exit_number = true; v.exit_number = 7;
+            assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+            checkCirculationPacket(port.batches.back(), profile, expected[p], 7, type == 33);
+        }
+    }
+    setenv("NBT_HUD_CANVAS", "10 20 135 96", 1); setenv("NBT_HUD_GLYPH", "40 30 70 60", 1);
+    HudProfile profile = k6wa; applyHudEnv(profile);
+    FakePort port; Hud6waDisplay display(port, profile, false); display.setSettings(arrows());
+    NavView v = view(34, "", "80", 1, 80); v.has_exit_number = true; v.exit_number = 12;
+    assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+    checkCirculationPacket(port.batches.back(), profile, profile.glyph, 12, false);
+    unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_CANVAS");
+}
+
+static Shape picturePolygons(const Picture& picture) {
+    Shape result;
+    for (size_t i = 0; i < picture.size(); ++i) result.push_back(picture[i].poly);
+    return result;
+}
+
+static void testCirculationGeometry() {
+    const int widths[] = {0,126,176,120}, heights[] = {0,77,126,72};
+    const Rect frames[] = {{57,4,182,129},{29,9,95,75},{44,29,122,120},{29,9,91,71}};
+    const int numbers[] = {0,1,2,3,4,5,6,7,8,12,99,-1,100};
+    for (size_t p = 0; p < 4; ++p) {
+        HudProfile profile = k6wa; if (p) fitMeasured(widths[p], heights[p], profile);
+        profile.nHide = 8;
+        for (int i = 0; i < 8; ++i) profile.hide[i] = 20+i;
+        for (size_t n = 0; n < sizeof(numbers)/sizeof(numbers[0]); ++n) {
+            Picture cw, ccw;
+            assert(roundaboutPicture(shapeFor(33, false, 0), profile, cw, numbers[n]));
+            assert(roundaboutPicture(shapeFor(34, false, 0), profile, ccw, numbers[n]));
+            Shape a = picturePolygons(cw), b = picturePolygons(ccw);
+            checkCirculation(a, profile, frames[p], numbers[n], true, p == 1);
+            checkCirculation(b, profile, frames[p], numbers[n], false, p == 1);
+            int cx = ringLayout(profile).cx;
+            assert(a.size() == b.size());
+            for (size_t i = 0; i < a.size(); ++i) {
+                assert(cw[i].colour == profile.fill && ccw[i].colour == profile.fill);
+                assert(a[i].pts.size() == b[i].pts.size());
+                for (size_t j = 0; j < a[i].pts.size(); ++j) {
+                    assert(a[i].pts[j].y == b[i].pts[j].y);
+                    if (i < 3) assert(a[i].pts[j].x + b[i].pts[j].x == 2*cx);
+                    else assert(a[i].pts[j].x == b[i].pts[j].x);   // entrance and text are never flipped
+                }
+            }
+            FakePort port; Hud6waDisplay display(port, profile, false);
+            Batch batch = display.pictureBatch("circulation", cw, HudTexts(), true);
+            assert(batch.calls.size() <= Config().maxBatch && batch.calls.size() <= 64);
+            for (size_t i = 0; i < batch.calls.size(); ++i) assert(callOk(batch.calls[i], handlesOf(profile)));
+        }
+    }
+    // A thin canvas and a tall/narrow glyph pin must reduce both axes uniformly, without clipping or oval rings.
+    const char* canvases[] = {"10 20 29 99", "10 20 135 96"};
+    const char* glyphs[] = {"11 21 28 98", "40 30 60 90"};
+    for (size_t i = 0; i < 2; ++i) {
+        setenv("NBT_HUD_CANVAS", canvases[i], 1); setenv("NBT_HUD_GLYPH", glyphs[i], 1);
+        HudProfile profile = k6wa; applyHudEnv(profile);
+        for (int cw = 0; cw <= 1; ++cw) {
+            const int labels[] = {0,7,12};
+            for (size_t n = 0; n < 3; ++n) {
+                Picture pic;
+                int h = ringLayout(profile).side * (labels[n] > 9 ? 18 : 24) / 66;
+                bool ok = roundaboutPicture(shapeFor(cw ? 33 : 34, false, 0), profile, pic, labels[n]);
+                assert(ok == (!labels[n] || h >= 6));
+                checkCirculation(picturePolygons(pic), profile, profile.glyph, labels[n], cw != 0);
+            }
+        }
+    }
+    unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_CANVAS");
+}
+
+// Known exits retain a radial arrow outside a circular ring; the circulation fallback is reserved for unknown angles.
+static bool containsPoint(const Poly& p, double x, double y) {
+    bool inside = false;
+    for (size_t i = 0, j = p.pts.size()-1; i < p.pts.size(); j = i++) {
+        Point a = p.pts[i], b = p.pts[j];
+        if ((a.y > y) != (b.y > y) && x < (b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x) inside = !inside;
+    }
+    return inside;
+}
+
+static int pictureColourAt(const Picture& p, double x, double y) {
+    int colour = -1;
+    for (size_t i = 0; i < p.size(); ++i)
+        if (containsPoint(p[i].poly, x, y)) colour = p[i].colour;
+    return colour;
+}
+
+static int roundForTest(double n) { return n < 0 ? (int)ceil(n-0.5) : (int)floor(n+0.5); }
+
+static void nearPointSet(const Poly& actual, const Shape& expected, int tolerance = 1) {
+    assert(expected.size() == 1 && actual.pts.size() == expected[0].pts.size());
+    for (size_t i = 0; i < expected[0].pts.size(); ++i) {
+        bool found = false;
+        for (size_t j = 0; j < actual.pts.size(); ++j)
+            if (abs(actual.pts[j].x-expected[0].pts[i].x) <= tolerance &&
+                abs(actual.pts[j].y-expected[0].pts[i].y) <= tolerance) found = true;
+        assert(found);
+    }
+}
+
+static Shape expectedPolygon(const double* xy, size_t n, const RingLayout& l) {
+    Poly poly; poly.type = kPolygon;
+    for (size_t i = 0; i < n; ++i)
+        poly.pts.push_back(shapes::pt(l.cx+roundForTest(xy[2*i]), l.cy+roundForTest(xy[2*i+1])));
+    Shape out; out.push_back(poly); return out;
+}
+
+static void checkPictureBounds(const Picture& picture, const HudProfile& profile) {
+    for (size_t i = 0; i < picture.size(); ++i) {
+        const Poly& poly = picture[i].poly;
+        assert(poly.type == kPolygon && poly.pts.size() >= 3 && poly.pts.size() <= 99);
+        assert(area2(poly.pts) > 0);
+        for (size_t j = 0; j < poly.pts.size(); ++j) {
+            Point q = poly.pts[j];
+            assert(q.x >= profile.canvas.x0 && q.x <= profile.canvas.x1);
+            assert(q.y >= profile.canvas.y0 && q.y <= profile.canvas.y1);
+        }
+    }
+}
+
+static void checkKnownBase(const Picture& picture, const ShapeSpec& spec, const HudProfile& p, bool f30) {
+    assert(spec.exit >= 1 && spec.exit <= 360 && picture.size() >= 4);
+    RingLayout l = knownRingLayout(spec, p);
+    assert(l.side > 0);
+    if (f30) assert(l.cx == 62 && l.side == 66);   // translate the body; never change its diameter with the angle
+    double scale = l.side/66.0, outer = 26.296875*scale, inner = 18.046875*scale;
+    Shape circle; circle.push_back(picture[0].poly); circle.push_back(picture[1].poly);
+    Rect bounds = boundsForTest(circle);
+    assert(bounds.x0+bounds.x1 == 2*l.cx && bounds.y0+bounds.y1 == 2*l.cy);
+    assert(bounds.x1-bounds.x0 == bounds.y1-bounds.y0);
+    if (f30) assert(bounds.x1-bounds.x0 >= 52 && bounds.x1-bounds.x0 <= 53);
+    bool hasInner = false, hasOuter = false;
+    for (size_t i = 0; i < 2; ++i) {
+        assert(picture[i].colour == (spec.exit == 360 ? p.fill : p.road));
+        for (size_t j = 0; j < circle[i].pts.size(); ++j) {
+            double dx = circle[i].pts[j].x-l.cx, dy = circle[i].pts[j].y-l.cy;
+            double radius = sqrt(dx*dx+dy*dy);
+            bool ri = fabs(radius-inner) <= 0.8, ro = fabs(radius-outer) <= 0.8;
+            assert(ri || ro); hasInner |= ri; hasOuter |= ro;
+        }
+    }
+    assert(hasInner && hasOuter);
+    for (size_t i = 2; i < picture.size(); ++i) assert(picture[i].colour == p.fill);
+    checkPictureBounds(picture, p);
+    const Poly& head = picture.back().poly;
+    assert(head.pts.size() == 7);
+    if (spec.exit < 360) {
+        Shape input; input.push_back(picture[picture.size()-2].poly);
+        Rect entry = boundsForTest(input);
+        assert(entry.x0+entry.x1 == 2*l.cx);
+        assert(entry.x1-entry.x0 == 2*roundForTest(4.125*scale));   // input and exit use the ring's 8.25px stroke
+        assert(entry.y0 == l.cy+roundForTest(inner));
+        assert(entry.y1 > bounds.y1);   // the incoming bar must remain visible outside the circular body after fitting
+        double a = spec.exit*3.141592653589793/180, dx = sin(a)*(spec.clockwise ? -1 : 1), dy = cos(a);
+        double nx = -dy, ny = dx, base = (26.296875+6)*scale, tip = (26.296875+19.75)*scale;
+        const double points[] = {inner*dx+4.125*scale*nx, inner*dy+4.125*scale*ny,
+                                 base*dx+4.125*scale*nx, base*dy+4.125*scale*ny,
+                                 base*dx+10*scale*nx, base*dy+10*scale*ny,
+                                 tip*dx, tip*dy,
+                                 base*dx-10*scale*nx, base*dy-10*scale*ny,
+                                 base*dx-4.125*scale*nx, base*dy-4.125*scale*ny,
+                                 inner*dx-4.125*scale*nx, inner*dy-4.125*scale*ny};
+        nearPointSet(head, expectedPolygon(points, 7, l));
+        size_t farthest = 0;
+        long radius2 = -1;
+        for (size_t i = 0; i < head.pts.size(); ++i) {
+            long x = head.pts[i].x-l.cx, y = head.pts[i].y-l.cy, r = x*x+y*y;
+            if (r > radius2) { radius2 = r; farthest = i; }
+        }
+        double x = head.pts[farthest].x-l.cx, y = head.pts[farthest].y-l.cy;
+        assert(fabs(x*dy-y*dx) <= 1.5);   // strict normal axis, including 1..4 and 356..359; never an arbitrary tilt
+        assert(fabs(x*dx+y*dy-tip) <= 1.0 && x*dx+y*dy > outer+10*scale);
+        if (f30)
+            for (size_t i = 0; i < picture.size(); ++i)
+                for (size_t j = 0; j < picture[i].poly.pts.size(); ++j) {
+                    Point q = picture[i].poly.pts[j];
+                    long u = q.x-l.cx, v = q.y-l.cy;
+                    if (q.x != head.pts[farthest].x || q.y != head.pts[farthest].y)
+                        assert(u*u+v*v < radius2);   // an entrance footer cannot paint over the downward tip
+                }
+    } else if (f30) {
+        assert(l.cx == 62 && l.cy == 31 && l.side == 66 && picture.size() == 4);
+        const int mirror = spec.clockwise ? -1 : 1;
+        const double input[] = {2.875*mirror,18,11.125*mirror,18,
+                                11.125*mirror,45,2.875*mirror,45};
+        const double output[] = {-12.125*mirror,18,-12.125*mirror,31.25,
+                                 -18.0*mirror,31.25,-8.0*mirror,45,2.0*mirror,31.25,
+                                 -3.875*mirror,31.25,-3.875*mirror,18};
+        nearPointSet(picture[2].poly, expectedPolygon(input, 4, l), 0);
+        nearPointSet(head, expectedPolygon(output, 7, l), 0);   // the sole nonnormal exception: approved C360
+    }
+    if (spec.exit % 90 == 0) {
+        for (int progress = 45; progress < 360; progress += 90) {
+            double a = progress*3.141592653589793/180, radius = (inner+outer)/2;
+            double x = l.cx+sin(a)*radius*(spec.clockwise ? -1 : 1), y = l.cy+cos(a)*radius;
+            assert(pictureColourAt(picture, x, y) == (progress < spec.exit ? p.fill : p.road));
+        }
+    }
+}
+
+static void checkKnownNumber(const Picture& numbered, const Picture& plain, const ShapeSpec& spec,
+                             const HudProfile& profile, int number) {
+    Shape actual = picturePolygons(numbered), body = picturePolygons(plain);
+    samePolygons(actual, 0, body);
+    for (size_t i = 0; i < plain.size(); ++i) assert(numbered[i].colour == plain[i].colour);
+    RingLayout l = knownRingLayout(spec, profile);
+    if (number < 1 || number > 99) { assert(numbered.size() == plain.size()); return; }
+    int h = l.side*(number > 9 ? 18 : 24)/66;
+    assert(h >= 6);
+    Shape digits;
+    hudterm::digits::drawNumber(number, l.cx, l.cy-h/2, h, digits);
+    assert(numbered.size() == plain.size()+digits.size());
+    samePolygons(actual, plain.size(), digits);
+    const double hole = 18.046875*l.side/66.0-0.5;
+    for (size_t i = plain.size(); i < numbered.size(); ++i) {
+        assert(numbered[i].colour == profile.fill);
+        for (size_t j = 0; j < numbered[i].poly.pts.size(); ++j) {
+            Point q = numbered[i].poly.pts[j];
+            double dx = q.x-l.cx, dy = q.y-l.cy;
+            assert(dx*dx+dy*dy < hole*hole);
+        }
+    }
+    sameRect(boundsForTest(actual), boundsForTest(body));
+    checkPictureBounds(numbered, profile);
+}
+
+static void checkKnownBatch(const Picture& picture, const HudProfile& profile) {
+    FakePort port; Hud6waDisplay display(port, profile, false);
+    Batch batch = display.pictureBatch("known ring", picture, HudTexts(), true);
+    assert(batch.calls.size() <= Config().maxBatch && batch.calls.size() <= 64);
+    for (size_t i = 0; i < batch.calls.size(); ++i) assert(callOk(batch.calls[i], handlesOf(profile)));
+}
+
+static void testKnownRoundabouts() {
+    unsetenv("NBT_HUD_GLYPH"); unsetenv("NBT_HUD_CANVAS");
+    const int widths[] = {126,176,120,0}, heights[] = {77,126,72,0};
+    const int labels[] = {0,1,2,3,4,5,6,7,8,9,12,99,-1,100};
+    unsigned angles = 0;
+    for (size_t p = 0; p < 4; ++p) {
+        HudProfile profile = k6wa; if (widths[p]) fitMeasured(widths[p], heights[p], profile);
+        profile.nHide = 8; for (int h = 0; h < 8; ++h) profile.hide[h] = 20+h;
+        for (int angle = 1; angle <= 360; ++angle) {
+            Picture pictures[2];
+            for (int cw = 0; cw <= 1; ++cw) {
+                ShapeSpec spec = shapeFor(cw ? 33 : 34, true, angle);
+                assert(spec.exit == angle);
+                assert(roundaboutPicture(spec, profile, pictures[cw]));
+                checkKnownBase(pictures[cw], spec, profile, p == 0);
+                Picture seven; assert(roundaboutPicture(spec, profile, seven, 7));
+                checkKnownNumber(seven, pictures[cw], spec, profile, 7);
+                checkKnownBatch(seven, profile);
+                if (angle == 1 || angle % 45 == 0 || angle == 359)
+                    for (size_t n = 0; n < sizeof(labels)/sizeof(labels[0]); ++n) {
+                        Picture numbered;
+                        assert(roundaboutPicture(spec, profile, numbered, labels[n]));
+                        checkKnownNumber(numbered, pictures[cw], spec, profile, labels[n]);
+                        checkKnownBatch(numbered, profile);
+                    }
+                ++angles;
+            }
+            RingLayout ccw = knownRingLayout(shapeFor(34, true, angle), profile);
+            RingLayout cw = knownRingLayout(shapeFor(33, true, angle), profile);
+            assert(ccw.side == cw.side && ccw.cy == cw.cy && pictures[0].size() == pictures[1].size());
+            for (size_t i = 0; i < pictures[0].size(); ++i) {
+                Poly reflected = pictures[0][i].poly;
+                for (size_t j = 0; j < reflected.pts.size(); ++j)
+                    reflected.pts[j].x = cw.cx-(reflected.pts[j].x-ccw.cx);
+                Shape expected; expected.push_back(reflected);
+                // A centred input rectangle is its own mirror even if its winding remains unchanged.
+                nearPointSet(pictures[1][i].poly, expected, 0);
+            }
+        }
+    }
+    assert(angles == 2880);
+}
+
+// An upward exit can translate the circle down past its original footer: a rectangle wholly inside the ring
+// is not a visible entrance. Check native output against the actual circle, including valid top-aligned pins.
+static void testKnownEntryVisibility() {
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
+    const int angles[] = {170,179,180,190};
+    for (int p = 0; p < 5; ++p) {
+        if (p == 2) setenv("NBT_HUD_GLYPH", "20 0 50 30", 1);
+        if (p == 3) setenv("NBT_HUD_GLYPH", "20 0 120 60", 1);
+        if (p == 4) {
+            setenv("NBT_HUD_CANVAS", "10 20 209 149", 1);
+            setenv("NBT_HUD_GLYPH", "30 20 60 50", 1);
+        }
+        HudProfile profile = k6wa; applyHudEnv(profile);
+        if (p == 1) fitMeasured(199, 129, profile);
+        for (size_t a = 0; a < sizeof(angles)/sizeof(angles[0]); ++a)
+            for (int cw = 0; cw <= 1; ++cw) {
+                ShapeSpec spec = shapeFor(cw ? 33 : 34, true, angles[a]);
+                Picture picture; assert(roundaboutPicture(spec, profile, picture));
+                checkKnownBase(picture, spec, profile, false);
+                Shape circle, input;
+                circle.push_back(picture[0].poly); circle.push_back(picture[1].poly);
+                input.push_back(picture[picture.size()-2].poly);
+                Rect body = boundsForTest(circle), entrance = boundsForTest(input);
+                assert(entrance.y0 <= body.y1 && entrance.y1 >= body.y1+(p < 2 ? 2 : 1));
+                assert(entrance.y1 <= profile.canvas.y1);
+                Picture numbered; assert(roundaboutPicture(spec, profile, numbered, 7));
+                checkKnownNumber(numbered, picture, spec, profile, 7);
+                checkKnownBatch(numbered, profile);
+            }
+    }
+    unsetenv("NBT_HUD_CANVAS"); unsetenv("NBT_HUD_GLYPH");
+}
+
 static void testLanes() {
     std::vector<kombinav::AaLane> lanes;
     lanes.push_back(oneLane(1, false));
@@ -920,6 +1457,66 @@ static size_t fills(const Batch& b) {
     for (size_t i = 0; i < b.calls.size(); ++i)
         if (b.calls[i].fkt == kSetFillColor) ++n;
     return n;
+}
+
+// Roundabouts use one common static picture far and near, independently of glyph mode or a supplied number.
+static void testKnownRoundaboutDriver() {
+    HudProfile profile = k6wa; fitMeasured(126, 77, profile);
+    const int angles[] = {1,90,225,359,360};
+    for (int mb = 0; mb <= 1; ++mb) {
+        setenv("NBT_HUD_GLYPHS", mb ? "1" : "0", 1);
+        for (int type = 33; type <= 34; ++type)
+            for (size_t a = 0; a < sizeof(angles)/sizeof(angles[0]); ++a)
+                for (int label = 0; label <= 1; ++label) {
+                    FakePort port; Hud6waDisplay display(port, profile, false);
+                    NavView v = timed(type, "Ring Road", "800", 1, 800, 60);
+                    v.has_exit_angle = true; v.exit_angle = angles[a];
+                    v.has_exit_number = label != 0; v.exit_number = 7;
+                    assert(display.showManeuver(v, 0, true, true) == ClusterDisplay::kOk);
+                    assert(port.batches.size() == 1 && !display.nearShown() && display.routeStage() == 0);
+                    Picture expected;
+                    assert(roundaboutPicture(shapeFor(type, true, angles[a]), profile, expected, label ? 7 : 0));
+                    Shape expectedShape = picturePolygons(expected);
+                    Shape far = packetPolygons(port.batches[0]);
+                    assert(far.size() == expectedShape.size()); samePolygons(far, 0, expectedShape);
+                    v.step_m = 280; v.step_s = 15;
+                    assert(!display.sameManeuver(v, 1));
+                    assert(display.keepUp(v, 1) == ClusterDisplay::kOk && port.batches.size() == 1);
+                    v.step_m = 100; v.step_s = 5;
+                    assert(!display.sameManeuver(v, 2));
+                    assert(display.showManeuver(v, 2, false, false) == ClusterDisplay::kOk);
+                    assert(port.batches.size() == 2 && !display.nearShown() && display.routeStage() == 0);
+                    Shape near = packetPolygons(port.batches[1]);
+                    assert(near.size() == far.size()); samePolygons(near, 0, far);
+                    assert(callsOn(port.batches[0], 7) == 0 && callsOn(port.batches[0], 8) == 0);
+                    assert(callsOn(port.batches[1], 7) == 0 && callsOn(port.batches[1], 8) == 0);
+                    v.step_m = 0; v.step_s = 0;
+                    assert(!display.sameManeuver(v, 3));
+                    assert(display.keepUp(v, 3) == ClusterDisplay::kOk && port.batches.size() == 2);
+                }
+    }
+    unsetenv("NBT_HUD_GLYPHS");
+
+    // Switching from an ordinary junction clears its dirty overlay in the first roundabout batch, exactly once.
+    FakePort port; Hud6waDisplay display(port, k6wa, false);
+    NavView turn = timed(8, "Testroad", "200", 1, 280, 15);
+    assert(display.showManeuver(turn, 0, true, true) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 2 && display.nearShown() && display.routeStage() == 4);
+    NavView ring = timed(34, "Ring Road", "100", 1, 100, 8);
+    ring.has_exit_angle = true; ring.exit_angle = 225;
+    ring.has_exit_number = true; ring.exit_number = 7;
+    assert(display.showManeuver(ring, 1, true, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 3 && !display.nearShown() && display.routeStage() == 0);
+    const Batch& first = port.batches[2];
+    assert(callsOn(first, 7) == 1 && callsOn(first, 8) == 1);
+    for (size_t i = 0; i < first.calls.size(); ++i)
+        if (first.calls[i].handle() == 7 || first.calls[i].handle() == 8)
+            assert(first.calls[i].fkt == kRemoveAllItems);
+    ring.exit_angle = 90;
+    assert(display.showManeuver(ring, 2, true, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 4 && callsOn(port.batches[3], 7) == 0 && callsOn(port.batches[3], 8) == 0);
+    assert(display.showManeuver(turn, 3, true, false) == ClusterDisplay::kOk);
+    assert(port.batches.size() == 6 && display.nearShown() && port.batches.back().label == "route");
 }
 
 // The near stage through the driver: the arrow first, the junction view (roads in 5/6, route in 7/8) at the main
@@ -1077,24 +1674,20 @@ static void testJunctionDriver() {
     assert(d.showManeuver(v3, 10, true, false) == ClusterDisplay::kOk);
     assert(callsOn(port.batches[8], 7) == 0 && callsOn(port.batches[8], 8) == 0);
 
-    // A roundabout already near: its junction view at once, with the exit number in the route's colour.
+    // A known roundabout remains the same standalone picture even when already near; it owns no route overlay.
     NavView ra = timed(32, "Ring Road", "150", 1, 150, 12);
-    ra.has_exit_angle = true;
-    ra.exit_angle = 270;
-    ra.has_exit_number = true;
-    ra.exit_number = 3;
+    ra.has_exit_angle = true; ra.exit_angle = 270;
+    ra.has_exit_number = true; ra.exit_number = 3;
     assert(d.showManeuver(ra, 11, true, false) == ClusterDisplay::kOk);
-    assert(port.batches.size() == 11 && d.nearShown() && logged("junction view at once"));
-    assert(logged("exit 3 |"));
+    assert(port.batches.size() == 10 && !d.nearShown() && d.routeStage() == 0);
     const Batch& rb = port.batches[9];
-    assert(rb.label == "maneuver" && fills(rb) == 3 && rb.calls[rb.calls.size() - 1].fkt == kSetVisibility);
-    assert(port.batches[10].label == "route" && d.routeStage() == 4);
+    assert(rb.label == "maneuver" && callsOn(rb, 7) == 0 && callsOn(rb, 8) == 0);
 
-    // The destination keeps its flag, near or not.
+    // The destination keeps its flag, near or not; the roundabout left no overlay to empty.
     NavView dest = timed(39, "Example Close", "50", 1, 50, 5);
     assert(d.showManeuver(dest, 12, true, false) == ClusterDisplay::kOk);
-    assert(port.batches.size() == 12 && !d.nearShown() && !d.sameManeuver(dest, 13));
-    assert(callsOn(port.batches[11], 7) == 1 && callsOn(port.batches[11], 8) == 1);   // the roundabout's route emptied
+    assert(port.batches.size() == 11 && !d.nearShown() && !d.sameManeuver(dest, 13));
+    assert(callsOn(port.batches[10], 7) == 0 && callsOn(port.batches[10], 8) == 0);
 
     // The clear puts the route overlay back as the factory navigation leaves it: both empty, 8 on show.
     std::string detail;
@@ -1767,6 +2360,12 @@ int main() {
     testMapboxRoundaboutExit();
     testJunctionScaled();
     testDigits();
+    testUnknownRoundabout();
+    testUnknownCanvasPins();
+    testCirculationGeometry();
+    testKnownRoundabouts();
+    testKnownEntryVisibility();
+    testKnownRoundaboutDriver();
     testLanes();
     testJunctionDriver();
     testJunctionFits();
