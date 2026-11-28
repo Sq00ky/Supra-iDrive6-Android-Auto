@@ -46,7 +46,8 @@ static const char* const kHandAppDir     = NBT_HAND_APP_DIR;
 static const char* const kHandDataDir    = NBT_HAND_DATA_DIR;
 static const char* const kDaemonEnvName  = "nbt-aad.env";   // in the conf dir
 static const char* const kPfBackupName   = "pf.bak";        // in the conf dir
-static const char* const kHudCyrillicFlagName = "hud-cyrillic";  // Settings checkbox, read by the 6WA HUD text path
+static const char* const kHudAsciiFlagName = "hud-ascii";  // Settings: extended character set in the HUD unticked (6WA)
+// (hud-cyrillic, the old opt-in before the extended set became the default, is no longer read)
 
 // The decision: 0 = hand install (also before any decision), 1 = package install. A plain int with a constant
 // initialiser, so it is set before any constructor runs, and one object for the whole program or library.

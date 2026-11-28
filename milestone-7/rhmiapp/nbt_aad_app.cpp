@@ -596,8 +596,8 @@ pid_t launchDaemon() {
     g_lastLaunch = now;
     if (!fileExists(nbt::daemonPath())) { alog("launch: %s not found", nbt::daemonPath()); return -1; }
 
-    static char envbuf[16][160];
-    char* envp[16 + 64];
+    static char envbuf[64][160];   // PATH + up to 63 settings of nbt-aad.env
+    char* envp[64 + 96];
     int ne = 0;
     strcpy(envbuf[0], "PATH=/bin:/usr/bin:/opt/os/bin:/opt/sys/bin:/opt/core/bin:/opt/car/bin:/fs/sda0/opt/mm/bin");
     envp[ne++] = envbuf[0];
@@ -605,7 +605,7 @@ pid_t launchDaemon() {
     FILE* f = openDaemonEnv();
     if (f) {
         char line[160];
-        while (nb < 16 && fgets(line, sizeof(line), f)) {
+        while (nb < 64 && fgets(line, sizeof(line), f)) {
             size_t l = strlen(line);
             while (l && (line[l - 1] == '\n' || line[l - 1] == '\r' || line[l - 1] == ' ')) line[--l] = 0;
             if (!l || line[0] == '#' || !strchr(line, '=')) continue;
@@ -2832,24 +2832,24 @@ bool onFavouriteBarToggle(void*,const bmw::Parcel&) {
     if(g_app)showFavouriteBar(g_app);
     return true;
 }
-// HUD Cyrillic switch (NBT_HUD_CYRILLIC): the Settings checkbox writes <data dir>/hud-cyrillic, which the 6WA HUD
-// text path reads (hud6wa_display.cpp). Off by default: the cluster font has to carry the glyphs. The env var still
-// wins, so a hand-set NBT_HUD_CYRILLIC=0 turns it off even with the box ticked.
+// "Extended character set in HUD" (6WA street names and song title in Hangul, CJK, Cyrillic, Greek, ...): ticked by
+// default. Unticking writes <data dir>/hud-ascii, which hud6wa_display.cpp reads (ASCII only); NBT_HUD_UNICODE in
+// nbt-aad.env still wins. The old opt-in file hud-cyrillic is not read any more, so it changes nothing.
 void showHudCyrillic(bmw::PluginApp* app) {
-    app->updateModel(251, nbt::flagSet(nbt::kHudCyrillicFlagName));
+    app->updateModel(251, !nbt::flagSet(nbt::kHudAsciiFlagName));
     g_hudCyrillicShown = true;
 }
 bool onHudCyrillicToggle(void*,const bmw::Parcel&) {
-    const char* n = nbt::kHudCyrillicFlagName;
-    if (nbt::flagSet(n)) {                                        // unticked: the file goes, English-only again
+    const char* n = nbt::kHudAsciiFlagName;
+    if (nbt::flagSet(n)) {                                        // ticked again: the extended set is back
         unlink(nbt::dataFile(n).c_str());
         unlink(nbt::appFile(n).c_str());
-    } else {
+    } else {                                                      // unticked: ASCII only
         nbt::makeDataDir();
         int fd=open(nbt::dataFile(n).c_str(),O_WRONLY|O_CREAT|O_TRUNC,0666);
-        if(fd>=0)close(fd);else alog("hud cyrillic: cannot save switch errno=%d",errno);
+        if(fd>=0)close(fd);else alog("hud characters: cannot save switch errno=%d",errno);
     }
-    alog("HUD Cyrillic %s", nbt::flagSet(n) ? "on" : "off");
+    alog("HUD extended character set %s", nbt::flagSet(n) ? "off (ASCII only)" : "on");
     if(g_app)showHudCyrillic(g_app);
     return true;
 }

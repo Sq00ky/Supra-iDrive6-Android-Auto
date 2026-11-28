@@ -72,11 +72,11 @@ int main() {
     e = nbt::pfaa::setKeepPf("NBT_KEEP_PF=1 \r\n# NBT_KEEP_PF=0\n");
     assert(!e.changed && e.position == 1 && e.settings == 1 && e.text == "NBT_KEEP_PF=1 \r\n# NBT_KEEP_PF=0\n");
 
-    // 7. A 15-setting file puts the new line 16th: the caller warns (only the first 15 are used).
+    // 7. A full file (kMaxEnvSettings settings) puts the new line after the last one used: the caller warns.
     std::string full;
-    for (int i = 0; i < 15; ++i) { char b[32]; snprintf(b, sizeof b, "NBT_X%d=1\n", i); full += b; }
+    for (int i = 0; i < nbt::pfaa::kMaxEnvSettings; ++i) { char b[32]; snprintf(b, sizeof b, "NBT_X%d=1\n", i); full += b; }
     e = nbt::pfaa::setKeepPf(full);
-    assert(e.position == 16 && e.position > nbt::pfaa::kMaxEnvSettings);
+    assert(e.position == nbt::pfaa::kMaxEnvSettings + 1 && e.position > nbt::pfaa::kMaxEnvSettings);
 
     // 8. --uninstall: every NBT_KEEP_PF setting goes, comments and other settings stay; nothing to drop = unchanged.
     int removed = -1;

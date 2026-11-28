@@ -61,7 +61,7 @@ struct HudTexts {
 };
 HudTexts hudTexts(const NavView& v, const hudterm::HudProfile& p);               // scripts from hudTextScripts()
 HudTexts hudTexts(const NavView& v, const hudterm::HudProfile& p, int scripts);  // hudterm::TextScripts
-int hudTextScripts();   // kTextAll, or with NBT_HUD_UNICODE=0 the old filter (kTextLatin / kTextCyrillic)
+int hudTextScripts();   // kTextAll; kTextLatin (or kTextCyrillic) when the extended set is off (hud-ascii / NBT_HUD_UNICODE=0)
 const char* hudUnitText(int aa_unit);   // "m", "km", "mi", "ft", "yd"; "" when unknown
 
 bool sameLanes(const std::vector<AaLane>& a, const std::vector<AaLane>& b);

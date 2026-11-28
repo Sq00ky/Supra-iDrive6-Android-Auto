@@ -27,7 +27,7 @@ for app in apps:
 
 main = apps[0]
 cyrillic = next(c for c in main.iter('checkbox')
-                if c.get('text') == 'Cyrillic street names in HUD')
+                if c.get('text') == 'Extended character set in HUD')
 vehicle = next(s for s in main.find('hmiStates') if s.get('text') == 'Car manufacturer')
 auto = next(c for c in vehicle.iter('radiobutton') if c.get('text') == 'Auto')
 assert cyrillic.get('action') != auto.get('action'), 'Cyrillic and manufacturer Auto share an action'

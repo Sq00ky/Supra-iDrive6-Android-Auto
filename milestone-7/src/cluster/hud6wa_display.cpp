@@ -5,7 +5,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>   // getenv (NBT_HUD_CYRILLIC)
+#include <stdlib.h>   // getenv (NBT_HUD_UNICODE, NBT_HUD_CYRILLIC)
 #include <string.h>   // strcmp
 
 #include "nbt_paths.hpp"
@@ -15,26 +15,21 @@ namespace kombinav {
 
 using namespace hudterm;
 
-// NBT_HUD_CYRILLIC: keep Cyrillic street names (sent as UTF-16BE) instead of blanking them. Off unless set to a
-// non-"0" value, since it needs the cluster font to carry the glyphs.
-static bool hudCyrillicEnabled() {
-    // The Settings checkbox writes <data dir>/hud-cyrillic. The env var wins when set, so a hand-set
-    // NBT_HUD_CYRILLIC=0 turns it off even with the box ticked (and =1 turns it on without the box).
-    const char* e = getenv("NBT_HUD_CYRILLIC");
-    if (e && *e)
-        return !(strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
-    return nbt::flagSet(nbt::kHudCyrillicFlagName);
+// Which letters the street and idle texts keep (cluster/hudterm.hpp TextScripts). By default the extended set: every
+// script with no ASCII form (Hangul, CJK, Cyrillic, Greek, ...), as the factory navigation shows the market's own names
+// in the same HUD; a text the font refuses falls back to Latin by itself (health()). ASCII only when the Settings box
+// "Extended character set in HUD" is unticked (flag hud-ascii) or NBT_HUD_UNICODE=0 (the env wins: =1 keeps the
+// extended set even with the box unticked). With ASCII only, NBT_HUD_CYRILLIC=1 still lets Cyrillic through.
+static bool envOff(const char* e) {
+    return e && *e && (strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0);
 }
 
-// Which letters the street and idle texts keep (cluster/hudterm.hpp TextScripts). By default every script with no ASCII
-// form (Hangul, CJK, Cyrillic, Greek, ...): the factory navigation shows the market's own names in the same HUD, and a
-// text the font refuses falls back to Latin by itself (health()). NBT_HUD_UNICODE=0 restores the old filter: ASCII,
-// plus Cyrillic with NBT_HUD_CYRILLIC / the Settings checkbox.
 int hudTextScripts() {
-    const char* e = getenv("NBT_HUD_UNICODE");
-    if (e && *e && (strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0))
-        return hudCyrillicEnabled() ? kTextCyrillic : kTextLatin;
-    return kTextAll;
+    const char* u = getenv("NBT_HUD_UNICODE");
+    const bool extended = (u && *u) ? !envOff(u) : !nbt::flagSet(nbt::kHudAsciiFlagName);
+    if (extended) return kTextAll;
+    const char* c = getenv("NBT_HUD_CYRILLIC");
+    return (c && *c && !envOff(c)) ? kTextCyrillic : kTextLatin;
 }
 
 static bool hasNonAscii(const std::string& s) {

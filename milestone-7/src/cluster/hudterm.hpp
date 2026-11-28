@@ -201,7 +201,7 @@ inline std::vector<uint8_t> setText(uint16_t h, const char* s) {
 // Which scripts toClusterText lets through besides ASCII (Latin letters with an ASCII form are always reduced to it).
 enum TextScripts {
     kTextLatin = 0,      // ASCII only: every other letter becomes a space (the old default)
-    kTextCyrillic = 1,   // + Cyrillic (U+0400..U+04FF), the NBT_HUD_CYRILLIC opt-in
+    kTextCyrillic = 1,   // + Cyrillic (U+0400..U+04FF): extended set off, NBT_HUD_CYRILLIC=1
     kTextAll = 2         // + the letters of every script that has no ASCII form (Hangul, CJK, Cyrillic, Greek, Thai, ...)
 };
 

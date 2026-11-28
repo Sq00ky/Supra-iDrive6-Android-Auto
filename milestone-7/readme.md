@@ -931,7 +931,7 @@ Not covered: the "then" preview, the cluster's small map, road shields / route-n
 `/opt/aa/nbt-aad.env` holds one `NAME=value` per line. Lines starting with `#` and blank lines are skipped.
 
 Limits and behaviour:
-- **Only the first 15 settings are used, and each line is limited to 159 characters.**
+- **Only the first 63 settings are used, and each line is limited to 159 characters.**
 - The file is read when the iDrive menu starts the daemon. A daemon started from a shell doesn't read it; put the
   settings in front of the command instead, e.g. `NBT_LOG_FILE=/mnt/umass01200t7/a.log /opt/aa/nbt-aad`.
 - Changes take effect at the next **Start** (or Restart). No reboot is needed.
@@ -1089,7 +1089,7 @@ Leave these unset unless you are testing.
 | `NBT_HUD_JUNCTION=0` | 6WA cluster (`NBT_CLUSTER=6wa`): keep the arrow all the way to the turn. By default the arrow gives way to a junction view at the main prompt (see `NBT_KOMBI_NAV_MAIN_S`) or within `NBT_HUD_NEAR_M`, like the factory navigation's near view: the maneuver's roads (in and out, both branches of a fork or an exit, a roundabout's ring and exit number) with the route drawn over them, its tail shorter in four steps on the way in. Android Auto sends no map, so other side roads are not drawn |
 | `NBT_HUD_NEAR_M` | 6WA: the junction view comes in this close to the maneuver whatever the time (default `300`, `50`..`2000`) |
 | `NBT_HUD_LANES=1` | 6WA: the phone's lanes in the cluster's lane layer, left of the picture. Off by default: where the cluster shows that layer is not known yet |
-| `NBT_HUD_UNICODE=0` | 6WA: street names and the idle text in ASCII only, as before (Cyrillic too with `NBT_HUD_CYRILLIC` or its Settings checkbox). By default the letters of every script with no ASCII form are kept (Hangul, CJK, Cyrillic, Greek, Thai, ...); Latin letters with accents still become their plain letters, and right-to-left scripts are left out. A text the cluster refuses (its font lacks a letter: `[HudTerm] ... text refused`) switches the HUD to ASCII for the rest of the run and draws the maneuver again |
+| `NBT_HUD_UNICODE=0` | 6WA: street names and the idle text in ASCII only (Cyrillic too with `NBT_HUD_CYRILLIC=1`), the same as unticking Settings -> **Extended character set in HUD**; `=1` keeps the extended set even with the box unticked. By default (box ticked) the letters of every script with no ASCII form are kept (Hangul, CJK, Cyrillic, Greek, Thai, ...); Latin letters with accents still become their plain letters, and right-to-left scripts are left out. A text the cluster refuses (its font lacks a letter: `[HudTerm] ... text refused`) switches the HUD to ASCII for the rest of the run and draws the maneuver again. The old "Cyrillic street names in HUD" setting (file `hud-cyrillic`) is no longer read |
 | `NBT_HUD_STREET_MAX` | 6WA: the longest street text in characters (`1`..`32`, default the profile's `32`). Hangul and CJK letters are about twice as wide as Latin ones |
 | `NBT_KOMBI_NAV_INPLACE` | How the next maneuver (or a lane change) is sent on a route already shown: `1` (default) = an in-place update of the shown maneuver, the cluster's own update block, so it doesn't rebuild the route; `2` = the same without the guiding model; `0` = the whole route graph again. A guidance gap (rerouting) always sends the whole graph |
 | `NBT_KOMBI_NAV_HANDLE`, `NBT_KOMBI_NAV_HOST`, `NBT_KOMBI_NAV_PORT` | KOMBI guidance instance handle (default `0xC8`, the same on every boot seen), address (`160.48.199.96`) and port (`30502`) |

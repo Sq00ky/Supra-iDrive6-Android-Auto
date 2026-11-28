@@ -119,8 +119,8 @@ void launchDaemon() {
     if (!fileExists(kDaemon)) { plog("launch: %s not found", kDaemon); return; }
 
     // Environment: ours first (getenv takes the first match), then the HMI's.
-    static char envbuf[16][160];
-    char* envp[16 + 64];
+    static char envbuf[64][160];   // PATH + up to 63 settings of nbt-aad.env
+    char* envp[64 + 96];
     int ne = 0;
     strcpy(envbuf[0], "PATH=/bin:/usr/bin:/opt/os/bin:/opt/sys/bin:/opt/core/bin:/opt/car/bin:/fs/sda0/opt/mm/bin");
     envp[ne++] = envbuf[0];
@@ -128,7 +128,7 @@ void launchDaemon() {
     FILE* f = fopen(kDaemonEnv, "r");
     if (f) {
         char line[160];
-        while (nb < 16 && fgets(line, sizeof(line), f)) {
+        while (nb < 64 && fgets(line, sizeof(line), f)) {
             size_t l = strlen(line);
             while (l && (line[l - 1] == '\n' || line[l - 1] == '\r' || line[l - 1] == ' ')) line[--l] = 0;
             if (!l || line[0] == '#' || !strchr(line, '=')) continue;
