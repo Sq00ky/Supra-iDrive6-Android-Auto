@@ -55,7 +55,7 @@ Core::Core(const Config& cfg)
       lastNavMs_(0), status_(kOffline), changed_(false), haveCurrent_(false),
       nextCall_(0), batchStartMs_(0), recent_(cfg.copyMs), tag_(1), epoch_(0),
       measureDue_(false), measureInFlight_(false), measureLate_(false), measureSentMs_(0), haveSize_(false), sizeW_(0), sizeH_(0),
-      haveMovedTo_(false) {
+      haveMovedTo_(false), textRefusals_(0), lastRefusedText_(0) {
     if (cfg_.maxInFlight == 0) cfg_.maxInFlight = 1;
     memset(&stats_, 0, sizeof(stats_));
 }
@@ -65,6 +65,11 @@ bool Core::measuredSize(int& w, int& h) const {
     w = sizeW_;
     h = sizeH_;
     return true;
+}
+
+uint32_t Core::textRefusals(uint16_t* lastHandle) const {
+    if (lastHandle) *lastHandle = lastRefusedText_;
+    return textRefusals_;
 }
 
 void Core::dropWork(uint32_t now) {
@@ -391,6 +396,10 @@ void Core::onAnswer(const most::View& m, uint32_t now) {
         if (matched && (m.fkt == kTextareaSetText || m.fkt == kPotentiometerSetValue)) {
             printf("[HudTerm] %s: %s refused, guidance kept\n", why,
                    m.fkt == kTextareaSetText ? "text" : "distance bar");
+            if (m.fkt == kTextareaSetText) {           // the driver may send that text again in letters the font has
+                ++textRefusals_;
+                lastRefusedText_ = h;
+            }
             finishIfDone(now);                          // matched only: an unrelated error still fails the terminal
             return;
         }
@@ -627,6 +636,13 @@ bool HudTerminal::measuredSize(int& w, int& h) const {
     bool ok = core_.measuredSize(w, h);
     pthread_mutex_unlock(&lock_);
     return ok;
+}
+
+uint32_t HudTerminal::textRefusals(uint16_t* lastHandle) const {
+    pthread_mutex_lock(&lock_);
+    uint32_t n = core_.textRefusals(lastHandle);
+    pthread_mutex_unlock(&lock_);
+    return n;
 }
 
 // Polled: it is only used for a clear, where a short wait does not matter.

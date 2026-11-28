@@ -26,6 +26,23 @@ static bool hudCyrillicEnabled() {
     return nbt::flagSet(nbt::kHudCyrillicFlagName);
 }
 
+// Which letters the street and idle texts keep (cluster/hudterm.hpp TextScripts). By default every script with no ASCII
+// form (Hangul, CJK, Cyrillic, Greek, ...): the factory navigation shows the market's own names in the same HUD, and a
+// text the font refuses falls back to Latin by itself (health()). NBT_HUD_UNICODE=0 restores the old filter: ASCII,
+// plus Cyrillic with NBT_HUD_CYRILLIC / the Settings checkbox.
+int hudTextScripts() {
+    const char* e = getenv("NBT_HUD_UNICODE");
+    if (e && *e && (strcmp(e, "0") == 0 || strcmp(e, "off") == 0 || strcmp(e, "no") == 0 || strcmp(e, "false") == 0))
+        return hudCyrillicEnabled() ? kTextCyrillic : kTextLatin;
+    return kTextAll;
+}
+
+static bool hasNonAscii(const std::string& s) {
+    for (size_t i = 0; i < s.size(); ++i)
+        if ((unsigned char)s[i] >= 0x80) return true;
+    return false;
+}
+
 const char* hudUnitText(int aa_unit) {
     switch (aa_unit) {
         case 1: return "m";
@@ -39,9 +56,11 @@ const char* hudUnitText(int aa_unit) {
 
 // The state machine has already shortened the distance and put "-" where there is none yet: the 6WA shows nothing
 // then, rather than a character its font may not have.
-HudTexts hudTexts(const NavView& v, const HudProfile& p) {
+HudTexts hudTexts(const NavView& v, const HudProfile& p) { return hudTexts(v, p, hudTextScripts()); }
+
+HudTexts hudTexts(const NavView& v, const HudProfile& p, int scripts) {
     HudTexts t;
-    t.street = toClusterText(v.road, p.streetPunct, p.streetChars, false, hudCyrillicEnabled());
+    t.street = toClusterText(v.road, p.streetPunct, p.streetChars, false, scripts);
     if (v.dist_text != "-") t.distance = toClusterText(v.dist_text, ".", p.distanceChars, true);
     if (!t.distance.empty()) t.unit = hudUnitText(v.aa_unit);
     return t;
@@ -80,7 +99,8 @@ Hud6waDisplay::Hud6waDisplay(Port& port, const HudProfile& p, bool shadow)
     : port_(port), p_(p), base_(p), shadow_(shadow), log_fn_(NULL), log_user_(NULL), sent_any_(false), fresh_(true),
       redraw_(false), held_(false), claim_(true), visible_(p.bufB), epoch_(0), measured_w_(0), measured_h_(0), barRange_(0), barLevel_(-1), has_layout_(false),
       near_(false), near_shown_(false), near_m_(0), stage_(0), stage_shown_(0), route_visible_(p.routeB),
-      route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false), idle_(false), idle_t_(0) {}
+      route_dirty_(false), lane_visible_(p.laneB), lanes_dirty_(false), idle_(false), idle_t_(0),
+      scripts_(hudTextScripts()), refusals_seen_(0) {}
 
 void Hud6waDisplay::log(const char* fmt, ...) {
     char buf[320];
@@ -124,6 +144,21 @@ ClusterDisplay::Result Hud6waDisplay::health(uint32_t* epoch) {
             fresh_ = true;
             stage_shown_ = 0;
             if (lanes_dirty_ || !lanes_shown_.empty()) { lanes_shown_.clear(); lanes_dirty_ = true; }
+        }
+    }
+    // The cluster refused a street or idle text: when it carried letters beyond ASCII, its font lacks them. Send the
+    // texts again in Latin letters, for the rest of this run (the font does not change).
+    uint16_t refusedHandle = 0;
+    uint32_t refusals = port_.textRefusals(&refusedHandle);
+    if (refusals != refusals_seen_) {
+        refusals_seen_ = refusals;
+        if (scripts_ != kTextLatin && refusedHandle == p_.street && hasNonAscii(shown_.street)) {   // maneuver or idle
+            scripts_ = kTextLatin;
+            log("the cluster refused a street text with non-Latin letters: Latin letters only from now on");
+            if (sent_any_ && !shadow_) {
+                redraw_ = true;
+                fresh_ = true;
+            }
         }
     }
     if (st == kReady && sent_any_ && !shadow_ && e != epoch_ && !redraw_) {
@@ -415,7 +450,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
         held_ = true;
         return kOk;
     }
-    HudTexts t = hudTexts(v, p_);
+    HudTexts t = hudTexts(v, p_, scripts_);
     ShapeSpec spec = shapeFor(v.aa_type, v.has_exit_angle, v.exit_angle);
     bool junction = near_ && has_layout_;
     Picture pic;
@@ -467,7 +502,7 @@ ClusterDisplay::Result Hud6waDisplay::showManeuver(const NavView& v, double, boo
 // ---- the idle text ("now playing") ----
 
 std::string Hud6waDisplay::idleText(const std::string& utf8) const {
-    return toClusterText(utf8, p_.streetPunct, p_.streetChars, false);
+    return toClusterText(utf8, p_.streetPunct, p_.streetChars, false, scripts_);
 }
 
 // Full: everything we show while idle. The picture buffers, and a route or lane layer a maneuver may have left, are
@@ -560,7 +595,7 @@ void Hud6waDisplay::appendDistanceBar(Batch& b, int level, bool redraw) const {
 ClusterDisplay::Result Hud6waDisplay::updateDistance(const NavView& v, double) {
     Result r = health(NULL);
     if (r != kOk || port_.status() == kNavActive) return r;
-    HudTexts t = hudTexts(v, p_);
+    HudTexts t = hudTexts(v, p_, scripts_);
     Batch b("distance");
     if (t.distance != shown_.distance) b.add(kTextareaSetText, setText(p_.distance, t.distance.c_str()));
     if (t.unit != shown_.unit) b.add(kTextareaSetText, setText(p_.unit, t.unit.c_str()));

@@ -198,13 +198,40 @@ inline std::vector<uint8_t> setText(uint16_t h, const char* s) {
     return p;
 }
 
+// Which scripts toClusterText lets through besides ASCII (Latin letters with an ASCII form are always reduced to it).
+enum TextScripts {
+    kTextLatin = 0,      // ASCII only: every other letter becomes a space (the old default)
+    kTextCyrillic = 1,   // + Cyrillic (U+0400..U+04FF), the NBT_HUD_CYRILLIC opt-in
+    kTextAll = 2         // + the letters of every script that has no ASCII form (Hangul, CJK, Cyrillic, Greek, Thai, ...)
+};
+
+// kTextAll: a BMP code point from U+0370 up that is a letter of a script with no ASCII form, sent as it is. Left out
+// (a space): punctuation and symbols (U+2000..U+2BFF, U+3000..U+303F), combining marks, surrogates and private use,
+// variation selectors and specials, and the right-to-left scripts (Hebrew, Arabic, ...), which need a bidi and shaping
+// pass the cluster is not known to do. Whether the cluster's font has a glyph is not known here: a text it refuses
+// comes back as an error, and the 6WA display then falls back to kTextLatin (hud6wa_display.cpp).
+inline bool keepScriptLetter(uint32_t cp) {
+    if (cp < 0x0370 || cp > 0xFFEF) return false;
+    if (cp >= 0x0590 && cp <= 0x08FF) return false;   // Hebrew, Arabic, Syriac, Thaana, NKo, ...: right to left
+    if (cp >= 0x1AB0 && cp <= 0x1AFF) return false;   // combining marks
+    if (cp >= 0x1DC0 && cp <= 0x1DFF) return false;
+    if (cp >= 0x2000 && cp <= 0x2BFF) return false;   // punctuation, arrows, maths, shapes, dingbats, symbols
+    if (cp >= 0x3000 && cp <= 0x303F) return false;   // CJK punctuation
+    if (cp >= 0xD800 && cp <= 0xF8FF) return false;   // surrogates, private use
+    if (cp >= 0xFB1D && cp <= 0xFDFF) return false;   // Hebrew and Arabic presentation forms
+    if (cp >= 0xFE00 && cp <= 0xFEFF) return false;   // variation selectors, CJK forms, Arabic forms, BOM
+    if (cp >= 0xFF00 && cp <= 0xFF60) return false;   // fullwidth punctuation (fullwidth ASCII is folded before this)
+    return true;
+}
+
 // UTF-8 -> text setText() takes and the cluster's font can show. Letters, digits and spaces are kept; Latin-1 and
 // Latin Extended-A letters become their plain letters (German umlauts and sharp s the German way: ae, oe, ue, ss);
-// the characters in `punct` are kept; a comma becomes a dot when commaToDot (a decimal comma in a distance); anything
-// else becomes a space. Runs of spaces become one, the ends are trimmed, and the result is cut to maxChars.
+// fullwidth ASCII becomes ASCII; the characters in `punct` are kept; a comma becomes a dot when commaToDot (a decimal
+// comma in a distance); letters of the scripts `scripts` lets through are kept as they are; anything else becomes a
+// space. Runs of spaces become one, the ends are trimmed, and the result is cut to maxChars code points.
 // Which characters a cluster's font has is its profile's business: a comma made the 6WA show nothing at all.
 inline std::string toClusterText(const std::string& utf8, const char* punct, size_t maxChars, bool commaToDot,
-                                 bool unicode = false) {
+                                 int scripts = kTextLatin) {
     // U+00C0..U+017F, one entry per code point.
     static const char* const kLatin =
         "A|A|A|A|Ae|A|AE|C|E|E|E|E|I|I|I|I|D|N|O|O|O|O|Oe| |O|U|U|U|Ue|Y|Th|ss|"
@@ -224,6 +251,8 @@ inline std::string toClusterText(const std::string& utf8, const char* punct, siz
         for (size_t j = 1; j < k; ++j) cp = (cp << 6) | ((unsigned char)utf8[i + j] & 0x3Fu);
         if (k == 1 && c >= 0x80) cp = 0xFFFD;                         // a stray continuation or bad lead byte
         i += k;
+        if (cp >= 0xFF01 && cp <= 0xFF5E) cp -= 0xFEE0;                 // fullwidth ASCII (CJK text) -> ASCII
+        else if (cp == 0x3000) cp = ' ';                               // ideographic space
         if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9') || cp == ' ') {
             raw.push_back((char)cp);
         } else if (cp == ',' && commaToDot) {
@@ -234,9 +263,15 @@ inline std::string toClusterText(const std::string& utf8, const char* punct, siz
             const char* p = kLatin;
             for (uint32_t n = cp - 0xC0; n; --n) p = strchr(p, '|') + 1;
             while (*p && *p != '|') raw.push_back(*p++);
-        } else if (unicode && cp >= 0x0400 && cp <= 0x04FF) {
-            raw.push_back((char)(0xC0 | (cp >> 6)));                   // Cyrillic kept as UTF-8 (2 bytes), re-decoded
-            raw.push_back((char)(0x80 | (cp & 0x3F)));                 // to UTF-16BE in setText; NBT_HUD_CYRILLIC
+        } else if ((scripts == kTextCyrillic && cp >= 0x0400 && cp <= 0x04FF) ||
+                   (scripts == kTextAll && keepScriptLetter(cp))) {
+            if (cp < 0x800) {                                          // kept as UTF-8, re-decoded to UTF-16BE in
+                raw.push_back((char)(0xC0 | (cp >> 6)));               // setText: 2 bytes (Cyrillic, Greek, ...)
+            } else {
+                raw.push_back((char)(0xE0 | (cp >> 12)));              // or 3 (Hangul, CJK, Thai, ...)
+                raw.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+            }
+            raw.push_back((char)(0x80 | (cp & 0x3F)));
         } else {
             raw.push_back(' ');
         }
@@ -246,7 +281,7 @@ inline std::string toClusterText(const std::string& utf8, const char* punct, siz
         if (raw[j] == ' ' && (out.empty() || out[out.size() - 1] == ' ')) continue;
         out.push_back(raw[j]);
     }
-    // cut to maxChars CODE POINTS (not bytes: a Cyrillic letter is 2 UTF-8 bytes)
+    // cut to maxChars CODE POINTS (not bytes: a Cyrillic letter is 2 UTF-8 bytes, a Hangul syllable 3)
     size_t cps = 0, pos = 0;
     while (pos < out.size()) {
         if (cps == maxChars) { out.resize(pos); break; }
