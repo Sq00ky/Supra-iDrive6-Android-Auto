@@ -39,9 +39,12 @@ public:
         putVarint(out_, value);
     }
     void string(unsigned field, const std::string& value) {
+        blob(field, reinterpret_cast<const uint8_t*>(value.data()), value.size());
+    }
+    void blob(unsigned field, const uint8_t* p, size_t n) {
         putVarint(out_, (field << 3) | WIRE_LENGTH);
-        putVarint(out_, value.size());
-        out_.insert(out_.end(), value.begin(), value.end());
+        putVarint(out_, n);
+        if (n) out_.insert(out_.end(), p, p + n);
     }
     void message(unsigned field, const ProtoWriter& value) {
         putVarint(out_, (field << 3) | WIRE_LENGTH);

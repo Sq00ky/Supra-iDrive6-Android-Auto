@@ -14,7 +14,11 @@
 #include "aa_control_msgs.hpp"
 #include "aa_phone_status.hpp"
 #include "aa_proto.hpp"
+#include "aa_frames.hpp"
 #include "audio/aa_media_msgs.hpp"
+#include "radio/aa_local_media.hpp"
+#include "radio/radio_tap.hpp"
+#include "radio/wall_time.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,6 +117,10 @@ AASession::AASession()
     mic_sent_ = 0;
     audio_frames_[0] = audio_frames_[1] = audio_frames_[2] = 0;
     aa_minor_ = 6;
+    radio_tap_ = NULL;
+    radio_open_ = radio_armed_ = radio_pending_ = radio_holding_ = false;
+    radio_hold_until_ = 0;
+    phone_media_state_ = 0xFFFFFFFFu;
     // Touch events are optional. The wake pipe is not: the knob, the microphone, and video
     // focus are delivered through it, including when NBT_TOUCH_FWD=0.
     touch_fwd_ = nbt::envFlag("NBT_TOUCH_FWD") != 0;
@@ -311,6 +319,30 @@ bool AASession::sendMicOpenResponse(uint8_t channel) {
     return sendFrame(channel, 0x0B, &enc[0], enc.size());
 }
 
+// One encrypted message; above kAaMaxFramePayload it goes out as FIRST/MIDDLE/LAST fragments, each encrypted alone.
+bool AASession::sendChannelMessage(uint8_t channel, const std::vector<uint8_t>& plain) {
+    if (plain.empty()) return false;
+    std::vector<AaFragment> parts = aaSplit(plain.size(), kAaMaxFramePayload);
+    std::vector<uint8_t> enc;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        const uint8_t flags = (uint8_t)(kAaFrameEncrypted | parts[i].type);
+        bool ok = cryptor_.encrypt(&plain[parts[i].offset], parts[i].length, enc);
+        if (ok && parts[i].type == kAaFrameFirst) {
+            std::vector<uint8_t> frame = aaFrameHeader(channel, flags, (uint16_t)enc.size(), (uint32_t)plain.size());
+            frame.insert(frame.end(), enc.begin(), enc.end());
+            ok = sendAll(&frame[0], frame.size());
+        } else if (ok) {
+            ok = sendFrame(channel, flags, &enc[0], enc.size());
+        }
+        if (!ok) {
+            printf("[AASession] ch %u: message of %u bytes not sent (fragment %u of %u failed)\n", (unsigned)channel,
+                   (unsigned)plain.size(), (unsigned)i + 1, (unsigned)parts.size());
+            return false;
+        }
+    }
+    return true;
+}
+
 // AV_MEDIA_WITH_TIMESTAMP_INDICATION 0x0000: 8-byte big-endian timestamp (us, monotonic) + PCM, on ch 14.
 bool AASession::sendMicFrame(const std::vector<uint8_t>& pcm) {
     struct timespec ts;
@@ -461,7 +493,11 @@ bool AASession::start(int client_fd) {
     pending_compass_ = false;
     mic_open_ = false;
     mic_queue_.clear();
+    radio_armed_ = false;
+    radio_pending_ = false;
     pthread_mutex_unlock(&touch_mutex_);
+    radio_open_ = false;
+    phone_media_state_ = 0xFFFFFFFFu;
     mic_sent_ = 0;
     location_sent_ = 0;
     satellites_started_ = false;
@@ -1149,12 +1185,90 @@ void AASession::drainSpeed() {
     if (!sendSensorEvent(3)) printf("[AASession] CAR_SPEED event: SEND FAILED\n");
 }
 
+// ---- Radio tile (ch 18, radio/radio_tile.hpp) --------------------------------------------------------------------------
+
+void AASession::setRadioTile(RadioTap* tap) {
+    pthread_mutex_lock(&touch_mutex_);
+    radio_tap_ = tap;
+    pthread_mutex_unlock(&touch_mutex_);
+}
+
+RadioTap* AASession::radioTap() {
+    pthread_mutex_lock(&touch_mutex_);
+    RadioTap* const tap = radio_tap_;
+    pthread_mutex_unlock(&touch_mutex_);
+    return tap;
+}
+
+void AASession::postRadioUpdate() {
+    pthread_mutex_lock(&touch_mutex_);
+    const bool wake = radio_armed_ && !radio_pending_;   // one wake per pending update
+    if (radio_armed_) radio_pending_ = true;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (wake) wakeSessionThread();
+}
+
+void AASession::radioTileOpened() {
+    pthread_mutex_lock(&touch_mutex_);
+    RadioTap* const tap = radio_tap_;
+    radio_armed_ = tap != NULL;   // before the snapshot, so no change in between is missed
+    radio_pending_ = false;
+    pthread_mutex_unlock(&touch_mutex_);
+    if (!tap) return;
+    radio_open_ = true;
+    radio_pacer_.reset();
+    radio_sent_ = RadioTileSent();
+    radio_holding_ = false;
+    pushRadioTile(tap);
+}
+
+void AASession::drainRadioTile() {
+    if (!radio_open_) return;
+    pthread_mutex_lock(&touch_mutex_);
+    RadioTap* const tap = radio_tap_;
+    const bool changed = radio_pending_;
+    radio_pending_ = false;
+    pthread_mutex_unlock(&touch_mutex_);
+    const uint32_t now = monoMs();
+    if (changed) radio_pacer_.changed(now);
+    if (radio_pacer_.due(now)) pushRadioTile(tap);
+}
+
+// A tile counts as sent even when sending fails, so a dead connection is not retried.
+void AASession::pushRadioTile(RadioTap* tap) {
+    radio_pacer_.sent();
+    if (!tap) return;   // the tile was turned off
+    const RadioState s = tap->snapshot();
+    const uint32_t now = monoMs();   // after the snapshot: no tuning in it started later
+    const RadioTileView v = radioTileView(s, phone_media_state_ == 2, now);
+    if (v.hold) {
+        radio_pacer_.holdUntil(v.holdUntilMs);
+        if (!radio_holding_ || radio_hold_until_ != v.holdUntilMs)
+            printf("[RadioTile] %s holding the last tile %s\n", WallTime().hms, v.holdReason);
+        radio_holding_ = true;
+        radio_hold_until_ = v.holdUntilMs;
+        return;
+    }
+    radio_holding_ = false;
+    if (!v.show || !radioTileChanged(radio_sent_, v)) return;
+    radioTileRemember(radio_sent_, v);
+    const WallTime at;
+    if (v.album.empty()) printf("[RadioTile] %s no station name yet: \"%s\"\n", at.hms, v.song.c_str());
+    const uint32_t t0 = monoMs();
+    const bool ok = sendChannelMessage(AA_CH_LOCAL_MEDIA, localMediaStatus(v.state, v.source, std::vector<int>())) &&
+                    sendChannelMessage(AA_CH_LOCAL_MEDIA, localMediaMetadata(v.song, v.artist, v.album, v.art));
+    printf("[RadioTile] %s state %d, source \"%s\", song \"%s\", artist \"%s\", art %u bytes: %s %u ms\n", at.hms,
+           v.state, v.source.c_str(), v.song.c_str(), v.artist.c_str(), (unsigned)v.art.size(),
+           ok ? "sent in" : "SEND FAILED after", (unsigned)(monoMs() - t0));
+}
+
 void AASession::drainPeriodic() {
     drainAcks();
     drainUnderflows();
     drainSatellites();
     drainCompass();
     drainSpeed();
+    drainRadioTile();
 }
 
 static uint32_t msLeft(uint32_t last_ms, uint32_t every_ms, uint32_t now) {
@@ -1163,8 +1277,9 @@ static uint32_t msLeft(uint32_t last_ms, uint32_t every_ms, uint32_t now) {
 }
 
 // 1 s ticks, 250 ms while a deferred audio ack is pending so a forced ack goes out on time, and never past the next timed
-// sensor event: a phone frame just before one is due would otherwise put it off by a whole tick, and at 1 s ticks a quiet
-// phone would stretch a compass repeat to 2 s. A 0 here cannot spin, because sendSensorEvent stamps the time before it sends.
+// sensor event or radio tile: a phone frame just before one is due would otherwise put it off by a whole tick, and at 1 s
+// ticks a quiet phone would stretch a compass repeat to 2 s. A 0 here cannot spin, because sendSensorEvent stamps the time
+// before it sends and pushRadioTile clears the pacer.
 uint32_t AASession::periodicTickMs() {
     uint32_t tick = acks_.hasPending() ? 250u : 1000u;
     const uint32_t now = monoMs();
@@ -1178,6 +1293,10 @@ uint32_t AASession::periodicTickMs() {
     }
     if (speed_last_zero_) {
         const uint32_t left = msLeft(speed_last_ms_, kCarSpeedRepeatZeroEveryMs, now);
+        if (left < tick) tick = left;
+    }
+    if (radio_open_) {
+        const uint32_t left = radio_pacer_.msUntilDue(now);
         if (left < tick) tick = left;
     }
     return tick;
@@ -1443,9 +1562,11 @@ void AASession::sessionLoop() {
                        pbFirstVarint(frame_data, 2, 2));
                 uint8_t open_resp[4] = { 0x00, 0x08, 0x08, 0x00 }; // Msg ID 8 (ChannelOpenResponse), Status 0 (OK)
                 std::vector<uint8_t> enc_resp;
+                bool opened = false;
                 if (cryptor_.encrypt(open_resp, sizeof(open_resp), enc_resp)) {
-                    sendFrame(channel, 0x0F, &enc_resp[0], enc_resp.size()); // Specific channel flag 0x0F
+                    opened = sendFrame(channel, 0x0F, &enc_resp[0], enc_resp.size()); // Specific channel flag 0x0F
                 }
+                if (opened && channel == AA_CH_LOCAL_MEDIA) radioTileOpened();
             } else if (channel == 10 && msg_id >= 0x8000) {
                 // Navigation status channel: guidance state (0x8003), next turn (0x8006), turn distance (0x8007), ...
                 // Nothing is answered; the messages go to the nav-status callback (kombi_nav). Before v1.6.3 the
@@ -1471,6 +1592,10 @@ void AASession::sessionLoop() {
                         last_state = st;
                         printf("[AASession] media status ch12: state %u\n", st);
                     }
+                    if (st != phone_media_state_) {
+                        phone_media_state_ = st;
+                        if (radio_open_) radio_pacer_.changed(monoMs());   // the tile shows whether the phone plays
+                    }
                 } else if (msg_id != 0x8003) {
                     printf("[AASession] media channel 12: msg 0x%04X (%u bytes)\n", msg_id,
                            (unsigned)frame_data.size());
@@ -1492,6 +1617,13 @@ void AASession::sessionLoop() {
                        (unsigned)frame_data.size());
                 for (size_t i = 0; i < frame_data.size() && i < 24; ++i) printf(" %02x", frame_data[i]);
                 printf("%s\n", frame_data.size() > 24 ? " ..." : "");
+            } else if (channel == AA_CH_LOCAL_MEDIA && radioTap()) {
+                // Car local media: nothing from the phone is answered here; the generic AV handlers below would.
+                static unsigned local_media_msgs = 0;
+                if (local_media_msgs < 5 || local_media_msgs % 100 == 0)
+                    printf("[RadioTile] %s phone msg 0x%04X (%u bytes) on ch %u ignored, %u so far\n", WallTime().hms,
+                           msg_id, (unsigned)frame_data.size(), channel, local_media_msgs + 1);
+                ++local_media_msgs;
             } else if (msg_id == 0x8000) { // AV SETUP_REQUEST (Phone requests AV configuration on Video/Audio channel)
                 // Only focus/open the main dashboard display. Advertising/focusing all
                 // DHU display channels makes the phone encode several H.264 streams; we
@@ -1760,8 +1892,8 @@ void AASession::finishSession() {
     // asked it to, release the fd here, then tell the owner if nobody requested the stop.
     bool ended_on_its_own = exchangeRunningOff();
     releaseSocket();
-    // The position, heading, wheel speed, gear and parking brake keep coming with no phone connected: with these set, each one
-    // would write to a wake pipe nobody reads.
+    // The position, heading, wheel speed, gear, parking brake and radio keep coming with no phone connected: with these set,
+    // each one would write to a wake pipe nobody reads.
     pthread_mutex_lock(&touch_mutex_);
     location_started_ = false;
     pending_location_ = false;
@@ -1771,7 +1903,11 @@ void AASession::finishSession() {
     pending_speed_ = false;
     resetCarState(gear_);
     resetCarState(parking_brake_);
+    radio_armed_ = false;
+    radio_pending_ = false;
     pthread_mutex_unlock(&touch_mutex_);
+    radio_open_ = false;
+    phone_media_state_ = 0xFFFFFFFFu;
     if (ended_on_its_own && disconnect_cb_) {
         disconnect_cb_(disconnect_user_data_);
     }

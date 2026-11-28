@@ -25,6 +25,8 @@ SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/clus
                  src/cluster/hud6wa_display.cpp src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 
 # Each test and the daemon sources it links (beyond its own .cpp).
+SRC_test_aa_frames         :=
+SRC_test_aa_local_media    :=
 SRC_test_aa_proto          := src/wireless_setup.cpp
 SRC_test_favourite_bitmap :=
 SRC_test_favourite_composition :=
@@ -46,6 +48,10 @@ SRC_test_audio_route       := src/audio/audio_route.cpp
 SRC_test_bcl_detect        := src/wireless_setup.cpp
 SRC_test_boot_guard        :=
 SRC_test_overlay_watch     :=
+SRC_test_most_tuner        :=
+SRC_test_radio_state       :=
+SRC_test_radio_text_log    :=
+SRC_test_radio_tile        :=
 SRC_test_pf_aa             :=
 SRC_test_bt_play           := src/audio/bt_play.cpp
 SRC_test_car_config        := src/sdr_builder.cpp
@@ -112,6 +118,7 @@ SRC_test_session_owner     :=
 SRC_test_spp_rereg         :=
 SRC_test_session_sensors   := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_rx_timeout := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
+SRC_test_session_radio_tile := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_touch             := src/touch_probe.cpp
 SRC_test_touch_frame       :=
 SRC_test_usb_accessory     := src/tcp_server.cpp src/usb_accessory.cpp src/usb_direct.cpp src/wireless_setup.cpp
@@ -177,10 +184,18 @@ run-$(1): $(OUT)/$(1)
 endef
 $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 
-# This one #includes aa_session.cpp, so it is not in its SRC list, and with several sources -MF keeps only the last one's
-# dependencies: without this line, a change to the session would not rebuild it.
-$(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
-$(OUT)/test_session_rx_timeout: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
+# These #include aa_session.cpp or aa_session.hpp, and with several sources -MF keeps only the last one's dependencies:
+# without these lines, a change to the session or a header it pulls in would not rebuild them.
+SESSION_DEPS := $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp \
+  $(ROOT)/src/aa_frames.hpp $(ROOT)/src/radio/radio_tap.hpp $(ROOT)/src/radio/radio_tile.hpp \
+  $(ROOT)/src/radio/radio_state.hpp $(ROOT)/src/radio/most_tuner.hpp $(ROOT)/src/radio/wall_time.hpp $(ROOT)/src/radio/radio_text_log.hpp \
+  $(ROOT)/src/radio/aa_local_media.hpp $(ROOT)/src/radio/radio_placeholder_art.hpp
+$(OUT)/test_session_sensors: $(SESSION_DEPS) stub_cryptor.hpp
+$(OUT)/test_session_rx_timeout: $(SESSION_DEPS) stub_cryptor.hpp
+$(OUT)/test_session_radio_tile: $(SESSION_DEPS) stub_cryptor.hpp radio_fixtures.hpp
+$(OUT)/test_session_bye: $(SESSION_DEPS) stub_cryptor.hpp
+$(OUT)/test_session_control $(OUT)/test_session_fragments $(OUT)/test_session_lifecycle: $(SESSION_DEPS)
+$(OUT)/test_session_lifecycle.tsan: $(SESSION_DEPS)
 
 # Frames are not really encrypted in this one, so it can script the phone without a TLS handshake.
 $(OUT)/test_session_bye: CXXFLAGS += -include stub_cryptor.hpp

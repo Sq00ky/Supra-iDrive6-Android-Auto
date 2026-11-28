@@ -1,0 +1,171 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
+#pragma once
+// What the Android Auto media tile shows for the audible radio, and when to send it. Pure, no I/O, no clock.
+#include "radio/radio_placeholder_art.hpp"
+#include "radio/radio_state.hpp"
+
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <string>
+#include <vector>
+
+namespace nbt {
+
+enum { kSettleMs = 300, kMaxDelayMs = 1000, kTuneHoldMs = 3000 };
+
+struct RadioTileView {
+    bool show;                  // false: send nothing now
+    bool hold;                  // shown tuner tunes or waits for DL+ while playing: keep the last tile until holdUntilMs
+    uint32_t holdUntilMs;
+    const char* holdReason;     // NULL unless hold
+    int state;                  // 1 stopped, 2 playing
+    std::string source, song, artist, album;
+    std::vector<uint8_t> art;
+    RadioTileView() : show(false), hold(false), holdUntilMs(0), holdReason(NULL), state(1) {}
+};
+
+struct RadioTileSent {
+    bool valid;
+    int state;
+    std::string source, song, artist, album;
+    std::vector<uint8_t> art;
+    RadioTileSent() : valid(false), state(0) {}
+};
+
+namespace radio_detail {
+
+inline std::string fallbackName(int kind, const TunerContent& t) {
+    if (kind == kTunerDab) return "DAB";
+    if (t.freqKHz == 0) return "FM";
+    char buf[24];
+    if (t.freqKHz < 30000) {
+        snprintf(buf, sizeof(buf), "AM %u", (unsigned)t.freqKHz);
+    } else {
+        const unsigned tenths = (unsigned)((t.freqKHz + 50) / 100);
+        snprintf(buf, sizeof(buf), "FM %u.%u", tenths / 10, tenths % 10);
+    }
+    return buf;
+}
+
+// Holds v from startMs for spanMs while on.
+inline bool holdFor(RadioTileView& v, bool on, uint32_t startMs, uint32_t spanMs, uint32_t nowMs, const char* why) {
+    if (!on || !radioWithin(startMs, spanMs, nowMs)) return false;
+    v.hold = true;
+    v.holdUntilMs = startMs + spanMs;
+    v.holdReason = why;
+    return true;
+}
+
+}  // namespace radio_detail
+
+inline std::vector<uint8_t> radioPlaceholderArt() {
+    return std::vector<uint8_t>(kRadioPlaceholderJpeg, kRadioPlaceholderJpeg + sizeof(kRadioPlaceholderJpeg));
+}
+
+// The one place the art passes before it is sent. FM borrows the DAB picture only for the same programme (PI == SId).
+inline std::vector<uint8_t> radioTileArt(const RadioState& s, int kind) {
+    const bool dabPicture = kind == kTunerDab || (s.fm.id != 0 && !s.fm.idIsFreq && s.fm.id == s.dab.id);
+    if (dabPicture && !s.dab.slide.empty()) return s.dab.slide;
+    if (dabPicture && !s.dab.logo.empty()) return s.dab.logo;
+    return radioPlaceholderArt();
+}
+
+inline RadioTileView radioTileView(const RadioState& s, bool phonePlaying, uint32_t nowMs) {
+    RadioTileView v;
+    const int kind = shownTuner(s);
+    if (kind == kTunerNone) return v;
+    const TunerContent& t = kind == kTunerDab ? s.dab : s.fm;
+
+    v.state = s.audible == 1 ? 2 : (s.audible == 0 ? 1 : (phonePlaying ? 1 : 2));
+    if (v.state == 2 &&   // STOPPED goes out at once
+        (radio_detail::holdFor(v, t.tuning, t.tuneStartMs, kTuneHoldMs, nowMs, "while the tuner tunes") ||
+         radio_detail::holdFor(v, t.plusWaiting, t.plusWaitStartMs, kPlusWaitMs, nowMs, "waiting for DL+")))
+        return v;
+    v.source = kind == kTunerDab ? "DAB" : "FM";
+    const std::string station = t.name.empty() ? radio_detail::fallbackName(kind, t) : t.name;
+    v.album = t.name;
+    if (!t.title.empty()) {
+        v.song = t.title;
+        v.artist = t.artist.empty() ? station : t.artist;
+    } else {
+        v.song = station;
+        v.artist = t.text;
+    }
+    v.art = radioTileArt(s, kind);
+    v.show = !v.song.empty();
+    return v;
+}
+
+inline bool radioTileChanged(const RadioTileSent& last, const RadioTileView& v) {
+    return !last.valid || last.state != v.state || last.source != v.source || last.song != v.song ||
+           last.artist != v.artist || last.album != v.album || last.art != v.art;
+}
+
+inline void radioTileRemember(RadioTileSent& last, const RadioTileView& v) {
+    last.valid = true;
+    last.state = v.state;
+    last.source = v.source;
+    last.song = v.song;
+    last.artist = v.artist;
+    last.album = v.album;
+    last.art = v.art;
+}
+
+// Collects changes: due kSettleMs after the last one or kMaxDelayMs after the first; holdUntil arms an extra due time.
+class RadioTilePacer {
+public:
+    RadioTilePacer() { reset(); }
+
+    void reset() {
+        pending_ = false;
+        hold_ = false;
+        firstMs_ = lastMs_ = holdMs_ = 0;
+    }
+
+    void changed(uint32_t nowMs) {
+        if (!pending_) {
+            pending_ = true;
+            firstMs_ = nowMs;
+        }
+        lastMs_ = nowMs;
+    }
+
+    void holdUntil(uint32_t whenMs) {
+        hold_ = true;
+        holdMs_ = whenMs;
+    }
+
+    bool due(uint32_t nowMs) const { return msUntilDue(nowMs) == 0; }
+
+    uint32_t msUntilDue(uint32_t nowMs) const {
+        uint32_t best = 0xFFFFFFFFu;
+        if (pending_) {
+            best = remaining(nowMs, lastMs_, kSettleMs);
+            const uint32_t m = remaining(nowMs, firstMs_, kMaxDelayMs);
+            if (m < best) best = m;
+        }
+        if (hold_) {
+            const uint32_t h = (int32_t)(nowMs - holdMs_) >= 0 ? 0 : holdMs_ - nowMs;
+            if (h < best) best = h;
+        }
+        return best;
+    }
+
+    void sent() {
+        pending_ = false;
+        hold_ = false;
+    }
+
+private:
+    static uint32_t remaining(uint32_t nowMs, uint32_t sinceMs, uint32_t spanMs) {
+        const uint32_t elapsed = nowMs - sinceMs;
+        return elapsed >= spanMs ? 0 : spanMs - elapsed;
+    }
+
+    bool pending_, hold_;
+    uint32_t firstMs_, lastMs_, holdMs_;
+};
+
+}  // namespace nbt

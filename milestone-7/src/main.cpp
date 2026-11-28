@@ -113,6 +113,8 @@
 #include "car/input_activity.hpp"
 #include "car/gps.hpp"
 #include "car/vehicle.hpp"
+#include "radio/radio_tap.hpp"
+#include "radio/radio_tile_config.hpp"
 #include "most/client.hpp"
 #include "most/trace.hpp"
 #include "crash_handler.hpp"
@@ -172,6 +174,7 @@ static nbt::car::VolumeInput g_carVolume;    // the car's master volume for the 
 static nbt::car::InputActivity g_carInput;   // any car control the driver touched: a consumer of g_most
 static nbt::car::CarGps g_gps;               // the car's GPS fix: a consumer of g_most
 static nbt::car::CarVehicle g_vehicle;       // the car's wheel speed, gear and parking brake: a consumer of g_most
+static nbt::RadioTap g_radioTap;             // the iDrive radio in the media tile: a consumer of g_most
 static nbt::most::Trace g_mostTrace;         // NBT_MOST_LOG=1: logs what g_most sees
 static nbt::car::FavouritePreview g_favouritePreview;
 static volatile sig_atomic_t g_favouritePeek = 0;
@@ -2059,6 +2062,9 @@ static void onCarSatellites(const nbt::SatelliteStatus& status, void* user) {
     static_cast<nbt::AASession*>(user)->postCarSatellites(status);
 }
 
+// Radio change (DSI callback thread): only queues the update for the session thread.
+static void onRadioChange(void* user) { static_cast<nbt::AASession*>(user)->postRadioUpdate(); }
+
 // The car's heading (DSI callback thread, about 1 Hz) -> AA COMPASS sensor. Kept between sessions.
 static void onCarCompass(int32_t bearing_e6, void* user) {
     static_cast<nbt::AASession*>(user)->postCarCompass(bearing_e6);
@@ -2630,6 +2636,11 @@ int main(int argc, char* argv[]) {
     else printf("[Main] car parking brake -> Android Auto off (NBT_CAR_PARKING_BRAKE=0).\n");
     if (!g_most.requireConsumer("vehicle sensors", g_vehicle.attach(g_most, vehicle)))
         printf("[Main] car speed, gear and parking brake failed to start.\n");
+    if (nbt::radioTileEnabled()) {
+        printf("[RadioTile] on: the iDrive radio in the Android Auto media tile, channel 18 (NBT_RADIO_TILE=0 turns it off)\n");
+        if (g_most.requireConsumer("radio tile", g_radioTap.attach(g_most, &onRadioChange, &g_session)))
+            g_session.setRadioTile(&g_radioTap);
+    } else printf("[Main] radio tile -> Android Auto off (NBT_RADIO_TILE=0).\n");
     // NBT_CCS_DEBUG / NBT_CCS_ALL were the control-message loggers of the old ccs_input.cpp; the MOST client has one
     // logger for everything it sees now, so they turn that on.
     const bool ccsLogCompat = nbt::envFlag("NBT_CCS_DEBUG") == 1 || nbt::envFlag("NBT_CCS_ALL") == 1;
