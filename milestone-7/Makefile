@@ -69,6 +69,7 @@ SRCS = src/main.cpp \
        src/gesture_sniff.cpp \
        src/volume_osd.cpp \
        src/volume_pill.cpp \
+       src/screenshot.cpp \
        src/compat_stdcxx.cpp
 
 # C sources: the vendored speexdsp resampler (third_party/speexdsp, BSD-3), built through src/audio/speex.c.

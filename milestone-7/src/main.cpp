@@ -130,6 +130,7 @@
 #include "cluster/nav_core.hpp"
 #include "cluster/ric_media.hpp"
 #include "gesture_sniff.hpp"
+#include "screenshot.hpp"
 #include <termios.h>
 
 #include <stdio.h>
@@ -2296,7 +2297,7 @@ int main(int argc, char* argv[]) {
     // Hand install or NBTApps package (nbt_paths.hpp): from where we were started, before anything reads a setting.
     nbt::initPaths(argc > 0 ? argv[0] : NULL);
     // "Disable logging (performance test)": set before the log redirection below, so the printf traces too cost
-    // only a write to /dev/null. Not on the one-shot --pf-* / --license paths: the app reads their output.
+    // only a write to /dev/null. Only without arguments: the one-shot commands below keep their output.
     if (argc <= 1) {
         g_noLog = nbt::noLogWanted(getenv("NBT_NO_LOG"), nbt::flagSet(nbt::kNoLogFlagName));
         if (g_noLog) stdoutToNull();
@@ -2334,6 +2335,7 @@ int main(int argc, char* argv[]) {
     // the car's connection manager. Started by the daemon with LD_LIBRARY_PATH=/opt/conn/lib; prints its own result.
     if (argc > 1 && !strcmp(argv[1], "--wfd-own")) return nbt::runWfdOwnCommand(argc, argv);
     if (argc > 1 && !strcmp(argv[1], "--wfd-own-status")) return nbt::runWfdStatusCommand();
+    if (argc > 1 && !strcmp(argv[1], "--screenshot")) return nbt::runScreenshotCommand(argc, argv);
     if (argc > 1 && (!strcmp(argv[1], "--license") || !strcmp(argv[1], "--licence"))) {
         nbt::printNbtAadLicense();
         return 0;
