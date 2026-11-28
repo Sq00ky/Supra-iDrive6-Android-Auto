@@ -143,6 +143,8 @@ public:
     bool measuredSize(int& w, int& h) const;
     // TextareaSetText calls the cluster answered with an error (a glyph its font lacks), and the last one's handle.
     uint32_t textRefusals(uint16_t* lastHandle) const;
+    // A measurement is due or awaited and not yet late: a picture drawn now would be on the last size.
+    bool measuring() const { return measureDue_ || (measureInFlight_ && !measureLate_); }
     // How long until tick() has something to do, for the send thread's wait; a large value when nothing is timed.
     uint32_t msUntilDeadline(uint32_t now) const;
     // A status change since the last call, for the listener.
@@ -214,6 +216,9 @@ public:
     // The cluster's picture-buffer size (ImageGetSize), once it has arrived; false until then, or when the transport
     // does not measure. A driver fits its box to it. Default false: a test fake need not implement it.
     virtual bool measuredSize(int& w, int& h) const { (void)w; (void)h; return false; }
+    // The picture buffer is being measured (again, once the guidance moved) and the answer is not late yet: a driver
+    // waits with its picture. Default false.
+    virtual bool measuring() const { return false; }
     // A new guidance of ours meets a navigation we yield to: take the HUD over when that navigation has been quiet for
     // navQuietMs, even with its route still on screen (Core::claim). True when the terminal is then ready. Default
     // false: a test fake need not implement it.
@@ -248,6 +253,7 @@ public:
     bool waiting(int slot) const;
     bool waitIdle(uint32_t ms);
     bool measuredSize(int& w, int& h) const;
+    bool measuring() const;
     bool claim();
     uint32_t textRefusals(uint16_t* lastHandle) const;
     TerminalStats stats() const;

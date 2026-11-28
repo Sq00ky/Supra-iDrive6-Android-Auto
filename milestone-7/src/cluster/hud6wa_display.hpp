@@ -111,6 +111,7 @@ private:
     // The junction view: is it due for v, and which route stage is (1..kStages, kStages the longest tail).
     bool nearDue(const NavView& v, double* m) const;
     void startManeuver(const NavView& v);
+    void fitLayout();
     void updateStage(const NavView& v);
     bool routeInOverlay() const { return p_.routeA && p_.routeB; }
     bool lanesOn() const { return s_.hud_lanes && p_.laneA && p_.laneB; }
@@ -147,7 +148,9 @@ private:
     int barLevel_;           // last queued bar level, -1 when the bar is hidden
 
     // the junction view of the maneuver shown
-    bool has_layout_;        // the maneuver has one (the destination keeps its flag)
+    bool laid_out_;          // layout_ is the maneuver's (the destination keeps its flag)
+    int layout_type_;        // its AA type, for the log
+    bool has_layout_;        // laid out, and its way stays on this picture buffer
     hudterm::Layout layout_;
     bool near_;              // due: from the main prompt (or near_m) until the next maneuver
     bool near_shown_;        // the picture queued is the junction view
