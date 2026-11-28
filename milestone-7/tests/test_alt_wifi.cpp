@@ -4,6 +4,7 @@
 // The ciphertext vectors are real car values: /var/opt/conn/WFDPass.conf on the J29 read
 // 3B0F277431217E050505 and the decoded passphrase is uMs1GNN240.
 #include "alt_wifi.hpp"
+#include "wfd_own.hpp"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -276,6 +277,28 @@ int main() {
     CHECK(strcmp(nbt::kWfdOnlyFlagName, "wifi-direct") == 0);
     CHECK(strcmp(nbt::dataFile(nbt::kWfdOnlyFlagName).c_str(), "/var/opt/aa/wifi-direct") == 0);   // hand install
     CHECK(strcmp(nbt::appFile(nbt::kWfdOnlyFlagName).c_str(), "/opt/aa/wifi-direct") == 0);
+    // ---- derived name: brand + last 5 of the VIN ----------------------------------------
+    {
+        std::string t;
+        const std::string swt = std::string("xx\x01" "K512345\x01" "yy\x01" "K512345\x01" "\x01" "ZZ99999\x01", 30);
+        CHECK(nbt::wfdVinTailFromSwt(swt, t) && t == "K512345");                    // the most frequent record wins
+        CHECK(!nbt::wfdVinTailFromSwt(std::string("\x01" "K5I2345\x01", 9), t));     // I is never in a VIN
+        CHECK(!nbt::wfdVinTailFromSwt("no records", t));
+        std::string v;
+        CHECK(nbt::wfdVinFromBlob(std::string("\x11WZ1DB4C05LW012345\x00\x02", 21), v) && v == "WZ1DB4C05LW012345");
+        CHECK(!nbt::wfdVinFromBlob("WZ1DB4C05LW0123456", v));                         // 18 chars: not a VIN
+        CHECK(nbt::wfdSsidFromBrandVin("Toyota", "WZ1DB4C05LW051807") == "DIRECT-03-Toyota51807");
+        CHECK(nbt::wfdSsidFromBrandVin("Rolls-Royce", "K512345") == "DIRECT-03-Rolls-Royce12345");
+        CHECK(nbt::wfdSsidFromBrandVin("BMW", "1234").empty());
+        std::string s, from;
+        CHECK(nbt::wfdPickSsid(false, "", "", s, from, "DIRECT-03-BMW12345") && s == "DIRECT-03-BMW12345" &&
+              from.find("derived") != std::string::npos);
+        CHECK(nbt::wfdPickSsid(false, "", "DIRECT-03-MINI54321", s, from, "DIRECT-03-BMW12345") && s == "DIRECT-03-MINI54321");
+        CHECK(!nbt::wfdPickSsid(false, "", "", s, from, "garbage"));
+        setenv("NBT_VIN", "wz1db4c05lw051807", 1);
+        CHECK(nbt::wfdVinTail(t, from) && t == "WZ1DB4C05LW051807" && from == "NBT_VIN");
+        unsetenv("NBT_VIN");
+    }
     printf(fails ? "test_alt_wifi: %d FAILED\n" : "test_alt_wifi: all passed\n", fails);
     return fails ? 1 : 0;
 }

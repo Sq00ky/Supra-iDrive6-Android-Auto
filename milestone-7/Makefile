@@ -149,6 +149,10 @@ plugin/plugin_check: plugin/plugin_check.cpp plugin/plugin_abi.hpp
 
 # Standalone read-only probe for the car's Wi-Fi Direct group (NBT_ALT_WIFI=DIRECT): prints ifconfig wfd0, the
 # decoded WFDPass/WFDWps files, raw mwud replies and the Wi-Fi persistency strings. Not part of nbt-aad.
+vinprobe: tools/vinprobe.cpp src/alt_wifi.hpp src/wfd_own.hpp
+	@echo [CXX] tools/vinprobe.cpp
+	$(CXX) $(CXXFLAGS) -o $@ tools/vinprobe.cpp -lsocket -lang-c++
+
 wfd_probe: tools/wfd_probe.cpp src/alt_wifi.hpp src/wireless_setup.hpp
 	@echo [CXX] tools/wfd_probe.cpp
 	$(CXX) $(CXXFLAGS) -o $@ tools/wfd_probe.cpp -lsocket -lang-c++
@@ -170,7 +174,7 @@ volcap: tools/volcap.cpp src/dsi_client.cpp src/dsi_client.hpp src/most/ids.hpp 
 
 clean:
 	@echo [CLEAN] Removing object files and binaries
-	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe pf_aa hudprobe
+	rm -f $(OBJS) $(OBJS:.o=.d) $(TARGET) test_display test_controls plugin/libhmiaad.so plugin/plugin_check wfd_probe vinprobe pf_aa hudprobe
 
 # osdprobe: standalone check that this unit lets us own an LM surface for our own window.
 osdprobe: tools/osdprobe.cpp
