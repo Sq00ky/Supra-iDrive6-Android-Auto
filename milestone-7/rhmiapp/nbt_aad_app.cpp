@@ -2736,17 +2736,25 @@ const char* const kSettingsFlags[] = {
     kAutostartFlag, nbt::usblog::kFlagName, kMenuIdriveFlag, kDriveModeFlag, kKombiNavFlag, kAnyDistFlag, kNoLogFlag,
     kSpeechBtFlag, kWarnFlag, kUsbAaFlag, kPhoneGpsFlag, kWfdOnlyFlag, kNativeAudioFlag, kLciMediaFlag, kCpCompatFlag,
     nbt::kHudAsciiFlagName,   // the 6WA HUD reads it at start: leaving Settings restarts nbt-aad so the change applies
+    kKombiMediaFlag, kGestureMuteFlag, kNavPromptMixFlag,
 };
+// Every Settings control restarts nbt-aad on the way out when it changed: the flag files above, plus three choices
+// that are not plain flags (compared in settingsBackOnMainPage): car manufacturer, HUD profile, favourites bar.
 const size_t kSettingsFlagCount = sizeof(kSettingsFlags) / sizeof(kSettingsFlags[0]);
 bool settingFlagSet(const char* name) { return nbt::flagSet(name); }
 std::string g_setSnap;
 bool g_setSnapPending = false;
 time_t g_setSnapTime = 0;
 
+int g_clusterAtEntry = -1;
+bool g_favOffAtEntry = false;
+
 void settingsPageEntered() {
     if (g_setSnapPending) return;                        // keep the snapshot of the first visit since the last check
     g_setSnap = nbt::settingsSnapshot(kSettingsFlags, kSettingsFlagCount, &settingFlagSet);
     g_vehicleAtEntry = readVehicleChoice();
+    g_clusterAtEntry = clusterChoice();
+    g_favOffAtEntry = fileExists(nbt::favouriteDisabledPath().c_str());
     g_setSnapPending = true;
     g_setSnapTime = time(NULL);
 }
@@ -2760,6 +2768,17 @@ void settingsBackOnMainPage() {
     if (!g_vehicleAtEntry.empty() && vehicleNow != g_vehicleAtEntry) {
         if (!diff.empty()) diff += ", ";
         diff += "car manufacturer " + g_vehicleAtEntry + " -> " + vehicleNow;
+    }
+    const int clusterNow = clusterChoice();
+    if (clusterNow != g_clusterAtEntry) {
+        if (!diff.empty()) diff += ", ";
+        diff += std::string("HUD profile ") + (g_clusterAtEntry < 0 ? "unset" : kClusterValues[g_clusterAtEntry]) + " -> " +
+                (clusterNow < 0 ? "unset" : kClusterValues[clusterNow]);
+    }
+    const bool favOffNow = fileExists(nbt::favouriteDisabledPath().c_str());
+    if (favOffNow != g_favOffAtEntry) {
+        if (!diff.empty()) diff += ", ";
+        diff += favOffNow ? "favourites bar off" : "favourites bar on";
     }
     DaemonState d = readDaemonState();
     nbt::SettingsRestart r = nbt::settingsRestartDecide(
