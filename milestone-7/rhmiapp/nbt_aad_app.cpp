@@ -2735,6 +2735,7 @@ bool onRestartRow(void*, const bmw::Parcel&) {
 const char* const kSettingsFlags[] = {
     kAutostartFlag, nbt::usblog::kFlagName, kMenuIdriveFlag, kDriveModeFlag, kKombiNavFlag, kAnyDistFlag, kNoLogFlag,
     kSpeechBtFlag, kWarnFlag, kUsbAaFlag, kPhoneGpsFlag, kWfdOnlyFlag, kNativeAudioFlag, kLciMediaFlag, kCpCompatFlag,
+    nbt::kHudAsciiFlagName,   // the 6WA HUD reads it at start: leaving Settings restarts nbt-aad so the change applies
 };
 const size_t kSettingsFlagCount = sizeof(kSettingsFlags) / sizeof(kSettingsFlags[0]);
 bool settingFlagSet(const char* name) { return nbt::flagSet(name); }
