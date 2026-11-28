@@ -32,6 +32,6 @@ WLAN_WIFI_DIRECT -> aktiv
 
 WLAN_STATUS -> aktiv
 
-WLAN_AP -> aktic
+WLAN_AP -> aktiv
 
 After that, go to Manage Mobile Devices -> Settings and make sure Vehicle WiFi is ticked
