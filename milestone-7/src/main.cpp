@@ -2327,7 +2327,7 @@ static bool pfAutoInstall() {
         printf("[Main] PF rules: automatic install off (NBT_PF_AUTO=0)\n");
         return false;
     }
-    const std::string off = nbt::confFile(kPfAutoOffName), failed = nbt::confFile(kPfAutoFailedName);
+    const std::string off = nbt::confFile(kPfAutoOffName).c_str(), failed = nbt::confFile(kPfAutoFailedName).c_str();
     if (fileExists(off.c_str())) {
         printf("[Main] PF rules: not installed automatically (Uninstall PF Rules was pressed; %s)\n", off.c_str());
         return false;
