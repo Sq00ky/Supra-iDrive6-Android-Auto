@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
     tryFile("/dev/shmem/sysetpage", 2);
     printf("Wi-Fi Direct name today (head-unit ladder):\n");
     std::string ssid;
-    if (resolveWfdSsid("wfd0", ssid)) printf("  resolved: '%s'\n", show(ssid).c_str());
+    if (resolveWfdSsid("wfd0", ssid)) printf("  resolved: '%s'\n", ssid.c_str());   // a group name holds only the last 5, shown with -q anyway
     else printf("  not resolved from the head unit's files\n");
     if (zgw) zgwProbe();
     std::string tail, from;
@@ -186,7 +186,7 @@ int main(int argc, char** argv) {
     printf("RESULT: VIN tail %s from %s\n", show(tail).c_str(), from.c_str());
     static const char* const kBrands[] = { "BMW", "MINI", "Toyota", "Rolls-Royce" };
     for (size_t i = 0; i < 4; ++i)
-        printf("  derived name for %-11s %s%s\n", kBrands[i], show(wfdSsidFromBrandVin(kBrands[i], tail)).c_str(),
+        printf("  derived name for %-11s %s%s\n", kBrands[i], wfdSsidFromBrandVin(kBrands[i], tail).c_str(),
                !ssid.empty() && wfdSsidFromBrandVin(kBrands[i], tail) == ssid ? "   <- matches the car's name" : "");
     return 0;
 }
