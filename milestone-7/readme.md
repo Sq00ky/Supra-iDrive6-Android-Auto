@@ -11,6 +11,17 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 
 **Version:** daemon `v1.8.47-gesture3`, iDrive app `rhmiapp-22` (Fork F, the main tree), plus the fixes in [FIXES.md](FIXES.md). This folder is milestone-7.
 
+> **v1.9.122 / rhmiapp-99: iDrive freeze with other iDrive apps, every script on the 6WA HUD, Settings restart.**
+> - Supersedes the v1.9.121-pr370 test build (#370 only), which was published without an NBTApps package.
+> - **#370** (@alabalag1, #364): the iDrive app's daemon probe no longer waits up to 200 ms on iDrive's shared plugin
+>   threads (one non-blocking socket; driver actions still wait); `slow status tick` / `slow ... handler` log lines.
+> - **#372** (@JongChane, #358): 6WA street names and idle text keep every script with no ASCII form; refused text
+>   falls back to ASCII. Settings "Extended character set in HUD" (default on, flag `hud-ascii` when off) replaces
+>   "Cyrillic street names in HUD" (`hud-cyrillic` no longer read); `NBT_HUD_UNICODE`, `NBT_HUD_STREET_MAX`.
+> - Settings: every control restarts nbt-aad on leaving Settings when it changed (song title, gesture mute, nav prompt
+>   mix, HUD profile, favourites bar added).
+> - `nbt-aad.env`: 63 settings passed (was 15).
+>
 > **v1.9.120 / rhmiapp-97: NBTApps install fix, wireless connect fix, BMW F15 HUD profile, Turkish, log privacy.**
 > - **#332**: dropped 8 orphaned textIdModels (230-237 -> texts 301-308, the old favourites submenu) that every language
 >   lacked; the NBTApps installer refused the release. `tests/test_text_ids.py` now fails `make check` on any missing text.
